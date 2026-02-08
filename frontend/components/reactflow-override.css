@@ -1,0 +1,88 @@
+/* =========================================
+   REACTFLOW OVERRIDES - FORCE DARK MODE
+   ========================================= */
+
+/* Pane Background - FORCE TRANSPARENT TO ALLOW COMPONENT THEME */
+div.react-flow__pane {
+    background-color: transparent !important;
+}
+
+/* Background Pattern */
+div.react-flow__background {
+    background-color: transparent !important;
+}
+
+svg.react-flow__background-pattern circle {
+    fill: var(--accent, #2d2d2d) !important;
+    opacity: 0.15 !important;
+}
+
+/* Controls - FORCE DARK */
+div.react-flow__controls {
+    background: #0d1520 !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+}
+
+button.react-flow__controls-button {
+    background: transparent !important;
+    border: none !important;
+    color: #94a3b8 !important;
+    width: 32px !important;
+    height: 32px !important;
+    border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+}
+
+button.react-flow__controls-button:hover {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #fff !important;
+}
+
+/* Minimap - FORCE DARK */
+div.react-flow__minimap {
+    background: #020408 !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+}
+
+svg.react-flow__minimap-mask {
+    fill: rgba(2, 4, 8, 0.7) !important;
+}
+
+svg.react-flow__minimap-node {
+    fill: #1e293b !important;
+    stroke: none !important;
+}
+
+/* Edges */
+path.react-flow__edge-path {
+    stroke: #1e293b !important;
+    stroke-width: 1px !important;
+}
+
+g.react-flow__edge.selected path.react-flow__edge-path {
+    stroke: #2d2d2d !important;
+    stroke-width: 2px !important;
+}
+
+/* Handles */
+div.react-flow__handle {
+    background: #1e293b !important;
+    border: 1px solid #2d2d2d !important;
+    width: 6px !important;
+    height: 6px !important;
+}
+
+div.react-flow__handle:hover {
+    background: #2d2d2d !important;
+}
+
+/* KILL ALL LIGHT MODE */
+@media (prefers-color-scheme: light) {
+    div.react-flow__pane,
+    div.react-flow__minimap,
+    div.react-flow__controls {
+        background: #020408 !important;
+    }
+}

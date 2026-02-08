@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+sse-starlette
+crewai
+openai
+langchain_openai
+python-dotenv

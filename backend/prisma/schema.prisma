@@ -1,0 +1,381 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String?
+  avatarUrl     String?
+  passwordHash  String?
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships OrganizationMember[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  avatarUrl String?
+  settings  String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members       OrganizationMember[]
+  workspaces    Workspace[]
+  executions    Execution[]
+  subscription  Subscription?
+  usageMeters   UsageMeter[]
+  toolPermissions ToolPermission[]
+
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String   // owner, admin, member, viewer
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("organization_members")
+}
+
+model Workspace {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  settings       String   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workflows    Workflow[]
+  agents       Agent[]
+  chatSessions ChatSession[]
+
+  @@map("workspaces")
+}
+
+model Workflow {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  name          String
+  description   String?
+  status        String    @default("draft") // draft, published, archived
+  definition    String
+  n8nWorkflowId String?
+  createdBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  publishedAt   DateTime?
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executions   Execution[]
+  chatSessions ChatSession[]
+
+  @@map("workflows")
+}
+
+model Execution {
+  id             String    @id @default(uuid())
+  workflowId     String
+  organizationId String
+  status         String    @default("pending") // pending, running, success, failed, timeout, waiting
+  currentNodeId  String?
+  input          String?
+  output         String?
+  error          String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  durationMs     Int?
+  costUsd        Float?
+  triggeredBy    String    // manual, webhook, schedule, api
+  createdAt      DateTime  @default(now())
+
+  workflow Workflow         @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+  steps    ExecutionStep[]
+  decisions Decision[] // AESK: Autonomous decisions that triggered this execution
+
+  @@map("executions")
+}
+
+model ExecutionStep {
+  id          String    @id @default(uuid())
+  executionId String
+  nodeId      String
+  nodeType    String
+  status      String
+  input       String?
+  output      String?
+  error       String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  durationMs  Int?
+  stepOrder   Int
+
+  execution Execution  @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  toolCalls ToolCall[]
+
+  @@map("execution_steps")
+}
+
+model ToolCall {
+  id               String   @id @default(uuid())
+  executionStepId  String
+  toolName         String
+  arguments        String
+  result           String?
+  error            String?
+  durationMs       Int?
+  costUsd          Float?
+  createdAt        DateTime @default(now())
+
+  executionStep ExecutionStep @relation(fields: [executionStepId], references: [id], onDelete: Cascade)
+
+  @@map("tool_calls")
+}
+
+model Agent {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  name         String
+  description  String?
+  model        String
+  systemPrompt String
+  temperature  Float    @default(0.7)
+  maxTokens    Int      @default(2000)
+  tools        String   @default("[]")
+  memoryConfig String   @default("{\"type\":\"none\"}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("agents")
+}
+
+model Tool {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  displayName     String
+  description     String
+  category        String?
+  type            String // http, database, function, builtin
+  configuration   String
+  parametersSchema String
+  isPublic        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  permissions ToolPermission[]
+
+  @@map("tools")
+}
+
+model ToolPermission {
+  id              String   @id @default(uuid())
+  organizationId  String
+  toolId          String
+  allowed         Boolean  @default(true)
+  configOverrides String   @default("{}")
+  createdAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tool         Tool         @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, toolId])
+  @@map("tool_permissions")
+}
+
+model ChatSession {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  workflowId    String
+  userId        String?
+  metadata      String   @default("{}")
+  createdAt     DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workflow Workflow      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  sessionId String
+  role      String // user, assistant, system
+  content   String
+  metadata  String   @default("{}")
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String?
+  userId         String?
+  action         String
+  resourceType   String?
+  resourceId     String?
+  metadata       String   @default("{}")
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model BillingPlan {
+  id              String   @id @default(uuid())
+  name            String
+  displayName     String
+  priceMonthlyUsd Float?
+  limits          String
+  features        String   @default("[]")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  subscriptions Subscription[]
+
+  @@map("billing_plans")
+}
+
+model Subscription {
+  id                   String    @id @default(uuid())
+  organizationId       String    @unique
+  planId               String
+  status               String    @default("active") // trial, active, past_due, cancelled
+  stripeSubscriptionId String?
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         BillingPlan  @relation(fields: [planId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model UsageMeter {
+  id             String   @id @default(uuid())
+  organizationId String
+  metric         String // executions, llm_tokens, storage_bytes
+  value          BigInt   @default(0)
+  periodStart    DateTime
+  periodEnd      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metric, periodStart])
+  @@map("usage_meters")
+}
+
+// ==========================================
+// AESK (Autonomic Enterprise System Kernel)
+// Company Brain & Autonomous Orchestration
+// ==========================================
+
+model Feedback {
+  id             String    @id @default(uuid())
+  organizationId String
+  source         String    // 'twitter', 'email', 'appstore', 'support', 'webhook'
+  content        String
+  sentimentScore Float?
+  status         String    @default("pending") // 'pending', 'analyzed', 'acted_on', 'ignored'
+  metadata       String    @default("{}")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  decisions Decision[]
+
+  @@map("feedback")
+}
+
+model Decision {
+  id                  String    @id @default(uuid())
+  organizationId      String
+  agentName           String    // 'cortex_strategist', 'dev_squad', 'marketing_squad'
+  actionType          String    // 'CODE_FIX', 'MARKETING', 'SUPPORT_RESPONSE', 'WORKFLOW_CREATE'
+  reasoning           String
+  priority            String    @default("MEDIUM") // 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+  status              String    @default("pending") // 'pending', 'executing', 'completed', 'failed'
+  result              String?
+  costUsd             Float?
+  createdAt           DateTime  @default(now())
+  completedAt         DateTime?
+
+  // Relations
+  feedbackId          String?
+  feedback            Feedback? @relation(fields: [feedbackId], references: [id])
+  workflowExecutionId String?
+  workflowExecution   Execution? @relation(fields: [workflowExecutionId], references: [id])
+
+  @@map("decisions")
+}
+
+model Signal {
+  id             String   @id @default(uuid())
+  organizationId String
+  type           String   // 'error', 'metric', 'user_action', 'system_health', 'external_event'
+  severity       String   // 'INFO', 'WARNING', 'ERROR', 'CRITICAL'
+  payload        String   // JSON string
+  processed      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@map("signals")
+}
+
+model CompanyMetric {
+  id             String   @id @default(uuid())
+  organizationId String
+  metricName     String   // 'active_users', 'error_rate', 'revenue', 'api_cost', 'agent_executions'
+  value          Float
+  unit           String   // 'count', 'usd', 'percentage', 'ms'
+  timestamp      DateTime @default(now())
+
+  @@map("company_metrics")
+}
+
+model AESKConfig {
+  id             String   @id @default(uuid())
+  organizationId String   @unique
+  enabled        Boolean  @default(false)
+  loopIntervalMs Int      @default(10000) // 10 seconds
+  budgetDailyUsd Float    @default(50.0)
+  budgetMonthlyUsd Float  @default(500.0)
+  emergencyStop  Boolean  @default(false)
+  settings       String   @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("aesk_config")
+}

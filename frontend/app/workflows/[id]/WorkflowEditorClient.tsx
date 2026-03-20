@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
+import { BRAND } from '@/lib/brand';
 
 interface WorkflowEditorClientProps {
     workflowId?: string;
@@ -18,16 +19,17 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
             try {
                 const mod = await import('./WorkflowEditorInnerPro');
                 if (mounted) setEditor(() => mod.default);
-            } catch (err: any) {
-                console.error('Failed to load full editor, falling back to lite view', err);
+            } catch (err: unknown) {
+                console.error('Failed to load full editor, falling back to simple mode', err);
                 if (!mounted) return;
                 setUsingFallback(true);
                 try {
                     const lite = await import('./WorkflowEditorInnerLite');
                     if (mounted) setEditor(() => lite.default);
-                } catch (liteErr: any) {
+                } catch (liteErr: unknown) {
                     if (mounted) {
-                        setError(liteErr?.message || 'Failed to load editor');
+                        const message = liteErr instanceof Error ? liteErr.message : 'Failed to load editor';
+                        setError(message);
                     }
                 }
             }
@@ -40,7 +42,7 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
 
     if (error) {
         return (
-            <div style={{ padding: '40px', color: '#ef4444' }}>
+            <div style={{ padding: '24px', color: '#ef4444', fontSize: 13 }}>
                 {error}
             </div>
         );
@@ -48,7 +50,7 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
 
     if (!Editor) {
         return (
-            <div style={{ padding: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            <div style={{ padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 240, color: 'var(--text-secondary)' }}>
                 Loading workflow...
             </div>
         );
@@ -58,15 +60,13 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
         <>
             {usingFallback && (
                 <div style={{
-                    padding: '10px 14px',
-                    background: 'rgba(255, 183, 77, 0.12)',
-                    border: '1px solid rgba(255, 183, 77, 0.3)',
+                    padding: '10px 16px',
+                    borderBottom: '1px solid rgba(245, 158, 11, 0.35)',
                     color: '#f59e0b',
                     fontSize: '12px',
-                    borderRadius: '10px',
-                    margin: '16px',
+                    background: 'rgba(245, 158, 11, 0.08)',
                 }}>
-                    Full editor failed to load; showing lite view instead.
+                    {BRAND.company} is running in simple mode.
                 </div>
             )}
             <Editor workflowId={workflowId} />

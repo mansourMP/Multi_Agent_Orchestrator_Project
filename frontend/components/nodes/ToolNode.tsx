@@ -1,31 +1,33 @@
 'use client';
 import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Wrench, Send, Search, Database, Globe } from 'lucide-react';
+import { Wrench, Send, Search, Database, Globe, type LucideIcon } from 'lucide-react';
 
-const ToolNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+type ToolNodeData = {
+    label?: string;
+    action?: string;
+};
+
+const TOOL_ICON_MAP: Record<string, LucideIcon> = {
+    telegram: Send,
+    search: Search,
+    database: Database,
+    webhook: Globe,
+    http: Globe,
+};
+
+const ToolNode = ({ data, selected }: { data: ToolNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const accentColor = '#14b8a6'; // Teal for tools
 
-    const getIcon = () => {
-        switch (data.action) {
-            case 'telegram': return Send;
-            case 'search': return Search;
-            case 'database': return Database;
-            case 'webhook':
-            case 'http': return Globe;
-            default: return Wrench;
-        }
-    };
-
-    const Icon = getIcon();
+    const Icon = TOOL_ICON_MAP[data.action || ''] || Wrench;
 
     return (
         <div
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             style={{
-                background: '#fff',
+                background: 'var(--bg-surface)',
                 borderRadius: '16px',
                 boxShadow: selected
                     ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}20`
@@ -47,7 +49,7 @@ const ToolNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 type="target"
                 position={Position.Left}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,
@@ -79,13 +81,13 @@ const ToolNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                     <div style={{
                         fontSize: '14px',
                         fontWeight: 600,
-                        color: '#1e293b',
+                        color: 'var(--text-primary)',
                     }}>
                         {data.label || 'Tool'}
                     </div>
                     <div style={{
                         fontSize: '10px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         marginTop: '3px',
                     }}>
                         Integration
@@ -97,7 +99,7 @@ const ToolNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 type="source"
                 position={Position.Right}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,

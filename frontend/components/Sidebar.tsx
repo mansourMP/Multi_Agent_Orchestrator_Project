@@ -1,266 +1,396 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import {
     LayoutDashboard,
     Workflow,
-    Bot,
     Activity,
-    Settings,
-    Search,
-    Brain,
-    Database,
+    FileStack,
     Key,
-    Users,
-    ChevronsLeft,
-    ChevronsRight,
-    MoreHorizontal,
-    MessageSquare
+    MessageSquare,
+    Settings,
+    UserRound,
 } from 'lucide-react';
+import { BRAND } from '@/lib/brand';
+import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { safeNavigate } from '@/lib/safeNavigate';
+import {
+    CHAT_SESSION_SELECT_EVENT,
+    CHAT_STORE_STORAGE_KEY,
+    CHAT_STORE_UPDATED_EVENT,
+    sanitizeChatStore,
+    type ChatSessionRecord,
+} from '@/components/orion/chat/chatSchema';
+import type { ComponentType, CSSProperties } from 'react';
 
-const NAV_ITEMS = [
-    { label: 'Overview', href: '/', icon: LayoutDashboard },
-    { label: 'Workflows', href: '/workflows', icon: Workflow },
-    { label: 'Agents', href: '/agents', icon: Bot },
-    { label: 'Executions', href: '/executions', icon: Activity },
-    { label: 'Credentials', href: '/credentials', icon: Key },
-    { label: 'Variables', href: '/variables', icon: Database },
+type NavItem = {
+    label: string;
+    href: string;
+    icon: ComponentType<{ size?: number; strokeWidth?: number; style?: CSSProperties }>;
+    appGlyph?: string;
+    badge?: number;
+};
+
+const WORKSPACE_ITEMS: NavItem[] = [
+    { label: 'Chat', href: '/workspace', icon: MessageSquare },
+    { label: 'Runs', href: '/runs', icon: Activity },
+    { label: 'Outputs', href: '/artifacts', icon: FileStack },
+    { label: 'Connections', href: '/integrations', icon: Key },
+    { label: 'Automations', href: '/workflows', icon: Workflow },
 ];
 
-const SECONDARY_ITEMS = [
-    { label: 'Command Center', href: '/aesk', icon: Brain },
-    { label: 'System Health', href: '/health', icon: Activity },
-    { label: 'Feedback', href: '/feedback', icon: MessageSquare },
-    { label: 'Settings', href: '/settings', icon: Settings },
-    { label: 'Admin Panel', href: '/admin', icon: Users },
-];
+type SolutionNavItem = {
+    label?: string;
+    href?: string;
+    icon?: string;
+};
+
+type InstalledSolution = {
+    id: string;
+    enabled: boolean;
+    route_base?: string;
+    primary_route?: string;
+    status?: {
+        unresolved_alerts?: number;
+    };
+    ui_preset?: {
+        nav_items?: SolutionNavItem[];
+        admin_bottom_items?: SolutionNavItem[];
+    };
+};
 
 export default function Sidebar() {
     const pathname = usePathname();
-    const router = useRouter();
-    const [isCollapsed, setIsCollapsed] = useState(false);
+    const chatSessionsRef = useRef<HTMLDivElement | null>(null);
+    const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+    const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
+    const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
+    const [selectedChatSessionId, setSelectedChatSessionId] = useState<string | null>(null);
+    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>([]);
 
-    const isWorkflowPath = pathname?.startsWith('/workflows');
+    useEffect(() => {
+        let alive = true;
+        const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+        const runtimeKey = readRuntimeApiKeyFromStorage('replace-with-strong-key');
+        const headers: HeadersInit = { 'X-API-Key': runtimeKey };
+
+        const refreshAttention = async () => {
+            try {
+                const res = await fetch(`${runtimeUrl}/history/runs?limit=40&workspace_id=default`, { headers });
+                if (!res.ok) return;
+                const payload = await res.json().catch(() => null);
+                const items = Array.isArray(payload?.items) ? payload.items : [];
+                const count = items.filter((item: unknown) => {
+                    const record = item as Record<string, unknown>;
+                    return String(record?.status || '').toLowerCase() === 'waiting_for_input';
+                }).length;
+                if (alive) setPendingApprovalsCount(count);
+            } catch {
+                // keep previous badge value
+            }
+        };
+
+        void refreshAttention();
+        const timer = window.setInterval(() => {
+            void refreshAttention();
+        }, 12000);
+        return () => {
+            alive = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    useEffect(() => {
+        let alive = true;
+        const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+        const runtimeKey = readRuntimeApiKeyFromStorage('replace-with-strong-key');
+        if (!runtimeKey) {
+            return;
+        }
+        const refreshSolutions = async () => {
+            try {
+                const res = await fetch(`${runtimeUrl}/solutions/state`, { headers: { 'X-API-Key': runtimeKey } });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) return;
+                const items = Array.isArray(body?.active) ? body.active : [];
+                if (alive) {
+                    setActiveSolutions(items.filter((item: unknown) => Boolean(item) && typeof item === 'object') as InstalledSolution[]);
+                }
+            } catch {
+                if (alive) setActiveSolutions([]);
+            }
+        };
+        void refreshSolutions();
+        const timer = window.setInterval(() => {
+            void refreshSolutions();
+        }, 20000);
+        return () => {
+            alive = false;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    const workspaceItems = useMemo(
+        () =>
+            WORKSPACE_ITEMS.map((item) => {
+                return item.href === '/runs' && pendingApprovalsCount > 0
+                    ? { ...item, badge: pendingApprovalsCount }
+                    : item;
+            }),
+        [pendingApprovalsCount],
+    );
+
+    const solutionItems = useMemo(() => {
+        return activeSolutions
+            .filter((solution) => solution.enabled && String(solution.route_base || '').trim())
+            .map((solution) => ({
+                label: solution.id === 'hotel-vision' ? 'Hotel Vision' : solution.id,
+                href: solution.primary_route || solution.route_base || '/',
+                icon: LayoutDashboard,
+                badge: Number(solution.status?.unresolved_alerts || 0) || undefined,
+            }));
+    }, [activeSolutions]);
+
+    const railItems = useMemo(() => {
+        const items: NavItem[] = [];
+        const seen = new Set<string>();
+
+        for (const item of [...solutionItems, ...workspaceItems]) {
+            if (item.href === '/workspace' && seen.has('/workspace')) continue;
+            if (seen.has(item.href)) continue;
+            seen.add(item.href);
+            items.push(item);
+        }
+
+        return items;
+    }, [solutionItems, workspaceItems]);
 
     useEffect(() => {
         const root = document.documentElement;
-        if (isCollapsed) {
-            root.style.setProperty('--sidebar-width', '72px');
-        } else {
-            root.style.setProperty('--sidebar-width', '240px');
-        }
-    }, [isCollapsed]);
+        root.style.setProperty('--sidebar-width', '68px');
+    }, []);
 
     useEffect(() => {
-        setIsCollapsed(Boolean(isWorkflowPath));
-    }, [isWorkflowPath]);
+        const loadChatSessions = () => {
+            try {
+                const raw = window.localStorage.getItem(CHAT_STORE_STORAGE_KEY);
+                if (!raw) {
+                    setChatSessions([]);
+                    setSelectedChatSessionId(null);
+                    return;
+                }
+                const parsed = sanitizeChatStore(JSON.parse(raw));
+                if (!parsed) {
+                    setChatSessions([]);
+                    setSelectedChatSessionId(null);
+                    return;
+                }
+                setChatSessions(
+                    [...parsed.sessions]
+                        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+                        .slice(0, 8),
+                );
+                setSelectedChatSessionId(parsed.selectedSessionId);
+            } catch {
+                setChatSessions([]);
+                setSelectedChatSessionId(null);
+            }
+        };
+
+        loadChatSessions();
+        window.addEventListener('storage', loadChatSessions);
+        window.addEventListener(CHAT_STORE_UPDATED_EVENT, loadChatSessions as EventListener);
+        window.addEventListener('focus', loadChatSessions);
+        return () => {
+            window.removeEventListener('storage', loadChatSessions);
+            window.removeEventListener(CHAT_STORE_UPDATED_EVENT, loadChatSessions as EventListener);
+            window.removeEventListener('focus', loadChatSessions);
+        };
+    }, []);
+
+    useEffect(() => {
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!chatSessionsRef.current?.contains(event.target as Node)) {
+                setChatSessionsOpen(false);
+            }
+        };
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setChatSessionsOpen(false);
+        };
+
+        window.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, []);
+
+    const isNavItemActive = (item: NavItem): boolean => {
+        return pathname === item.href;
+    };
 
     return (
         <aside className="sidebar" style={{
             width: 'var(--sidebar-width)',
-            transition: 'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)',
-            overflow: 'hidden',
+            transition: 'width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1)',
+            overflow: 'visible',
             display: 'flex',
             flexDirection: 'column',
-            borderRight: '1px solid var(--border-default)',
-            backgroundColor: 'var(--bg-sidebar)'
         }}>
-            {/* Brand Header */}
-            <div className="sidebar-header" style={{ marginBottom: '8px', padding: isCollapsed ? '0 12px' : '0 20px', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-                {!isCollapsed && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{
-                            width: '24px',
-                            height: '24px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            flexShrink: 0
-                        }}>
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M2 17L12 22L22 17" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                <path d="M2 12L12 17L22 12" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                        </div>
-                        <span style={{
-                            fontSize: '16px',
-                            fontWeight: 700,
-                            color: 'var(--text-primary)',
-                            letterSpacing: '-0.02em',
-                            whiteSpace: 'nowrap',
-                            opacity: isCollapsed ? 0 : 1,
-                            transition: 'opacity 0.2s',
-                        }}>
-                            conductor<span style={{ color: '#ff6d5a' }}>.</span>
-                        </span>
-                    </div>
-                )}
-
-                {!isWorkflowPath && (
-                    <button
-                        onClick={() => setIsCollapsed(!isCollapsed)}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'var(--text-tertiary)',
-                            cursor: 'pointer',
-                            padding: '6px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            borderRadius: '6px',
-                            transition: 'all 0.2s'
-                        }}
-                        className="hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
-                        aria-label="Toggle sidebar"
-                    >
-                        {isCollapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-                    </button>
-                )}
-        </div>
-
-            {/* Scrollable Content Area */}
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                {/* Quick Search */}
-                <div style={{ padding: isCollapsed ? '0 12px 16px' : '0 20px 16px 20px' }}>
-                    <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: isCollapsed ? 'center' : 'flex-start',
-                        gap: 10,
-                        padding: '8px 12px',
-                        background: 'var(--bg-app)',
-                        border: '1px solid var(--border-default)',
-                        borderRadius: '8px',
-                        color: 'var(--text-tertiary)',
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                        height: '36px',
-                        transition: 'all 0.2s'
-                    }} className="hover:border-[var(--gray-5)]">
-                        <Search size={14} style={{ flexShrink: 0 }} />
-                        {!isCollapsed && <span style={{ whiteSpace: 'nowrap' }}>Search...</span>}
-                    </div>
-                </div>
-
-                {/* Main Navigation */}
-                <nav style={{ padding: '0 8px' }}>
-                    {!isCollapsed && (
-                        <div style={{ padding: '0 12px 8px 12px', fontSize: '11px', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            Platform
-                        </div>
-                    )}
-                    {NAV_ITEMS.map((item) => {
-                        const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-                        return (
-                            <button
-                                key={item.href}
-                                onClick={() => router.push(item.href)}
-                                style={{
-                                    width: '100%',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: isCollapsed ? 'center' : 'flex-start',
-                                    gap: '12px',
-                                    padding: '8px 12px',
-                                    background: isActive ? 'var(--bg-hover)' : 'transparent',
-                                    border: 'none',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer',
-                                    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                    transition: 'all 0.2s',
-                                    fontWeight: isActive ? 700 : 500,
-                                    marginBottom: '2px'
-                                }}
-                                className={!isActive ? "hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]" : ""}
-                                title={isCollapsed ? item.label : ''}
-                            >
-                                <item.icon size={18} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.7, flexShrink: 0 }} />
-                                {!isCollapsed && <span style={{ fontSize: '13px', whiteSpace: 'nowrap' }}>{item.label}</span>}
-                            </button>
-                        );
-                    })}
-                </nav>
-
-                <div style={{ height: '24px' }} />
-
-                {/* Secondary Navigation */}
-                <nav style={{ padding: '0 8px' }}>
-                    {SECONDARY_ITEMS.map((item) => {
-                        const isActive = pathname === item.href;
-                        return (
-                            <button
-                                key={item.href}
-                                onClick={() => router.push(item.href)}
-                                style={{
-                                    width: '100%',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: isCollapsed ? 'center' : 'flex-start',
-                                    gap: '12px',
-                                    padding: '8px 12px',
-                                    background: isActive ? 'var(--bg-hover)' : 'transparent',
-                                    border: 'none',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer',
-                                    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                    transition: 'all 0.2s',
-                                    fontWeight: isActive ? 700 : 500,
-                                    marginBottom: '2px'
-                                }}
-                                className={!isActive ? "hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]" : ""}
-                                title={isCollapsed ? item.label : ''}
-                            >
-                                <item.icon size={18} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.7, flexShrink: 0 }} />
-                                {!isCollapsed && <span style={{ fontSize: '13px', whiteSpace: 'nowrap' }}>{item.label}</span>}
-                            </button>
-                        );
-                    })}
-                </nav>
+            <div
+                className="sidebar-header"
+                style={{
+                    marginBottom: '2px',
+                    padding: '8px 4px 6px 4px',
+                    justifyContent: 'center',
+                }}
+            >
+                <button
+                    type="button"
+                    className="sidebar-brandmark"
+                    onClick={() => safeNavigate('/')}
+                    title={BRAND.company}
+                    aria-label={`${BRAND.company} home`}
+                >
+                    <span className="sidebar-brandmark-text">{BRAND.company}</span>
+                </button>
             </div>
 
-            {/* Profile Footer */}
-            <div style={{ padding: isCollapsed ? '8px' : '16px 12px', borderTop: '1px solid var(--border-subtle)' }}>
-                <button
-                    style={{
-                        width: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: isCollapsed ? 'center' : 'space-between',
-                        padding: '8px',
-                        background: 'transparent',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s',
-                        color: 'var(--text-primary)'
-                    }}
-                    className="hover:bg-[var(--bg-hover)]"
-                >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{
-                            width: '28px',
-                            height: '28px',
-                            borderRadius: '6px',
-                            background: '#000',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            color: '#fff'
-                        }}>M</div>
-                        {!isCollapsed && (
-                            <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
-                                <span style={{ fontSize: '13px', fontWeight: 600 }}>Mansur</span>
-                                <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>Pro Workspace</span>
-                            </div>
-                        )}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ padding: '0 6px 10px', display: 'grid', gap: 12 }}>
+                    <div className="sidebar-rail-group">
+                        {railItems.map((item) => {
+                            const isActive = isNavItemActive(item);
+                            const isChatItem = item.href === '/workspace';
+                            return (
+                                <div
+                                    key={`workspace:${item.href}:${item.label}`}
+                                    className="sidebar-rail-entry"
+                                    ref={isChatItem ? chatSessionsRef : undefined}
+                                >
+                                    <button
+                                        onClick={() => {
+                                            if (isChatItem && pathname === '/workspace') {
+                                                setChatSessionsOpen((current) => !current);
+                                                return;
+                                            }
+                                            safeNavigate(item.href);
+                                        }}
+                                        className={`sidebar-nav-btn is-rail${isActive ? ' is-active' : ''}`}
+                                        style={isActive ? {
+                                            backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                            boxShadow: 'none',
+                                        } : undefined}
+                                        title={item.label}
+                                        aria-label={item.label}
+                                        aria-expanded={isChatItem ? chatSessionsOpen : undefined}
+                                    >
+                                        <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
+                                        {typeof item.badge === 'number' && item.badge > 0 ? (
+                                            <span className="sidebar-icon-badge" aria-hidden>
+                                                {item.badge > 99 ? '99+' : item.badge}
+                                            </span>
+                                        ) : null}
+                                    </button>
+
+                                    {isChatItem && pathname === '/workspace' && chatSessionsOpen ? (
+                                        <div className="sidebar-flyout sidebar-chat-history" role="dialog" aria-label="Chat sessions">
+                                            <div className="sidebar-flyout-header">
+                                                <div className="sidebar-flyout-title">Recent chats</div>
+                                                <div className="sidebar-flyout-copy">
+                                                    Sessions stay in the left rail. Start a new chat from the header.
+                                                </div>
+                                            </div>
+                                            <div className="sidebar-flyout-list">
+                                                {chatSessions.map((session) => {
+                                                    const updatedAtLabel = Number.isFinite(Date.parse(session.updatedAt))
+                                                        ? new Date(session.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                                                        : '';
+                                                    const preview = session.messages.find((message) => message.role === 'user')?.content || 'Empty chat';
+                                                    const isSelected = session.id === selectedChatSessionId;
+                                                    return (
+                                                        <button
+                                                            key={session.id}
+                                                            type="button"
+                                                            className={`sidebar-flyout-item sidebar-chat-history-item${isSelected ? ' is-active' : ''}`}
+                                                            onClick={() => {
+                                                                window.dispatchEvent(
+                                                                    new CustomEvent(CHAT_SESSION_SELECT_EVENT, {
+                                                                        detail: { sessionId: session.id },
+                                                                    }),
+                                                                );
+                                                                setChatSessionsOpen(false);
+                                                                safeNavigate('/workspace');
+                                                            }}
+                                                        >
+                                                            <span className="sidebar-chat-history-text">
+                                                                <span className="sidebar-flyout-label">{session.title}</span>
+                                                                <span className="sidebar-chat-history-preview">
+                                                                    {preview.length > 56 ? `${preview.slice(0, 53).trimEnd()}...` : preview}
+                                                                </span>
+                                                            </span>
+                                                            <span className="sidebar-chat-history-date">{updatedAtLabel}</span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ) : null}
+                                </div>
+                            );
+                        })}
                     </div>
-                    {!isCollapsed && <MoreHorizontal size={14} color="var(--text-tertiary)" />}
+                </div>
+            </div>
+
+            <div
+                className="sidebar-account-dock"
+                style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                }}
+            >
+                <button
+                    type="button"
+                    className={`sidebar-account-btn${pathname === '/settings' ? ' is-active' : ''}`}
+                    style={pathname === '/settings' ? {
+                        backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
+                        color: '#ffffff',
+                        border: 'none',
+                        boxShadow: 'none',
+                    } : undefined}
+                    onClick={() => safeNavigate('/settings')}
+                    title="Settings"
+                    aria-label="Settings"
+                >
+                    <span className="sidebar-account-avatar" aria-hidden>
+                        <Settings size={14} strokeWidth={2.1} />
+                    </span>
+                </button>
+                <button
+                    type="button"
+                    className={`sidebar-account-btn${pathname === '/account' ? ' is-active' : ''}`}
+                    style={pathname === '/account' ? {
+                        backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
+                        color: '#ffffff',
+                        border: 'none',
+                        boxShadow: 'none',
+                    } : undefined}
+                    onClick={() => safeNavigate('/account')}
+                    title="Account"
+                    aria-label="Account"
+                >
+                    <span className="sidebar-account-avatar" aria-hidden>
+                        <UserRound size={14} strokeWidth={2.1} />
+                    </span>
                 </button>
             </div>
         </aside>

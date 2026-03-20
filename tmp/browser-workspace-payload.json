@@ -1,0 +1,7 @@
+{
+  "mode": "capture_page",
+  "url": "http://localhost:3000/workspace",
+  "screenshotPath": "/Users/mansur/Multi_Agent_Orchestrator_Project/tmp/workspace-qa.png",
+  "settleMs": 1800,
+  "timeoutMs": 45000
+}

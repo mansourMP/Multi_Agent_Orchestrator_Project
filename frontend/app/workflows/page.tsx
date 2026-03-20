@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, MoreHorizontal, Clock, Circle, Search, Filter, Trash, Copy } from 'lucide-react';
+import { Plus, MoreHorizontal, Clock, Workflow as WorkflowIcon, Search, Trash, Copy, PlayCircle, CalendarClock, Zap } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { fetchWorkflows, createWorkflow, deleteWorkflow, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { MetricStrip } from '@/components/ui/MetricStrip';
 
 type WorkflowRecord = {
     id: string;
@@ -16,96 +19,87 @@ type WorkflowRecord = {
     updatedAt: string;
 };
 
+function formatApiError(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : '';
+    if (!message) return fallback;
+    if (message.includes('Failed to fetch')) {
+        return `${fallback}. Backend API may be offline on http://127.0.0.1:4000.`;
+    }
+    return `${fallback}: ${message}`;
+}
+
 const WORKFLOW_TEMPLATES = [
     {
-        id: 'blank',
-        name: 'Blank Canvas',
-        description: 'Start with an empty workflow.',
-        definition: { nodes: [], edges: [] }
+        id: 'quick-start',
+        name: 'Quick Start',
+        description: 'One assistant, one clear goal.',
+        definition: { nodes: [], edges: [], meta: { mode: 'simple_operator' } }
     },
     {
-        id: 'marketing-brief',
-        name: 'Marketing Brief',
-        description: 'CEO → Marketing → Review',
+        id: 'inbox-triage',
+        name: 'Inbox Triage',
+        description: 'Classify incoming messages and prepare clear replies.',
         definition: {
-            nodes: [
-                { id: 'agent-ceo', type: 'dashboard', position: { x: 160, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'CEO', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Approve strategy', status: 'idle' } },
-                { id: 'agent-marketing', type: 'dashboard', position: { x: 480, y: 140 }, data: { role: 'Marketing', label: 'GPT-4O', subLabel: 'Marketing', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Draft positioning', status: 'idle' } },
-                { id: 'agent-review', type: 'dashboard', position: { x: 800, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'Review', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Finalize output', status: 'idle' } },
-            ],
-            edges: [
-                { id: 'e-ceo-marketing', source: 'agent-ceo', target: 'agent-marketing' },
-                { id: 'e-marketing-review', source: 'agent-marketing', target: 'agent-review' }
-            ]
+            nodes: [],
+            edges: [],
+            meta: {
+                mode: 'simple_operator',
+                operator: { userGoal: 'Triage incoming customer messages and draft responses.' }
+            }
         }
     },
     {
-        id: 'research-sprint',
-        name: 'Research Sprint',
-        description: 'CEO → Research → Synthesis',
+        id: 'booking-assistant',
+        name: 'Booking Assistant',
+        description: 'Handle booking requests and propose available slots.',
         definition: {
-            nodes: [
-                { id: 'agent-ceo', type: 'dashboard', position: { x: 160, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'CEO', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Define scope', status: 'idle' } },
-                { id: 'agent-research', type: 'dashboard', position: { x: 480, y: 140 }, data: { role: 'Research', label: 'GPT-4O', subLabel: 'Research', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Gather sources', status: 'idle' } },
-                { id: 'agent-synthesis', type: 'dashboard', position: { x: 800, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'Synthesis', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Summarize findings', status: 'idle' } },
-            ],
-            edges: [
-                { id: 'e-ceo-research', source: 'agent-ceo', target: 'agent-research' },
-                { id: 'e-research-synthesis', source: 'agent-research', target: 'agent-synthesis' }
-            ]
+            nodes: [],
+            edges: [],
+            meta: {
+                mode: 'simple_operator',
+                operator: { userGoal: 'Confirm appointment details and help customers complete booking.' }
+            }
         }
     },
-    {
-        id: 'product-build',
-        name: 'Product Build',
-        description: 'CEO → Coder → Designer → CEO',
-        definition: {
-            nodes: [
-                { id: 'agent-ceo', type: 'dashboard', position: { x: 120, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'CEO', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Set scope', status: 'idle' } },
-                { id: 'agent-coder', type: 'dashboard', position: { x: 420, y: 140 }, data: { role: 'Coder', label: 'GPT-4O', subLabel: 'Coder', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Implement plan', status: 'idle' } },
-                { id: 'agent-designer', type: 'dashboard', position: { x: 720, y: 140 }, data: { role: 'Designer', label: 'GPT-4O', subLabel: 'Designer', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Design UI/UX', status: 'idle' } },
-                { id: 'agent-ceo-review', type: 'dashboard', position: { x: 1020, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'Review', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Approve build', status: 'idle' } },
-            ],
-            edges: [
-                { id: 'e-ceo-coder', source: 'agent-ceo', target: 'agent-coder' },
-                { id: 'e-coder-designer', source: 'agent-coder', target: 'agent-designer' },
-                { id: 'e-designer-review', source: 'agent-designer', target: 'agent-ceo-review' }
-            ]
-        }
-    },
-    {
-        id: 'gtm-launch',
-        name: 'GTM Launch',
-        description: 'CEO → Marketing → Coder → CEO',
-        definition: {
-            nodes: [
-                { id: 'agent-ceo', type: 'dashboard', position: { x: 140, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'CEO', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Define launch brief', status: 'idle' } },
-                { id: 'agent-marketing', type: 'dashboard', position: { x: 460, y: 140 }, data: { role: 'Marketing', label: 'GPT-4O', subLabel: 'Marketing', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Build messaging', status: 'idle' } },
-                { id: 'agent-coder', type: 'dashboard', position: { x: 780, y: 140 }, data: { role: 'Coder', label: 'GPT-4O', subLabel: 'Coder', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Implement launch assets', status: 'idle' } },
-                { id: 'agent-ceo-final', type: 'dashboard', position: { x: 1100, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'Final', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Approve launch', status: 'idle' } },
-            ],
-            edges: [
-                { id: 'e-ceo-marketing', source: 'agent-ceo', target: 'agent-marketing' },
-                { id: 'e-marketing-coder', source: 'agent-marketing', target: 'agent-coder' },
-                { id: 'e-coder-final', source: 'agent-coder', target: 'agent-ceo-final' }
-            ]
-        }
-    }
 ];
+
+const AUTOMATION_MODES = [
+    {
+        id: 'reusable',
+        label: 'Reusable',
+        description: 'Manual system your agents can run again anytime.',
+        icon: PlayCircle,
+    },
+    {
+        id: 'scheduled',
+        label: 'Scheduled',
+        description: 'Runs on a cadence for repeatable operations.',
+        icon: CalendarClock,
+    },
+    {
+        id: 'triggered',
+        label: 'Triggered',
+        description: 'Runs from a channel, webhook, or incoming event.',
+        icon: Zap,
+    },
+] as const;
+
+type AutomationModeId = (typeof AUTOMATION_MODES)[number]['id'];
 
 export default function WorkflowsPage() {
     const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [query, setQuery] = useState('');
     const [showModal, setShowModal] = useState(false);
     const [newWfName, setNewWfName] = useState('');
     const [newWfDesc, setNewWfDesc] = useState('');
-    const [selectedTemplateId, setSelectedTemplateId] = useState('blank');
-    const [aiTemplatePrompt, setAiTemplatePrompt] = useState('');
-    const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
+    const [selectedTemplateId, setSelectedTemplateId] = useState('quick-start');
+    const [automationMode, setAutomationMode] = useState<AutomationModeId>('reusable');
     const [deleteTarget, setDeleteTarget] = useState<WorkflowRecord | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const router = useRouter();
+    const modalPortalTarget = typeof document !== 'undefined' ? document.body : null;
 
     useEffect(() => {
         loadWorkflows();
@@ -114,10 +108,18 @@ export default function WorkflowsPage() {
     async function loadWorkflows() {
         try {
             setLoading(true);
+            setLoadError('');
             const data = await fetchWorkflows();
-            setWorkflows(data);
+            const next = Array.isArray(data)
+                ? data
+                : Array.isArray((data as { items?: unknown[] } | null | undefined)?.items)
+                    ? ((data as { items: WorkflowRecord[] }).items)
+                    : [];
+            setWorkflows(next);
         } catch (err) {
             console.error(err);
+            setWorkflows([]);
+            setLoadError(formatApiError(err, 'Failed to load workflows'));
         } finally {
             setLoading(false);
         }
@@ -128,41 +130,19 @@ export default function WorkflowsPage() {
         if (!newWfName) return;
         try {
             const template = WORKFLOW_TEMPLATES.find(t => t.id === selectedTemplateId) || WORKFLOW_TEMPLATES[0];
-            const newWorkflow = await createWorkflow(newWfName, newWfDesc, 'default', template.definition);
+            const nextDefinition = {
+                ...template.definition,
+                meta: {
+                    ...(template.definition.meta || {}),
+                    automationMode,
+                },
+            };
+            const newWorkflow = await createWorkflow(newWfName, newWfDesc, 'default', nextDefinition);
             router.push(`/workflows/${newWorkflow.id}`);
-        } catch (err) {
-            alert('Failed to create workflow');
+        } catch (error) {
+            alert(formatApiError(error, 'Failed to create workflow'));
         }
     }
-
-    const handleGenerateTemplate = async () => {
-        if (!aiTemplatePrompt.trim()) return;
-        setIsGeneratingTemplate(true);
-        try {
-            // Placeholder for future AI generation pipeline
-            const generatedTemplate = {
-                id: 'ai-generated',
-                name: `AI: ${aiTemplatePrompt.slice(0, 24)}`,
-                description: aiTemplatePrompt,
-                definition: {
-                    nodes: [
-                        { id: 'agent-ceo', type: 'dashboard', position: { x: 180, y: 140 }, data: { role: 'CEO', label: 'GPT-4O', subLabel: 'CEO', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Interpret prompt', status: 'idle' } },
-                        { id: 'agent-coder', type: 'dashboard', position: { x: 500, y: 140 }, data: { role: 'Coder', label: 'GPT-4O', subLabel: 'Coder', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Build workflow draft', status: 'idle' } },
-                        { id: 'agent-marketing', type: 'dashboard', position: { x: 820, y: 140 }, data: { role: 'Marketing', label: 'GPT-4O', subLabel: 'Marketing', modelId: 'gpt-4o', provider: 'OpenAI', task: 'Finalize deliverables', status: 'idle' } },
-                    ],
-                    edges: [
-                        { id: 'e-ceo-coder', source: 'agent-ceo', target: 'agent-coder' },
-                        { id: 'e-coder-marketing', source: 'agent-coder', target: 'agent-marketing' }
-                    ]
-                }
-            };
-            setSelectedTemplateId(generatedTemplate.id);
-            // inject into local template list for this session
-            WORKFLOW_TEMPLATES.unshift(generatedTemplate as any);
-        } finally {
-            setIsGeneratingTemplate(false);
-        }
-    };
 
     const handleDuplicate = async (event: React.MouseEvent, id: string) => {
         event.stopPropagation();
@@ -175,8 +155,8 @@ export default function WorkflowsPage() {
                 await updateWorkflow(created.id, original.definition);
             }
             await loadWorkflows();
-        } catch (err) {
-            alert('Failed to duplicate workflow');
+        } catch (error) {
+            alert(formatApiError(error, 'Failed to duplicate workflow'));
         }
     };
 
@@ -189,16 +169,31 @@ export default function WorkflowsPage() {
         );
     }, [workflows, query]);
 
+    const statusSummary = useMemo(() => {
+        return workflows.reduce(
+            (acc, workflow) => {
+                const status = String(workflow.status || 'draft').toLowerCase();
+                acc.total += 1;
+                if (status === 'published') acc.active += 1;
+                else if (status === 'paused') acc.scheduled += 1;
+                else if (status === 'error') acc.needsAttention += 1;
+                else acc.draft += 1;
+                return acc;
+            },
+            { total: 0, active: 0, draft: 0, scheduled: 0, needsAttention: 0 },
+        );
+    }, [workflows]);
+
     const getStatusDisplay = (status?: string) => {
         switch (status) {
             case 'published':
-                return { color: '#16a34a', label: 'Active' };
+                return { color: 'var(--success-fg)', ring: 'var(--success-border)', label: 'Active' };
             case 'paused':
-                return { color: '#f59e0b', label: 'Paused' };
+                return { color: 'var(--warning-fg)', ring: 'var(--warning-border)', label: 'Paused' };
             case 'error':
-                return { color: '#ef4444', label: 'Error' };
+                return { color: 'var(--error-fg)', ring: 'var(--error-border)', label: 'Error' };
             default:
-                return { color: '#94a3b8', label: 'Draft' };
+                return { color: 'var(--text-tertiary)', ring: 'var(--border-default)', label: 'Draft' };
         }
     };
 
@@ -221,401 +216,391 @@ export default function WorkflowsPage() {
             await deleteWorkflow(deleteTarget.id);
             setWorkflows(prev => prev.filter(wf => wf.id !== deleteTarget.id));
             setDeleteTarget(null);
-        } catch (err) {
-            alert('Failed to archive workflow');
+        } catch (error) {
+            alert(formatApiError(error, 'Failed to delete workflow'));
         } finally {
             setIsDeleting(false);
         }
     };
 
     return (
-        <div style={{ padding: '32px 40px', maxWidth: '1400px', margin: '0 auto', color: 'var(--text-primary)' }}>
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-                <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                        <div style={{ padding: '8px', background: 'var(--primary-base)', borderRadius: '10px', color: 'var(--primary-text)' }}>
-                            <Circle size={16} />
-                        </div>
-                        <h1 style={{ fontSize: '26px', fontWeight: 800, letterSpacing: '-0.03em' }}>Workflows</h1>
-                    </div>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '14px', fontWeight: 500 }}>Design, monitor, and deploy agent flows.</p>
-                </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <button className="btn btn-secondary" style={{ borderRadius: '10px', height: 40 }}>
-                        <Filter size={14} />
-                        Filters
-                    </button>
-                    <button className="btn btn-primary" style={{ borderRadius: '10px', height: 40 }} onClick={() => setShowModal(true)}>
+        <div className="orion-page-shell orion-animate-in">
+            <OsPageHeader
+                icon={<WorkflowIcon size={16} />}
+                title="Automations"
+                subtitle="Reusable systems your agents can run."
+                meta={
+                    workflows.length > 0 ? (
+                        <>
+                            <span>{workflows.length} total</span>
+                            <span>{statusSummary.active} active</span>
+                        </>
+                    ) : (
+                        <>
+                            <span>Use Workbench for one-off tasks</span>
+                        </>
+                    )
+                }
+                actions={
+                    <button className="orion-btn orion-btn-primary" onClick={() => setShowModal(true)}>
                         <Plus size={14} />
-                        New Workflow
+                        New Automation
                     </button>
-                </div>
-            </div>
+                }
+            />
 
-            {/* Toolbar */}
-            <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '16px'
-            }}>
-                <div style={{ position: 'relative', width: '360px' }}>
-                    <Search size={14} style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-tertiary)' }} />
-                    <input
-                        type="text"
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search workflows..."
-                        className="input"
-                        style={{ paddingLeft: '36px', height: '40px', borderRadius: '10px' }}
-                    />
-                </div>
-                <div style={{ color: 'var(--text-tertiary)', fontSize: 13 }}>
-                    {filtered.length} of {workflows.length} workflows
-                </div>
-            </div>
+            <MetricStrip
+                items={[
+                    { label: 'Automations', value: String(statusSummary.total) },
+                    { label: 'Active', value: String(statusSummary.active) },
+                    { label: 'Draft', value: String(statusSummary.draft) },
+                    { label: 'Scheduled', value: String(statusSummary.scheduled), note: 'Paused or timed routines' },
+                    { label: 'Needs attention', value: String(statusSummary.needsAttention) },
+                ]}
+            />
 
-            {/* List */}
-            <div className="card" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: '14px', overflow: 'hidden' }}>
-                {loading ? (
-                    <div style={{ padding: '72px', textAlign: 'center', color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading workflows…</div>
-                ) : filtered.length === 0 ? (
-                    <div style={{ padding: '100px 0', textAlign: 'center' }}>
-                        <div style={{ width: 56, height: 56, borderRadius: 16, background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', color: 'var(--text-tertiary)' }}>
-                            <Circle size={28} />
-                        </div>
-                        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>No workflows match</h3>
-                        <p style={{ color: 'var(--text-tertiary)', marginBottom: 20 }}>Try clearing filters or create a new workflow.</p>
-                        <button className="btn btn-primary" onClick={() => setShowModal(true)}>Create Workflow</button>
-                    </div>
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        {filtered.map((wf) => {
-                            const status = getStatusDisplay(wf.status);
-                            return (
-                                <div
-                                    key={wf.id}
-                                    onClick={() => router.push(`/workflows/${wf.id}`)}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                            router.push(`/workflows/${wf.id}`);
-                                        }
-                                    }}
-                                    style={{
-                                        padding: '22px 24px',
-                                        border: 'none',
-                                        background: 'transparent',
-                                        borderBottom: '1px solid var(--border-default)',
-                                        textAlign: 'left',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                        cursor: 'pointer'
-                                    }}
-                                    className="hover:bg-[var(--bg-hover)] outline-none"
-                                >
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-                                        <div style={{
-                                            width: 52,
-                                            height: 52,
-                                            borderRadius: 14,
-                                            background: 'var(--bg-element)',
-                                            border: '1px solid var(--border-default)',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: 'var(--text-primary)',
-                                            fontWeight: 800,
-                                            fontSize: 16
-                                        }}>
-                                            {wf.name?.slice(0, 2).toUpperCase() || 'WF'}
-                                        </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>{wf.name || 'Untitled Workflow'}</div>
-                                            <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>
-                                                {wf.description || 'No description provided'}
-                                            </div>
-                                            <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                                                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Clock size={12} />Updated {formatDate(wf.updatedAt)}</span>
-                                                <span>{wf.nodeCount || 0} nodes</span>
-                                                <span>Last run {formatDate(wf.lastRun)}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{
-                                            padding: '7px 12px',
+            {loading ? (
+                <section className="orion-panel muted" style={{ minHeight: 240, display: 'grid', placeItems: 'center' }}>
+                    <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading automations...</div>
+                </section>
+            ) : (
+                <>
+                    {loadError ? (
+                        <section className="orion-empty" style={{ marginBottom: 12 }}>
+                            <div className="orion-empty-title">Could not load automations</div>
+                            <div className="orion-empty-copy">{loadError}</div>
+                        </section>
+                    ) : null}
+                    {workflows.length > 0 ? (
+                        <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
+                            <div className="orion-panel-header" style={{ marginBottom: 0 }}>
+                                <div>
+                                    <div className="orion-panel-title">Find an automation</div>
+                                    <div className="orion-panel-copy">Search your reusable systems and jump back into editing.</div>
+                                </div>
+                            </div>
+                            <div className="orion-toolbar">
+                                <div className="orion-toolbar-input-wrap">
+                                    <Search size={14} className="icon" />
+                                    <input
+                                        type="text"
+                                        value={query}
+                                        onChange={(e) => setQuery(e.target.value)}
+                                        placeholder="Search automations..."
+                                        className="input"
+                                        style={{ paddingLeft: 36, height: 42, borderRadius: 11 }}
+                                    />
+                                </div>
+                                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 600 }}>
+                                    {filtered.length} of {workflows.length} automations
+                                </div>
+                            </div>
+                        </section>
+                    ) : null}
+
+                    {filtered.length === 0 ? (
+                        <section className="orion-empty">
+                            <div className="orion-empty-title">{workflows.length === 0 ? 'No automations yet' : 'No automations match'}</div>
+                            <div className="orion-empty-copy" style={{ marginBottom: 14 }}>
+                                {workflows.length === 0
+                                    ? 'Create one reusable system, or use Workbench when the task only needs to happen once.'
+                                    : 'Try another search or clear the current query.'}
+                            </div>
+                            <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
+                                {workflows.length === 0 ? (
+                                    <Link href="/" className="orion-btn orion-btn-ghost">
+                                        Open Home
+                                    </Link>
+                                ) : null}
+                            </div>
+                        </section>
+                    ) : (
+                        <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
+                            <div
+                                className="orion-panel-header"
+                                style={{
+                                    marginBottom: 0,
+                                    padding: '16px 18px 12px',
+                                    borderBottom: '1px solid var(--border-subtle)',
+                                }}
+                            >
+                                <div>
+                                    <div className="orion-panel-title">Automation library</div>
+                                    <div className="orion-panel-copy">Reusable systems your team can run again, schedule, or trigger from channels.</div>
+                                </div>
+                            </div>
+                            <section className="orion-list" style={{ padding: '0 12px 10px' }}>
+                            {filtered.map((wf) => {
+                        const status = getStatusDisplay(wf.status);
+                        return (
+                            <article
+                                key={wf.id}
+                                className="orion-list-row"
+                                onClick={() => router.push(`/workflows/${wf.id}`)}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        router.push(`/workflows/${wf.id}`);
+                                    }
+                                }}
+                            >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
+                                    <div
+                                        style={{
+                                            width: 30,
+                                            height: 30,
                                             borderRadius: 999,
-                                            border: `1px solid ${status.color}`,
-                                            color: status.color,
-                                            fontSize: 12,
-                                            fontWeight: 800,
-                                            background: `${status.color}10`
-                                        }}>
-                                            {status.label}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={(event) => handleDelete(event, wf)}
-                                            style={{
-                                                width: 32,
-                                                height: 32,
-                                                borderRadius: 999,
-                                                border: '1px solid rgba(255,255,255,0.2)',
-                                                background: 'transparent',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            <Trash size={14} />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={(event) => handleDuplicate(event, wf.id)}
-                                            style={{
-                                                width: 32,
-                                                height: 32,
-                                                borderRadius: 999,
-                                                border: '1px solid rgba(255,255,255,0.2)',
-                                                background: 'transparent',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            <Copy size={14} />
-                                        </button>
-                                        <MoreHorizontal size={18} color="var(--text-tertiary)" />
+                                            background: 'var(--primary-soft)',
+                                            display: 'grid',
+                                            placeItems: 'center',
+                                            color: 'var(--primary-base)',
+                                            fontWeight: 700,
+                                            fontSize: 11,
+                                            flexShrink: 0,
+                                        }}
+                                    >
+                                        {wf.name?.slice(0, 2).toUpperCase() || 'WF'}
+                                    </div>
+                                    <div className="orion-list-row-main" style={{ gap: 6 }}>
+                                        <div className="orion-list-row-title">{wf.name || 'Untitled Automation'}</div>
+                                        <div className="orion-list-row-subtitle">{wf.description || 'No description provided'}</div>
+                                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                                <Clock size={11} />
+                                                Updated {formatDate(wf.updatedAt)}
+                                            </span>
+                                            <span>Last run {formatDate(wf.lastRun)}</span>
+                                        </div>
                                     </div>
                                 </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
 
-            {/* CREATE MODAL */}
-            {showModal && (
-                <div style={{
-                    position: 'fixed',
-                    inset: 0,
-                    background: 'rgba(12, 14, 20, 0.65)',
-                    backdropFilter: 'blur(8px)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 100
-                }}
-                    onClick={() => setShowModal(false)}>
-                    <form
-                        onSubmit={handleCreateSubmit}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                            width: 440,
-                            background: 'var(--bg-surface)',
-                            border: '1px solid var(--border-default)',
-                            borderRadius: 16,
-                            boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
-                            padding: 24,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 18
-                        }}
-                    >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Create Workflow</h2>
-                            <button
-                                type="button"
-                                onClick={() => setShowModal(false)}
-                                style={{ background: 'transparent', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}
-                            >
-                                ×
-                            </button>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                            <div>
-                                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                    Name
-                                </label>
-                                <input
-                                    autoFocus
-                                    required
-                                    type="text"
-                                    value={newWfName}
-                                    onChange={(e) => setNewWfName(e.target.value)}
-                                    placeholder="e.g. Prospecting Agent Crew"
-                                    className="input"
-                                    style={{ padding: '12px', borderRadius: 10 }}
-                                />
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                    Description
-                                </label>
-                                <textarea
-                                    value={newWfDesc}
-                                    onChange={(e) => setNewWfDesc(e.target.value)}
-                                    placeholder="What does this workflow do?"
-                                    rows={3}
-                                    className="input"
-                                    style={{ padding: '12px', borderRadius: 10, resize: 'none' }}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                    Template
-                                </label>
-                                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                                    <input
-                                        value={aiTemplatePrompt}
-                                        onChange={(e) => setAiTemplatePrompt(e.target.value)}
-                                        placeholder="Describe what the workflow should do..."
-                                        className="input"
-                                        style={{ flex: 1, padding: '10px', borderRadius: 10 }}
-                                    />
+                                <div className="orion-toolbar-group" onClick={(event) => event.stopPropagation()}>
                                     <button
                                         type="button"
-                                        onClick={handleGenerateTemplate}
-                                        className="btn btn-secondary"
-                                        style={{ borderRadius: 10, padding: '10px 12px' }}
-                                        disabled={isGeneratingTemplate}
+                                        className="orion-icon-btn"
+                                        onClick={(event) => handleDelete(event, wf)}
+                                        aria-label="Delete workflow"
                                     >
-                                        {isGeneratingTemplate ? 'Generating…' : 'Generate'}
+                                        <Trash size={14} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="orion-icon-btn"
+                                        onClick={(event) => handleDuplicate(event, wf.id)}
+                                        aria-label="Duplicate workflow"
+                                    >
+                                        <Copy size={14} />
+                                    </button>
+                                    <span
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 6,
+                                            fontSize: 12,
+                                            color: 'var(--text-secondary)',
+                                            minWidth: 62,
+                                            justifyContent: 'flex-end',
+                                        }}
+                                    >
+                                        <span
+                                            style={{
+                                                width: 7,
+                                                height: 7,
+                                                borderRadius: 999,
+                                                background: status.color,
+                                                boxShadow: `0 0 0 3px ${status.ring}`,
+                                            }}
+                                        />
+                                        {status.label}
+                                    </span>
+                                    <button type="button" className="orion-icon-btn" aria-label="Workflow options">
+                                        <MoreHorizontal size={14} />
                                     </button>
                                 </div>
-                                <div style={{ display: 'grid', gap: 8 }}>
-                                    {WORKFLOW_TEMPLATES.map(template => (
-                                        <button
-                                            key={template.id}
-                                            type="button"
-                                            onClick={() => setSelectedTemplateId(template.id)}
-                                            style={{
-                                                textAlign: 'left',
-                                                padding: '12px',
-                                                borderRadius: 12,
-                                                border: selectedTemplateId === template.id ? '1px solid var(--primary-base)' : '1px solid var(--border-default)',
-                                                background: selectedTemplateId === template.id ? 'rgba(255,255,255,0.05)' : 'transparent',
-                                                color: 'var(--text-primary)',
-                                                cursor: 'pointer'
-                                            }}
-                                        >
-                                            <div style={{ fontSize: 14, fontWeight: 700 }}>{template.name}</div>
-                                            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{template.description}</div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--border-default)' }}>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowModal(false)}
-                                    className="btn"
-                                    style={{
-                                        background: 'transparent',
-                                        color: 'var(--text-secondary)',
-                                        border: '1px solid var(--border-default)',
-                                        borderRadius: 10,
-                                        fontWeight: 600,
-                                        padding: '10px 16px'
-                                    }}>
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    className="btn btn-primary"
-                                    style={{
-                                        padding: '10px 18px',
-                                        borderRadius: 10,
-                                        fontWeight: 700
-                                    }}>
-                                    Create
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
+                            </article>
+                        );
+                            })}
+                            </section>
+                        </section>
+                    )}
+                </>
             )}
 
-            {deleteTarget && (
-                <div style={{
-                    position: 'fixed',
-                    inset: 0,
-                    background: 'rgba(12, 14, 20, 0.65)',
-                    backdropFilter: 'blur(8px)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 120
-                }}
-                    onClick={() => setDeleteTarget(null)}>
-                    <div
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                            width: 420,
-                            background: 'var(--bg-surface)',
-                            border: '1px solid var(--border-default)',
-                            borderRadius: 16,
-                            boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
-                            padding: 24,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 16
-                        }}
-                    >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Archive Workflow</h2>
+            {/* CREATE MODAL */}
+            {showModal && modalPortalTarget
+                ? createPortal(
+                    <div className="orion-modal-overlay" onClick={() => setShowModal(false)}>
+                        <form
+                            onSubmit={handleCreateSubmit}
+                            onClick={(e) => e.stopPropagation()}
+                            className="orion-modal orion-modal-builder"
+                        >
+                        <header className="orion-modal-builder-header">
+                            <div>
+                                <h2 className="orion-modal-builder-title">New automation</h2>
+                                <div className="orion-modal-builder-subtitle">
+                                    Build a reusable system with a clear goal, starter, and run mode.
+                                </div>
+                            </div>
                             <button
                                 type="button"
-                                onClick={() => setDeleteTarget(null)}
-                                style={{ background: 'transparent', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}
+                                className="orion-icon-btn orion-modal-builder-close"
+                                onClick={() => setShowModal(false)}
+                                aria-label="Close modal"
                             >
                                 ×
                             </button>
+                        </header>
+
+                        <div className="orion-field">
+                            <label className="orion-field-label">Mode</label>
+                            <div style={{ display: 'grid', gap: 8 }}>
+                                {AUTOMATION_MODES.map((mode) => {
+                                    const Icon = mode.icon;
+                                    const active = automationMode === mode.id;
+                                    return (
+                                        <button
+                                            key={mode.id}
+                                            type="button"
+                                            onClick={() => setAutomationMode(mode.id)}
+                                            style={{
+                                                textAlign: 'left',
+                                                padding: 14,
+                                                borderRadius: 12,
+                                                border: active ? '1px solid var(--primary-border-strong)' : '1px solid var(--border-default)',
+                                                background: active ? 'var(--primary-soft)' : 'transparent',
+                                                color: 'var(--text-primary)',
+                                                cursor: 'pointer',
+                                                display: 'grid',
+                                                gap: 6,
+                                            }}
+                                        >
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 14.5, fontWeight: 700 }}>
+                                                <Icon size={15} />
+                                                {mode.label}
+                                            </div>
+                                            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>{mode.description}</div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
-                        <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-                            This will archive <strong>{deleteTarget.name}</strong>. You can restore it later from the database if needed.
+
+                        <div className="orion-field">
+                            <label className="orion-field-label">Name</label>
+                            <input
+                                autoFocus
+                                required
+                                type="text"
+                                value={newWfName}
+                                onChange={(e) => setNewWfName(e.target.value)}
+                                placeholder="e.g. Weekly content plan"
+                                className="orion-input"
+                            />
                         </div>
-                        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--border-default)' }}>
+
+                        <div className="orion-field">
+                            <label className="orion-field-label">Goal Summary</label>
+                            <textarea
+                                value={newWfDesc}
+                                onChange={(e) => setNewWfDesc(e.target.value)}
+                                placeholder="What repeatable result should this automation deliver?"
+                                rows={3}
+                                className="orion-input"
+                                style={{ resize: 'none', lineHeight: 1.5 }}
+                            />
+                        </div>
+
+                        <div className="orion-field">
+                            <label className="orion-field-label">Starter</label>
+                            <div style={{ display: 'grid', gap: 8 }}>
+                                {WORKFLOW_TEMPLATES.map((template) => (
+                                    <button
+                                        key={template.id}
+                                        type="button"
+                                        onClick={() => setSelectedTemplateId(template.id)}
+                                        style={{
+                                            textAlign: 'left',
+                                            padding: 14,
+                                            borderRadius: 12,
+                                            border:
+                                                selectedTemplateId === template.id
+                                                    ? '1px solid var(--primary-border-strong)'
+                                                    : '1px solid var(--border-default)',
+                                            background:
+                                                selectedTemplateId === template.id
+                                                    ? 'var(--primary-soft)'
+                                                    : 'transparent',
+                                            color: 'var(--text-primary)',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        <div style={{ fontSize: 14.5, fontWeight: 700 }}>{template.name}</div>
+                                        <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
+                                            {template.description}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                                This creates a repeatable system. It does not create a new agent.
+                            </div>
+                        </div>
+
+                        <footer className="orion-modal-builder-footer">
+                            <div />
+                            <div className="orion-modal-builder-footer-actions">
+                            <button type="button" onClick={() => setShowModal(false)} className="orion-btn orion-btn-ghost">
+                                Cancel
+                            </button>
+                            <button type="submit" className="orion-btn orion-btn-primary">
+                                Create Automation
+                            </button>
+                            </div>
+                        </footer>
+                        </form>
+                    </div>,
+                    modalPortalTarget,
+                )
+                : null}
+
+            {deleteTarget && modalPortalTarget
+                ? createPortal(
+                    <div className="orion-modal-overlay" onClick={() => setDeleteTarget(null)}>
+                        <div className="orion-modal" onClick={(e) => e.stopPropagation()} style={{ width: 420, maxWidth: '100%' }}>
+                        <header className="orion-panel-header" style={{ marginBottom: 0 }}>
+                            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Delete Automation</h2>
                             <button
                                 type="button"
+                                className="orion-icon-btn"
                                 onClick={() => setDeleteTarget(null)}
-                                className="btn"
-                                style={{
-                                    background: 'transparent',
-                                    color: 'var(--text-secondary)',
-                                    border: '1px solid var(--border-default)',
-                                    borderRadius: 10,
-                                    fontWeight: 600,
-                                    padding: '10px 16px'
-                                }}>
+                                aria-label="Close modal"
+                            >
+                                ×
+                            </button>
+                        </header>
+                        <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                            This will delete <strong>{deleteTarget.name}</strong>.
+                        </div>
+                        <footer style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--border-default)' }}>
+                            <button type="button" onClick={() => setDeleteTarget(null)} className="orion-btn">
                                 Cancel
                             </button>
                             <button
                                 type="button"
                                 onClick={confirmDelete}
-                                className="btn btn-primary"
-                                style={{
-                                    padding: '10px 18px',
-                                    borderRadius: 10,
-                                    fontWeight: 700
-                                }}
+                                className="orion-btn orion-btn-danger"
                                 disabled={isDeleting}
                             >
-                                {isDeleting ? 'Archiving…' : 'Archive'}
+                                {isDeleting ? 'Deleting…' : 'Delete'}
                             </button>
+                        </footer>
                         </div>
-                    </div>
-                </div>
-            )}
+                    </div>,
+                    modalPortalTarget,
+                )
+                : null}
         </div>
     );
 }

@@ -63,7 +63,7 @@ export class WorkflowsService {
                 where: whereClause,
                 orderBy: { updatedAt: 'desc' },
             });
-            return workflows.map(w => this.deserializeWorkflow(w));
+            return workflows.map((w: any) => this.deserializeWorkflow(w));
         } catch (e) {
             console.error("FindAll Workflows Failed:", e);
             return [];

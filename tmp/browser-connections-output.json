@@ -1,0 +1,38 @@
+{
+  "ok": true,
+  "mode": "capture_page",
+  "url": "http://localhost:3000/credentials",
+  "sessionProfile": "",
+  "currentTab": "main",
+  "openTabs": [
+    "main"
+  ],
+  "screenshotPath": "/Users/mansur/Multi_Agent_Orchestrator_Project/tmp/connections-qa.png",
+  "browserActions": [],
+  "actionResults": [],
+  "waitForSelector": "",
+  "clickSelector": "",
+  "typeSelector": "",
+  "title": "Empyralis - Outcome Autopilot for Business",
+  "finalUrl": "http://localhost:3000/credentials",
+  "textPreview": "WORKSPACE Workspace Navigate and operate Search commands, pages, and operations K Setup 0/3 Connections Connect shared tools, social channels, and agent-owned accounts without pretending every integration is the same. Control Center Overview Refresh Connect Connected 0 Live 0 Paused 0 Owned 0 Assign a connection to one worker only when that tool should route directly to that role. All connections are currently shared across the workspace. Connections are not available yet Runtime key is missing. Open Setup and enter the same runtime key used by the local stack. Retry Open Setup Launch next Best next additions for this platform: one community channel and one business publishing channel, both already supported by the runtime. Discord Communities, approvals, support rooms Ready now Route messages, request approvals in-channel, and let agents coordinate in one shared operating room. Connect it now for channel routing and access, then deepen native moderation and workflow actions only if Discord becomes a core operating surface. Add Discord View details Recommended next Native connection with testable credentials and worker ownership. Instagram Business Brand publishing and response workflows Ready now Create a clean business-only path for publishing, content ops, and inbox workflows tied to professional accounts. Connect business accounts now, then layer publishing, response, and review workflows on top once your account model is stable. Add Instagram Business View details Recommended next Native connection with testable credentials and worker ownership. Connector library Everything the platform can connect now, plus the honest rollout path for the channels that need provider-backed or custom delivery. Available now Built into the current runtime with create, test, pause, and remove support. Google Workspace Gmail + Calendar actions Available now Best for inbox triage, scheduling, and workspace automation. Ready to connect from this page. Add View details Telegram Bot Bot token + chat delivery Available now Useful for alerts, approvals, and direct assistant delivery. Ready to connect from this page. Add View details WhatsApp (Twilio) Twilio WhatsApp messaging Available now Best for operational messaging when you already run on Twilio. Ready to connect from this page. Add View details Discord Bot token + channel routing Available now Good for approvals, community operations, and shared channel-based workflows. Ready to connect from this page. Add View details Provider-backed next Fastest expansion path: ship through a connector platform first, then deepen the native UX later. Microsoft 365 Outlook, Excel, Word, PowerPoint, OneDrive Provider-backed next Best for Microsoft-first teams that need email, docs, spreadsheets, decks, and file workflows through Microsoft Graph before a deeper native layer exists. Ready to connect from this page. Connect View details X / Twitter Posts, replies, listening Provider-backed next Useful for publishing and social-response workflows before building your own deep native layer. Best shipped through a connector platform first. View details YouTube Channel monitoring + publishing workflows Provider-backed next Good for new-video triggers, comment workflows, and publishing support. Best shipped through a connector platform first. View details Custom build Keep these visible in the product, but be honest that they need custom auth, policy work, or deeper API handling. TikTok Business Publishing + campaign workflows Custom build Worth planning, but ship it as a deliberate business integration instead of pretending it is one click away. Needs a deliberate custom integration path. Build path Custom API / Webhook Any partner or internal platform Custom build Critical escape hatch for companies with niche platforms or internal tools. Needs a deliberate custom integration path. Build path AI",
+  "links": [
+    {
+      "href": "http://localhost:3000/setup",
+      "text": "Setup 0/3"
+    },
+    {
+      "href": "http://localhost:3000/control-center",
+      "text": "Overview"
+    },
+    {
+      "href": "http://localhost:3000/setup",
+      "text": "Open Setup"
+    }
+  ],
+  "downloads": [],
+  "viewport": {
+    "width": 1440,
+    "height": 895
+  }
+}

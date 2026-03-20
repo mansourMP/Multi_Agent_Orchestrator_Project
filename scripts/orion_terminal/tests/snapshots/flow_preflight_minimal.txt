@@ -1,0 +1,23 @@
+•  Execution location
+│  Local Companion
+•  Trust mode
+│  Auto (Default)
+•  Operator safety policy
+│  Default by trust mode
+•  AI provider
+│  Use runtime default
+•  Credential source
+│  Runtime Environment
+•  Channels & tools
+│  Skip (Workspace Only)
+•  File access scope
+│  Workspace
+[message] Preflight Summary
+Goal: phase4 preflight goal
+Target: Local Companion
+Trust: Auto (Default)
+Operator Safety: Default by trust mode
+Provider: Use runtime default
+Credential: Runtime Environment
+File Scope: Workspace
+Channels: Skip (Workspace Only)

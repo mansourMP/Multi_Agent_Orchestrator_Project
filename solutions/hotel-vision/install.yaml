@@ -1,0 +1,20 @@
+id: hotel-vision
+name: Hotel Vision
+description: Monitor hotel spaces, surface live occupancy, and route operational alerts.
+enabled: true
+route_base: /solutions/hotel-vision
+required_skills:
+  - vision-monitor
+data_roots:
+  - /spaces
+  - /solutions/hotel-vision/demo/spaces
+nav_items:
+  - dashboard
+  - spaces
+  - alerts
+  - settings
+workflows:
+  - hotel-vision.scan
+  - hotel-vision.alerts
+demo:
+  spaces_root: /solutions/hotel-vision/demo/spaces

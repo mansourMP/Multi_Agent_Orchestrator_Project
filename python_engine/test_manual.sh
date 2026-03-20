@@ -14,6 +14,12 @@ if [ ! -f .env ]; then
     echo ""
 fi
 
+# Check if .venv exists and activate it
+if [ -d ".venv" ]; then
+    echo "🔄 Activating virtual environment..."
+    source .venv/bin/activate
+fi
+
 # Test 1: Check imports
 echo "Test 1: Checking Python imports..."
 python3 -c "from llm_core import call_model; from agency_logic import AgencyLogic; print('✅ Imports successful')" 2>&1
@@ -36,8 +42,25 @@ echo "Test 4: Testing CLI interface..."
 echo '{"execution_id": "test-cli", "topic": "test"}' > /tmp/test_payload.json
 python3 agency_logic.py astronomy check_network --in /tmp/test_payload.json 2>&1 | head -n 5
 
+# Test 5: Memory Manager (Fallback mode)
+echo ""
+echo "Test 5: Testing Memory Manager (SQLite fallback)..."
+python3 -c "from memory_manager import MemoryManager; mgr = MemoryManager(sqlite_path='test_agency.db'); mgr.upsert_memory('Hello from manual test'); print('✅ Memory upserted')" 2>&1
+
+# Test 6: File Ingestion Proof
+echo ""
+echo "Test 6: Testing File Ingestion (Proof of Concept)..."
+echo '{"file_path": "README_PHASE2.md"}' > /tmp/test_ingest.json
+python3 agency_logic.py astronomy ingest_file --in /tmp/test_ingest.json 2>&1 | head -n 5
+
+# Test 7: Cognitive daemon queue controls
+echo ""
+echo "Test 7: Testing Cognitive Daemon queue controls..."
+python3 cognitive_daemon.py enqueue --niche-id astronomy --db-path test_agency.db --text "/orion status" 2>&1
+python3 cognitive_daemon.py status --niche-id astronomy --db-path test_agency.db 2>&1
+
 # Cleanup
-rm -f test_agency.db /tmp/test_payload.json
+rm -f test_agency.db /tmp/test_payload.json /tmp/test_ingest.json
 
 echo ""
 echo "=========================================="

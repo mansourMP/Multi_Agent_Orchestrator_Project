@@ -22,8 +22,6 @@ export default function WorkflowEditorInnerLite({ workflowId }: WorkflowEditorIn
 
     useEffect(() => {
         if (!workflowId) return;
-        setLoading(true);
-        setError(null);
         getWorkflow(workflowId)
             .then((data) => setWorkflow(data))
             .catch((err) => setError(err?.message || 'Failed to load workflow'))
@@ -31,78 +29,87 @@ export default function WorkflowEditorInnerLite({ workflowId }: WorkflowEditorIn
     }, [workflowId]);
 
     return (
-        <div style={{ padding: '32px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <Link href="/workflows" style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-                    ← Back to Workflows
-                </Link>
-                <span style={{ color: 'var(--text-tertiary)', fontSize: '13px' }}>
-                    Lite viewer (canvas temporarily disabled)
-                </span>
-            </div>
+        <div className="orion-page-shell orion-animate-in" style={{ gap: 16, paddingBottom: 24 }}>
+            <header className="orion-page-header" style={{ paddingBottom: 12, borderBottom: '1px solid var(--border-subtle)' }}>
+                <div className="orion-page-title-wrap">
+                    <div>
+                        <h1 className="orion-page-title" style={{ fontSize: 22 }}>Automation</h1>
+                        <p className="orion-page-subtitle">Simple view</p>
+                    </div>
+                </div>
+                <div className="orion-page-actions">
+                    <Link href="/workflows" className="orion-btn orion-btn-ghost">
+                        Back
+                    </Link>
+                </div>
+            </header>
 
             {loading && (
-                <div style={{ padding: '24px', border: '1px solid var(--border-subtle)', borderRadius: '12px' }}>
-                    Loading workflow...
-                </div>
+                <section className="orion-panel muted" style={{ minHeight: 180, display: 'grid', placeItems: 'center' }}>
+                    <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading automation...</div>
+                </section>
             )}
 
             {error && (
-                <div style={{
-                    padding: '16px',
-                    border: '1px solid rgba(239, 68, 68, 0.2)',
-                    background: 'rgba(239, 68, 68, 0.05)',
-                    borderRadius: '12px',
-                    color: '#ef4444',
-                    fontSize: '13px'
-                }}>
+                <section
+                    style={{
+                        padding: '10px 0',
+                        borderTop: '1px solid var(--error-border)',
+                        borderBottom: '1px solid color-mix(in srgb, var(--error-border) 60%, transparent)',
+                        color: 'var(--error-fg)',
+                        fontSize: 13,
+                    }}
+                >
                     {error}
-                </div>
+                </section>
             )}
 
             {workflow && (
-                <div style={{
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: '16px',
-                    padding: '20px',
-                    background: 'var(--bg-surface)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px',
-                    maxWidth: '640px'
-                }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                            <div style={{ fontSize: '18px', fontWeight: 700 }}>{workflow.name}</div>
-                            <div style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>{workflow.id}</div>
+                <section className="orion-panel" style={{ maxWidth: 760 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>{workflow.name}</div>
+                            <div style={{ color: 'var(--text-tertiary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{workflow.id}</div>
                         </div>
-                        <span style={{
-                            padding: '6px 10px',
-                            borderRadius: '10px',
-                            border: '1px solid var(--border-default)',
-                            fontSize: '11px',
-                            color: 'var(--text-secondary)'
-                        }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', flexShrink: 0 }}>
+                            <span
+                                style={{
+                                    width: 7,
+                                    height: 7,
+                                    borderRadius: 999,
+                                    background: workflow.status === 'published' ? 'var(--success-fg)' : '#94a3b8',
+                                    boxShadow:
+                                        workflow.status === 'published'
+                                            ? '0 0 0 3px var(--success-bg)'
+                                            : '0 0 0 3px rgba(148,163,184,0.22)',
+                                }}
+                            />
                             {workflow.status || 'draft'}
                         </span>
                     </div>
-                    {workflow.description && (
-                        <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                            {workflow.description}
-                        </div>
+                    {workflow.description ? (
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5 }}>{workflow.description}</div>
+                    ) : (
+                        <div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>No description provided.</div>
                     )}
                     {workflow.updatedAt && (
-                        <div style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
+                        <div style={{ color: 'var(--text-tertiary)', fontSize: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
                             Updated {new Date(workflow.updatedAt).toLocaleString()}
                         </div>
                     )}
-                </div>
+                </section>
             )}
 
             {!loading && !workflow && !error && (
-                <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                    Workflow not found.
-                </div>
+                <section className="orion-empty">
+                    <div className="orion-empty-title">Automation not found</div>
+                    <div className="orion-empty-copy" style={{ marginBottom: 10 }}>
+                        The automation may have been removed.
+                    </div>
+                    <Link href="/workflows" className="orion-btn orion-btn-primary">
+                        Go to Automations
+                    </Link>
+                </section>
             )}
         </div>
     );

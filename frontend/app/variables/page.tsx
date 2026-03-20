@@ -1,244 +1,345 @@
 'use client';
-import { useState, useEffect } from 'react';
-import { Database, Plus, Trash2, Edit2, Save, X, Type, FileJson, Hash } from 'lucide-react';
+
+import Link from 'next/link';
+import { useMemo, useState } from 'react';
+import { Database, Edit2, FileJson, Hash, Plus, ShieldCheck, Trash2, Type, X } from 'lucide-react';
 import { useToast } from '@/components/Toast';
+import { MetricStrip } from '@/components/ui/MetricStrip';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
 interface Variable {
-    id: string;
-    key: string;
-    value: string;
-    type: 'string' | 'number' | 'json';
-    description?: string;
+  id: string;
+  key: string;
+  value: string;
+  type: 'string' | 'number' | 'json';
+  description?: string;
+}
+
+const STORAGE_KEY = 'conductor_variables';
+
+function prettyType(type: Variable['type']): string {
+  if (type === 'json') return 'JSON';
+  if (type === 'number') return 'Number';
+  return 'String';
 }
 
 export default function VariablesPage() {
-    const { addToast } = useToast();
-    const [variables, setVariables] = useState<Variable[]>([]);
-    const [isEditing, setIsEditing] = useState<string | null>(null);
-    const [editForm, setEditForm] = useState<Partial<Variable>>({});
+  const { addToast } = useToast();
+  const [variables, setVariables] = useState<Variable[]>(() => {
+    if (typeof window === 'undefined') return [];
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? (parsed as Variable[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [query, setQuery] = useState('');
 
-    // Load from LocalStorage
-    useEffect(() => {
-        const saved = localStorage.getItem('conductor_variables');
-        if (saved) {
-            try {
-                setVariables(JSON.parse(saved));
-            } catch (e) {
-                console.error("Failed to parse variables");
-            }
-        }
-    }, []);
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<Omit<Variable, 'id'>>({
+    key: '',
+    value: '',
+    type: 'string',
+    description: '',
+  });
 
-    const saveVariables = (newVars: Variable[]) => {
-        setVariables(newVars);
-        localStorage.setItem('conductor_variables', JSON.stringify(newVars));
+  function persist(next: Variable[]) {
+    setVariables(next);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function openCreateModal() {
+    setEditingId(null);
+    setForm({ key: '', value: '', type: 'string', description: '' });
+    setShowModal(true);
+  }
+
+  function openEditModal(variable: Variable) {
+    setEditingId(variable.id);
+    setForm({
+      key: variable.key,
+      value: variable.value,
+      type: variable.type,
+      description: variable.description || '',
+    });
+    setShowModal(true);
+  }
+
+  function saveVariable() {
+    const normalizedKey = form.key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '');
+
+    if (!normalizedKey) {
+      addToast({ title: 'Variable key is required', type: 'error' });
+      return;
+    }
+
+    const duplicate = variables.find((item) => item.key === normalizedKey && item.id !== editingId);
+    if (duplicate) {
+      addToast({ title: 'Variable key must be unique', type: 'error' });
+      return;
+    }
+
+    if (form.type === 'json') {
+      try {
+        JSON.parse(form.value || '{}');
+      } catch {
+        addToast({ title: 'Invalid JSON value', type: 'error' });
+        return;
+      }
+    }
+
+    const payload: Omit<Variable, 'id'> = {
+      ...form,
+      key: normalizedKey,
+      description: form.description?.trim() || '',
     };
 
-    const handleAdd = () => {
-        const newVar: Variable = {
-            id: Math.random().toString(36).substr(2, 9),
-            key: '',
-            value: '',
-            type: 'string',
-            description: ''
-        };
-        saveVariables([newVar, ...variables]);
-        setIsEditing(newVar.id);
-        setEditForm(newVar);
-    };
+    if (editingId) {
+      persist(variables.map((item) => (item.id === editingId ? { ...item, ...payload } : item)));
+      addToast({ title: 'Variable updated', type: 'success' });
+    } else {
+      const newItem: Variable = {
+        id: crypto.randomUUID(),
+        ...payload,
+      };
+      persist([newItem, ...variables]);
+      addToast({ title: 'Variable created', type: 'success' });
+    }
 
-    const handleDelete = (id: string) => {
-        if (confirm('Are you sure you want to delete this variable?')) {
-            saveVariables(variables.filter(v => v.id !== id));
-            addToast({ title: 'Variable deleted', type: 'info' });
-        }
-    };
+    setShowModal(false);
+  }
 
-    const handleEdit = (v: Variable) => {
-        setIsEditing(v.id);
-        setEditForm(v);
-    };
+  function deleteVariable(id: string) {
+    const item = variables.find((entry) => entry.id === id);
+    if (!item) return;
+    if (!window.confirm(`Delete variable ${item.key}?`)) return;
+    persist(variables.filter((entry) => entry.id !== id));
+    addToast({ title: 'Variable deleted', type: 'info' });
+  }
 
-    const handleSave = () => {
-        if (!editForm.key?.trim()) {
-            addToast({ title: 'Key name is required', type: 'error' });
-            return;
-        }
-
-        const duplicate = variables.find(v => v.key === editForm.key && v.id !== isEditing);
-        if (duplicate) {
-            addToast({ title: 'Variable key must be unique', type: 'error' });
-            return;
-        }
-
-        saveVariables(variables.map(v => v.id === isEditing ? { ...v, ...editForm } as Variable : v));
-        setIsEditing(null);
-        addToast({ title: 'Variable saved successfully', type: 'success' });
-    };
-
-    const handleCancel = () => {
-        if (isEditing) {
-            const v = variables.find(x => x.id === isEditing);
-            if (v && !v.key) {
-                saveVariables(variables.filter(x => x.id !== isEditing));
-            }
-        }
-        setIsEditing(null);
-    };
-
-    const getTypeIcon = (type: string) => {
-        switch (type) {
-            case 'json': return <FileJson size={14} color="#f59e0b" />;
-            case 'number': return <Hash size={14} color="#3b82f6" />;
-            default: return <Type size={14} color="#64748b" />;
-        }
-    };
-
-    return (
-        <div style={{ padding: '40px 48px', maxWidth: '1400px', margin: '0 auto' }}>
-            {/* Header */}
-            <div style={{ marginBottom: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                        <div style={{ padding: '8px', background: '#000', borderRadius: '8px', color: '#fff' }}>
-                            <Database size={20} />
-                        </div>
-                        <h1 style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>Global Variables</h1>
-                    </div>
-                    <p style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>Global constants accessible to all agent contexts.</p>
-                </div>
-                <button onClick={handleAdd} className="btn btn-primary" style={{ padding: '10px 24px', borderRadius: '8px' }}>
-                    <Plus size={16} />
-                    <span>New Variable</span>
-                </button>
-            </div>
-
-            {/* Table Card */}
-            <div className="card" style={{ border: '1px solid var(--border-default)', background: '#fff', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                    <thead style={{ background: '#f8fafc' }}>
-                        <tr style={{ borderBottom: '1px solid var(--border-subtle)', textAlign: 'left' }}>
-                            <th style={{ padding: '16px 24px', color: 'var(--text-tertiary)', fontWeight: 600, width: '25%', textTransform: 'uppercase', fontSize: '12px' }}>Identifier</th>
-                            <th style={{ padding: '16px 24px', color: 'var(--text-tertiary)', fontWeight: 600, width: '45%', textTransform: 'uppercase', fontSize: '12px' }}>Value</th>
-                            <th style={{ padding: '16px 24px', color: 'var(--text-tertiary)', fontWeight: 600, width: '15%', textTransform: 'uppercase', fontSize: '12px' }}>Type</th>
-                            <th style={{ padding: '16px 24px', color: 'var(--text-tertiary)', fontWeight: 600, width: '15%', textAlign: 'right', textTransform: 'uppercase', fontSize: '12px' }}>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {variables.length === 0 && !isEditing && (
-                            <tr>
-                                <td colSpan={4} style={{ padding: '100px 0', textAlign: 'center' }}>
-                                    <div style={{ width: '56px', height: '56px', borderRadius: '16px', background: 'var(--bg-app)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', color: 'var(--text-tertiary)' }}>
-                                        <Database size={28} />
-                                    </div>
-                                    <h3 style={{ fontSize: '18px' }}>No global variables</h3>
-                                    <p style={{ color: 'var(--text-tertiary)', marginBottom: '32px' }}>Store system-wide constants here.</p>
-                                </td>
-                            </tr>
-                        )}
-                        {variables.map(v => (
-                            <tr key={v.id} style={{ borderBottom: '1px solid var(--border-subtle)', transition: 'all 0.2s' }} className="hover:bg-[#f8fafc]">
-                                {isEditing === v.id ? (
-                                    <>
-                                        <td style={{ padding: '16px 24px', verticalAlign: 'top' }}>
-                                            <input
-                                                className="input"
-                                                value={editForm.key}
-                                                onChange={e => setEditForm({ ...editForm, key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '') })}
-                                                placeholder="VARIABLE_KEY"
-                                                style={{ fontWeight: 700, fontFamily: 'monospace', borderRadius: '8px' }}
-                                                autoFocus
-                                            />
-                                        </td>
-                                        <td style={{ padding: '16px 24px', verticalAlign: 'top' }}>
-                                            {editForm.type === 'json' ? (
-                                                <textarea
-                                                    className="input"
-                                                    rows={4}
-                                                    value={editForm.value}
-                                                    onChange={e => setEditForm({ ...editForm, value: e.target.value })}
-                                                    style={{ fontFamily: 'monospace', borderRadius: '8px', padding: '12px' }}
-                                                />
-                                            ) : (
-                                                <input
-                                                    className="input"
-                                                    value={editForm.value}
-                                                    onChange={e => setEditForm({ ...editForm, value: e.target.value })}
-                                                    style={{ borderRadius: '8px' }}
-                                                />
-                                            )}
-                                        </td>
-                                        <td style={{ padding: '16px 24px', verticalAlign: 'top' }}>
-                                            <select
-                                                className="input"
-                                                value={editForm.type}
-                                                onChange={e => setEditForm({ ...editForm, type: e.target.value as any })}
-                                                style={{ borderRadius: '8px' }}
-                                            >
-                                                <option value="string">String</option>
-                                                <option value="number">Number</option>
-                                                <option value="json">JSON</option>
-                                            </select>
-                                        </td>
-                                        <td style={{ padding: '16px 24px', textAlign: 'right', verticalAlign: 'top' }}>
-                                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                                <button className="btn btn-primary" onClick={handleSave} style={{ padding: '8px', borderRadius: '8px' }}>
-                                                    <Save size={18} />
-                                                </button>
-                                                <button className="btn btn-secondary" onClick={handleCancel} style={{ padding: '8px', borderRadius: '8px' }}>
-                                                    <X size={18} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </>
-                                ) : (
-                                    <>
-                                        <td style={{ padding: '16px 24px', color: '#000', fontWeight: 800, fontFamily: 'monospace', fontSize: '14px' }}>
-                                            {v.key}
-                                        </td>
-                                        <td style={{ padding: '16px 24px', color: 'var(--text-secondary)', wordBreak: 'break-all', fontWeight: 500 }}>
-                                            {v.type === 'json' ? (
-                                                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: '#d97706', background: '#fffbeb', padding: '2px 6px', borderRadius: '4px', border: '1px solid #fef3c7' }}>JSON_OBJECT</span>
-                                            ) : (
-                                                v.value.length > 60 ? v.value.substring(0, 60) + '...' : v.value
-                                            )}
-                                        </td>
-                                        <td style={{ padding: '16px 24px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                                                {getTypeIcon(v.type)}
-                                                <span style={{ textTransform: 'capitalize' }}>{v.type}</span>
-                                            </div>
-                                        </td>
-                                        <td style={{ padding: '16px 24px', textAlign: 'right' }}>
-                                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                                <button className="btn-ghost" onClick={() => handleEdit(v)} style={{ padding: '8px', borderRadius: '8px' }}>
-                                                    <Edit2 size={18} />
-                                                </button>
-                                                <button className="btn-ghost" onClick={() => handleDelete(v.id)} style={{ padding: '8px', color: '#ef4444', borderRadius: '8px' }}>
-                                                    <Trash2 size={18} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </>
-                                )}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            {/* Quick Access Info */}
-            <div style={{ marginTop: '32px', padding: '24px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', gap: '20px', alignItems: 'center' }}>
-                <div style={{ padding: '12px', background: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', color: '#3b82f6', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-                    <Hash size={24} />
-                </div>
-                <div>
-                    <h4 style={{ color: 'var(--text-primary)', fontSize: '15px', fontWeight: 700, marginBottom: '4px' }}>Injection Reference</h4>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0, fontWeight: 500 }}>
-                        Reference variables in any agent node using: <code style={{ background: '#e2e8f0', padding: '2px 6px', borderRadius: '4px', color: '#000', fontWeight: 700 }}>{`{{ $vars.KEY }}`}</code>
-                    </p>
-                </div>
-            </div>
-        </div>
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return variables;
+    return variables.filter((item) =>
+      item.key.toLowerCase().includes(q) ||
+      item.value.toLowerCase().includes(q) ||
+      (item.description || '').toLowerCase().includes(q) ||
+      item.type.toLowerCase().includes(q),
     );
+  }, [variables, query]);
+
+  const stats = useMemo(
+    () => ({
+      total: variables.length,
+      string: variables.filter((item) => item.type === 'string').length,
+      number: variables.filter((item) => item.type === 'number').length,
+      json: variables.filter((item) => item.type === 'json').length,
+    }),
+    [variables],
+  );
+
+  return (
+    <div className="orion-page-shell orion-animate-in">
+      <OsPageHeader
+        icon={<Database size={18} />}
+        title="Variables"
+        subtitle="Control Center section for shared constants and reusable references across workflows."
+        meta={
+          <>
+            <span>Control Center</span>
+            <span>{variables.length} saved</span>
+          </>
+        }
+        actions={
+          <>
+            <Link href="/control-center" className="orion-btn orion-btn-ghost">
+              <ShieldCheck size={14} />
+              Overview
+            </Link>
+            <button className="orion-btn orion-btn-primary" onClick={openCreateModal}>
+              <Plus size={14} />
+              New variable
+            </button>
+          </>
+        }
+      />
+
+      <MetricStrip
+        items={[
+          { label: 'Saved', value: String(stats.total) },
+          { label: 'Text', value: String(stats.string) },
+          { label: 'Number', value: String(stats.number) },
+          { label: 'JSON', value: String(stats.json) },
+        ]}
+        minWidth={170}
+      />
+
+      <section className="orion-panel orion-surface-lift">
+        <div className="orion-toolbar">
+          <div className="orion-toolbar-input-wrap">
+            <Hash size={14} className="icon" />
+            <input
+              className="input"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search by key, value, type"
+              style={{ height: 40, borderRadius: 10, paddingLeft: 36 }}
+            />
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', fontWeight: 600 }}>
+            {filtered.length} of {variables.length} variables
+          </div>
+        </div>
+      </section>
+
+      {filtered.length === 0 ? (
+        <section className="orion-empty">
+          <div className="orion-empty-title">No variables</div>
+          <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
+            Create your first variable to reuse constants across workflows and prompts.
+          </div>
+          <button className="orion-btn orion-btn-primary" onClick={openCreateModal}>
+            Create variable
+          </button>
+        </section>
+      ) : (
+        <section className="orion-list">
+          {filtered.map((item) => {
+            const icon = item.type === 'json' ? <FileJson size={13} /> : item.type === 'number' ? <Hash size={13} /> : <Type size={13} />;
+            const valuePreview =
+              item.type === 'json'
+                ? 'JSON object'
+                : item.value.length > 90
+                  ? `${item.value.slice(0, 90)}...`
+                  : item.value;
+
+            return (
+              <article key={item.id} className="orion-list-row orion-surface-lift">
+                <div className="orion-list-row-main" style={{ gap: 6 }}>
+                  <div className="orion-list-row-title" style={{ fontFamily: 'var(--font-mono)' }}>
+                    {item.key}
+                  </div>
+                  <div className="orion-list-row-subtitle" style={{ lineHeight: 1.45 }}>
+                    {valuePreview}
+                  </div>
+                  <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span className="orion-chip" style={{ background: 'var(--bg-element)' }}>
+                      {icon}
+                      {prettyType(item.type)}
+                    </span>
+                    {item.description ? <span className="orion-chip">{item.description}</span> : null}
+                  </div>
+                </div>
+
+                <div className="orion-toolbar-group">
+                  <button className="orion-icon-btn" onClick={() => openEditModal(item)} aria-label="Edit variable">
+                    <Edit2 size={14} />
+                  </button>
+                  <button className="orion-icon-btn" onClick={() => deleteVariable(item.id)} aria-label="Delete variable">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </section>
+      )}
+
+      <section className="orion-panel orion-surface-lift" style={{ display: 'grid', gap: 8 }}>
+        <div className="orion-panel-title">Reference format</div>
+        <div className="orion-panel-copy">
+          Use variable values in prompts and nodes with <code style={{ fontFamily: 'var(--font-mono)' }}>{'{{ $vars.KEY }}'}</code>
+        </div>
+      </section>
+
+      {showModal && (
+        <div className="orion-modal-overlay" onClick={() => setShowModal(false)}>
+          <section className="orion-modal" onClick={(event) => event.stopPropagation()}>
+            <header className="orion-panel-header" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 800 }}>
+                {editingId ? 'Edit variable' : 'Create variable'}
+              </h2>
+              <button
+                className="orion-btn orion-btn-ghost"
+                style={{ minHeight: 30, paddingInline: 8 }}
+                onClick={() => setShowModal(false)}
+                aria-label="Close"
+              >
+                <X size={13} />
+              </button>
+            </header>
+
+            <div className="orion-field">
+              <label className="orion-field-label">Key</label>
+              <input
+                className="input"
+                value={form.key}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    key: event.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''),
+                  }))
+                }
+                placeholder="VARIABLE_KEY"
+                style={{ height: 40, borderRadius: 10, fontFamily: 'var(--font-mono)' }}
+                autoFocus
+              />
+            </div>
+
+            <div className="orion-field">
+              <label className="orion-field-label">Type</label>
+              <select
+                className="input"
+                value={form.type}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, type: event.target.value as Variable['type'] }))
+                }
+                style={{ height: 40, borderRadius: 10 }}
+              >
+                <option value="string">String</option>
+                <option value="number">Number</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+
+            <div className="orion-field">
+              <label className="orion-field-label">Value</label>
+              <textarea
+                className="input"
+                rows={form.type === 'json' ? 8 : 4}
+                value={form.value}
+                onChange={(event) => setForm((prev) => ({ ...prev, value: event.target.value }))}
+                placeholder={form.type === 'json' ? '{"example": true}' : 'Variable value'}
+                style={{ borderRadius: 10, resize: 'vertical', minHeight: form.type === 'json' ? 160 : 96, fontFamily: form.type === 'json' ? 'var(--font-mono)' : undefined }}
+              />
+            </div>
+
+            <div className="orion-field">
+              <label className="orion-field-label">Description (optional)</label>
+              <input
+                className="input"
+                value={form.description || ''}
+                onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                style={{ height: 40, borderRadius: 10 }}
+                placeholder="What this variable is for"
+              />
+            </div>
+
+            <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 4 }}>
+              <button className="orion-btn" onClick={() => setShowModal(false)}>
+                Cancel
+              </button>
+              <button className="orion-btn orion-btn-primary" onClick={saveVariable}>
+                {editingId ? 'Save' : 'Create'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </div>
+  );
 }

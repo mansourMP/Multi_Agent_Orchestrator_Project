@@ -1,4 +1,4 @@
-# Data Model - AgentForge
+# Data Model - Empyralis
 
 ## Entity Relationship Diagram
 

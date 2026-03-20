@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 sse-starlette
-crewai
 openai
-langchain_openai
 python-dotenv
+certifi
+cryptography>=42.0.0

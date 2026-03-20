@@ -1,0 +1,7 @@
+▣  1/3 Gateway Location
+•  Onboarding mode
+│  QuickStart
+•  Security acknowledged
+│  Yes
+•  Workspace
+│  default

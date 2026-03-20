@@ -1,9 +1,13 @@
 'use client';
 import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Globe, Search } from 'lucide-react';
+import { Globe } from 'lucide-react';
 
-const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+type ResearchNodeData = {
+    label?: string;
+};
+
+const ResearchNode = ({ data, selected }: { data: ResearchNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const accentColor = '#3b82f6'; // Blue for research
 
@@ -12,7 +16,7 @@ const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => 
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             style={{
-                background: '#fff',
+                background: 'var(--bg-surface)',
                 borderRadius: '16px',
                 boxShadow: selected
                     ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}20`
@@ -35,7 +39,7 @@ const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 type="target"
                 position={Position.Left}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,
@@ -69,8 +73,8 @@ const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                         width: 10,
                         height: 10,
                         borderRadius: '50%',
-                        background: '#22c55e',
-                        border: '2px solid #fff',
+                        background: 'var(--success-fg)',
+                        border: '2px solid var(--bg-surface)',
                     }} />
                 </div>
 
@@ -78,13 +82,13 @@ const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                     <div style={{
                         fontSize: '14px',
                         fontWeight: 600,
-                        color: '#1e293b',
+                        color: 'var(--text-primary)',
                     }}>
                         {data.label || 'Research'}
                     </div>
                     <div style={{
                         fontSize: '10px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         marginTop: '3px',
                     }}>
                         Web Search
@@ -96,7 +100,7 @@ const ResearchNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 type="source"
                 position={Position.Right}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,

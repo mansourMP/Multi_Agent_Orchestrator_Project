@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api/v1';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4000/api/v1';
 
 /**
  * Enhanced fetch wrapper to handle JSON errors and provide better feedback
@@ -27,7 +27,7 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
             if (body && body.message) {
                 errorMsg = Array.isArray(body.message) ? body.message.join(', ') : body.message;
             }
-        } catch (e) {
+        } catch {
             // No JSON body, use default status text
         }
         throw new ApiError(errorMsg, res.status);
@@ -44,7 +44,7 @@ export async function createWorkflow(
     name: string,
     description: string,
     workspaceId: string = 'default',
-    definition: any = { nodes: [], edges: [] }
+    definition: unknown = { nodes: [], edges: [] }
 ) {
     return apiFetch(`/workflows?workspaceId=${workspaceId}`, {
         method: 'POST',
@@ -61,7 +61,7 @@ export async function getWorkflow(id: string) {
     return apiFetch(`/workflows/${id}`);
 }
 
-export async function updateWorkflow(id: string, definition: any) {
+export async function updateWorkflow(id: string, definition: unknown) {
     return apiFetch(`/workflows/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -69,7 +69,7 @@ export async function updateWorkflow(id: string, definition: any) {
     });
 }
 
-export async function runWorkflow(id: string, credentials: any[] = [], variables: any[] = []) {
+export async function runWorkflow(id: string, credentials: unknown[] = [], variables: unknown[] = []) {
     return apiFetch(`/executions/${id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -77,7 +77,7 @@ export async function runWorkflow(id: string, credentials: any[] = [], variables
     });
 }
 
-export async function resumeWorkflow(executionId: string, data: any = {}) {
+export async function resumeWorkflow(executionId: string, data: unknown = {}) {
     return apiFetch(`/executions/${executionId}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -108,23 +108,4 @@ export async function fetchExecution(id: string) {
 
 export async function fetchAgents() {
     return apiFetch(`/agents`);
-}
-
-// --- SQUAD AGENTS API ---
-
-export async function startSquadSession(config: { agents: any[], userGoal: string }) {
-    // Uses SSE
-    const response = await fetch(`${API_URL}/agents/squad/stream`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(config),
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Failed to start squad session (${response.status}): ${text || response.statusText}`);
-    }
-    return response.body; // Stream
 }

@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Empyralis",
+    "slug": "empyralis-mobile",
+    "scheme": "empyralis",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.empyralis.mobile",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Empyralis needs access to your local network to connect to your Mac Mini core.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.empyralis.mobile"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "newArchEnabled": true
+    },
+    "extra": {
+      "runtimeUrl": "http://127.0.0.1:8001",
+      "workspaceId": "default"
+    }
+  }
+}

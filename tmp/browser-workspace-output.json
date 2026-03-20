@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "mode": "capture_page",
+  "url": "http://localhost:3000/workspace",
+  "sessionProfile": "",
+  "currentTab": "main",
+  "openTabs": [
+    "main"
+  ],
+  "screenshotPath": "/Users/mansur/Multi_Agent_Orchestrator_Project/tmp/workspace-qa.png",
+  "browserActions": [],
+  "actionResults": [],
+  "waitForSelector": "",
+  "clickSelector": "",
+  "typeSelector": "",
+  "title": "Empyralis - Outcome Autopilot for Business",
+  "finalUrl": "http://localhost:3000/workspace",
+  "textPreview": "WORKSPACE Workspace Workers, routing, and inspect Search commands, pages, and operations K Setup 0/3 OPERATOR WORKSPACE Workspace Operator view for routing work, inspecting runs, and stepping in when you need manual control. Advanced control Routing mode Direct specialist Return Home Hide inspect deck ROUTING ROSTER See which specialists are ready for the next routed task. Orchestrator route work and approvals No approvals waiting · runtime needs attention No bound external identity. OPERATOR LANE Orchestrator thread Describe the outcome you want. Empyralis will decide which specialists should handle it. No orchestration is active yet. Start with one outcome and Empyralis will turn it into tracked work. Plan the next workflow and keep approvals grouped together. Check the current blockers and route the next actions. Cmd+Enter to start orchestration. Use /commands here to jump to another page or action. Start orchestration LANE CONTEXT Orchestrator · route work and approvals Current stage: Observe LEAD Orchestrator Plans and delegates across specialist agents. MODE Route outcomes Empyralis picks the right specialists and keeps the work linked together. RUNTIME No active run Approvals and run history appear here after the first run starts. RUN SNAPSHOT STATUS Running RISK LOW TRUST guarded ROUTE -- NEXT ACTION Continue observe. APPROVALS Open Approvals Nothing needs permission right now. NEXT STEPS Ask Orchestrator to handle one concrete task. Use orchestration for multi-step outcomes. Use Automations when the pattern should be reusable. RUN HISTORY Open Runs No recent runs yet. Control deck Working with Orchestrator Context Automation Inspect SELECTED OWNER Orchestrator Coordinates specialist agents and keeps delegated work linked to the parent run. CHANNELS No dedicated channels assigned yet. CURRENT RUN idle No active or recent run selected. AI",
+  "links": [
+    {
+      "href": "http://localhost:3000/setup",
+      "text": "Setup 0/3"
+    }
+  ],
+  "downloads": [],
+  "viewport": {
+    "width": 1440,
+    "height": 895
+  }
+}

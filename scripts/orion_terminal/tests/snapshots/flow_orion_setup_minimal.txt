@@ -1,0 +1,33 @@
+•  Where will the Gateway run?
+│  Local (this machine)
+•  Setup session id
+│  sess-1
+•  Select sections to configure
+│  Model, Channels
+•  Provider group
+│  OpenAI
+•  Auth method
+│  Use existing Codex session
+•  Codex session source
+│  CODEX_AUTH_FILE
+•  Filter models by provider
+│  openai
+info: Setup uses runtime default model. Change model/provider in Configure > Provider/Auth.
+•  QuickStart channel
+│  Skip for now
+•  First run goal
+│  Describe the outcome you want. Empyralis will plan and execute it.
+[message] Empyralis Setup Summary
+Gateway: Local (this machine)
+Sections: Model, Channels
+Mode: QuickStart
+Config handling: Use default values
+Workspace: default
+Onboarding: chat-first (Telegram/Web)
+Provider: OpenAI
+Auth method: Use existing Codex session
+Model filter: openai
+Credential source: runtime
+QuickStart channel: Skip for now
+Connectors added: 0
+done: Setup session completed.

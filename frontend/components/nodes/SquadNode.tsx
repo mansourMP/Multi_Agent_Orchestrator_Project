@@ -1,9 +1,19 @@
 'use client';
-import { memo, useState, useEffect } from 'react';
+import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { Users, Crown, Code, PenTool, Search, Megaphone, Sparkles } from 'lucide-react';
 
-const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+type SquadMember = {
+    role?: string;
+    model?: string;
+};
+
+type SquadNodeData = {
+    label?: string;
+    members?: SquadMember[];
+};
+
+const SquadNode = ({ data, selected }: { data: SquadNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const members = data.members || [{ role: 'Lead', model: 'gpt-4' }];
 
@@ -25,7 +35,7 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             style={{
-                background: '#fff',
+                background: 'var(--bg-surface)',
                 borderRadius: '16px',
                 boxShadow: selected
                     ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}20`
@@ -49,7 +59,7 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 type="target"
                 position={Position.Left}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,
@@ -85,8 +95,8 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                         width: 10,
                         height: 10,
                         borderRadius: '50%',
-                        background: '#22c55e',
-                        border: '2px solid #fff',
+                        background: 'var(--success-fg)',
+                        border: '2px solid var(--bg-surface)',
                         animation: selected ? 'pulse 2s ease-in-out infinite' : 'none',
                     }} />
                 </div>
@@ -95,14 +105,14 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                     <div style={{
                         fontSize: '14px',
                         fontWeight: 600,
-                        color: '#1e293b',
+                        color: 'var(--text-primary)',
                         lineHeight: 1.2,
                     }}>
                         {data.label || 'Squad'}
                     </div>
                     <div style={{
                         fontSize: '11px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         marginTop: '2px',
                         display: 'flex',
                         alignItems: 'center',
@@ -123,8 +133,9 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
             <div style={{
                 padding: '0 18px 14px',
             }}>
-                {members.slice(0, 3).map((m: any, i: number) => {
-                    const MemberIcon = getIcon(m.role);
+                {members.slice(0, 3).map((m: SquadMember, i: number) => {
+                    const memberRole = typeof m.role === 'string' && m.role.trim() ? m.role : 'Specialist';
+                    const MemberIcon = getIcon(memberRole);
                     return (
                         <div key={i} style={{
                             display: 'flex',
@@ -132,22 +143,22 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                             gap: '8px',
                             padding: '6px 10px',
                             margin: '4px 0',
-                            background: '#f8fafc',
+                            background: 'var(--bg-element)',
                             borderRadius: '8px',
-                            border: '1px solid #f1f5f9',
+                            border: '1px solid var(--border-subtle)',
                         }}>
-                            <MemberIcon size={12} color="#64748b" strokeWidth={1.5} />
+                            <MemberIcon size={12} color="var(--text-tertiary)" strokeWidth={1.5} />
                             <span style={{
                                 fontSize: '11px',
-                                color: '#475569',
+                                color: 'var(--text-secondary)',
                                 fontWeight: 500,
                                 flex: 1,
                             }}>
-                                {m.role}
+                                {memberRole}
                             </span>
                             <span style={{
                                 fontSize: '9px',
-                                color: '#94a3b8',
+                                color: 'var(--text-tertiary)',
                                 fontFamily: 'var(--font-mono)',
                             }}>
                                 {m.model}
@@ -158,7 +169,7 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 {members.length > 3 && (
                     <div style={{
                         fontSize: '10px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         textAlign: 'center',
                         marginTop: '4px',
                     }}>
@@ -171,7 +182,7 @@ const SquadNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 type="source"
                 position={Position.Right}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,

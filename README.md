@@ -1,10 +1,69 @@
-# AgentForge - AI Agent Orchestration Platform
+# Empyralis - AI Agent Platform
 
 ![Phase 5: Human-Agent Collaboration](https://img.shields.io/badge/Phase-5%20Human--Agent%20Collaboration-brightgreen)
 ![Status](https://img.shields.io/badge/Status-70%25%20Complete-blue)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-**AgentForge** is a production-grade visual orchestration platform for building, deploying, and managing multi-agent AI workflows. Think of it as "GitHub Actions meets LangChain" - a drag-and-drop canvas where you design complex agent swarms with conditional logic, human-in-the-loop approvals, and parallel execution.
+## Empyralis Current Quickstart
+
+For the currently maintained Empyralis Autopilot flow (simple user mode), use:
+
+- [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
+
+This includes:
+- 3-terminal startup (frontend, backend, runtime)
+- runtime key setup
+- outcome pack run flow
+- troubleshooting
+
+## Empyralis Desktop App
+
+If you want Empyralis as a real desktop application (VS Code-style shell):
+
+- [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
+
+Quick commands:
+
+```bash
+bash scripts/install_empyralis_desktop.sh
+bash scripts/run_empyralis_desktop.sh
+```
+
+### Empyralis Terminal Commands
+
+After installing CLI (`bash scripts/install_empyralis_cli.sh`), use:
+
+- `empyralis` -> terminal command center (arrow-key UI when `prompt_toolkit` is installed)
+- `empyralis run "your goal"` -> immediate general-worker run
+- `empyralis setup` -> onboarding alias (security + provider + connectors)
+- `empyralis onboard` -> full onboarding flow (security + provider + connectors + hatch)
+- `empyralis configure` -> section-based reconfiguration flow
+- `empyralis hatch` -> live TUI alias
+- `empyralis tui` -> live terminal run loop
+- `empyralis status` -> runtime + worker quick status
+- `empyralis connectors` -> connector onboarding from terminal
+- `empyralis doctor` -> runtime doctor report
+- `empyralis profiles health` -> provider profile health
+- `empyralis gateway start|stop|status|logs` -> gateway shortcuts
+- `empyralis stack start|stop|status|logs` -> full local stack control
+- `empyralis completion bash|zsh|fish` -> shell completion output
+
+Architecture reference:
+
+- [docs/ORION_TERMINAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/ORION_TERMINAL_ARCHITECTURE.md)
+
+Optional for richer terminal interaction:
+
+```bash
+pip install -r requirements.txt
+```
+
+Notes:
+
+- Arrow-key selection works via `prompt_toolkit` when installed.
+- If `prompt_toolkit` is missing, Empyralis falls back to built-in terminal selectors (`curses`) when running in an interactive TTY.
+
+**Empyralis** is a production-grade agent workspace for building, deploying, and operating multi-agent systems. Think of it as an AI control plane: agents, automations, approvals, artifacts, local execution, and external channels in one product.
 
 ---
 
@@ -216,4 +275,4 @@ Built with:
 
 ---
 
-**Made with ❤️ by the AgentForge Team**
+**Made with ❤️ by the Empyralis Team**

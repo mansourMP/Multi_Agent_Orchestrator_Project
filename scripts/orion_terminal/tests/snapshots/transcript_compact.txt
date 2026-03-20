@@ -1,0 +1,4 @@
+•  Execution
+│  Auto
+•  Run mode
+│  General

@@ -656,7 +656,7 @@ export class ExecutionsService {
                 include: { workflow: true },
                 orderBy: { createdAt: 'desc' },
             });
-            return executions.map(e => this.deserializeExecution(e));
+            return executions.map((e: any) => this.deserializeExecution(e));
         } catch (e) {
             console.error("FindAll Failed:", e);
             return []; // Return empty array on failure to avoid frontend crash

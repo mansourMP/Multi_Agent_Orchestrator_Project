@@ -1,0 +1,6 @@
+orion tui - http://runtime
+agent main | session all | engine orion
+channels: idle
+────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────
+Commands: type goal | /run <goal> | /ok <id> | /hold <id> <reason> | /session | /status | /help | /exit

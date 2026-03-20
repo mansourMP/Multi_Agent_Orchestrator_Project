@@ -35,6 +35,7 @@ except ImportError:
 # --- CONFIGURATION ---
 DEFAULT_CHEAP_MODEL = os.getenv("CHEAP_MODEL", "gemini/gemini-1.5-flash")
 DEFAULT_SMART_MODEL = os.getenv("SMART_MODEL", "anthropic/claude-3-5-sonnet-20241022")
+DEFAULT_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "openai/text-embedding-3-small")
 
 # LiteLLM settings
 litellm.drop_params = True  # Drop unsupported params instead of erroring
@@ -45,6 +46,18 @@ def log(msg: str):
     """Log to STDERR only (STDOUT reserved for JSON output)"""
     sys.stderr.write(f"[LLM_CORE] {msg}\n")
     sys.stderr.flush()
+
+# --- EMBEDDINGS ---
+def get_embedding(text: str, model_id: Optional[str] = None) -> list[float]:
+    """Get vector embedding for text using LiteLLM"""
+    model = model_id or DEFAULT_EMBEDDING_MODEL
+    try:
+        response = litellm.embedding(model=model, input=[text])
+        return response.data[0]['embedding']
+    except Exception as e:
+        log(f"Embedding failed: {e}")
+        # Return dummy vector if failed (should be handled by caller)
+        return []
 
 # --- DATABASE INITIALIZATION ---
 def init_llm_database(db_path: str = "agency_memory.db"):

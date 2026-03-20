@@ -1,4 +1,5 @@
 import sys
+import os
 import yaml
 import json
 import hashlib
@@ -6,6 +7,7 @@ import sqlite3
 import argparse
 import uuid
 import time
+from typing import Any, List
 
 # Import LLM Core
 try:
@@ -14,6 +16,14 @@ except ImportError:
     sys.stderr.write("[AGENCY_LOGIC] ERROR: llm_core.py not found in same directory\n")
     sys.exit(1)
 
+# Import Memory Manager (Unified World Model)
+try:
+    from memory_manager import MemoryManager
+    MEMORY_AVAILABLE = True
+except ImportError:
+    sys.stderr.write("[AGENCY_LOGIC] WARNING: memory_manager.py not found. Persistent memory disabled.\n")
+    MEMORY_AVAILABLE = False
+
 # Import Agent Identity (AC-OS Diamond Feature)
 try:
     from agent_identity import AgentIdentity, SafetyGuard, GlobalKnowledge
@@ -21,6 +31,27 @@ try:
 except ImportError:
     sys.stderr.write("[AGENCY_LOGIC] WARNING: agent_identity.py not found. Identity features disabled.\n")
     IDENTITY_AVAILABLE = False
+
+# Import Cognitive Loop (Observe -> Orient -> Decide -> Act)
+try:
+    from cognitive_loop import CognitiveLoop
+    COGNITIVE_LOOP_AVAILABLE = True
+except ImportError:
+    sys.stderr.write("[AGENCY_LOGIC] WARNING: cognitive_loop.py not found. Cognitive loop disabled.\n")
+    COGNITIVE_LOOP_AVAILABLE = False
+
+# Import Cognitive Daemon controls (queue + start/stop/status)
+try:
+    from cognitive_daemon import (
+        daemon_status,
+        enqueue_event,
+        start_daemon,
+        stop_daemon,
+    )
+    COGNITIVE_DAEMON_AVAILABLE = True
+except ImportError:
+    sys.stderr.write("[AGENCY_LOGIC] WARNING: cognitive_daemon.py not found. Daemon controls disabled.\n")
+    COGNITIVE_DAEMON_AVAILABLE = False
 
 # --- HELPER: ROBUST LOGGING & OUTPUT ---
 def log(msg):
@@ -46,6 +77,13 @@ class AgencyLogic:
         self.execution_id = execution_id or f"exec-{uuid.uuid4().hex[:8]}"
         self._init_memory()
         
+        # Initialize Memory Manager
+        if MEMORY_AVAILABLE:
+            self.memory = MemoryManager(sqlite_path=db_path)
+            log(f"Unified World Model (Memory) initialized for niche: {niche_config.get('id')}")
+        else:
+            self.memory = None
+
         # Initialize AC-OS Identity System
         if IDENTITY_AVAILABLE:
             self.identity = AgentIdentity(niche_config.get('id', 'default'), db_path)
@@ -56,6 +94,16 @@ class AgencyLogic:
             self.identity = None
             self.safety_guard = None
             self.global_knowledge = None
+
+        # Initialize Cognitive Loop
+        if COGNITIVE_LOOP_AVAILABLE:
+            self.cognitive_loop = CognitiveLoop(
+                memory=self.memory,
+                niche_id=niche_config.get('id', 'default'),
+                execution_id=self.execution_id,
+            )
+        else:
+            self.cognitive_loop = None
 
     def _init_memory(self):
         """Initialize database with enhanced schema"""
@@ -95,7 +143,7 @@ class AgencyLogic:
         
         # Build critique prompt based on niche values
         values_str = ", ".join(self.config.get('values', []))
-        identity = self.config.get('identity_prompt', 'You are a professional content critic.')
+        identity = self.config.get('identity_prompt', 'You are a neutral assistant focused on quality and safety.')
         
         system_prompt = f"""{identity}
 
@@ -198,7 +246,7 @@ Decision criteria:
         """
         log(f"Generating research brief for topic: {topic}")
         
-        identity = self.config.get('identity_prompt', 'You are a professional researcher.')
+        identity = self.config.get('identity_prompt', 'You are a neutral assistant focused on clear research output.')
         values_str = ", ".join(self.config.get('values', []))
         
         system_prompt = f"""{identity}
@@ -390,15 +438,63 @@ Respond with valid JSON in this structure:
         status["niche_id"] = self.config.get('id')
         return status
 
+    # =========================================================================
+    # COGNITIVE LOOP METHODS
+    # =========================================================================
+
+    def cognitive_tick(self, event: Any, k: int = 5):
+        if not self.cognitive_loop:
+            return {"ok": False, "error": "Cognitive loop not available"}
+        return {
+            "ok": True,
+            "execution_id": self.execution_id,
+            "niche_id": self.config.get('id'),
+            "tick": self.cognitive_loop.tick(event, k=k),
+        }
+
+    def cognitive_run(self, events: List[Any], k: int = 5, max_steps: int = 50):
+        if not self.cognitive_loop:
+            return {"ok": False, "error": "Cognitive loop not available"}
+        return {
+            "ok": True,
+            "execution_id": self.execution_id,
+            "niche_id": self.config.get('id'),
+            "run": self.cognitive_loop.run(events, k=k, max_steps=max_steps),
+        }
+
 def load_niche_config(niche_id):
-    try:
-        with open('config/niches.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-        if 'niches' in config:
-            return config['niches'].get(niche_id)
-        return config.get(niche_id) # Fallback if direct structure
-    except FileNotFoundError:
+    import os
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parent.parent
+    configured_path = os.getenv("EMPYRALIS_NICHES_FILE") or os.getenv("ORION_NICHES_FILE")
+    possible_paths = []
+    if configured_path:
+        possible_paths.append(Path(configured_path).expanduser())
+    possible_paths.extend(
+        [
+            Path.cwd() / "config" / "niches.yaml",
+            project_root / "config" / "niches.yaml",
+            Path.cwd().parent / "config" / "niches.yaml",
+        ]
+    )
+    
+    config_content = None
+    for path in possible_paths:
+        if path.exists():
+            try:
+                with path.open('r', encoding='utf-8') as f:
+                    config_content = yaml.safe_load(f)
+                break
+            except Exception:
+                continue
+                
+    if not config_content:
         return None
+        
+    if 'niches' in config_content:
+        return config_content['niches'].get(niche_id)
+    return config_content.get(niche_id)
 
 # --- CLI ENTRYPOINT ---
 if __name__ == "__main__":
@@ -507,6 +603,186 @@ if __name__ == "__main__":
             data = agency.get_safety_status()
             output_result(data.get('ok', True), "safety_status", data)
 
+        # =====================================================================
+        # MEMORY ACTIONS (Unified World Model)
+        # =====================================================================
+
+        elif args.action == "upsert_memory":
+            if not agency.memory:
+                raise RuntimeError("Memory system not available")
+            text = input_data.get('text')
+            if not isinstance(text, str) or not text.strip():
+                raise RuntimeError("upsert_memory requires non-empty 'text'.")
+            metadata = input_data.get('metadata', {})
+            if metadata is None:
+                metadata = {}
+            if not isinstance(metadata, dict):
+                raise RuntimeError("upsert_memory 'metadata' must be an object.")
+            metadata['execution_id'] = agency.execution_id
+            metadata['niche_id'] = agency.config.get('id')
+            mem_id = agency.memory.upsert_memory(text, metadata)
+            output_result(True, "upsert_memory", {"id": mem_id})
+
+        elif args.action == "search_memory":
+            if not agency.memory:
+                raise RuntimeError("Memory system not available")
+            query = input_data.get('query')
+            if not isinstance(query, str) or not query.strip():
+                raise RuntimeError("search_memory requires non-empty 'query'.")
+            k = input_data.get('k', 5)
+            try:
+                k = int(k)
+            except Exception:
+                raise RuntimeError("search_memory 'k' must be an integer.")
+            if k < 1:
+                raise RuntimeError("search_memory 'k' must be >= 1.")
+            if k > 50:
+                k = 50
+            results = agency.memory.search_memory(query, k)
+            output_result(True, "search_memory", {"results": results})
+
+        elif args.action == "ingest_file":
+            if not agency.memory:
+                raise RuntimeError("Memory system not available")
+            file_path = input_data.get('file_path')
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise RuntimeError("ingest_file requires non-empty 'file_path'.")
+            file_path = file_path.strip()
+            if not os.path.exists(file_path):
+                raise RuntimeError(f"File not found: {file_path}")
+            
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            if not content.strip():
+                raise RuntimeError(f"File is empty: {file_path}")
+            
+            # Simple chunking for proof of concept
+            # In production, use more sophisticated recursive chunking
+            chunks = [content[i:i+2000] for i in range(0, len(content), 2000)]
+            log(f"Ingesting {file_path} in {len(chunks)} chunks")
+            
+            mem_ids = []
+            for i, chunk in enumerate(chunks):
+                mid = agency.memory.upsert_memory(chunk, {
+                    "source": "file_ingest",
+                    "file_path": file_path,
+                    "chunk": i,
+                    "total_chunks": len(chunks)
+                })
+                mem_ids.append(mid)
+            
+            output_result(True, "ingest_file", {"file_path": file_path, "memories": mem_ids})
+
+        # =====================================================================
+        # COGNITIVE LOOP ACTIONS
+        # =====================================================================
+
+        elif args.action == "cognitive_tick":
+            if not agency.cognitive_loop:
+                raise RuntimeError("Cognitive loop not available")
+
+            event = input_data.get('event')
+            if event is None:
+                if isinstance(input_data, dict) and "text" in input_data:
+                    event = input_data
+                else:
+                    raise RuntimeError("cognitive_tick requires 'event' or top-level 'text'.")
+
+            k = input_data.get('k', 5)
+            try:
+                k = int(k)
+            except Exception:
+                raise RuntimeError("cognitive_tick 'k' must be an integer.")
+            if k < 1:
+                raise RuntimeError("cognitive_tick 'k' must be >= 1.")
+            if k > 50:
+                k = 50
+
+            data = agency.cognitive_tick(event, k=k)
+            output_result(data.get("ok", True), "cognitive_tick", data)
+
+        elif args.action == "cognitive_run":
+            if not agency.cognitive_loop:
+                raise RuntimeError("Cognitive loop not available")
+
+            events = input_data.get('events')
+            if not isinstance(events, list) or not events:
+                raise RuntimeError("cognitive_run requires non-empty 'events' list.")
+
+            k = input_data.get('k', 5)
+            max_steps = input_data.get('max_steps', 50)
+            try:
+                k = int(k)
+                max_steps = int(max_steps)
+            except Exception:
+                raise RuntimeError("cognitive_run 'k' and 'max_steps' must be integers.")
+
+            if k < 1:
+                raise RuntimeError("cognitive_run 'k' must be >= 1.")
+            if max_steps < 1:
+                raise RuntimeError("cognitive_run 'max_steps' must be >= 1.")
+            if max_steps > 200:
+                max_steps = 200
+
+            data = agency.cognitive_run(events, k=k, max_steps=max_steps)
+            output_result(data.get("ok", True), "cognitive_run", data)
+
+        elif args.action == "cognitive_enqueue":
+            if not COGNITIVE_DAEMON_AVAILABLE:
+                raise RuntimeError("Cognitive daemon controls not available")
+            event = input_data.get("event")
+            if event is None:
+                text = input_data.get("text")
+                if isinstance(text, str) and text.strip():
+                    event = {"text": text.strip(), "source": input_data.get("source", "api")}
+                else:
+                    raise RuntimeError("cognitive_enqueue requires 'event' or non-empty 'text'.")
+            event_id = enqueue_event(
+                db_path=agency.db_path,
+                niche_id=agency.config.get("id"),
+                event=event,
+                source=str(input_data.get("source", "api")),
+                execution_id=input_data.get("execution_id"),
+                priority=int(input_data.get("priority", 100)),
+                max_attempts=int(input_data.get("max_attempts", 3)),
+            )
+            output_result(True, "cognitive_enqueue", {"event_id": event_id})
+
+        elif args.action == "cognitive_daemon_status":
+            if not COGNITIVE_DAEMON_AVAILABLE:
+                raise RuntimeError("Cognitive daemon controls not available")
+            data = daemon_status(
+                niche_id=agency.config.get("id"),
+                db_path=agency.db_path,
+            )
+            output_result(True, "cognitive_daemon_status", data)
+
+        elif args.action == "cognitive_daemon_start":
+            if not COGNITIVE_DAEMON_AVAILABLE:
+                raise RuntimeError("Cognitive daemon controls not available")
+            poll_seconds = float(input_data.get("poll_seconds", 2.0))
+            stale_after = float(input_data.get("stale_after_seconds", 0.0))
+            foreground = bool(input_data.get("foreground", False))
+            data = start_daemon(
+                niche_id=agency.config.get("id"),
+                db_path=agency.db_path,
+                poll_seconds=poll_seconds,
+                stale_after_seconds=stale_after,
+                foreground=foreground,
+            )
+            output_result(bool(data.get("ok")), "cognitive_daemon_start", data)
+
+        elif args.action == "cognitive_daemon_stop":
+            if not COGNITIVE_DAEMON_AVAILABLE:
+                raise RuntimeError("Cognitive daemon controls not available")
+            timeout_seconds = float(input_data.get("timeout_seconds", 5.0))
+            data = stop_daemon(
+                niche_id=agency.config.get("id"),
+                db_path=agency.db_path,
+                timeout_seconds=timeout_seconds,
+            )
+            output_result(bool(data.get("ok")), "cognitive_daemon_stop", data)
+
         else:
             output_result(False, args.action, {}, {"code": "UNKNOWN_ACTION", "message": f"Action {args.action} not recognized"})
             sys.exit(1)
@@ -514,4 +790,3 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"CRITICAL ERROR: {e}")
         output_result(False, args.action, {}, {"code": "RUNTIME_ERROR", "message": str(e)})
-

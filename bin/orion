@@ -1,0 +1,1778 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_self() {
+  local target="$1"
+  while [ -L "$target" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)"
+    target="$(readlink "$target")"
+    [[ "$target" != /* ]] && target="$dir/$target"
+  done
+  cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd
+}
+
+SCRIPT_DIR="$(resolve_self "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
+CLI_NAME="${EMPYRALIS_CLI_NAME:-empyralis}"
+CLI_DISPLAY_NAME="Empyralis CLI"
+WIZARD_PATH="${ROOT_DIR}/scripts/orion_terminal_wizard.py"
+START_STACK_SCRIPT="${ROOT_DIR}/scripts/start_empyralis_local_stack.sh"
+if [[ ! -x "${START_STACK_SCRIPT}" ]]; then
+  START_STACK_SCRIPT="${ROOT_DIR}/scripts/start_orion_local_stack.sh"
+fi
+STOP_STACK_SCRIPT="${ROOT_DIR}/scripts/stop_empyralis_local_stack.sh"
+if [[ ! -x "${STOP_STACK_SCRIPT}" ]]; then
+  STOP_STACK_SCRIPT="${ROOT_DIR}/scripts/stop_orion_local_stack.sh"
+fi
+STATUS_STACK_SCRIPT="${ROOT_DIR}/scripts/status_empyralis_local_stack.sh"
+if [[ ! -x "${STATUS_STACK_SCRIPT}" ]]; then
+  STATUS_STACK_SCRIPT="${ROOT_DIR}/scripts/status_orion_local_stack.sh"
+fi
+LOGS_STACK_SCRIPT="${ROOT_DIR}/scripts/logs_empyralis_local_stack.sh"
+if [[ ! -x "${LOGS_STACK_SCRIPT}" ]]; then
+  LOGS_STACK_SCRIPT="${ROOT_DIR}/scripts/logs_orion_local_stack.sh"
+fi
+GO_SCRIPT="${ROOT_DIR}/scripts/empyralis_go.sh"
+if [[ ! -x "${GO_SCRIPT}" ]]; then
+  GO_SCRIPT="${ROOT_DIR}/scripts/orion_go.sh"
+fi
+RELEASE_STATUS_SCRIPT="${ROOT_DIR}/scripts/orion_release_status.sh"
+RELEASE_GATE_SCRIPT="${ROOT_DIR}/scripts/orion_release_gate.sh"
+PYTHON_ENGINE_DIR="${ROOT_DIR}/python_engine"
+COGNITIVE_DAEMON_PATH="${PYTHON_ENGINE_DIR}/cognitive_daemon.py"
+PYTHON_ENGINE_PYTHON="python3"
+if [[ -x "${PYTHON_ENGINE_DIR}/.venv/bin/python" ]]; then
+  PYTHON_ENGINE_PYTHON="${PYTHON_ENGINE_DIR}/.venv/bin/python"
+fi
+
+if [[ ! -f "${WIZARD_PATH}" ]]; then
+  echo "${CLI_DISPLAY_NAME} is not installed correctly: missing scripts/orion_terminal_wizard.py"
+  echo "Expected root: ${ROOT_DIR}"
+  exit 1
+fi
+
+API_URL="${EMPYRALIS_API_URL:-${ORION_API_URL:-http://127.0.0.1:8001}}"
+STACK_RUNTIME_KEY_FILE="${ROOT_DIR}/.orion-stack/runtime_key"
+STACK_ENV_FILE="${ROOT_DIR}/.orion-stack/stack.env"
+STACK_OPENAI_KEY_FILE="${ROOT_DIR}/.orion-stack/openai_api_key"
+normalize_runtime_key() {
+  printf "%s" "${1:-}" | tr -d '[:space:]'
+}
+STACK_RUNTIME_KEY_VALUE=""
+if [[ -f "${STACK_RUNTIME_KEY_FILE}" ]]; then
+  STACK_RUNTIME_KEY_VALUE="$(normalize_runtime_key "$(cat "${STACK_RUNTIME_KEY_FILE}" 2>/dev/null || true)")"
+fi
+RUNTIME_KEY_VALUE="$(normalize_runtime_key "${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${STACK_RUNTIME_KEY_VALUE:-replace-with-strong-key}}}}")"
+if [[ -z "${RUNTIME_KEY_VALUE}" ]]; then
+  RUNTIME_KEY_VALUE="replace-with-strong-key"
+fi
+STACK_OPENAI_KEY_VALUE=""
+if [[ -f "${STACK_OPENAI_KEY_FILE}" ]]; then
+  STACK_OPENAI_KEY_VALUE="$(tr -d '\r\n' < "${STACK_OPENAI_KEY_FILE}" 2>/dev/null || true)"
+fi
+if [[ -z "${OPENAI_API_KEY:-}" && -n "${STACK_OPENAI_KEY_VALUE}" ]]; then
+  export OPENAI_API_KEY="${STACK_OPENAI_KEY_VALUE}"
+fi
+
+load_stack_mode_defaults() {
+  if [[ ! -f "${STACK_ENV_FILE}" ]]; then
+    return 0
+  fi
+  while IFS='=' read -r key value; do
+    [[ -z "${key}" ]] && continue
+    [[ "${key}" == \#* ]] && continue
+    case "${key}" in
+      EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED|EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE|EMPYRALIS_TELEGRAM_AUTOPILOT_ENGINE|EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX|EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED|EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE|EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE|EMPYRALIS_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX|ORION_TELEGRAM_AUTOPILOT_ENABLED|ORION_TELEGRAM_AUTOPILOT_PROFILE|ORION_TELEGRAM_AUTOPILOT_ENGINE|ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX|ORION_WHATSAPP_AUTOPILOT_ENABLED|ORION_WHATSAPP_AUTOPILOT_PROFILE|ORION_WHATSAPP_AUTOPILOT_ENGINE|ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX)
+        if [[ -z "${!key:-}" ]]; then
+          export "${key}=${value}"
+        fi
+        ;;
+    esac
+  done < "${STACK_ENV_FILE}"
+}
+
+print_help() {
+  cat <<EOF
+Empyralis CLI
+
+Usage:
+  ${CLI_NAME}                          Open terminal command center (launcher)
+  ${CLI_NAME} chat                     Open live terminal chat UI
+  ${CLI_NAME} app                      Open one-app chat mode (OpenClaw-style loop)
+  ${CLI_NAME} go                       Start stack + run no-debug checks (single command)
+  ${CLI_NAME} launcher                 Launch terminal command center
+  ${CLI_NAME} run "<goal>"             Run immediately in general worker mode
+  ${CLI_NAME} preflight                Security + provider + scope checks before run
+  ${CLI_NAME} setup                    Primary setup flow (Empyralis guided mechanics)
+  ${CLI_NAME} onboard                  Full onboarding flow (security + provider + connectors)
+  ${CLI_NAME} configure                Section-based configuration wizard
+  ${CLI_NAME} hatch                    Alias for live terminal command loop
+  ${CLI_NAME} tui                      Open live terminal command loop
+  ${CLI_NAME} status                   Runtime + worker quick status
+  ${CLI_NAME} contract check [--json]  Runtime contract + CLI compatibility check
+  ${CLI_NAME} cognitive <cmd>          Cognitive daemon control (start|stop|status|enqueue|event|digest|digests|approvals|approve|reject|skills|skill-decay|objective|objective-tail|objective-lessons|objective-dispatch|objective-simulate|objective-autotune|watch|watch-run)
+  ${CLI_NAME} autopilot status         Telegram/WhatsApp autopilot quick status
+  ${CLI_NAME} autopilot watch [sec]    Live autopilot monitor (default 2s)
+  ${CLI_NAME} autopilot watch-line [s] Single-line autopilot monitor (default 2s)
+  ${CLI_NAME} autopilot test [ch] [g]  Run autopilot smoke test (ch=telegram|whatsapp, default engine=codex)
+  ${CLI_NAME} connectors               Connect channels/tools from terminal
+  ${CLI_NAME} doctor                   Print runtime doctor report
+  ${CLI_NAME} release-status           Unified release diagnostics (health/worker/autopilot/latest run)
+  ${CLI_NAME} release-gate [soak_sec]  Run release gate (routing tests + brand audit + strict status + soak)
+  ${CLI_NAME} legal-scan               Scan runtime surfaces for blocked third-party branding
+  ${CLI_NAME} profiles health [ws]     Print provider profile health (default ws=default)
+  ${CLI_NAME} gateway <cmd>            Gateway service shortcuts (start|stop|status|logs)
+  ${CLI_NAME} stack <cmd>              Full local stack control (start|stop|status|logs)
+  ${CLI_NAME} completion <shell>       Generate completion script (bash|zsh|fish)
+  ${CLI_NAME} --help                   Show this help
+EOF
+}
+
+ensure_runtime() {
+  local http_code
+  http_code="$(curl -sS -o /dev/null -w "%{http_code}" \
+    --connect-timeout 2 \
+    --max-time 4 \
+    -H "X-API-Key: ${RUNTIME_KEY_VALUE}" \
+    "${API_URL}/health" 2>/dev/null || true)"
+
+  if [[ "${http_code}" == "200" || "${http_code}" == "401" || "${http_code}" == "403" ]]; then
+    return 0
+  fi
+
+  if [[ -x "${START_STACK_SCRIPT}" ]]; then
+    echo "Empyralis runtime is offline. Starting local stack..."
+    load_stack_mode_defaults
+    RUNTIME_KEY="${RUNTIME_KEY_VALUE}" bash "${START_STACK_SCRIPT}"
+  else
+    echo "Empyralis runtime is offline at ${API_URL}."
+    echo "Start it first, then run: ${CLI_NAME}"
+    exit 1
+  fi
+}
+
+cmd_stack() {
+  local action="${1:-status}"
+  shift || true
+  case "${action}" in
+    start)
+      load_stack_mode_defaults
+      bash "${START_STACK_SCRIPT}"
+      ;;
+    stop)
+      bash "${STOP_STACK_SCRIPT}"
+      ;;
+    status)
+      bash "${STATUS_STACK_SCRIPT}"
+      ;;
+    logs)
+      local lines="${1:-120}"
+      bash "${LOGS_STACK_SCRIPT}" "${lines}"
+      ;;
+    *)
+      echo "Unknown stack action: ${action}"
+      echo "Use: ${CLI_NAME} stack {start|stop|status|logs}"
+      exit 2
+      ;;
+  esac
+}
+
+cmd_gateway() {
+  local action="${1:-status}"
+  shift || true
+  local runtime_log="${ROOT_DIR}/.orion-stack/logs/runtime.log"
+  case "${action}" in
+    start)
+      load_stack_mode_defaults
+      START_BACKEND=0 START_FRONTEND=0 RUNTIME_KEY="${RUNTIME_KEY_VALUE}" bash "${START_STACK_SCRIPT}"
+      ;;
+    stop)
+      bash "${STOP_STACK_SCRIPT}"
+      ;;
+    status)
+      bash "${STATUS_STACK_SCRIPT}"
+      if curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/health" >/dev/null 2>&1; then
+        echo "gateway: healthy"
+      else
+        echo "gateway: unreachable"
+      fi
+      ;;
+    logs)
+      local lines="${1:-120}"
+      if [[ -f "${runtime_log}" ]]; then
+        tail -n "${lines}" -f "${runtime_log}"
+      else
+        bash "${LOGS_STACK_SCRIPT}" "${lines}"
+      fi
+      ;;
+    *)
+      echo "Unknown gateway action: ${action}"
+      echo "Use: ${CLI_NAME} gateway {start|stop|status|logs}"
+      exit 2
+      ;;
+  esac
+}
+
+arg_has_flag() {
+  local needle="$1"
+  shift || true
+  local arg
+  for arg in "$@"; do
+    if [[ "${arg}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_placeholder_value() {
+  local value="${1:-}"
+  case "${value}" in
+    \<*\>) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_id_placeholders() {
+  local sub="$1"
+  shift || true
+  local prev=""
+  local arg
+  for arg in "$@"; do
+    case "${prev}" in
+      --event-id|--objective-id)
+        if is_placeholder_value "${arg}"; then
+          echo "Replace placeholder ${arg} with a real ID before running: ${CLI_NAME} cognitive ${sub}"
+          exit 2
+        fi
+        ;;
+    esac
+    prev="${arg}"
+  done
+}
+
+resolve_objective_id() {
+  local resolved=""
+  local list_json
+  list_json="$(cmd_cognitive objective-list --limit 20 2>/dev/null || true)"
+  if command -v jq >/dev/null 2>&1; then
+    resolved="$(echo "${list_json}" | jq -r '[.items[] | select(.status=="active")][0].id // .items[0].id // empty' 2>/dev/null || true)"
+  fi
+  echo "${resolved}"
+}
+
+cmd_cognitive() {
+  local sub="${1:-status}"
+  shift || true
+
+  if [[ ! -f "${COGNITIVE_DAEMON_PATH}" ]]; then
+    echo "Missing cognitive daemon script: ${COGNITIVE_DAEMON_PATH}"
+    exit 1
+  fi
+
+  local default_niche="${ORION_COGNITIVE_NICHE_ID:-astronomy}"
+  local default_db="${ORION_COGNITIVE_DB_PATH:-${PYTHON_ENGINE_DIR}/agency_memory.db}"
+
+  case "${sub}" in
+    start|run|status|stop|enqueue|event|digest|digests|approvals|approve|reject|skills|skill-decay|objective-add|objective-list|objective-get|objective-pause|objective-resume|objective-complete|objective-tick|objective-tail|objective-lessons|objective-dispatch|objective-simulate|objective-autotune)
+      validate_id_placeholders "${sub}" "$@"
+      if ! arg_has_flag "--niche-id" "$@"; then
+        set -- --niche-id "${default_niche}" "$@"
+      fi
+      if ! arg_has_flag "--db-path" "$@"; then
+        set -- --db-path "${default_db}" "$@"
+      fi
+      (
+        cd "${PYTHON_ENGINE_DIR}" && \
+        ORION_API_URL="${ORION_API_URL:-${API_URL}}" \
+        ORION_API_KEY="${ORION_API_KEY:-${RUNTIME_KEY_VALUE}}" \
+        RUNTIME_KEY="${RUNTIME_KEY:-${RUNTIME_KEY_VALUE}}" \
+        ORION_COGNITIVE_RUN_MODE="${ORION_COGNITIVE_RUN_MODE:-auto}" \
+        exec "${PYTHON_ENGINE_PYTHON}" "${COGNITIVE_DAEMON_PATH}" "${sub}" "$@"
+      )
+      ;;
+    objective)
+      local objective_action="list"
+      if [[ $# -gt 0 && "${1:-}" != --* ]]; then
+        objective_action="${1}"
+        shift || true
+      fi
+      case "${objective_action}" in
+        add)
+          cmd_cognitive objective-add "$@"
+          ;;
+        list)
+          cmd_cognitive objective-list "$@"
+          ;;
+        approvals)
+          cmd_cognitive approvals "$@"
+          ;;
+        get)
+          cmd_cognitive objective-get "$@"
+          ;;
+        pause)
+          cmd_cognitive objective-pause "$@"
+          ;;
+        resume)
+          cmd_cognitive objective-resume "$@"
+          ;;
+        complete)
+          cmd_cognitive objective-complete "$@"
+          ;;
+        tick)
+          cmd_cognitive objective-tick "$@"
+          ;;
+        tail)
+          cmd_cognitive objective-tail "$@"
+          ;;
+        lessons)
+          cmd_cognitive objective-lessons "$@"
+          ;;
+        dispatch|run-now)
+          cmd_cognitive objective-dispatch "$@"
+          ;;
+        simulate)
+          cmd_cognitive objective-simulate "$@"
+          ;;
+        autotune)
+          cmd_cognitive objective-autotune "$@"
+          ;;
+        approve|reject)
+          local event_id=""
+          local objective_filter=""
+          local note=""
+          while [[ $# -gt 0 ]]; do
+            case "${1}" in
+              --event-id)
+                event_id="${2:-}"
+                shift 2
+                ;;
+              --objective-id)
+                objective_filter="${2:-}"
+                shift 2
+                ;;
+              --note)
+                note="${2:-}"
+                shift 2
+                ;;
+              *)
+                echo "Unknown objective ${objective_action} flag: ${1}"
+                echo "Use: ${CLI_NAME} cognitive objective ${objective_action} [--event-id <id> | --objective-id <id>] [--note text]"
+                exit 2
+                ;;
+            esac
+          done
+          if [[ -n "${event_id}" ]] && is_placeholder_value "${event_id}"; then
+            echo "Replace placeholder ${event_id} with a real event ID."
+            exit 2
+          fi
+          if [[ -n "${objective_filter}" ]] && is_placeholder_value "${objective_filter}"; then
+            echo "Replace placeholder ${objective_filter} with a real objective ID."
+            exit 2
+          fi
+          if [[ -z "${event_id}" && -n "${objective_filter}" ]]; then
+            local approvals_json
+            approvals_json="$(cmd_cognitive approvals --objective-id "${objective_filter}" --limit 1)"
+            if command -v jq >/dev/null 2>&1; then
+              event_id="$(echo "${approvals_json}" | jq -r '.items[0].event_id // empty')"
+            fi
+          fi
+          if [[ -z "${event_id}" ]]; then
+            echo "No pending approval found. Use:"
+            echo "  ${CLI_NAME} cognitive approvals --limit 10"
+            echo "  ${CLI_NAME} cognitive objective ${objective_action} --event-id <event_id> [--note text]"
+            echo "  ${CLI_NAME} cognitive objective ${objective_action} --objective-id <objective_id> [--note text]"
+            exit 2
+          fi
+          if [[ "${objective_action}" == "approve" ]]; then
+            cmd_cognitive approve --event-id "${event_id}" --note "${note}"
+          else
+            cmd_cognitive reject --event-id "${event_id}" --note "${note}"
+          fi
+          ;;
+        doctor)
+          local objective_id=""
+          local limit=5
+          local json_mode=0
+          while [[ $# -gt 0 ]]; do
+            case "${1}" in
+              --objective-id)
+                objective_id="${2:-}"
+                shift 2
+                ;;
+              --limit)
+                limit="${2:-5}"
+                shift 2
+                ;;
+              --json)
+                json_mode=1
+                shift
+                ;;
+              *)
+                shift
+                ;;
+            esac
+          done
+
+          local status_json
+          status_json="$(cmd_cognitive status)"
+
+          local objective_json
+          if [[ -n "${objective_id}" ]]; then
+            objective_json="$(cmd_cognitive objective-get --objective-id "${objective_id}")"
+          else
+            local list_json target_id
+            list_json="$(cmd_cognitive objective-list --limit 20)"
+            if command -v jq >/dev/null 2>&1; then
+              target_id="$(echo "${list_json}" | jq -r '[.items[] | select(.status=="active")][0].id // .items[0].id // empty')"
+            else
+              target_id=""
+            fi
+            if [[ -n "${target_id}" ]]; then
+              objective_json="$(cmd_cognitive objective-get --objective-id "${target_id}")"
+              objective_id="${target_id}"
+            else
+              objective_json='{"ok": false, "error": "objective_not_found"}'
+            fi
+          fi
+
+          local tail_json
+          if [[ -n "${objective_id}" ]]; then
+            tail_json="$(cmd_cognitive objective-tail --objective-id "${objective_id}" --limit "${limit}")"
+          else
+            tail_json='{"ok": false, "error": "objective_not_found", "events": [], "reflections": []}'
+          fi
+
+          local approvals_json
+          approvals_json="$(cmd_cognitive approvals --limit "${limit}")"
+
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "${status_json}"
+            echo "${objective_json}"
+            echo "${tail_json}"
+            echo "${approvals_json}"
+            return 0
+          fi
+
+          local doctor_json
+          doctor_json="$(jq -n \
+            --argjson status "${status_json}" \
+            --argjson objective_get "${objective_json}" \
+            --argjson tail "${tail_json}" \
+            --argjson approvals "${approvals_json}" \
+            '{
+              ok: true,
+              status: $status,
+              objective: ($objective_get.objective // null),
+              tail: $tail,
+              approvals: $approvals
+            }'
+          )"
+
+          if [[ "${json_mode}" == "1" ]]; then
+            echo "${doctor_json}"
+          else
+            echo "${doctor_json}" | jq -r '
+              "Empyralis Objective Doctor",
+              "daemon: \(.status.state.status // "-") pid_alive=\(.status.state.pid_alive // false) queue(pending=\(.status.queue.pending // 0),processing=\(.status.queue.processing // 0),waiting=\(.status.queue.waiting_for_input // 0),failed=\(.status.queue.failed // 0))",
+              (
+                if .objective == null then
+                  "objective: -"
+                else
+                  "objective: \(.objective.title // "-") [\((.objective.id // "")[0:8])] status=\(.objective.status // "-") priority=\(.objective.priority // "-")"
+                end
+              ),
+              (
+                if .objective == null then
+                  "next_run_at: -  last_run_at: -"
+                else
+                  "next_run_at: \(.objective.next_run_at // "-")  last_run_at: \(.objective.last_run_at // "-")"
+                end
+              ),
+              (
+                if .objective == null then
+                  "policy: -"
+                else
+                  (.objective.metadata.policy // {}) as $p |
+                  "policy: fail_streak=\(($p.verification_fail_streak // 0) | tostring) escalation=\(($p.escalation_state // "-") | tostring)/\(($p.escalation_resolution // "-") | tostring) remediation=\(($p.remediation_state // "-") | tostring)/\(($p.remediation_reason // "-") | tostring) auto_approvals=\(($p.auto_approval_count // 0) | tostring)"
+                end
+              ),
+              (
+                if .objective == null then
+                  "policy_hold: -"
+                else
+                  (.objective.metadata.policy // {}) as $p |
+                  "policy_hold: reason=\(($p.approval_hold_reason // "-") | tostring) until=\(($p.approval_hold_until // "-") | tostring)"
+                end
+              ),
+              (
+                if .objective == null then
+                  "skill_replay: -"
+                else
+                  (.objective.metadata.policy // {}) as $p |
+                  "skill_replay: attempts=\(($p.skill_replay_attempts // 0) | tostring) applied=\(($p.skill_replay_applied // 0) | tostring) fallback=\(($p.skill_replay_fallbacks // 0) | tostring) last_conf=\(($p.skill_replay_last_confidence // "-") | tostring) last_reason=\(($p.skill_replay_last_reason // "-") | tostring)"
+                end
+              ),
+              (
+                if .objective == null then
+                  "operator_safety: -"
+                else
+                  (.objective.constraints // {}) as $c |
+                  (($c.operator_safety_profile // .objective.metadata.operator_safety_profile // .objective.metadata.policy.last_dispatch_operator_safety_profile // "default") | tostring) as $profile |
+                  (($c.operator_approval_levels // .objective.metadata.operator_approval_levels // .objective.metadata.policy.last_dispatch_operator_approval_levels // []) | if type=="array" then map(tostring) else [] end) as $levels |
+                  (if ($levels | length) > 0 then ($levels | join(",")) else "none" end) as $levels_txt |
+                  "operator_safety: profile=\($profile) approvals=\($levels_txt)"
+                end
+              ),
+              (
+                if (.tail.events | length) > 0 then
+                  .tail.events[0] as $e |
+                  "latest_event: \(($e.id // "")[0:8]) status=\($e.status // "-") final=\(($e.digest.final_status // "-")) summary=\(($e.digest.one_line_summary // $e.result.tick.result.one_line_summary // "-") | tostring)"
+                else
+                  "latest_event: -"
+                end
+              ),
+              (
+                if (.tail.events | length) > 0 then
+                  .tail.events[0] as $e |
+                  "latest_event_flags: \((($e.digest.risk_flags // []) | map(tostring) | join(",")) // "-")"
+                else
+                  "latest_event_flags: -"
+                end
+              ),
+              (
+                if (.tail.reflections | length) > 0 then
+                  .tail.reflections[0] as $r |
+                  "latest_reflection: passed=\($r.passed // false) confidence=\(($r.confidence // 0) | tostring) lesson=\(($r.lesson // "-") | tostring)"
+                else
+                  "latest_reflection: -"
+                end
+              ),
+              "approvals: \(.approvals.count // 0)"
+            '
+          fi
+          ;;
+        board)
+          local status_filter="${ORION_COGNITIVE_OBJECTIVE_BOARD_STATUS:-active}"
+          local limit="${ORION_COGNITIVE_OBJECTIVE_BOARD_LIMIT:-20}"
+          local json_mode=0
+          while [[ $# -gt 0 ]]; do
+            case "${1}" in
+              --status)
+                status_filter="${2:-active}"
+                shift 2
+                ;;
+              --limit)
+                limit="${2:-20}"
+                shift 2
+                ;;
+              --json)
+                json_mode=1
+                shift
+                ;;
+              *)
+                if [[ "${1}" =~ ^[0-9]+$ ]]; then
+                  limit="${1}"
+                  shift
+                elif [[ -z "${status_filter}" || "${status_filter}" == "active" ]]; then
+                  status_filter="${1}"
+                  shift
+                else
+                  echo "Unknown objective board flag: ${1}"
+                  echo "Use: ${CLI_NAME} cognitive objective board [--status <status>|all] [--limit <n>] [--json]"
+                  exit 2
+                fi
+                ;;
+            esac
+          done
+          if ! [[ "${limit}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid --limit value: ${limit}"
+            exit 2
+          fi
+          if (( limit < 1 )); then
+            limit=1
+          fi
+          if (( limit > 100 )); then
+            limit=100
+          fi
+          local approvals_limit=$((limit * 10))
+          if (( approvals_limit < 20 )); then
+            approvals_limit=20
+          fi
+          if (( approvals_limit > 400 )); then
+            approvals_limit=400
+          fi
+          local lessons_limit=$((limit * 15))
+          if (( lessons_limit < 50 )); then
+            lessons_limit=50
+          fi
+          if (( lessons_limit > 800 )); then
+            lessons_limit=800
+          fi
+
+          local -a list_args
+          list_args=(objective-list --limit "${limit}")
+          if [[ -n "${status_filter}" && "${status_filter}" != "all" && "${status_filter}" != "*" ]]; then
+            list_args+=(--status "${status_filter}")
+          fi
+
+          local objectives_json
+          objectives_json="$(cmd_cognitive "${list_args[@]}")"
+          local approvals_json
+          approvals_json="$(cmd_cognitive approvals --limit "${approvals_limit}")"
+          local lessons_json
+          lessons_json="$(cmd_cognitive objective-lessons --limit "${lessons_limit}")"
+
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "${objectives_json}"
+            echo "${approvals_json}"
+            echo "${lessons_json}"
+            return 0
+          fi
+
+          local board_json
+          board_json="$(jq -n \
+            --arg status_filter "${status_filter}" \
+            --argjson objectives "${objectives_json}" \
+            --argjson approvals "${approvals_json}" \
+            --argjson lessons "${lessons_json}" \
+            '{
+              ok: true,
+              status_filter: $status_filter,
+              count: (($objectives.items // []) | length),
+              objectives: (
+                ($objectives.items // []) | map(
+                  . as $o |
+                  ($o.metadata.policy // {}) as $p |
+                  (($lessons.items // []) | map(select((.objective_id // "") == ($o.id // "")))) as $lr |
+                  ($lr | length) as $lr_count |
+                  ($lr | map(select(.passed == true)) | length) as $lr_passed |
+                  (if $lr_count > 0 then ($lr | map((.confidence // 0) | tonumber) | add) / $lr_count else null end) as $avg_conf |
+                  (if $lr_count > 1 then ((($lr[0].confidence // 0) | tonumber) - ((($lr | last).confidence // 0) | tonumber)) else 0 end) as $trend_delta |
+                  {
+                    id: ($o.id // ""),
+                    title: ($o.title // ""),
+                    status: ($o.status // "unknown"),
+                    priority: ($o.priority // 0),
+                    next_run_at: ($o.next_run_at // null),
+                    last_run_at: ($o.last_run_at // null),
+                    fail_streak: ($p.verification_fail_streak // 0),
+                    escalation_state: ($p.escalation_state // "-"),
+                    escalation_resolution: ($p.escalation_resolution // "-"),
+                    auto_approvals: ($p.auto_approval_count // 0),
+                    remediation_state: ($p.remediation_state // "-"),
+                    remediation_reason: ($p.remediation_reason // "-"),
+                    remediation_until: ($p.escalation_deferred_until // $p.remediation_until // null),
+                    replay_attempts: ($p.skill_replay_attempts // 0),
+                    replay_applied: ($p.skill_replay_applied // 0),
+                    replay_fallbacks: ($p.skill_replay_fallbacks // 0),
+                    replay_last_confidence: ($p.skill_replay_last_confidence // null),
+                    replay_last_signature: ($p.skill_replay_last_signature // "-"),
+                    replay_last_reason: ($p.skill_replay_last_reason // "-"),
+                    operator_safety_profile: (
+                      ($o.constraints.operator_safety_profile // $o.metadata.operator_safety_profile // $p.last_dispatch_operator_safety_profile // "default")
+                      | tostring
+                    ),
+                    operator_approval_levels: (
+                      ($o.constraints.operator_approval_levels // $o.metadata.operator_approval_levels // $p.last_dispatch_operator_approval_levels // [])
+                      | if type=="array" then map(tostring) else [] end
+                    ),
+                    replay_hit_rate: (
+                      if ($p.skill_replay_attempts // 0) > 0 then
+                        (((($p.skill_replay_applied // 0) * 1000) / ($p.skill_replay_attempts // 1)) | round / 10)
+                      else null
+                      end
+                    ),
+                    reflection_count: $lr_count,
+                    pass_rate: (if $lr_count > 0 then (($lr_passed * 1000 / $lr_count) | round / 10) else null end),
+                    avg_confidence: $avg_conf,
+                    trend_delta: (if $lr_count > 1 then (($trend_delta * 1000) | round / 1000) else 0 end),
+                    trend: (
+                      if $lr_count <= 1 then "flat"
+                      elif $trend_delta > 0.08 then "up"
+                      elif $trend_delta < -0.08 then "down"
+                      else "flat"
+                      end
+                    ),
+                    approvals_pending: (
+                      ($approvals.items // [])
+                      | map(select((.objective_id // "") == ($o.id // "")))
+                      | length
+                    )
+                  }
+                )
+              )
+            }'
+          )"
+          if [[ "${json_mode}" == "1" ]]; then
+            echo "${board_json}"
+          else
+            echo "${board_json}" | jq -r '
+              "Empyralis Objective Board",
+              "filter: status=\(.status_filter // "all") count=\(.count // 0)",
+              (
+                if (.objectives | length) == 0 then
+                  "No objectives found."
+                else
+                  (.objectives[] |
+                    "- \((.title // "-") | tostring) [\((.id // "")[0:8])] status=\(.status // "-") p=\((.priority // 0) | tostring) fails=\((.fail_streak // 0) | tostring) esc=\((.escalation_state // "-") | tostring)/\((.escalation_resolution // "-") | tostring) rem=\((.remediation_state // "-") | tostring) auto=\((.auto_approvals // 0) | tostring) replay=\((.replay_applied // 0) | tostring)/\((.replay_attempts // 0) | tostring)(\((if .replay_hit_rate == null then "-" else ((.replay_hit_rate | tostring) + "%") end)) op=\((.operator_safety_profile // "default") | tostring):\((if ((.operator_approval_levels // []) | length) > 0 then ((.operator_approval_levels // []) | join(",")) else "none" end)) approvals=\((.approvals_pending // 0) | tostring) refl=\((.reflection_count // 0) | tostring) pass=\((if .pass_rate == null then "-" else ((.pass_rate | tostring) + "%") end)) conf=\((if .avg_confidence == null then "-" else (((.avg_confidence * 100) | round / 100) | tostring) end)) trend=\((.trend // "flat") | tostring)"
+                  )
+                end
+              )
+            '
+          fi
+          ;;
+        watch)
+          local objective_id=""
+          local interval="${ORION_COGNITIVE_OBJECTIVE_WATCH_INTERVAL:-2}"
+          local limit="${ORION_COGNITIVE_OBJECTIVE_WATCH_LIMIT:-10}"
+          local summary_mode="${ORION_COGNITIVE_OBJECTIVE_WATCH_SUMMARY:-0}"
+          local iterations=0
+          local niche_override=""
+          local db_override=""
+          while [[ $# -gt 0 ]]; do
+            case "${1}" in
+              --objective-id)
+                objective_id="${2:-}"
+                shift 2
+                ;;
+              --interval)
+                interval="${2:-2}"
+                shift 2
+                ;;
+              --limit)
+                limit="${2:-10}"
+                shift 2
+                ;;
+              --iterations)
+                iterations="${2:-0}"
+                shift 2
+                ;;
+              --summary)
+                summary_mode="1"
+                shift
+                ;;
+              --full)
+                summary_mode="0"
+                shift
+                ;;
+              --niche-id)
+                niche_override="${2:-}"
+                shift 2
+                ;;
+              --db-path)
+                db_override="${2:-}"
+                shift 2
+                ;;
+              *)
+                echo "Unknown objective watch flag: ${1}"
+                echo "Use: ${CLI_NAME} cognitive objective watch [--objective-id <id>] [--interval seconds] [--limit n] [--iterations n] [--summary|--full]"
+                exit 2
+                ;;
+            esac
+          done
+          if [[ -z "${objective_id}" ]]; then
+            objective_id="$(resolve_objective_id)"
+            if [[ -z "${objective_id}" ]]; then
+              echo "No objective found. Create one first with: ${CLI_NAME} cognitive objective add ..."
+              exit 2
+            fi
+            echo "Watching objective: ${objective_id}"
+            sleep 0.5
+          fi
+          if is_placeholder_value "${objective_id}"; then
+            echo "Replace placeholder ${objective_id} with a real objective ID."
+            exit 2
+          fi
+          local loop_count=0
+          while true; do
+            clear
+            date
+            echo
+            local snapshot=""
+            local -a snapshot_args
+            snapshot_args=(objective-tail --objective-id "${objective_id}" --limit "${limit}")
+            if [[ -n "${niche_override}" ]]; then
+              snapshot_args+=(--niche-id "${niche_override}")
+            fi
+            if [[ -n "${db_override}" ]]; then
+              snapshot_args+=(--db-path "${db_override}")
+            fi
+            snapshot="$(cmd_cognitive "${snapshot_args[@]}")"
+            if [[ "${summary_mode}" == "1" ]]; then
+              if command -v jq >/dev/null 2>&1; then
+                echo "${snapshot}" | jq -r '
+                  if (.ok | not) then
+                    "error: \(.error // "unknown")"
+                  else
+                    "objective: \(.objective.title // "-") [\((.objective.id // "")[0:8])] status=\(.objective.status // "-") priority=\(.objective.priority // "-")",
+                    "next_run_at: \(.objective.next_run_at // "-")  last_run_at: \(.objective.last_run_at // "-")",
+                    (
+                      (.objective.metadata.policy // {}) as $p |
+                      "policy: fail_streak=\(($p.verification_fail_streak // 0) | tostring) escalation=\(($p.escalation_state // "-") | tostring)/\(($p.escalation_resolution // "-") | tostring) remediation=\(($p.remediation_state // "-") | tostring)/\(($p.remediation_reason // "-") | tostring) auto_approvals=\(($p.auto_approval_count // 0) | tostring)"
+                    ),
+                    (
+                      (.objective.constraints // {}) as $c |
+                      (($c.operator_safety_profile // .objective.metadata.operator_safety_profile // .objective.metadata.policy.last_dispatch_operator_safety_profile // "default") | tostring) as $profile |
+                      (($c.operator_approval_levels // .objective.metadata.operator_approval_levels // .objective.metadata.policy.last_dispatch_operator_approval_levels // []) | if type=="array" then map(tostring) else [] end) as $levels |
+                      (if ($levels | length) > 0 then ($levels | join(",")) else "none" end) as $levels_txt |
+                      "operator_safety: profile=\($profile) approvals=\($levels_txt)"
+                    ),
+                    "counts: events=\(.count_events // 0) reflections=\(.count_reflections // 0)",
+                    (
+                      if (.events | length) > 0 then
+                        .events[0] as $e |
+                        "latest_event: \(($e.id // "")[0:8]) status=\($e.status // "-") final=\(($e.digest.final_status // "-")) summary=\(($e.digest.one_line_summary // $e.result.tick.result.one_line_summary // "-") | tostring)"
+                      else
+                        "latest_event: -"
+                      end
+                    ),
+                    (
+                      if (.events | length) > 0 then
+                        .events[0] as $e |
+                        "latest_event_flags: \((($e.digest.risk_flags // []) | map(tostring) | join(",")) // "-")"
+                      else
+                        "latest_event_flags: -"
+                      end
+                    ),
+                    (
+                      if (.reflections | length) > 0 then
+                        .reflections[0] as $r |
+                        "latest_reflection: passed=\($r.passed // false) confidence=\(($r.confidence // 0) | tostring) lesson=\(($r.lesson // "-") | tostring)"
+                      else
+                        "latest_reflection: -"
+                      end
+                    )
+                  end
+                '
+              else
+                echo "${snapshot}"
+              fi
+            else
+              echo "${snapshot}"
+            fi
+            loop_count=$((loop_count + 1))
+            if [[ "${iterations}" =~ ^[0-9]+$ ]] && (( iterations > 0 )) && (( loop_count >= iterations )); then
+              break
+            fi
+            sleep "${interval}"
+          done
+          ;;
+        *)
+          echo "Unknown objective action: ${objective_action}"
+          echo "Use: ${CLI_NAME} cognitive objective {add|list|board|approvals|get|pause|resume|complete|tick|tail|lessons|dispatch|simulate|autotune|approve|reject|doctor|watch}"
+          exit 2
+          ;;
+      esac
+      ;;
+    watch-run)
+      ensure_runtime
+      local ref="${1:-}"
+      if [[ -z "${ref}" ]]; then
+        echo "Usage: ${CLI_NAME} cognitive watch-run <event_id|run_id> [--interval seconds] [--timeout seconds]"
+        exit 2
+      fi
+      shift || true
+      local interval="${ORION_COGNITIVE_WATCH_INTERVAL:-2}"
+      local timeout="${ORION_COGNITIVE_WATCH_TIMEOUT_SECONDS:-240}"
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --interval)
+            interval="${2:-2}"
+            shift 2
+            ;;
+          --timeout)
+            timeout="${2:-240}"
+            shift 2
+            ;;
+          *)
+            shift
+            ;;
+        esac
+      done
+      local run_id=""
+      local event_id=""
+      local event_status=""
+      local event_summary=""
+      local now_ts start_ts
+      start_ts="$(date +%s)"
+      while true; do
+        now_ts="$(date +%s)"
+        local elapsed=$((now_ts - start_ts))
+
+        # Resolve event -> run_id if an event id was provided.
+        local event_ref="${event_id:-${ref}}"
+        local event_json
+        event_json="$(cmd_cognitive event --event-id "${event_ref}" 2>/dev/null || true)"
+        if [[ -n "${event_json}" && "$(echo "${event_json}" | jq -r '.ok // false' 2>/dev/null || echo false)" == "true" ]]; then
+          event_id="$(echo "${event_json}" | jq -r '.event.id // empty')"
+          event_status="$(echo "${event_json}" | jq -r '.event.status // "unknown"')"
+          run_id="$(echo "${event_json}" | jq -r '.event.digest.run_id // .event.result_json.tick.result.run_id // empty')"
+          event_summary="$(echo "${event_json}" | jq -r '.event.digest.one_line_summary // .event.result_json.tick.result.one_line_summary // empty')"
+        elif [[ -z "${run_id}" ]]; then
+          # If not found as event, treat ref as run id.
+          run_id="${ref}"
+        fi
+
+        clear
+        date
+        echo
+        echo "Empyralis Cognitive Watch"
+        if [[ -n "${event_id}" ]]; then
+          echo "event_id: ${event_id}"
+          echo "event_status: ${event_status}"
+        fi
+
+        if [[ -n "${run_id}" ]]; then
+          local run_state_json run_status run_summary
+          run_state_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/runs/${run_id}" 2>/dev/null || echo '{}')"
+          run_status="$(echo "${run_state_json}" | jq -r '.status // "unknown"')"
+          run_summary="$(echo "${run_state_json}" | jq -r '.result // .message // .result_summary // empty' | head -n 1)"
+          echo "run_id: ${run_id}"
+          echo "run_status: ${run_status}"
+          if [[ -n "${run_summary}" ]]; then
+            echo "summary: ${run_summary}" | cut -c1-220
+          elif [[ -n "${event_summary}" ]]; then
+            echo "summary: ${event_summary}" | cut -c1-220
+          fi
+          echo "elapsed: ${elapsed}s"
+          if [[ "${run_status}" == "completed" || "${run_status}" == "failed" || "${run_status}" == "timeout" || "${run_status}" == "waiting_for_input" ]]; then
+            echo "next: see /runs/${run_id}"
+            break
+          fi
+        else
+          echo "run_id: pending (waiting for cognitive event to produce run_id)"
+          if [[ -n "${event_summary}" ]]; then
+            echo "summary: ${event_summary}" | cut -c1-220
+          fi
+          echo "elapsed: ${elapsed}s"
+          if [[ "${event_status}" == "done" || "${event_status}" == "failed" ]]; then
+            break
+          fi
+        fi
+
+        if [[ "${elapsed}" -ge "${timeout}" ]]; then
+          echo "watch_run_error: timeout after ${timeout}s"
+          exit 1
+        fi
+        sleep "${interval}"
+      done
+      ;;
+    watch)
+      local interval="${1:-2}"
+      shift || true
+      while true; do
+        clear
+        date
+        echo
+        cmd_cognitive status "$@"
+        sleep "${interval}"
+      done
+      ;;
+    *)
+      echo "Unknown cognitive action: ${sub}"
+      echo "Use: ${CLI_NAME} cognitive {start|stop|status|enqueue|event|digest|digests|approvals|approve|reject|skills|skill-decay|objective|objective-tail|objective-lessons|objective-dispatch|objective-simulate|objective-autotune|watch [seconds]|watch-run <event_id|run_id>}"
+      echo "Examples:"
+      echo "  ${CLI_NAME} cognitive start --niche-id astronomy --poll-seconds 1.0"
+      echo "  ${CLI_NAME} cognitive enqueue --text \"/empyralis status\" --wait"
+      echo "  ${CLI_NAME} cognitive enqueue --text \"/empyralis run task A and task B\" --plan --wait"
+      echo "  ${CLI_NAME} cognitive digest --event-id <event_id>"
+      echo "  ${CLI_NAME} cognitive digests --limit 10"
+      echo "  ${CLI_NAME} cognitive skills --limit 10"
+      echo "  ${CLI_NAME} cognitive skills --action operator_exec --promoted-only"
+      echo "  ${CLI_NAME} cognitive skill-decay --max-age-seconds 604800 --min-samples 5 --min-success-rate 0.55"
+      echo "  ${CLI_NAME} cognitive objective add --title \"Daily status\" --goal \"summarize workspace\" --cadence-seconds 3600"
+      echo "  ${CLI_NAME} cognitive objective add --title \"SLA run\" --goal \"status\" --sla-seconds 1800 --max-fail-streak 2"
+      echo "  ${CLI_NAME} cognitive objective add --title \"Adaptive status\" --goal \"status\" --cadence-seconds 600 --autotune-enabled --autotune-apply"
+      echo "  ${CLI_NAME} cognitive objective list"
+      echo "  ${CLI_NAME} cognitive objective board --status active --limit 12"
+      echo "  ${CLI_NAME} cognitive objective pause --objective-id <id>"
+      echo "  ${CLI_NAME} cognitive objective resume --objective-id <id>"
+      echo "  ${CLI_NAME} cognitive objective tail --objective-id <id> --limit 10"
+      echo "  ${CLI_NAME} cognitive objective lessons --limit 10"
+      echo "  ${CLI_NAME} cognitive objective dispatch --objective-id <id>"
+      echo "  ${CLI_NAME} cognitive objective simulate --objective-id <id> --action run_goal --final-status planned --status planned"
+      echo "  ${CLI_NAME} cognitive objective autotune --objective-id <id>"
+      echo "  ${CLI_NAME} cognitive objective autotune --objective-id <id> --sample-size 30 --apply"
+      echo "  ${CLI_NAME} cognitive objective doctor --objective-id <id>"
+      echo "  ${CLI_NAME} cognitive objective watch --objective-id <id> --summary"
+      echo "  ${CLI_NAME} cognitive approvals --limit 10"
+      echo "  ${CLI_NAME} cognitive approve --event-id <event_id> --note \"approved\""
+      echo "  ${CLI_NAME} cognitive reject --event-id <event_id> --note \"reason\""
+      echo "  ${CLI_NAME} cognitive watch-run <event_id>"
+      echo "  ${CLI_NAME} cognitive status"
+      echo "  ${CLI_NAME} cognitive stop"
+      exit 2
+      ;;
+  esac
+}
+
+cmd_completion() {
+  local shell_name="${1:-bash}"
+  case "${shell_name}" in
+    bash)
+      cat <<'EOF' | sed "s/orion/${CLI_NAME}/g"
+_orion_complete() {
+  local cur prev words cword
+  _init_completion -n : || return
+  local top="run preflight setup onboard configure launcher chat app go hatch tui status contract cognitive autopilot connectors doctor release-status release-gate legal-scan profiles gateway stack completion help"
+
+  if [[ ${cword} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "${top}" -- "${cur}") )
+    return
+  fi
+
+  case "${words[1]}" in
+    contract)
+      COMPREPLY=( $(compgen -W "check" -- "${cur}") )
+      ;;
+    profiles)
+      COMPREPLY=( $(compgen -W "health" -- "${cur}") )
+      ;;
+    autopilot)
+      COMPREPLY=( $(compgen -W "status watch watch-line test" -- "${cur}") )
+      ;;
+    cognitive)
+      COMPREPLY=( $(compgen -W "start run status stop enqueue event digest digests approvals approve reject skills skill-decay objective objective-add objective-list objective-get objective-pause objective-resume objective-complete objective-tick objective-tail objective-lessons objective-dispatch objective-simulate objective-autotune watch watch-run" -- "${cur}") )
+      ;;
+    gateway|stack)
+      COMPREPLY=( $(compgen -W "start stop status logs" -- "${cur}") )
+      ;;
+    completion)
+      COMPREPLY=( $(compgen -W "bash zsh fish" -- "${cur}") )
+      ;;
+  esac
+}
+complete -F _orion_complete orion
+EOF
+      ;;
+    zsh)
+      cat <<'EOF' | sed "s/orion/${CLI_NAME}/g"
+#compdef orion
+
+_orion() {
+  local -a commands
+  commands=(
+    'run:Run immediately in general worker mode'
+    'preflight:Run preflight checks before execution'
+    'setup:Alias for onboarding flow'
+    'onboard:Full onboarding flow'
+    'configure:Section-based configuration wizard'
+    'launcher:Launch terminal command center'
+    'chat:Open live terminal chat UI'
+    'app:Open one-app terminal mode'
+    'go:Start stack + no-debug health/autopilot checks'
+    'hatch:Alias for live terminal command loop'
+    'tui:Open live terminal command loop'
+    'status:Runtime and worker quick status'
+    'contract:Runtime contract + compatibility check'
+    'cognitive:Cognitive daemon control (start/stop/status/enqueue/event/digest/digests/approvals/approve/reject/skills/skill-decay/objective/objective-tail/objective-lessons/objective-dispatch/objective-simulate/objective-autotune/watch/watch-run)'
+    'autopilot:Telegram/WhatsApp autopilot status'
+    'connectors:Connect channels/tools from terminal'
+    'doctor:Print runtime doctor report'
+    'release-status:Unified release diagnostics (health/worker/autopilot/latest run)'
+    'release-gate:Run release gate (routing tests + brand audit + strict status + soak)'
+    'legal-scan:Scan runtime surfaces for blocked third-party branding'
+    'profiles:Provider profile commands'
+    'gateway:Gateway service shortcuts'
+    'stack:Full local stack control'
+    'completion:Generate completion script'
+    'help:Show help'
+  )
+  _describe 'command' commands
+}
+
+_orion
+EOF
+      ;;
+    fish)
+      cat <<'EOF' | sed "s/orion/${CLI_NAME}/g"
+complete -c orion -f -a "run preflight setup onboard configure launcher chat app go hatch tui status contract cognitive autopilot connectors doctor release-status release-gate legal-scan profiles gateway stack completion help"
+complete -c orion -n "__fish_seen_subcommand_from contract" -f -a "check"
+complete -c orion -n "__fish_seen_subcommand_from profiles" -f -a "health"
+complete -c orion -n "__fish_seen_subcommand_from autopilot" -f -a "status watch watch-line test"
+complete -c orion -n "__fish_seen_subcommand_from cognitive" -f -a "start run status stop enqueue event digest digests approvals approve reject skills skill-decay objective objective-add objective-list objective-get objective-pause objective-resume objective-complete objective-tick objective-tail objective-lessons objective-dispatch objective-simulate objective-autotune watch watch-run"
+complete -c orion -n "__fish_seen_subcommand_from gateway stack" -f -a "start stop status logs"
+complete -c orion -n "__fish_seen_subcommand_from completion" -f -a "bash zsh fish"
+EOF
+      ;;
+    *)
+      echo "Unsupported shell '${shell_name}'. Use bash|zsh|fish." >&2
+      exit 2
+      ;;
+  esac
+}
+
+cmd_doctor() {
+  ensure_runtime
+  curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/doctor" | python3 -m json.tool
+}
+
+cmd_release_status() {
+  if [[ ! -x "${RELEASE_STATUS_SCRIPT}" ]]; then
+    echo "Missing script: ${RELEASE_STATUS_SCRIPT}"
+    exit 1
+  fi
+  ensure_runtime
+  RUNTIME_KEY="${RUNTIME_KEY_VALUE}" exec bash "${RELEASE_STATUS_SCRIPT}" "$@"
+}
+
+cmd_release_gate() {
+  if [[ ! -x "${RELEASE_GATE_SCRIPT}" ]]; then
+    echo "Missing script: ${RELEASE_GATE_SCRIPT}"
+    exit 1
+  fi
+  RUNTIME_KEY="${RUNTIME_KEY_VALUE}" exec bash "${RELEASE_GATE_SCRIPT}" "$@"
+}
+
+cmd_profiles() {
+  local sub="${1:-health}"
+  shift || true
+  case "${sub}" in
+    health)
+      ensure_runtime
+      local ws="${1:-default}"
+      curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/providers/profiles/health?workspace_id=${ws}" | python3 -m json.tool
+      ;;
+    *)
+      echo "Unknown profiles action: ${sub}"
+      echo "Use: ${CLI_NAME} profiles health [workspace_id]"
+      exit 2
+      ;;
+  esac
+}
+
+cmd_legal_scan() {
+  local script_path="${ROOT_DIR}/scripts/legal_scan_orion.sh"
+  if [[ ! -x "${script_path}" ]]; then
+    echo "Missing legal scan script: ${script_path}"
+    exit 1
+  fi
+  bash "${script_path}"
+}
+
+cmd_status() {
+  ensure_runtime
+  local health_json
+  local workers_json
+  health_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/health")"
+  workers_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/local/workers/status" 2>/dev/null || echo '{}')"
+  HEALTH_JSON="${health_json}" WORKERS_JSON="${workers_json}" python3 - <<'PY'
+import json, os
+
+health = json.loads(os.environ.get("HEALTH_JSON", "{}") or "{}")
+workers = json.loads(os.environ.get("WORKERS_JSON", "{}") or "{}")
+
+runtime_ok = bool(health.get("ok"))
+runtime_valid = bool(health.get("runtime_valid", True))
+targets = ",".join(health.get("supported_execution_targets", []))
+openai_source = str(health.get("openai_credential_source") or "none")
+auth_mode = str(health.get("auth_mode") or "unknown")
+openai_api_key_allowed = bool(health.get("openai_api_key_allowed", True))
+codex_oauth_web = bool(health.get("codex_oauth_interactive_supported"))
+runtime_api_version = str(health.get("runtime_api_version") or "unknown")
+runtime_api_min_cli_version = str(health.get("runtime_api_min_cli_version") or "unknown")
+worker_summary = workers.get("summary") if isinstance(workers.get("summary"), dict) else {}
+online = int(worker_summary.get("online", 0) or 0)
+idle = int(worker_summary.get("idle", 0) or 0)
+busy = int(worker_summary.get("busy", 0) or 0)
+
+print("Empyralis Status")
+print(f"runtime_ok: {runtime_ok}")
+print(f"runtime_valid: {runtime_valid}")
+print(f"execution_targets: {targets}")
+print(f"workers_online: {online}")
+print(f"workers_idle: {idle}")
+print(f"workers_busy: {busy}")
+print(f"scheduler_enabled: {bool(health.get('scheduler_enabled'))}")
+print(f"auth_required: {bool(health.get('auth_required'))}")
+print(f"auth_mode: {auth_mode}")
+print(f"openai_api_key_allowed: {openai_api_key_allowed}")
+print(f"openai_source: {openai_source}")
+print(f"codex_oauth_interactive_supported: {codex_oauth_web}")
+print(f"codex_signin_mode: {'oauth-web' if codex_oauth_web else 'token-vault'}")
+print(f"runtime_api_version: {runtime_api_version}")
+print(f"runtime_api_min_cli_version: {runtime_api_min_cli_version}")
+PY
+}
+
+cmd_contract() {
+  local sub="${1:-check}"
+  shift || true
+  case "${sub}" in
+    check)
+      ensure_runtime
+      local as_json=0
+      while [[ $# -gt 0 ]]; do
+        case "${1}" in
+          --json)
+            as_json=1
+            shift
+            ;;
+          *)
+            echo "Unknown contract check flag: ${1}"
+            echo "Use: ${CLI_NAME} contract check [--json]"
+            exit 2
+            ;;
+        esac
+      done
+
+      local contract_json
+      contract_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/contract" 2>/dev/null || true)"
+      local source="contract"
+      if [[ -z "${contract_json}" ]]; then
+        contract_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/health")"
+        source="health_fallback"
+      fi
+      CONTRACT_JSON="${contract_json}" CONTRACT_SOURCE="${source}" CLI_VERSION="${ORION_CLI_VERSION:-2026.2.26}" CONTRACT_JSON_MODE="${as_json}" python3 - <<'PY'
+import json
+import os
+import re
+
+def version_tuple(value: str) -> tuple[int, int, int]:
+    parts = [int(p) for p in re.findall(r"\d+", str(value or ""))]
+    while len(parts) < 3:
+        parts.append(0)
+    return (parts[0], parts[1], parts[2])
+
+def version_lt(left: str, right: str) -> bool:
+    return version_tuple(left) < version_tuple(right)
+
+raw = os.environ.get("CONTRACT_JSON", "{}")
+source = os.environ.get("CONTRACT_SOURCE", "contract")
+cli_version = str(os.environ.get("CLI_VERSION") or "2026.2.26")
+as_json = str(os.environ.get("CONTRACT_JSON_MODE") or "0") == "1"
+
+try:
+    payload = json.loads(raw or "{}")
+except Exception:
+    payload = {}
+if not isinstance(payload, dict):
+    payload = {}
+contract = payload.get("contract") if isinstance(payload.get("contract"), dict) else payload
+if not isinstance(contract, dict):
+    contract = {}
+
+runtime_api_version = str(contract.get("runtime_api_version") or "").strip()
+min_cli = str(contract.get("runtime_api_min_cli_version") or "").strip()
+schema_version = str(contract.get("contract_schema_version") or payload.get("runtime_contract_schema_version") or "").strip()
+auth_mode = str(contract.get("auth_mode") or payload.get("auth_mode") or "unknown")
+cognitive_policy = contract.get("cognitive_operator_policy")
+if not isinstance(cognitive_policy, dict):
+    cognitive_policy = {}
+expected_major_raw = str(os.getenv("ORION_CLI_RUNTIME_API_MAJOR", "1")).strip()
+enforce_major = str(os.getenv("ORION_CLI_ENFORCE_RUNTIME_API_MAJOR", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+compatible = True
+reasons = []
+if min_cli and version_lt(cli_version, min_cli):
+    compatible = False
+    reasons.append(f"cli_version {cli_version} < runtime_min_cli {min_cli}")
+
+if runtime_api_version and expected_major_raw.isdigit() and enforce_major:
+    runtime_major = version_tuple(runtime_api_version)[0]
+    expected_major = int(expected_major_raw)
+    if runtime_major != expected_major:
+        compatible = False
+        reasons.append(f"runtime_api_major {runtime_major} != expected_major {expected_major}")
+
+report = {
+    "ok": True,
+    "source": source,
+    "cli_version": cli_version,
+    "runtime_api_version": runtime_api_version or "unknown",
+    "runtime_api_min_cli_version": min_cli or "unspecified",
+    "contract_schema_version": schema_version or "unknown",
+    "auth_mode": auth_mode,
+    "cognitive_operator_enabled": bool(cognitive_policy.get("enabled", False)),
+    "cognitive_operator_trust_mode_default": str(cognitive_policy.get("trust_mode_default") or "auto"),
+    "cognitive_operator_approval_levels": cognitive_policy.get("approval_levels_by_trust_mode") if isinstance(cognitive_policy.get("approval_levels_by_trust_mode"), dict) else {},
+    "compatible": compatible,
+    "reasons": reasons,
+}
+
+if as_json:
+    print(json.dumps(report, indent=2))
+else:
+    print("Empyralis Runtime Contract")
+    print(f"source: {report['source']}")
+    print(f"runtime_api_version: {report['runtime_api_version']}")
+    print(f"runtime_api_min_cli_version: {report['runtime_api_min_cli_version']}")
+    print(f"contract_schema_version: {report['contract_schema_version']}")
+    print(f"auth_mode: {report['auth_mode']}")
+    print(
+        "cognitive_operator: enabled={} trust_default={}".format(
+            report["cognitive_operator_enabled"],
+            report["cognitive_operator_trust_mode_default"],
+        )
+    )
+    if report["cognitive_operator_approval_levels"]:
+        print(f"cognitive_operator_approval_levels: {report['cognitive_operator_approval_levels']}")
+    print(f"cli_version: {report['cli_version']}")
+    print(f"compatible: {report['compatible']}")
+    if reasons:
+        for reason in reasons:
+            print(f"- {reason}")
+if not compatible:
+    raise SystemExit(3)
+PY
+      ;;
+    *)
+      echo "Unknown contract action: ${sub}"
+      echo "Use: ${CLI_NAME} contract check [--json]"
+      exit 2
+      ;;
+  esac
+}
+
+cmd_autopilot() {
+  local sub="${1:-status}"
+  shift || true
+  case "${sub}" in
+    status)
+      ensure_runtime
+      local telegram_json
+      local whatsapp_json
+      telegram_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/channels/telegram/autopilot/status" 2>/dev/null || echo '{}')"
+      whatsapp_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/channels/whatsapp/autopilot/status" 2>/dev/null || echo '{}')"
+      TELEGRAM_JSON="${telegram_json}" WHATSAPP_JSON="${whatsapp_json}" python3 - <<'PY'
+import json, os
+
+def _load(name: str) -> dict:
+    raw = os.environ.get(name, "{}")
+    try:
+        obj = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+def _autopilot_summary(payload: dict) -> dict:
+    auto = payload.get("autopilot") if isinstance(payload.get("autopilot"), dict) else {}
+    connectors = payload.get("connectors") if isinstance(payload.get("connectors"), list) else []
+    first = connectors[0] if connectors else {}
+    return {
+        "available": bool(payload),
+        "enabled": bool(auto.get("enabled")),
+        "active": bool(auto.get("active")),
+        "thread_alive": bool(auto.get("thread_alive")),
+        "processed": int(auto.get("processed_updates") or auto.get("processed_messages") or 0),
+        "runs": int(auto.get("runs_started") or 0),
+        "connectors": len(connectors),
+        "last_action": str(first.get("last_action") or ""),
+        "last_run_id": str(first.get("last_run_id") or ""),
+        "connector_label": str(first.get("label") or ""),
+        "last_chat_id": str(first.get("last_chat_id") or ""),
+        "last_error": str(auto.get("last_error") or first.get("last_error") or ""),
+        "last_error_at": str(auto.get("last_error_at") or first.get("last_error_at") or ""),
+        "error_category": str(auto.get("last_error_category") or first.get("last_error_category") or ""),
+        "error_source": str(auto.get("last_error_source") or ""),
+        "error_count": int(auto.get("error_count") or 0),
+        "consecutive_errors": int(auto.get("consecutive_errors") or 0),
+        "retry_count": int(auto.get("retry_count") or 0),
+        "last_retry_at": str(auto.get("last_retry_at") or ""),
+        "backoff_seconds": float(auto.get("backoff_seconds") or 0.0),
+        "next_retry_at": str(auto.get("next_retry_at") or ""),
+        "prefix": str(auto.get("prefix") or ""),
+        "require_prefix": bool(auto.get("require_prefix")) if "require_prefix" in auto else None,
+    }
+
+tg = _autopilot_summary(_load("TELEGRAM_JSON"))
+wa = _autopilot_summary(_load("WHATSAPP_JSON"))
+
+print("Empyralis Autopilot Status")
+if tg["available"]:
+    print(
+        f"telegram: enabled={tg['enabled']} active={tg['active']} thread_alive={tg['thread_alive']} "
+        f"connectors={tg['connectors']} processed={tg['processed']} runs={tg['runs']}"
+    )
+    if tg["prefix"]:
+        req = "on" if tg["require_prefix"] else "off"
+        print(f"telegram_prefix: {req}:{tg['prefix']}")
+    if tg["connector_label"] or tg["last_chat_id"]:
+        print(f"telegram_connector: label={tg['connector_label'] or '-'} chat_id={tg['last_chat_id'] or '-'}")
+    if tg["last_action"] or tg["last_run_id"]:
+        print(f"telegram_last: action={tg['last_action'] or '-'} run_id={tg['last_run_id'] or '-'}")
+    if tg["processed"] == 0 and tg["enabled"] and tg["active"] and tg["connectors"] > 0:
+        print("telegram_hint: no inbound updates seen yet. Send a plain text message to your bot chat now.")
+    if tg["last_error"]:
+        print(f"telegram_error: {tg['last_error']}")
+    if tg["error_category"] or tg["consecutive_errors"] or tg["retry_count"] or tg["backoff_seconds"] > 0:
+        print(
+            f"telegram_error_meta: category={tg['error_category'] or '-'} "
+            f"source={tg['error_source'] or '-'} "
+            f"consecutive={tg['consecutive_errors']} retries={tg['retry_count']} "
+            f"backoff={tg['backoff_seconds']:.2f}s"
+        )
+    if tg["last_error_at"]:
+        print(f"telegram_error_at: {tg['last_error_at']}")
+    if tg["next_retry_at"]:
+        print(f"telegram_next_retry: {tg['next_retry_at']}")
+else:
+    print("telegram: unavailable")
+
+if wa["available"]:
+    print(
+        f"whatsapp: enabled={wa['enabled']} active={wa['active']} thread_alive={wa['thread_alive']} "
+        f"connectors={wa['connectors']} processed={wa['processed']} runs={wa['runs']}"
+    )
+    if wa["prefix"]:
+        req = "on" if wa["require_prefix"] else "off"
+        print(f"whatsapp_prefix: {req}:{wa['prefix']}")
+    if wa["last_action"] or wa["last_run_id"]:
+        print(f"whatsapp_last: action={wa['last_action'] or '-'} run_id={wa['last_run_id'] or '-'}")
+    wa_error = wa["last_error"]
+    if (
+        wa["connectors"] == 0
+        and "no matching whatsapp connector for inbound message" in wa_error.lower()
+    ):
+        wa_error = ""
+    if wa_error:
+        print(f"whatsapp_error: {wa_error}")
+    if wa["error_category"] or wa["consecutive_errors"] or wa["error_count"]:
+        print(
+            f"whatsapp_error_meta: category={wa['error_category'] or '-'} "
+            f"source={wa['error_source'] or '-'} "
+            f"consecutive={wa['consecutive_errors']} total={wa['error_count']}"
+        )
+    if wa["last_error_at"]:
+        print(f"whatsapp_error_at: {wa['last_error_at']}")
+else:
+    print("whatsapp: unavailable")
+PY
+      ;;
+    watch)
+      ensure_runtime
+      local interval="${1:-2}"
+      while true; do
+        clear
+        date
+        echo
+        cmd_autopilot status
+        sleep "${interval}"
+      done
+      ;;
+    watch-line)
+      ensure_runtime
+      local interval="${1:-2}"
+      while true; do
+        local telegram_json whatsapp_json
+        telegram_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/channels/telegram/autopilot/status" 2>/dev/null || echo '{}')"
+        whatsapp_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/channels/whatsapp/autopilot/status" 2>/dev/null || echo '{}')"
+        TELEGRAM_JSON="${telegram_json}" WHATSAPP_JSON="${whatsapp_json}" python3 - <<'PY'
+import json, os, time
+
+def _load(name: str) -> dict:
+    raw = os.environ.get(name, "{}")
+    try:
+        obj = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+def _summary(payload: dict, processed_key: str) -> dict:
+    auto = payload.get("autopilot") if isinstance(payload.get("autopilot"), dict) else {}
+    connectors = payload.get("connectors") if isinstance(payload.get("connectors"), list) else []
+    first = connectors[0] if connectors else {}
+    error = str(auto.get("last_error") or first.get("last_error") or "")
+    return {
+        "enabled": bool(auto.get("enabled")),
+        "active": bool(auto.get("active")),
+        "alive": bool(auto.get("thread_alive")),
+        "connectors": len(connectors),
+        "processed": int(auto.get(processed_key) or 0),
+        "runs": int(auto.get("runs_started") or 0),
+        "action": str(first.get("last_action") or "-"),
+        "error": error,
+    }
+
+def _fmt(ch: str, s: dict) -> str:
+    mode = (
+        "down" if not s["enabled"]
+        else "up" if s["active"] and s["alive"]
+        else "degraded"
+    )
+    base = (
+        f"{ch}={mode}"
+        f"(c={s['connectors']} p={s['processed']} r={s['runs']} a={s['action']})"
+    )
+    if s["error"]:
+        # Suppress stale/non-actionable connector-match noise for channel-disabled setups.
+        err_lower = s["error"].lower()
+        if ch == "wa" and s["connectors"] == 0 and "no matching whatsapp connector for inbound message" in err_lower:
+            return base
+        err = s["error"].replace("\n", " ").strip()
+        if len(err) > 80:
+            err = err[:77] + "..."
+        base += f" err={err}"
+    return base
+
+tg = _summary(_load("TELEGRAM_JSON"), "processed_updates")
+wa = _summary(_load("WHATSAPP_JSON"), "processed_messages")
+ts = time.strftime("%Y-%m-%d %H:%M:%S")
+print(f"{ts} | {_fmt('tg', tg)} | {_fmt('wa', wa)}")
+PY
+        sleep "${interval}"
+      done
+      ;;
+    test)
+      ensure_runtime
+      local channel="${1:-telegram}"
+      shift || true
+      local goal="${*:-autopilot smoke test}"
+
+      if [[ "${channel}" != "telegram" && "${channel}" != "whatsapp" ]]; then
+        echo "Invalid channel '${channel}'. Use telegram or whatsapp."
+        exit 2
+      fi
+
+      local status_path="/channels/${channel}/autopilot/status"
+      local status_json
+      status_json="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}${status_path}")"
+      AUTOPILOT_JSON="${status_json}" CHANNEL="${channel}" python3 - <<'PY'
+import json, os, sys
+
+channel = os.environ.get("CHANNEL", "telegram")
+try:
+    payload = json.loads(os.environ.get("AUTOPILOT_JSON", "{}") or "{}")
+except Exception:
+    payload = {}
+auto = payload.get("autopilot") if isinstance(payload.get("autopilot"), dict) else {}
+connectors = payload.get("connectors") if isinstance(payload.get("connectors"), list) else []
+
+enabled = bool(auto.get("enabled"))
+active = bool(auto.get("active"))
+connector_count = len(connectors)
+
+print(f"autopilot_test: channel={channel} enabled={enabled} active={active} connectors={connector_count}")
+if not enabled:
+    print("autopilot_test_error: autopilot is disabled")
+    sys.exit(10)
+if not active:
+    print("autopilot_test_error: autopilot is not active")
+    sys.exit(11)
+if connector_count <= 0:
+    print("autopilot_test_error: no connectors found for channel")
+    sys.exit(12)
+PY
+
+      local payload
+      payload="$(jq -n \
+        --arg ws "default" \
+        --arg goal "${goal}" \
+        --arg channel "${channel}" \
+        --arg engine "${ORION_AUTOPILOT_TEST_ENGINE:-codex}" \
+        '{engine:$engine,workspace_id:$ws,user_goal:$goal,metadata:{source:"autopilot_smoke_test",channel:$channel,trust_mode:"auto",execution_target:"local_companion"}}')"
+
+      local run_json run_id
+      run_json="$(curl -fsS -X POST \
+        -H "X-API-Key: ${RUNTIME_KEY_VALUE}" \
+        -H "Content-Type: application/json" \
+        "${API_URL}/runs/start" \
+        -d "${payload}")"
+      run_id="$(echo "${run_json}" | jq -r '.run_id // empty')"
+      if [[ -z "${run_id}" ]]; then
+        echo "autopilot_test_error: failed to start run"
+        echo "${run_json}" | jq
+        exit 13
+      fi
+      echo "autopilot_test_run_id: ${run_id}"
+
+      local waited=0
+      local timeout="${ORION_AUTOPILOT_TEST_TIMEOUT_SECONDS:-45}"
+      while true; do
+        local run_state status summary
+        run_state="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/runs/${run_id}" 2>/dev/null || echo '{}')"
+        status="$(echo "${run_state}" | jq -r '.status // ""')"
+        summary="$(echo "${run_state}" | jq -r '.result // .result_summary // .message // ""')"
+        if [[ "${status}" == "completed" || "${status}" == "failed" || "${status}" == "timeout" || "${status}" == "error" ]]; then
+          echo "autopilot_test_result: ${status}"
+          if [[ -n "${summary}" ]]; then
+            echo "autopilot_test_summary: ${summary}" | cut -c1-260
+          fi
+          echo "autopilot_test_run_url: /runs/${run_id}"
+          break
+        fi
+        if [[ "${status}" == "starting" || "${status}" == "running" || "${status}" == "running_local" || "${status}" == "queued_local" || "${status}" == "waiting_for_input" ]]; then
+          echo "autopilot_test_result: started (status=${status})"
+          echo "autopilot_test_run_url: /runs/${run_id}"
+          break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        if [[ ${waited} -ge ${timeout} ]]; then
+          echo "autopilot_test_error: timeout waiting for run terminal state"
+          exit 14
+        fi
+      done
+      ;;
+    *)
+      echo "Unknown autopilot action: ${sub}"
+      echo "Use: ${CLI_NAME} autopilot {status|watch [seconds]|watch-line [seconds]|test [telegram|whatsapp] [goal]}"
+      exit 2
+      ;;
+  esac
+}
+
+run_wizard_mode() {
+  local mode="$1"
+  shift || true
+  ensure_runtime
+  exec python3 "${WIZARD_PATH}" \
+    --api-url "${API_URL}" \
+    --runtime-key "${RUNTIME_KEY_VALUE}" \
+    --mode "${mode}" \
+    "$@"
+}
+
+run_one_app_mode() {
+  # OpenClaw-like single app loop: clean chat surface + line composer.
+  unset ORION_CLI_CHAT_REQUIRE_RUN_PREFIX
+  unset ORION_CLI_CHAT_AUTOFOCUS_TELEGRAM
+  unset ORION_CLI_CHAT_CLEAR_SCREEN
+  unset ORION_CLI_CHAT_FULL_REDRAW
+  unset ORION_CLI_CHAT_SPINNER
+  export ORION_CLI_ONE_APP_MODE=1
+  export ORION_CLI_CHAT_LIVE_INPUT=0
+  export ORION_CLI_LINE_INPUT=1
+
+  local -a args=("$@")
+  if ! arg_has_flag "--engine" "${args[@]}"; then
+    args=(--engine "${ORION_CLI_TUI_ENGINE:-codex}" "${args[@]}")
+  fi
+  run_wizard_mode tui "${args[@]}"
+}
+
+cmd="${1:-launcher}"
+case "${cmd}" in
+  -h|--help|help)
+    print_help
+    ;;
+  run)
+    shift || true
+    ensure_runtime
+    if [[ $# -eq 0 ]]; then
+      echo "Usage: ${CLI_NAME} run \"<goal>\""
+      exit 2
+    fi
+    exec python3 "${WIZARD_PATH}" \
+      --api-url "${API_URL}" \
+      --runtime-key "${RUNTIME_KEY_VALUE}" \
+      --mode run \
+      --goal "$*"
+    ;;
+  preflight)
+    shift || true
+    run_wizard_mode preflight "$@"
+    ;;
+  wizard)
+    shift || true
+    run_wizard_mode launcher "$@"
+    ;;
+  onboard)
+    shift || true
+    run_wizard_mode onboard "$@"
+    ;;
+  setup)
+    shift || true
+    run_wizard_mode setup "$@"
+    ;;
+  configure)
+    shift || true
+    run_wizard_mode configure "$@"
+    ;;
+  launcher)
+    shift || true
+    run_wizard_mode launcher "$@"
+    ;;
+  chat)
+    shift || true
+    if ! arg_has_flag "--engine" "$@"; then
+      set -- --engine "${ORION_CLI_TUI_ENGINE:-codex}" "$@"
+    fi
+    run_wizard_mode tui "$@"
+    ;;
+  app)
+    shift || true
+    run_one_app_mode "$@"
+    ;;
+  go)
+    shift || true
+    if [[ ! -x "${GO_SCRIPT}" ]]; then
+      echo "Missing script: ${GO_SCRIPT}"
+      exit 1
+    fi
+    RUNTIME_KEY="${RUNTIME_KEY_VALUE}" exec bash "${GO_SCRIPT}" "$@"
+    ;;
+  hatch)
+    shift || true
+    if ! arg_has_flag "--engine" "$@"; then
+      set -- --engine "${ORION_CLI_TUI_ENGINE:-codex}" "$@"
+    fi
+    run_wizard_mode tui "$@"
+    ;;
+  tui)
+    shift || true
+    if ! arg_has_flag "--engine" "$@"; then
+      set -- --engine "${ORION_CLI_TUI_ENGINE:-codex}" "$@"
+    fi
+    run_wizard_mode tui "$@"
+    ;;
+  status)
+    cmd_status
+    ;;
+  contract)
+    shift || true
+    cmd_contract "$@"
+    ;;
+  cognitive)
+    shift || true
+    cmd_cognitive "$@"
+    ;;
+  autopilot)
+    shift || true
+    cmd_autopilot "$@"
+    ;;
+  connectors)
+    shift || true
+    ensure_runtime
+    exec python3 "${WIZARD_PATH}" \
+      --api-url "${API_URL}" \
+      --runtime-key "${RUNTIME_KEY_VALUE}" \
+      --connectors-only \
+      "$@"
+    ;;
+  doctor)
+    cmd_doctor
+    ;;
+  release-status)
+    shift || true
+    cmd_release_status "$@"
+    ;;
+  release-gate)
+    shift || true
+    cmd_release_gate "$@"
+    ;;
+  legal-scan)
+    cmd_legal_scan
+    ;;
+  profiles)
+    shift || true
+    cmd_profiles "$@"
+    ;;
+  gateway)
+    shift || true
+    cmd_gateway "$@"
+    ;;
+  stack)
+    shift || true
+    cmd_stack "$@"
+    ;;
+  completion)
+    shift || true
+    cmd_completion "$@"
+    ;;
+  *)
+    run_wizard_mode launcher "$@"
+    ;;
+esac

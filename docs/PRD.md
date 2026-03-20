@@ -1,5 +1,5 @@
 # Product Requirements Document (PRD)
-## AgentForge - AI Agent Workflow Orchestration Platform
+## Empyralis - AI Agent Workflow Orchestration Platform
 
 **Version:** 1.0  
 **Date:** 2026-01-18  
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-AgentForge is a professional AI agent workflow orchestration platform that enables users to build, deploy, and manage intelligent agents through a visual workflow editor. The platform combines the power of n8n workflow orchestration with LLM-powered agents that can access tools, maintain memory, and interact with external data sources.
+Empyralis is a professional AI agent workflow orchestration platform that enables users to build, deploy, and manage intelligent agents through a visual workflow editor. The platform combines the power of n8n workflow orchestration with LLM-powered agents that can access tools, maintain memory, and interact with external data sources.
 
 ---
 
@@ -942,7 +942,7 @@ Each milestone is complete when:
 
 ## Appendix A: Competitive Analysis
 
-| Feature | AgentForge | Langflow | Flowise | n8n Agents | Our Advantage |
+| Feature | Empyralis | Langflow | Flowise | n8n Agents | Our Advantage |
 |---------|-----------|----------|---------|------------|---------------|
 | Visual Workflow | ✅ | ✅ | ✅ | ✅ | Cleaner UI, better UX |
 | Multi-Model | ✅ | ✅ | ✅ | ⚠️ Limited | More providers |

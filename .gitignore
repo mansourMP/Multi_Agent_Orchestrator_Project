@@ -33,3 +33,38 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Python caches / bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Local scratch copies
+*.bak
+
+# Empyralis local runtime state (machine-local)
+.orion/
+.orion-stack/
+.orion_approval_audit.json
+.orion_channel_events.json
+.orion_channel_events.json.bak.*
+.orion_credentials_vault.json
+.orion_credentials_vault.json.bak.*
+.orion_idempotency_log.json
+.orion-media/
+.orion_run_history.json
+.orion_runtime_skills.json
+.orion_runtime_state.db
+.orion_runtime_state.db-*
+.orion_setup_sessions.json
+.orion_telegram_autopilot_state.json
+.orion_telegram_autopilot_state.json.bak.*
+.orion_telegram_chat_onboarding.json
+.orion_telegram_chat_profiles.json
+.orion_whatsapp_autopilot_state.json
+.orion_vault_key
+.orion-validation/
+.gws-config/
+*.bak.migration
+screenshots/
+test_payload.json

@@ -3,7 +3,11 @@ import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { GitMerge, Zap } from 'lucide-react';
 
-const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+type ParallelNodeData = {
+    label?: string;
+};
+
+const ParallelNode = ({ data, selected }: { data: ParallelNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const accentColor = '#06b6d4'; // Cyan for parallel
 
@@ -12,7 +16,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             style={{
-                background: '#fff',
+                background: 'var(--bg-surface)',
                 borderRadius: '16px',
                 boxShadow: selected
                     ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}20`
@@ -34,7 +38,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 type="target"
                 position={Position.Left}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,
@@ -73,7 +77,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        border: '2px solid #fff',
+                        border: '2px solid var(--bg-surface)',
                     }}>
                         <Zap size={8} color="#fff" fill="#fff" />
                     </div>
@@ -83,13 +87,13 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                     <div style={{
                         fontSize: '14px',
                         fontWeight: 600,
-                        color: '#1e293b',
+                        color: 'var(--text-primary)',
                     }}>
                         {data.label || 'Parallel'}
                     </div>
                     <div style={{
                         fontSize: '10px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         marginTop: '3px',
                     }}>
                         Concurrent
@@ -104,7 +108,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 }}>
                     <div style={{
                         padding: '2px 6px',
-                        background: `${accentColor}10`,
+                        background: `${accentColor}12`,
                         borderRadius: '4px',
                         fontSize: '8px',
                         fontWeight: 600,
@@ -115,7 +119,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                     </div>
                     <div style={{
                         padding: '2px 6px',
-                        background: `${accentColor}10`,
+                        background: `${accentColor}12`,
                         borderRadius: '4px',
                         fontSize: '8px',
                         fontWeight: 600,
@@ -133,7 +137,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 position={Position.Right}
                 id="branch-1"
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 10,
                     height: 10,
                     border: `3px solid ${accentColor}`,
@@ -146,7 +150,7 @@ const ParallelNode = ({ data, selected }: { data: any; selected?: boolean }) => 
                 position={Position.Right}
                 id="branch-2"
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 10,
                     height: 10,
                     border: `3px solid ${accentColor}`,

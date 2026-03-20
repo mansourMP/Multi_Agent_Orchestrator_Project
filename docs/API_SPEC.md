@@ -1,4 +1,4 @@
-# API Specification - AgentForge
+# API Specification - Empyralis
 
 **Base URL:** `https://api.agentforge.app/v1`  
 **Auth:** Bearer token in `Authorization` header

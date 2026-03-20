@@ -3,7 +3,12 @@ import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { Zap, Play } from 'lucide-react';
 
-const TriggerNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+type TriggerNodeData = {
+    label?: string;
+    triggerType?: string;
+};
+
+const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const accentColor = '#eab308'; // Yellow/gold for triggers
 
@@ -12,7 +17,7 @@ const TriggerNode = ({ data, selected }: { data: any; selected?: boolean }) => {
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             style={{
-                background: '#fff',
+                background: 'var(--bg-surface)',
                 borderRadius: '16px',
                 boxShadow: selected
                     ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}30`
@@ -60,7 +65,7 @@ const TriggerNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                         height: 16,
                         borderRadius: '50%',
                         background: accentColor,
-                        border: '2px solid #fff',
+                        border: '2px solid var(--bg-surface)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -74,13 +79,13 @@ const TriggerNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                     <div style={{
                         fontSize: '14px',
                         fontWeight: 600,
-                        color: '#1e293b',
+                        color: 'var(--text-primary)',
                     }}>
                         {data.label || 'Start'}
                     </div>
                     <div style={{
                         fontSize: '10px',
-                        color: '#94a3b8',
+                        color: 'var(--text-tertiary)',
                         marginTop: '3px',
                     }}>
                         {data.triggerType || 'Webhook'}
@@ -92,7 +97,7 @@ const TriggerNode = ({ data, selected }: { data: any; selected?: boolean }) => {
                 type="source"
                 position={Position.Right}
                 style={{
-                    background: '#fff',
+                    background: 'var(--bg-surface)',
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,

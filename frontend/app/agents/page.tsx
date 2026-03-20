@@ -1,123 +1,210 @@
 'use client';
-import { Bot, Plus, Search, MoreHorizontal, ShieldCheck, Zap } from 'lucide-react';
 
-export default function AgentsPage() {
-    // Mock data for now, would normally fetch
-    const agents: Array<{ id: string; name: string; role: string; model: string; status: string }> = [
-        { id: '1', name: 'Strategic Lead', role: 'CEO', model: 'gpt-4o', status: 'active' },
-        { id: '2', name: 'Content Architect', role: 'Marketing', model: 'claude-3-5-sonnet', status: 'active' },
-        { id: '3', name: 'Logic Engine', role: 'Coder', model: 'gpt-4-turbo', status: 'active' },
-    ];
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Puzzle, Sparkles } from 'lucide-react';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { MetricStrip } from '@/components/ui/MetricStrip';
+import { ORION_API_URL } from '../page.api';
+import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
-    return (
-        <div style={{ padding: '40px 48px', maxWidth: '1400px', margin: '0 auto' }}>
-            {/* Header */}
-            <div style={{ marginBottom: '40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                        <div style={{ padding: '8px', background: '#000', borderRadius: '8px', color: '#fff' }}>
-                            <Bot size={20} />
-                        </div>
-                        <h1 style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>Agents</h1>
-                    </div>
-                    <p style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>Manage your specialized AI agent workforce.</p>
-                </div>
-                <div>
-                    <button className="btn btn-primary" style={{ padding: '10px 24px', borderRadius: '8px' }}>
-                        <Plus size={16} />
-                        <span>Hire New Agent</span>
-                    </button>
-                </div>
-            </div>
+type InstalledSkill = {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  has_query_handler?: boolean;
+  has_snapshot_worker?: boolean;
+  config?: Record<string, unknown>;
+};
 
-            {/* Filter Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
-                <div style={{ position: 'relative', width: '320px' }}>
-                    <Search size={14} style={{ position: 'absolute', left: '12px', top: '11px', color: 'var(--text-tertiary)' }} />
-                    <input
-                        type="text"
-                        placeholder="Search workforce..."
-                        className="input"
-                        style={{ paddingLeft: '36px', height: '36px', borderRadius: '8px' }}
-                    />
-                </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 16px', background: '#f1f5f9', borderRadius: '8px', fontSize: '12px', fontWeight: 600, color: '#475569' }}>
-                        <ShieldCheck size={14} color="#10b981" />
-                        <span>All systems operational</span>
-                    </div>
-                </div>
-            </div>
+type SkillsStateResponse = {
+  installed?: InstalledSkill[];
+};
 
-            {/* Data Table */}
-            <div className="card" style={{ border: '1px solid var(--border-default)', background: '#fff', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-                <table className="table">
-                    <thead style={{ background: '#f8fafc' }}>
-                        <tr>
-                            <th style={{ paddingLeft: '24px', color: 'var(--text-tertiary)', fontWeight: 600, fontSize: '12px', textTransform: 'uppercase' }}>Agent Identity</th>
-                            <th style={{ color: 'var(--text-tertiary)', fontWeight: 600, fontSize: '12px', textTransform: 'uppercase' }}>Specialization</th>
-                            <th style={{ color: 'var(--text-tertiary)', fontWeight: 600, fontSize: '12px', textTransform: 'uppercase' }}>Neural Architecture</th>
-                            <th style={{ color: 'var(--text-tertiary)', fontWeight: 600, fontSize: '12px', textTransform: 'uppercase' }}>Status</th>
-                            <th style={{ width: '60px', paddingRight: '24px' }}></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {agents.length === 0 ? (
-                            <tr>
-                                <td colSpan={5} style={{ textAlign: 'center', padding: '100px 0' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-                                        <div style={{ width: '56px', height: '56px', background: 'var(--bg-app)', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)' }}>
-                                            <Bot size={28} />
-                                        </div>
-                                        <h3 style={{ fontSize: '18px' }}>No agents hired yet</h3>
-                                        <p style={{ color: 'var(--text-tertiary)', maxWidth: '320px', margin: '0 auto 24px' }}>Deploy specialized agents to handle complex reasoning, coding, or research tasks.</p>
-                                        <button className="btn btn-primary">Hire first agent</button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ) : (
-                            agents.map((agent) => (
-                                <tr key={agent.id} style={{ transition: 'all 0.2s' }} className="hover:bg-[#f8fafc]">
-                                    <td style={{ padding: '16px 24px' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                            <div style={{ 
-                                                width: '32px', 
-                                                height: '32px', 
-                                                borderRadius: '8px', 
-                                                background: '#000', 
-                                                display: 'flex', 
-                                                alignItems: 'center', 
-                                                justifyContent: 'center', 
-                                                color: '#fff', 
-                                                fontSize: '11px',
-                                                fontWeight: 800
-                                            }}>AI</div>
-                                            <span style={{ fontWeight: 700, color: 'var(--text-primary)', fontSize: '15px' }}>{agent.name}</span>
-                                        </div>
-                                    </td>
-                                    <td style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{agent.role}</td>
-                                    <td>
-                                        <div className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}>
-                                            {agent.model}
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div className="badge badge-success" style={{ gap: '6px' }}>
-                                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
-                                            ACTIVE
-                                        </div>
-                                    </td>
-                                    <td style={{ paddingRight: '24px', textAlign: 'right' }}>
-                                        <button className="btn-ghost" style={{ padding: '8px', borderRadius: '8px' }}>
-                                            <MoreHorizontal size={18} />
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
+const BUILT_IN_SKILLS = [
+  'Summarize emails',
+  'Draft replies',
+  'Research topics',
+  'Organize tasks',
+  'Monitor and alert',
+];
+
+function capabilitySummary(skill: InstalledSkill): string {
+  if (skill.id === 'vision-monitor') {
+    return 'Capture snapshots, count people, write live space state, and answer operational questions from the latest camera state.';
+  }
+  return skill.description || 'Installed skill available to your assistant.';
+}
+
+function configuredSpaces(skill: InstalledSkill): string[] {
+  const config = skill.config && typeof skill.config === 'object' ? skill.config : {};
+  const spaces = Array.isArray(config.spaces) ? config.spaces : [];
+  return spaces
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item) => String(item.name || item.id || '').trim())
+    .filter(Boolean);
+}
+
+export default function SkillsPage() {
+  const [skills, setSkills] = useState<InstalledSkill[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const runtimeKey = useMemo(
+    () => readRuntimeApiKeyFromStorage(process.env.NEXT_PUBLIC_ORION_API_KEY || 'replace-with-strong-key'),
+    [],
+  );
+
+  const loadSkills = useCallback(async () => {
+    if (!runtimeKey) {
+      setSkills([]);
+      setLoading(false);
+      setError('Runtime key is missing. Open Setup to reconnect this device.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${ORION_API_URL}/skills/state`, {
+        headers: { 'X-API-Key': runtimeKey },
+      });
+      const body = (await res.json().catch(() => ({}))) as SkillsStateResponse & { detail?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to load skills.'));
+      }
+      const items = Array.isArray(body.installed) ? body.installed : [];
+      setSkills(items.filter((item) => item && typeof item === 'object' && String(item.id || '').trim()));
+    } catch (fetchError) {
+      setSkills([]);
+      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load skills.');
+    } finally {
+      setLoading(false);
+    }
+  }, [runtimeKey]);
+
+  useEffect(() => {
+    void loadSkills();
+  }, [loadSkills]);
+
+  const activeCount = skills.filter((item) => item.enabled).length;
+
+  return (
+    <div className="orion-page-shell narrow orion-animate-in">
+      <OsPageHeader
+        icon={<Puzzle size={18} />}
+        title="Skills"
+        subtitle="Installed skill modules available to this deployment"
+        meta={
+          <>
+            <span>{activeCount} active</span>
+            <span>{skills.length} installed</span>
+          </>
+        }
+      />
+
+      <MetricStrip
+        items={[
+          { label: 'Installed skills', value: String(skills.length) },
+          { label: 'Active skills', value: String(activeCount) },
+          { label: 'Built-in skills', value: String(BUILT_IN_SKILLS.length) },
+        ]}
+        minWidth={180}
+      />
+
+      <section className="orion-panel">
+        <div className="orion-panel-header">
+          <div>
+            <div className="orion-panel-title">Installed skills</div>
+            <div className="orion-panel-copy">These skills are loaded from the backend `/skills/state` endpoint.</div>
+          </div>
         </div>
-    );
+
+        {loading ? (
+          <div className="orion-empty" style={{ minHeight: 180 }}>
+            <div className="orion-empty-title">Loading skills…</div>
+          </div>
+        ) : error ? (
+          <div className="orion-empty" style={{ minHeight: 180 }}>
+            <div className="orion-empty-title">Could not load skills</div>
+            <div className="orion-empty-copy">{error}</div>
+          </div>
+        ) : skills.length === 0 ? (
+          <div className="orion-empty" style={{ minHeight: 180 }}>
+            <div className="orion-empty-title">No installed skills found</div>
+            <div className="orion-empty-copy">
+              Add a skill directory under `/skills` on the runtime host and it will appear here automatically.
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {skills.map((skill) => {
+              const spaces = configuredSpaces(skill);
+              return (
+                <article
+                  key={skill.id}
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    padding: 16,
+                    borderRadius: 16,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-surface)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{skill.name}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{skill.id}</div>
+                    </div>
+                    <span className="orion-chip">{skill.enabled ? 'Active' : 'Inactive'}</span>
+                  </div>
+
+                  <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                    {capabilitySummary(skill)}
+                  </div>
+
+                  {spaces.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {spaces.slice(0, 4).map((space) => (
+                        <span key={`${skill.id}:${space}`} className="orion-chip">
+                          {space}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {skill.has_snapshot_worker ? <span className="orion-chip">Worker</span> : null}
+                    {skill.has_query_handler ? <span className="orion-chip">Query handler</span> : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="orion-panel">
+        <div className="orion-panel-header">
+          <div>
+            <div className="orion-panel-title">Built-in skills</div>
+            <div className="orion-panel-copy">Core assistant abilities available independently of installed plugins.</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+          {BUILT_IN_SKILLS.map((skill) => (
+            <div key={skill} className="orion-list-row" style={{ minHeight: 76, alignItems: 'center' }}>
+              <div className="orion-list-row-main">
+                <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <Sparkles size={14} />
+                  {skill}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
 }

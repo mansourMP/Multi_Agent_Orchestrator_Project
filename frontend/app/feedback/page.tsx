@@ -1,128 +1,155 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Send, AlertTriangle, Lightbulb, MessageSquare } from 'lucide-react';
+import { useState, type ComponentType, type FormEvent } from 'react';
+import { AlertTriangle, Lightbulb, MessageSquare, Send } from 'lucide-react';
+import { MetricStrip } from '@/components/ui/MetricStrip';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
+
+type FeedbackType = 'BUG' | 'FEATURE_REQ' | 'OTHER';
+
+const FEEDBACK_TYPES: Array<{
+  id: FeedbackType;
+  label: string;
+  icon: ComponentType<{ size?: number }>;
+  color: string;
+}> = [
+  { id: 'BUG', label: 'Report Bug', icon: AlertTriangle, color: '#f97316' },
+  { id: 'FEATURE_REQ', label: 'Feature Idea', icon: Lightbulb, color: '#fb923c' },
+  { id: 'OTHER', label: 'General', icon: MessageSquare, color: '#60a5fa' },
+];
 
 export default function FeedbackPage() {
-    const [type, setType] = useState('FEATURE_REQ');
-    const [content, setContent] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [type, setType] = useState<FeedbackType>('FEATURE_REQ');
+  const [content, setContent] = useState('');
+  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-        setStatus('idle');
-        try {
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/aesk/feedback`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content,
-                    source: 'user_app_feedback',
-                    metadata: { type }
-                })
-            });
-            if (!response.ok) throw new Error('Submission failed');
-            setStatus('success');
-            setContent('');
-        } catch (error) {
-            setStatus('error');
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
 
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '40px 48px', maxWidth: '1000px', margin: '0 auto' }}>
-            <header style={{ marginBottom: '40px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <div style={{ padding: '8px', background: '#000', borderRadius: '8px', color: '#fff' }}>
-                    <MessageSquare size={20} />
-                </div>
-                <div>
-                    <h1 style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.03em' }}>Feedback & Support</h1>
-                    <p style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>Help us evolve the platform with your insights.</p>
-                </div>
-            </header>
+    if (!content.trim()) return;
 
-            <div className="card" style={{ padding: '40px', background: '#fff', border: '1px solid var(--border-default)', borderRadius: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-                        <TypeButton 
-                            active={type === 'BUG'} 
-                            onClick={() => setType('BUG')} 
-                            icon={AlertTriangle} 
-                            label="Report Bug" 
-                            color="#ef4444" 
-                        />
-                        <TypeButton 
-                            active={type === 'FEATURE_REQ'} 
-                            onClick={() => setType('FEATURE_REQ')} 
-                            icon={Lightbulb} 
-                            label="Feature Idea" 
-                            color="#ff6d5a" 
-                        />
-                        <TypeButton 
-                            active={type === 'OTHER'} 
-                            onClick={() => setType('OTHER')} 
-                            icon={MessageSquare} 
-                            label="General" 
-                            color="#3b82f6" 
-                        />
-                    </div>
+    setIsSubmitting(true);
+    setStatus('idle');
 
-                    <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.05em' }}>
-                            Transmission Details
-                        </label>
-                        <textarea
-                            value={content}
-                            onChange={(e) => setContent(e.target.value)}
-                            required
-                            rows={6}
-                            className="input"
-                            style={{ padding: '20px', borderRadius: '12px', fontSize: '15px', resize: 'none', minHeight: '180px' }}
-                            placeholder="Tell us what's on your mind..."
-                        />
-                    </div>
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/aesk/feedback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            source: 'user_app_feedback',
+            metadata: { type },
+          }),
+        },
+      );
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #f1f5f9', paddingTop: '32px' }}>
-                        <div style={{ fontSize: '14px', fontWeight: 600 }}>
-                            {status === 'success' && <span style={{ color: '#10b981' }}>✅ Transmitted successfully. Thank you.</span>}
-                            {status === 'error' && <span style={{ color: '#ef4444' }}>❌ Error transmitting feedback.</span>}
-                        </div>
+      if (!response.ok) throw new Error('Submission failed');
 
-                        <button
-                            type="submit"
-                            disabled={isSubmitting || !content}
-                            className="btn btn-primary"
-                            style={{ padding: '12px 32px', borderRadius: '8px', fontSize: '14px' }}
-                        >
-                            <span>{isSubmitting ? 'Transmitting...' : 'Send Feedback'}</span>
-                            <Send size={18} />
-                        </button>
-                    </div>
-                </form>
-            </div>
+      setContent('');
+      setStatus('success');
+    } catch {
+      setStatus('error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="orion-page-shell narrow orion-animate-in">
+      <OsPageHeader
+        icon={<MessageSquare size={18} />}
+        title="Feedback"
+        subtitle="Bugs, ideas, and product notes."
+      />
+
+      <MetricStrip
+        items={[
+          { label: 'Channel', value: 'In-app' },
+          { label: 'Focus', value: type === 'BUG' ? 'Bug' : type === 'FEATURE_REQ' ? 'Feature' : 'General' },
+          { label: 'Status', value: status === 'success' ? 'Sent' : status === 'error' ? 'Retry needed' : 'Draft' },
+        ]}
+        minWidth={160}
+      />
+
+      <form className="orion-panel orion-surface-lift" style={{ display: 'grid', gap: 14 }} onSubmit={handleSubmit}>
+        <section className="orion-grid-3">
+          {FEEDBACK_TYPES.map((item) => {
+            const isActive = item.id === type;
+            const Icon = item.icon;
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setType(item.id)}
+                style={{
+                  borderRadius: 12,
+                  border: isActive ? `1px solid ${item.color}` : '1px solid var(--border-default)',
+                  background: isActive ? `${item.color}18` : 'var(--bg-element)',
+                  color: isActive ? item.color : 'var(--text-secondary)',
+                  minHeight: 84,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                <Icon size={18} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{item.label}</span>
+              </button>
+            );
+          })}
+        </section>
+
+        <div className="orion-field">
+          <label className="orion-field-label" htmlFor="feedback-input">
+            Message
+          </label>
+          <textarea
+            id="feedback-input"
+            className="input"
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            rows={8}
+            required
+            placeholder="Describe the issue or request."
+            style={{ borderRadius: 12, resize: 'vertical', minHeight: 180, padding: 14 }}
+          />
         </div>
-    );
-}
 
-function TypeButton({ active, onClick, icon: Icon, label, color }: any) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', borderRadius: '12px', border: '1px solid', transition: 'all 0.2s', cursor: 'pointer',
-                background: active ? `${color}08` : '#fff',
-                borderColor: active ? color : '#e2e8f0',
-                color: active ? color : '#64748b',
-                boxShadow: active ? `0 0 0 1px ${color}20` : 'none'
-            }}
+        <footer
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 10,
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            borderTop: '1px solid var(--border-default)',
+            paddingTop: 12,
+          }}
         >
-            <Icon size={28} style={{ marginBottom: '12px' }} />
-            <span style={{ fontSize: '14px', fontWeight: 700 }}>{label}</span>
-        </button>
-    );
+          <div style={{ minHeight: 22, fontSize: 12 }}>
+            {status === 'success' && <span style={{ color: 'var(--success-fg)' }}>Feedback sent successfully.</span>}
+            {status === 'error' && (
+              <span style={{ color: 'var(--error-fg)' }}>Failed to send feedback. Verify backend API status.</span>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            className="orion-btn orion-btn-primary"
+            disabled={isSubmitting || content.trim().length === 0}
+          >
+            <Send size={14} />
+            {isSubmitting ? 'Sending…' : 'Send Feedback'}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
 }

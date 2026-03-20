@@ -1,4 +1,4 @@
-# System Design - AgentForge
+# System Design - Empyralis
 
 **Production-Grade AI Agent Orchestration Platform**
 

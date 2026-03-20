@@ -1,0 +1,1 @@
+export const SINGLE_AGENT_MODE = process.env.NEXT_PUBLIC_ORION_SINGLE_AGENT_MODE === '1';

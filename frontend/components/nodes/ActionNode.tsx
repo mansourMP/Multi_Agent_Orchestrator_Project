@@ -40,7 +40,7 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
                     : isHovered
                         ? '0 10px 22px rgba(15, 23, 42, 0.12)'
                         : '0 6px 16px rgba(15, 23, 42, 0.08)',
-                minWidth: '220px',
+                width: '220px',
                 overflow: 'hidden',
                 transition: 'all 0.2s ease',
                 transform: selected ? 'translateY(-2px)' : isHovered ? 'translateY(-1px)' : 'none',
@@ -58,7 +58,7 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
                 }}
             />
 
-            <div style={{ padding: '16px', display: 'grid', gap: '10px' }}>
+            <div style={{ padding: '14px 16px', display: 'grid', gap: '10px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div
                         style={{
@@ -78,7 +78,7 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
                         <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
                             {data.label || ACTION_LABELS[actionType] || 'Action'}
                         </div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
                             {ACTION_LABELS[actionType] || 'Action step'}
                         </div>
                     </div>

@@ -3738,6 +3738,31 @@ body.orion-chat-home .sidebar-brandmark {
   letter-spacing: -0.02em;
 }
 
+.workflow-canvas-palette-btn {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-left: 4px solid var(--workflow-palette-accent, var(--primary-base));
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  box-shadow: none;
+}
+
+.workflow-canvas-palette-btn:hover {
+  background: #f8fafc;
+  border-color: var(--border-default);
+}
+
 .workflow-pro-log-title {
   font-size: 14px;
   font-weight: 750;

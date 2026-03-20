@@ -19,10 +19,8 @@ type AgentNodeData = {
 const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
     const accentColor = '#7c3aed';
-    const provider = (data.provider || 'openai').toUpperCase();
-    const duty = (data.duty as string) || 'Duty: Deliver team value with clarity.';
-    const prompt = (data.prompt as string) || 'Prompt not initialized';
     const status = (data.status as string) || 'idle';
+    const description = (data.description as string) || (data.duty as string) || 'Autonomous reasoning';
 
     return (
         <div
@@ -38,7 +36,7 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
                     : isHovered
                         ? '0 10px 22px rgba(15, 23, 42, 0.12)'
                         : '0 6px 16px rgba(15, 23, 42, 0.08)',
-                minWidth: '220px',
+                width: '220px',
                 overflow: 'hidden',
                 transition: 'all 0.2s ease',
                 transform: selected ? 'translateY(-2px)' : isHovered ? 'translateY(-1px)' : 'none',
@@ -57,7 +55,7 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
             />
 
             <div style={{
-                padding: '16px',
+                padding: '14px 16px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '10px',
@@ -65,19 +63,21 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
                         <div style={{
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            color: 'var(--text-tertiary)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.08em',
+                        }}>
+                            Agent
+                        </div>
+                        <div style={{
                             fontSize: '15px',
                             fontWeight: 700,
                             color: 'var(--text-primary)',
+                            marginTop: 2,
                         }}>
                             {data.label || 'AI Agent'}
-                        </div>
-                        <div style={{
-                            fontSize: '11px',
-                            color: 'var(--text-tertiary)',
-                            fontFamily: 'var(--font-mono)',
-                            letterSpacing: '0.1em'
-                        }}>
-                            {provider}
                         </div>
                     </div>
                     <div style={{
@@ -109,30 +109,19 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
                         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
                             {data.modelId || 'gpt-4'}
                         </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            <span>{data.role || 'Worker'}</span>
-                            <span>•</span>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>{data.description || 'Autonomous reasoning'}</span>
+                        <div
+                            style={{
+                                fontSize: '11px',
+                                color: 'var(--text-tertiary)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                            }}
+                            title={description}
+                        >
+                            {description}
                         </div>
                     </div>
-                </div>
-
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', minHeight: '38px', lineHeight: 1.45 }}>
-                    {duty}
-                </div>
-                <div style={{
-                    fontSize: '10px',
-                    color: 'var(--text-primary)',
-                    background: 'var(--bg-element)',
-                    padding: '6px 10px',
-                    borderRadius: '8px',
-                    fontStyle: 'italic',
-                    border: '1px solid var(--border-subtle)',
-                }}>
-                    {prompt.length > 50 ? `${prompt.substring(0, 50)}...` : prompt}
-                </div>
-                <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '2px' }}>
-                    Tools: {(data.tools || []).slice(0, 3).join(', ') || 'Core toolkit'}
                 </div>
             </div>
 

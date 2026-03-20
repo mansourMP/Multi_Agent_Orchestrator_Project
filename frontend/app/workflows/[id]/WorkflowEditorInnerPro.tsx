@@ -143,9 +143,11 @@ type ActionCanvasData = {
 type CanvasNodeData = TriggerCanvasData | AgentCanvasData | ActionCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
-const CANVAS_NODE_X = 320;
-const CANVAS_NODE_TOP = 80;
-const CANVAS_NODE_GAP = 220;
+const CANVAS_NODE_WIDTH = 220;
+const CANVAS_NODE_CENTER_X = 400;
+const CANVAS_NODE_X = CANVAS_NODE_CENTER_X - (CANVAS_NODE_WIDTH / 2);
+const CANVAS_NODE_TOP = 48;
+const CANVAS_NODE_GAP = 150;
 
 const DEFAULT_OPERATOR: OperatorConfig = {
     modelId: 'gpt-4.1',
@@ -282,13 +284,13 @@ function buildLinearEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
         id: `edge-${node.id}-${nodes[index + 1].id}`,
         source: node.id,
         target: nodes[index + 1].id,
-        type: 'smoothstep',
+        type: 'bezier',
         markerEnd: { type: MarkerType.ArrowClosed },
         animated: true,
         selectable: false,
         style: {
-            stroke: '#7c3aed',
-            strokeWidth: 1.6,
+            stroke: 'rgba(124, 58, 237, 0.6)',
+            strokeWidth: 2,
         },
     }));
 }
@@ -415,7 +417,7 @@ function normalizeProvider(provider: string): ProviderId {
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
     const streamRef = useRef<EventSource | null>(null);
-    const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, CanvasWorkflowEdge> | null>(null);
+    const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
 
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -742,6 +744,19 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         [canvasNodes, selectedNodeId],
     );
 
+    const renderedCanvasEdges = useMemo<Edge[]>(
+        () => canvasEdges.map((edge) => ({
+            ...edge,
+            type: 'bezier' as const,
+            animated: runStatus === 'running',
+            style: {
+                stroke: 'rgba(124, 58, 237, 0.6)',
+                strokeWidth: 2,
+            },
+        })),
+        [canvasEdges, runStatus],
+    );
+
     const addCanvasNode = useCallback((type: CanvasNodeType) => {
         setCanvasNodes((prev) => {
             const maxY = prev.length > 0 ? Math.max(...prev.map((node) => Number(node.position.y) || CANVAS_NODE_TOP)) : (CANVAS_NODE_TOP - CANVAS_NODE_GAP);
@@ -790,7 +805,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     useEffect(() => {
         if (!isCanvasMode || canvasNodes.length === 0 || !flowInstanceRef.current) return;
         const frame = requestAnimationFrame(() => {
-            flowInstanceRef.current?.fitView({ padding: 0.26, duration: 220, maxZoom: 1.1 });
+            flowInstanceRef.current?.fitView({ padding: 0.3, duration: 220, maxZoom: 1.1 });
         });
         return () => cancelAnimationFrame(frame);
     }, [isCanvasMode, canvasNodes.length]);
@@ -1309,31 +1324,31 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
                             <div className="workflow-pro-section-title">Palette</div>
                             <button
-                                className="orion-btn orion-btn-primary"
+                                className="workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('trigger')}
-                                style={{ width: '100%', justifyContent: 'flex-start', boxShadow: 'none' }}
+                                style={{ ['--workflow-palette-accent' as string]: '#f59e0b' }}
                             >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(245, 158, 11, 0.18)', color: '#f59e0b' }}>
+                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b' }}>
                                     <Zap size={14} />
                                 </span>
                                 Trigger
                             </button>
                             <button
-                                className="orion-btn orion-btn-primary"
+                                className="workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('agent')}
-                                style={{ width: '100%', justifyContent: 'flex-start', boxShadow: 'none' }}
+                                style={{ ['--workflow-palette-accent' as string]: '#7c3aed' }}
                             >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(124, 58, 237, 0.18)', color: '#c4b5fd' }}>
+                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(124, 58, 237, 0.12)', color: '#7c3aed' }}>
                                     <BrainCircuit size={14} />
                                 </span>
                                 Agent
                             </button>
                             <button
-                                className="orion-btn orion-btn-primary"
+                                className="workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('action')}
-                                style={{ width: '100%', justifyContent: 'flex-start', boxShadow: 'none' }}
+                                style={{ ['--workflow-palette-accent' as string]: '#10b981' }}
                             >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(16, 185, 129, 0.18)', color: '#10b981' }}>
+                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}>
                                     <Send size={14} />
                                 </span>
                                 Action
@@ -1347,14 +1362,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             <ReactFlow
                                 style={{ flex: 1, minHeight: 0 }}
                                 nodes={canvasNodes}
-                                edges={canvasEdges}
+                                edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
                                 fitView
-                                fitViewOptions={{ padding: 0.2 }}
+                                fitViewOptions={{ padding: 0.3 }}
                                 onInit={(instance) => {
                                     flowInstanceRef.current = instance;
                                     requestAnimationFrame(() => {
-                                        instance.fitView({ padding: 0.26, duration: 220, maxZoom: 1.1 });
+                                        instance.fitView({ padding: 0.3, duration: 220, maxZoom: 1.1 });
                                     });
                                 }}
                                 onNodesChange={handleCanvasNodesChange}
@@ -1369,14 +1384,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 elementsSelectable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
-                                    type: 'smoothstep',
-                                    animated: true,
+                                    type: 'bezier',
+                                    animated: runStatus === 'running',
                                     markerEnd: { type: MarkerType.ArrowClosed },
                                     selectable: false,
-                                    style: { stroke: '#7c3aed', strokeWidth: 1.6 },
+                                    style: { stroke: 'rgba(124, 58, 237, 0.6)', strokeWidth: 2 },
                                 }}
                             >
-                                <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} color="rgba(124, 58, 237, 0.15)" />
+                                <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#d1d5db" />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>
                         </section>

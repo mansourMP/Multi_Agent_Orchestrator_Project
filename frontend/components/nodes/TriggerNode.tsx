@@ -26,7 +26,7 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
                     : isHovered
                         ? '0 10px 22px rgba(15, 23, 42, 0.12)'
                         : '0 6px 16px rgba(15, 23, 42, 0.08)',
-                minWidth: '220px',
+                width: '220px',
                 overflow: 'hidden',
                 transition: 'all 0.2s ease',
                 transform: selected ? 'translateY(-2px)' : isHovered ? 'translateY(-1px)' : 'none',
@@ -34,7 +34,7 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
             }}
         >
             <div style={{
-                padding: '16px',
+                padding: '14px 16px',
                 display: 'grid',
                 gridTemplateColumns: '42px minmax(0, 1fr)',
                 alignItems: 'center',
@@ -62,7 +62,7 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
                         {data.label || 'Start'}
                     </div>
                     <div style={{
-                        fontSize: '12px',
+                        fontSize: '11px',
                         color: 'var(--text-tertiary)',
                     }}>
                         {data.triggerType || 'Webhook'}

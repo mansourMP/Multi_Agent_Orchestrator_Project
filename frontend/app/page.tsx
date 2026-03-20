@@ -739,7 +739,7 @@ function resolveChatNextRecommendation(args: {
       chipText: 'No tools connected — add one',
       chipTone: 'warning',
       actionLabel: 'Open Connections',
-      href: '/integrations',
+      href: '/credentials',
     };
   }
   return {
@@ -1389,7 +1389,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       return;
     }
     if (command === '/integrations' || command === '/credentials' || command === '/channels') {
-      router.push('/integrations');
+      router.push('/credentials');
       return;
     }
     if (command === '/agents' || command === '/assistant') {
@@ -1401,7 +1401,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       return;
     }
     if (command === '/runs' || command === '/executions' || command === '/history') {
-      router.push('/runs');
+      router.push('/executions');
       return;
     }
     if (command === '/approvals') {
@@ -1811,7 +1811,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const secondaryActions = [
         createAction('Open Profiles', '/agents'),
         createAction('Open Setup', '/setup'),
-        createAction('Open Connections', '/integrations'),
+        createAction('Open Connections', '/credentials'),
         createAction('Open Approvals', '/approvals'),
         createAction('Open Control Center', '/control-center'),
       ].filter((item) => item.label !== primaryAction.label);
@@ -2268,7 +2268,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
               router.push(`/runs/${encodeURIComponent(targetRunId)}/inspect?focus=artifacts`);
             }}
             onOpenRunsPage={() => {
-              router.push('/runs');
+              router.push('/executions');
             }}
             onOpenApprovalsPage={() => {
               router.push('/approvals');

@@ -69,7 +69,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     title: 'Runs',
     breadcrumb: 'Control Center',
     slotLabel: 'Execution history',
-    match: (pathname: string) => pathname === '/runs',
+    match: (pathname: string) => pathname === '/executions',
   },
   {
     id: 'run-inspect',
@@ -97,7 +97,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     title: 'Connections',
     breadcrumb: 'Workspace',
     slotLabel: 'Connected tools and channels',
-    match: (pathname: string) => pathname === '/integrations',
+    match: (pathname: string) => pathname === '/credentials',
   },
   {
     id: 'setup',
@@ -119,13 +119,6 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     breadcrumb: 'Control Center',
     slotLabel: 'Skills, access, and execution policy',
     match: (pathname: string) => pathname === '/skills',
-  },
-  {
-    id: 'variables',
-    title: 'Variables',
-    breadcrumb: 'Control Center',
-    slotLabel: 'Shared constants and references',
-    match: (pathname: string) => pathname === '/variables',
   },
   {
     id: 'account',

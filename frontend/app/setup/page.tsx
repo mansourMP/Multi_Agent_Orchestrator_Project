@@ -575,7 +575,7 @@ export default function SetupPage() {
       copy: 'Use Connections for Google, Microsoft 365, Telegram, WhatsApp, and the rest. That page is already the dedicated place to link tools.',
       state: hasConnectedTools ? 'Connected' : 'Optional',
       actionLabel: 'Open Connections',
-      href: '/integrations',
+      href: '/credentials',
       emphasized: !hasConnectedTools && setupReady,
     },
     {
@@ -612,7 +612,7 @@ export default function SetupPage() {
           </div>
         </div>
         <div className="orion-page-actions">
-          <Link className="orion-btn orion-btn-ghost" href="/integrations" style={{ minHeight: 36 }}>
+          <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 36 }}>
             Open Connections
           </Link>
           <Link className="orion-btn orion-btn-ghost" href="/" style={{ minHeight: 36 }}>
@@ -782,7 +782,7 @@ export default function SetupPage() {
             >
               Check workspace
             </button>
-            <Link className="orion-btn orion-btn-ghost" href="/integrations" style={{ minHeight: 34, fontSize: 12, background: UI.shell }}>
+            <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 34, fontSize: 12, background: UI.shell }}>
               Open Connections
             </Link>
           </div>

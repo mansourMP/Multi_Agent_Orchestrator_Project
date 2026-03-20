@@ -63,7 +63,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
     description: 'Manage shared tools, channels, and workspace access.',
     group: 'Navigate',
     keywords: ['connections', 'integrations', 'credentials', 'connectors', 'channels'],
-    action: { type: 'navigate', href: '/integrations' },
+    action: { type: 'navigate', href: '/credentials' },
   },
   {
     id: 'nav.setup',
@@ -103,7 +103,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
     description: 'Review run traces, statuses, and output summaries.',
     group: 'Navigate',
     keywords: ['history', 'runs', 'executions', 'logs'],
-    action: { type: 'navigate', href: '/runs' },
+    action: { type: 'navigate', href: '/executions' },
   },
   {
     id: 'nav.workflows',

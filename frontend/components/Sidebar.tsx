@@ -34,9 +34,9 @@ type NavItem = {
 
 const WORKSPACE_ITEMS: NavItem[] = [
     { label: 'Chat', href: '/workspace', icon: MessageSquare },
-    { label: 'Runs', href: '/runs', icon: Activity },
+    { label: 'Runs', href: '/executions', icon: Activity },
     { label: 'Outputs', href: '/artifacts', icon: FileStack },
-    { label: 'Connections', href: '/integrations', icon: Key },
+    { label: 'Connections', href: '/credentials', icon: Key },
     { label: 'Automations', href: '/workflows', icon: Workflow },
 ];
 
@@ -134,7 +134,7 @@ export default function Sidebar() {
     const workspaceItems = useMemo(
         () =>
             WORKSPACE_ITEMS.map((item) => {
-                return item.href === '/runs' && pendingApprovalsCount > 0
+                return item.href === '/executions' && pendingApprovalsCount > 0
                     ? { ...item, badge: pendingApprovalsCount }
                     : item;
             }),

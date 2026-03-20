@@ -71,7 +71,7 @@ export default function ControlCenterPage() {
       icon: SlidersHorizontal,
     },
     {
-      href: '/integrations',
+      href: '/credentials',
       title: 'Connections',
       copy: 'Manage shared tools, channels, and worker access.',
       status: accessMode === 'full' ? 'Full access enabled' : 'Default access mode',

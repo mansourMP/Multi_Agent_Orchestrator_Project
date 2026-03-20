@@ -38,11 +38,11 @@ const STARTER_PROMPTS = [
 const QUICK_NAV_ITEMS = [
   { label: 'Chat', path: '/' },
   { label: SINGLE_AGENT_MODE ? 'Assistant' : 'Agents', path: '/agents' },
-  { label: 'Connections', path: '/integrations' },
+  { label: 'Connections', path: '/credentials' },
   { label: 'Setup', path: '/setup' },
   { label: 'Control Center', path: '/control-center' },
   { label: 'Workspace', path: '/workspace' },
-  { label: 'Runs', path: '/runs' },
+  { label: 'Runs', path: '/executions' },
   { label: 'Outputs', path: '/artifacts' },
   { label: 'Automations', path: '/workflows' },
   { label: 'Approvals', path: '/approvals' },
@@ -148,7 +148,7 @@ function resolvePageGuide(pathname: string): PageGuide {
       sections: ['Role overview', 'Member list', 'Access notes', 'Workspace identity'],
     };
   }
-  if (pathname === '/runs') {
+  if (pathname === '/executions') {
     return {
       title: 'Runs',
       purpose: 'Track execution history and inspect outcomes.',
@@ -175,7 +175,7 @@ function resolvePageGuide(pathname: string): PageGuide {
       sections: ['Output views', 'Result list', 'Preview rail', 'Filters'],
     };
   }
-  if (pathname === '/integrations') {
+  if (pathname === '/credentials') {
     return {
       title: 'Connections',
       purpose: 'Connect the tools and channels your workspace can use.',
@@ -262,7 +262,7 @@ function normalizePathForNav(pathname: string): string {
   if (pathname === '/control-center') return '/control-center';
   if (pathname === '/workspace') return '/workspace';
   if (pathname.startsWith('/workflows/')) return '/workflows';
-  if (pathname.startsWith('/runs/')) return '/runs';
+  if (pathname === '/executions' || pathname.startsWith('/runs/')) return '/executions';
   if (pathname === '/account') return '/settings';
   if (pathname.startsWith('/team')) return '/team';
   if (QUICK_NAV_ITEMS.some((item) => item.path === pathname)) return pathname;

@@ -1195,7 +1195,7 @@ export default function RunInspectPage() {
               <RefreshCw size={14} />
               Refresh
             </button>
-            <Link className="orion-btn orion-btn-ghost" href="/runs">
+            <Link className="orion-btn orion-btn-ghost" href="/executions">
               Back to Runs
             </Link>
           </>

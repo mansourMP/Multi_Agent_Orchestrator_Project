@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Loader2, Play, Save, Send, ShieldCheck, UploadCloud, Zap } from 'lucide-react';
-import { ReactFlow, Background, BackgroundVariant, Controls, MarkerType, applyNodeChanges, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { ReactFlow, Controls, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
@@ -144,9 +144,7 @@ type CanvasNodeData = TriggerCanvasData | AgentCanvasData | ActionCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
 const CANVAS_NODE_WIDTH = 220;
-const CANVAS_NODE_CENTER_X = 400;
-const CANVAS_NODE_X = CANVAS_NODE_CENTER_X - (CANVAS_NODE_WIDTH / 2);
-const CANVAS_NODE_TOP = 48;
+const CANVAS_NODE_TOP = -150;
 const CANVAS_NODE_GAP = 150;
 
 const DEFAULT_OPERATOR: OperatorConfig = {
@@ -269,11 +267,11 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     };
 }
 
-function layoutCanvasNodes(nodes: CanvasWorkflowNode[]): CanvasWorkflowNode[] {
+function layoutCanvasNodes(nodes: CanvasWorkflowNode[], centerX = 0): CanvasWorkflowNode[] {
     return nodes.map((node, index) => ({
         ...node,
         position: {
-            x: CANVAS_NODE_X,
+            x: centerX - (CANVAS_NODE_WIDTH / 2),
             y: CANVAS_NODE_TOP + (index * CANVAS_NODE_GAP),
         },
     }));
@@ -284,13 +282,14 @@ function buildLinearEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
         id: `edge-${node.id}-${nodes[index + 1].id}`,
         source: node.id,
         target: nodes[index + 1].id,
-        type: 'bezier',
-        markerEnd: { type: MarkerType.ArrowClosed },
+        type: 'smoothstep',
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
         animated: true,
         selectable: false,
         style: {
-            stroke: 'rgba(124, 58, 237, 0.6)',
+            stroke: '#7c3aed',
             strokeWidth: 2,
+            opacity: 0.7,
         },
     }));
 }
@@ -309,13 +308,70 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
             id: String(item.id || makeNodeId(type)).trim() || makeNodeId(type),
             type,
             position: {
-                x: Number.isFinite(x) ? x : 80,
+                x: Number.isFinite(x) ? x : -(CANVAS_NODE_WIDTH / 2),
                 y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + (parsed.length * CANVAS_NODE_GAP),
             },
             data: normalizeCanvasNodeData(type, item.data),
         });
     }
     return parsed;
+}
+
+function buildDefaultCanvasNodes(centerX = 0): CanvasWorkflowNode[] {
+    return layoutCanvasNodes([
+        {
+            id: 'trigger-default',
+            type: 'trigger',
+            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP },
+            data: { label: 'Start Trigger', triggerType: 'manual' },
+        },
+        {
+            id: 'agent-default',
+            type: 'agent',
+            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP + CANVAS_NODE_GAP },
+            data: {
+                label: 'AI Agent',
+                modelId: 'gpt-4.1',
+                prompt: 'Describe the task for this agent.',
+                tools: [],
+                provider: 'openai',
+                role: 'Worker',
+                duty: 'Complete the assigned task clearly and reliably.',
+                status: 'ready',
+                description: 'Autonomous reasoning',
+            },
+        },
+        {
+            id: 'action-default',
+            type: 'action',
+            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP + (CANVAS_NODE_GAP * 2) },
+            data: { label: 'Send Telegram', actionType: 'send_telegram' },
+        },
+    ], centerX);
+}
+
+function CanvasViewportCenter({
+    hostRef,
+    onCenterChange,
+}: {
+    hostRef: React.RefObject<HTMLDivElement | null>;
+    onCenterChange: (centerX: number) => void;
+}) {
+    const reactFlow = useReactFlow<CanvasWorkflowNode, Edge>();
+    const nodesInitialized = useNodesInitialized();
+
+    useEffect(() => {
+        if (!nodesInitialized) return;
+        const rect = hostRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const center = reactFlow.screenToFlowPosition({
+            x: rect.left + (rect.width / 2),
+            y: rect.top + (rect.height / 2),
+        });
+        onCenterChange(center.x);
+    }, [hostRef, nodesInitialized, onCenterChange, reactFlow]);
+
+    return null;
 }
 
 function serializeCanvasNodes(nodes: CanvasWorkflowNode[]): Array<Record<string, unknown>> {
@@ -418,14 +474,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const { addToast } = useToast();
     const streamRef = useRef<EventSource | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
+    const canvasHostRef = useRef<HTMLDivElement | null>(null);
+    const [canvasCenterX, setCanvasCenterX] = useState(0);
+    const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>(() => buildDefaultCanvasNodes(0));
+    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>(() => buildLinearEdges(buildDefaultCanvasNodes(0)));
 
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [workflow, setWorkflow] = useState<WorkflowShape | null>(null);
     const [workspaceId, setWorkspaceId] = useState<string>('default');
     const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-    const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>([]);
-    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>([]);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
     const [runStatus, setRunStatus] = useState<RunStatus>('idle');
@@ -679,9 +737,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 credentialId: typeof connectionStored?.credentialId === 'string' ? connectionStored.credentialId : '',
             });
             const parsedNodes = parseCanvasNodes(wf?.definition?.nodes);
-            const orderedNodes = layoutCanvasNodes(
-                [...parsedNodes].sort((left, right) => (left.position.y - right.position.y) || (left.position.x - right.position.x)),
-            );
+            const orderedNodes = parsedNodes.length > 0
+                ? layoutCanvasNodes(
+                    [...parsedNodes].sort((left, right) => (left.position.y - right.position.y) || (left.position.x - right.position.x)),
+                    canvasCenterX,
+                )
+                : buildDefaultCanvasNodes(canvasCenterX);
             setCanvasNodes(orderedNodes);
             setCanvasEdges(buildLinearEdges(orderedNodes));
             setSelectedNodeId(orderedNodes[0]?.id || null);
@@ -690,7 +751,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsLoading(false);
         }
-    }, [workflowId, addToast]);
+    }, [workflowId, addToast, canvasCenterX]);
 
     useEffect(() => {
         loadWorkflow();
@@ -747,15 +808,22 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const renderedCanvasEdges = useMemo<Edge[]>(
         () => canvasEdges.map((edge) => ({
             ...edge,
-            type: 'bezier' as const,
+            type: 'smoothstep' as const,
             animated: runStatus === 'running',
             style: {
-                stroke: 'rgba(124, 58, 237, 0.6)',
+                stroke: '#7c3aed',
                 strokeWidth: 2,
+                opacity: 0.7,
             },
+            markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
         })),
         [canvasEdges, runStatus],
     );
+
+    const handleCanvasCenterChange = useCallback((nextCenterX: number) => {
+        setCanvasCenterX(nextCenterX);
+        setCanvasNodes((prev) => layoutCanvasNodes(prev, nextCenterX));
+    }, []);
 
     const addCanvasNode = useCallback((type: CanvasNodeType) => {
         setCanvasNodes((prev) => {
@@ -765,7 +833,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 {
                     id: makeNodeId(type),
                     type,
-                    position: { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
+                    position: { x: canvasCenterX - (CANVAS_NODE_WIDTH / 2), y: maxY + CANVAS_NODE_GAP },
                     data: defaultNodeData(type),
                 },
             ];
@@ -773,7 +841,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setSelectedNodeId(nextNodes[nextNodes.length - 1]?.id || null);
             return nextNodes;
         });
-    }, []);
+    }, [canvasCenterX]);
 
     const updateSelectedNode = useCallback((updater: (node: CanvasWorkflowNode) => CanvasWorkflowNode) => {
         if (!selectedNodeId) return;
@@ -801,14 +869,6 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isCanvasMode, selectedNodeId]);
-
-    useEffect(() => {
-        if (!isCanvasMode || canvasNodes.length === 0 || !flowInstanceRef.current) return;
-        const frame = requestAnimationFrame(() => {
-            flowInstanceRef.current?.fitView({ padding: 0.3, duration: 220, maxZoom: 1.1 });
-        });
-        return () => cancelAnimationFrame(frame);
-    }, [isCanvasMode, canvasNodes.length]);
 
     const handlePublish = useCallback(async () => {
         if (!workflowId) return;
@@ -1358,19 +1418,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </div>
                         </section>
 
-                        <section className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex' }}>
+                        <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex' }}>
                             <ReactFlow
                                 style={{ flex: 1, minHeight: 0 }}
                                 nodes={canvasNodes}
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
                                 fitView
-                                fitViewOptions={{ padding: 0.3 }}
+                                fitViewOptions={{ padding: 0.4 }}
                                 onInit={(instance) => {
                                     flowInstanceRef.current = instance;
-                                    requestAnimationFrame(() => {
-                                        instance.fitView({ padding: 0.3, duration: 220, maxZoom: 1.1 });
-                                    });
+                                    instance.fitView({ padding: 0.4, duration: 400, maxZoom: 1.1 });
                                 }}
                                 onNodesChange={handleCanvasNodesChange}
                                 onNodeClick={(_event: unknown, node: CanvasWorkflowNode) => setSelectedNodeId(node.id)}
@@ -1384,14 +1442,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 elementsSelectable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
-                                    type: 'bezier',
+                                    type: 'smoothstep',
                                     animated: runStatus === 'running',
-                                    markerEnd: { type: MarkerType.ArrowClosed },
+                                    markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
                                     selectable: false,
-                                    style: { stroke: 'rgba(124, 58, 237, 0.6)', strokeWidth: 2 },
+                                    style: { stroke: '#7c3aed', strokeWidth: 2, opacity: 0.7 },
                                 }}
                             >
-                                <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#d1d5db" />
+                                <CanvasViewportCenter hostRef={canvasHostRef} onCenterChange={handleCanvasCenterChange} />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>
                         </section>

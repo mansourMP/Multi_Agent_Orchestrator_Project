@@ -7,6 +7,7 @@ import { AuthenticatedImage } from '@/components/solutions/AuthenticatedImage';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
+import { formatRelativeTime } from '@/lib/solutions';
 import {
   alertSeverityTone,
   askHotelSpace,
@@ -16,9 +17,8 @@ import {
   fetchHotelAlerts,
   fetchHotelSpace,
   fetchHotelSpaceHistory,
-  formatRelativeTime,
   statusTone,
-} from '@/lib/solutions';
+} from '@/lib/hotelVision';
 
 const SUGGESTED_QUESTIONS = ['Is it open?', 'How busy?', 'Any issues today?'];
 

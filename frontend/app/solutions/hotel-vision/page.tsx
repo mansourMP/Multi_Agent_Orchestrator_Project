@@ -7,7 +7,8 @@ import { AuthenticatedImage } from '@/components/solutions/AuthenticatedImage';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
-import { type HotelAlert, type HotelSpace, fetchHotelAlerts, fetchHotelSpaces, formatRelativeTime, statusTone } from '@/lib/solutions';
+import { formatRelativeTime } from '@/lib/solutions';
+import { type HotelAlert, type HotelSpace, fetchHotelAlerts, fetchHotelSpaces, statusTone } from '@/lib/hotelVision';
 
 function formatLiveAge(value: string | null | undefined, nowMs: number): string {
   const token = String(value || '').trim();

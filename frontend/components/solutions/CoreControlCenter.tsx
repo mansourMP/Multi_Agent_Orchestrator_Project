@@ -7,9 +7,9 @@ import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import {
-  type HotelAlert,
   type InstalledSolution,
-  fetchHotelAlerts,
+  type RecentRunItem,
+  fetchRecentRuns,
   fetchSkillsState,
   fetchSolutionsState,
   fetchWeeklySchedules,
@@ -26,9 +26,45 @@ export function CoreControlCenter() {
   const [solutions, setSolutions] = useState<InstalledSolution[]>([]);
   const [skills, setSkills] = useState<SkillCard[]>([]);
   const [workflows, setWorkflows] = useState<Array<Record<string, unknown>>>([]);
-  const [alerts, setAlerts] = useState<HotelAlert[]>([]);
+  const [recentRuns, setRecentRuns] = useState<RecentRunItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const humanizeAgentName = (value: string | null | undefined): string => {
+    const token = String(value || '').trim().toLowerCase();
+    if (!token || token === 'orchestrator') return 'Assistant';
+    return token
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  };
+
+  const summarizeRun = (run: RecentRunItem): string => {
+    const summary = String(run.result_summary || '').trim();
+    if (summary) return summary;
+    const goal = String(run.user_goal || '').trim();
+    if (goal) return goal;
+    return 'No summary available yet.';
+  };
+
+  const statusTone = (status: string | null | undefined): 'green' | 'yellow' | 'red' | 'grey' => {
+    const token = String(status || '').trim().toLowerCase();
+    if (token === 'completed' || token === 'success') return 'green';
+    if (token === 'running' || token === 'queued' || token === 'claimed' || token === 'waiting_for_input') return 'yellow';
+    if (token === 'failed' || token === 'error' || token === 'cancelled' || token === 'aborted') return 'red';
+    return 'grey';
+  };
+
+  const statusLabel = (status: string | null | undefined): string => {
+    const token = String(status || '').trim().toLowerCase();
+    if (!token) return 'Unknown';
+    return token
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -36,21 +72,17 @@ export function CoreControlCenter() {
       setLoading(true);
       setError('');
       try {
-        const [solutionsState, skillsState, weeklySchedules] = await Promise.all([
+        const [solutionsState, skillsState, weeklySchedules, runItems] = await Promise.all([
           fetchSolutionsState(),
           fetchSkillsState(),
           fetchWeeklySchedules(),
+          fetchRecentRuns(5),
         ]);
         if (cancelled) return;
         setSolutions(Array.isArray(solutionsState.active) ? solutionsState.active : []);
         setSkills(Array.isArray(skillsState.installed) ? skillsState.installed.filter((item) => item.enabled) : []);
         setWorkflows(Array.isArray(weeklySchedules) ? weeklySchedules : []);
-        if (solutionsState.active.some((item) => item.id === 'hotel-vision')) {
-          const hotelAlerts = await fetchHotelAlerts({ unresolvedOnly: true, days: 7 });
-          if (!cancelled) setAlerts(hotelAlerts.slice(0, 6));
-        } else {
-          setAlerts([]);
-        }
+        setRecentRuns(Array.isArray(runItems) ? runItems.slice(0, 5) : []);
       } catch (fetchError) {
         if (!cancelled) setError(fetchError instanceof Error ? fetchError.message : 'Failed to load control center.');
       } finally {
@@ -80,12 +112,26 @@ export function CoreControlCenter() {
     };
   }, [skills.length, solutions, workflows.length]);
 
+  const recentAlerts = useMemo(() => {
+    return solutions
+      .flatMap((solution) => {
+        const items = Array.isArray(solution.status?.recent_alerts) ? solution.status?.recent_alerts : [];
+        return items.map((alert) => ({
+          ...alert,
+          title: String(alert.title || '').trim() || solution.name,
+          solutionName: solution.name,
+        }));
+      })
+      .sort((left, right) => Date.parse(String(right.ts || '')) - Date.parse(String(left.ts || '')))
+      .slice(0, 6);
+  }, [solutions]);
+
   return (
     <div className="orion-page-shell narrow orion-animate-in">
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
         title="Dashboard"
-        subtitle="General control center for installed solutions, active skills, and running workflows."
+        subtitle="Your AI agents, running workflows, and installed solutions — all in one place."
         meta={
           <>
             <span>{solutions.length} active solution{solutions.length === 1 ? '' : 's'}</span>
@@ -126,6 +172,39 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
+                <div className="orion-panel-title">Recent activity</div>
+                <div className="orion-panel-copy">The latest agent work completed or still in progress.</div>
+              </div>
+            </div>
+            {recentRuns.length === 0 ? (
+              <div className="orion-empty">
+                <div className="orion-empty-title">No recent activity</div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {recentRuns.map((run) => (
+                  <div key={run.run_id} className="orion-list-row">
+                    <div className="orion-list-row-main">
+                      <div className="orion-list-row-title">{humanizeAgentName(run.agent_role)}</div>
+                      <div className="orion-list-row-subtitle">{summarizeRun(run)}</div>
+                    </div>
+                    <div style={{ display: 'grid', justifyItems: 'end', gap: 6 }}>
+                      <span className="orion-chip" data-status-tone={statusTone(run.status)}>
+                        {statusLabel(run.status)}
+                      </span>
+                      <span className="orion-panel-copy" style={{ margin: 0 }}>
+                        {formatRelativeTime(run.updated_at || run.created_at || null)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="orion-panel">
+            <div className="orion-panel-header">
+              <div>
                 <div className="orion-panel-title">Active solutions</div>
                 <div className="orion-panel-copy">
                   Installed vertical packages running on top of the core platform.
@@ -134,8 +213,12 @@ export function CoreControlCenter() {
             </div>
             {solutions.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No active solutions</div>
-                <div className="orion-empty-copy">Install a solution bundle under `/solutions` to expose an industry view.</div>
+                <div className="orion-empty-title">Add your first solution to get started</div>
+                <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
+                  <Link href="/setup" className="orion-btn orion-btn-primary">
+                    Open Setup
+                  </Link>
+                </div>
               </div>
             ) : (
               <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
@@ -182,7 +265,7 @@ export function CoreControlCenter() {
             </div>
             {skills.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No active skills</div>
+                <div className="orion-empty-title">No skills active</div>
               </div>
             ) : (
               <div className="orion-stagger-grid" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
@@ -211,7 +294,7 @@ export function CoreControlCenter() {
             </div>
             {workflows.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No scheduled workflows</div>
+                <div className="orion-empty-title">No automations running</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
@@ -233,27 +316,31 @@ export function CoreControlCenter() {
             )}
           </section>
 
-          {alerts.length > 0 ? (
-            <section className="orion-panel">
-              <div className="orion-panel-header">
-                <div>
-                  <div className="orion-panel-title">Recent alerts</div>
-                  <div className="orion-panel-copy">Latest unresolved solution alerts exposed to the control center.</div>
-                </div>
+          <section className="orion-panel">
+            <div className="orion-panel-header">
+              <div>
+                <div className="orion-panel-title">Recent alerts</div>
+                <div className="orion-panel-copy">Latest unresolved solution alerts exposed to the control center.</div>
               </div>
+            </div>
+            {recentAlerts.length === 0 ? (
+              <div className="orion-empty">
+                <div className="orion-empty-title">All clear</div>
+              </div>
+            ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                {alerts.map((alert) => (
+                {recentAlerts.map((alert) => (
                   <div key={alert.id} className="orion-list-row">
                     <div className="orion-list-row-main">
-                      <div className="orion-list-row-title">{alert.space_name || alert.space_id}</div>
+                      <div className="orion-list-row-title">{alert.title}</div>
                       <div className="orion-list-row-subtitle">{alert.message}</div>
                     </div>
                     <span className="orion-chip" data-status-tone="red" title={alert.ts}>{formatRelativeTime(alert.ts)}</span>
                   </div>
                 ))}
               </div>
-            </section>
-          ) : null}
+            )}
+          </section>
         </>
       )}
     </div>

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
-import { alertSeverityTone, type HotelAlert, fetchHotelAlerts, formatRelativeTime, resolveHotelAlert } from '@/lib/solutions';
+import { formatRelativeTime } from '@/lib/solutions';
+import { alertSeverityTone, type HotelAlert, fetchHotelAlerts, resolveHotelAlert } from '@/lib/hotelVision';
 
 export default function HotelVisionAlertsPage() {
   const [alerts, setAlerts] = useState<HotelAlert[]>([]);

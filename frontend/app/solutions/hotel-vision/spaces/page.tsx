@@ -6,7 +6,8 @@ import { Grid2X2 } from 'lucide-react';
 import { AuthenticatedImage } from '@/components/solutions/AuthenticatedImage';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
-import { type HotelSpace, fetchHotelSpaces, formatRelativeTime, statusTone } from '@/lib/solutions';
+import { formatRelativeTime } from '@/lib/solutions';
+import { type HotelSpace, fetchHotelSpaces, statusTone } from '@/lib/hotelVision';
 
 export default function HotelVisionSpacesPage() {
   const [spaces, setSpaces] = useState<HotelSpace[]>([]);

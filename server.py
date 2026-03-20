@@ -4327,87 +4327,35 @@ def _ensure_installed_solution(solution_id: str) -> Dict[str, Any]:
     return solution
 
 
-@app.get("/api/solutions/hotel-vision/spaces", dependencies=[Depends(require_api_key)])
-async def get_hotel_vision_spaces():
-    _ensure_installed_solution("hotel-vision")
-    spaces = call_installed_solution_hook("hotel-vision", "list_spaces")
-    return {"ok": True, "items": spaces if isinstance(spaces, list) else []}
-
-
-@app.get("/api/solutions/hotel-vision/spaces/{space_id}", dependencies=[Depends(require_api_key)])
-async def get_hotel_vision_space(space_id: str):
-    _ensure_installed_solution("hotel-vision")
+@app.api_route("/api/solutions/{solution_id}/{subpath:path}", methods=["GET", "POST", "PUT"], dependencies=[Depends(require_api_key)])
+async def dispatch_installed_solution_api(solution_id: str, subpath: str, request: Request):
+    _ensure_installed_solution(solution_id)
+    body: Dict[str, Any] = {}
+    if request.method.upper() in {"POST", "PUT", "PATCH"}:
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            body = {}
     try:
-        payload = call_installed_solution_hook("hotel-vision", "get_space", space_id)
+        payload = call_installed_solution_hook(
+            solution_id,
+            "handle_api_request",
+            request.method,
+            subpath,
+            body,
+            dict(request.query_params),
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"ok": True, "item": payload if isinstance(payload, dict) else {}}
-
-
-@app.get("/api/solutions/hotel-vision/spaces/{space_id}/history", dependencies=[Depends(require_api_key)])
-async def get_hotel_vision_space_history(space_id: str, hours: int = 24):
-    _ensure_installed_solution("hotel-vision")
-    try:
-        payload = call_installed_solution_hook("hotel-vision", "get_space_history", space_id, hours=max(1, min(hours, 168)))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"ok": True, "items": payload if isinstance(payload, list) else []}
-
-
-@app.get("/api/solutions/hotel-vision/spaces/{space_id}/snapshot", dependencies=[Depends(require_api_key)])
-async def get_hotel_vision_space_snapshot(space_id: str):
-    _ensure_installed_solution("hotel-vision")
-    try:
-        snapshot_path = call_installed_solution_hook("hotel-vision", "get_snapshot_path", space_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    path = Path(str(snapshot_path or "")).expanduser()
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Snapshot for '{space_id}' is not available.")
-    return FileResponse(path)
-
-
-@app.post("/api/solutions/hotel-vision/spaces/{space_id}/ask", dependencies=[Depends(require_api_key)])
-async def post_hotel_vision_space_question(space_id: str, request: Request):
-    _ensure_installed_solution("hotel-vision")
-    body = await request.json()
-    question = str((body or {}).get("question") or "").strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="question is required.")
-    try:
-        payload = call_installed_solution_hook("hotel-vision", "answer_space_question", space_id, question)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return payload if isinstance(payload, dict) else {"ok": False, "answer": ""}
-
-
-@app.get("/api/solutions/hotel-vision/alerts", dependencies=[Depends(require_api_key)])
-async def get_hotel_vision_alerts(
-    unresolved_only: bool = False,
-    days: int = 7,
-    space_id: Optional[str] = None,
-):
-    _ensure_installed_solution("hotel-vision")
-    payload = call_installed_solution_hook(
-        "hotel-vision",
-        "list_alerts",
-        unresolved_only=bool(unresolved_only),
-        days=max(1, min(days, 365)),
-        space_id=space_id,
-    )
-    return {"ok": True, "items": payload if isinstance(payload, list) else []}
-
-
-@app.post("/api/solutions/hotel-vision/alerts/{alert_id}/resolve", dependencies=[Depends(require_api_key)])
-async def post_hotel_vision_alert_resolve(alert_id: str):
-    _ensure_installed_solution("hotel-vision")
-    try:
-        payload = call_installed_solution_hook("hotel-vision", "resolve_alert", alert_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return payload if isinstance(payload, dict) else {"ok": True, "resolved": True, "alert_id": alert_id}
+    if isinstance(payload, Response):
+        return payload
+    if isinstance(payload, (dict, list)):
+        return payload
+    return {"ok": True}
 
 
 @app.get("/probe")

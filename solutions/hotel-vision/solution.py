@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from fastapi.responses import FileResponse, Response
 
 SOLUTION_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SOLUTION_DIR.parent.parent
@@ -21,6 +22,11 @@ def _read_json(path: Path) -> Dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -147,6 +153,8 @@ def _space_card(space_dir: Path) -> Dict[str, Any]:
         "space_id": str(config.get("space_id") or space_dir.name).strip(),
         "space_name": str(config.get("space_name") or config.get("space_id") or space_dir.name).strip(),
         "camera_url": str(config.get("camera_url") or "").strip(),
+        "hotel_name": str(config.get("hotel_name") or "").strip() or None,
+        "timezone": str(config.get("timezone") or "").strip() or None,
         "business_hours": config.get("business_hours") if isinstance(config.get("business_hours"), dict) else {},
         "scan_cadence_minutes": int(config.get("scan_cadence_minutes") or 5),
         "busy_threshold": int(config.get("busy_threshold") or 15),
@@ -187,12 +195,24 @@ def build_status(solution: Dict[str, Any]) -> Dict[str, Any]:
     unresolved_alerts = sum(int(card.get("unresolved_alert_count") or 0) for card in cards)
     now = datetime.now().astimezone()
     last_scan_at = _now_label(now, [str(card.get("updated_at") or "") for card in cards])
+    recent_alerts = [
+        {
+            "id": str(item.get("id") or "").strip(),
+            "ts": str(item.get("ts") or "").strip(),
+            "title": str(item.get("space_name") or item.get("space_id") or "Alert").strip(),
+            "message": str(item.get("message") or "").strip(),
+            "severity": str(item.get("severity") or "").strip() or "warning",
+            "solution_id": "hotel-vision",
+        }
+        for item in list_alerts(solution, unresolved_only=True, days=7)[:6]
+    ]
     return {
         "ok": True,
         "spaces_monitored": len(cards),
         "unresolved_alerts": unresolved_alerts,
         "last_scan_at": last_scan_at,
         "summary": f"{len(cards)} spaces · {unresolved_alerts} unresolved alerts",
+        "recent_alerts": recent_alerts,
     }
 
 
@@ -307,3 +327,86 @@ def get_snapshot_path(solution: Dict[str, Any], space_id: str) -> Path:
     if snapshot_path.exists():
         return snapshot_path
     raise FileNotFoundError(f"Snapshot for '{space_id}' is not available.")
+
+
+def update_space_config(solution: Dict[str, Any], space_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    space_dir = _space_dirs(solution).get(str(space_id or "").strip())
+    if space_dir is None:
+        raise FileNotFoundError(f"Space '{space_id}' was not found.")
+    config_path = space_dir / "config.json"
+    current = _load_space_config(space_dir)
+    business_hours_payload = payload.get("business_hours")
+    if isinstance(business_hours_payload, dict):
+        next_business_hours = {
+            str(key).strip(): str(value).strip()
+            for key, value in business_hours_payload.items()
+            if str(key).strip() and str(value).strip()
+        }
+    else:
+        next_business_hours = current.get("business_hours") if isinstance(current.get("business_hours"), dict) else {"mon-sun": "07:00-22:00"}
+    next_config = {
+        **current,
+        "space_id": str(current.get("space_id") or payload.get("space_id") or space_dir.name).strip() or space_dir.name,
+        "space_name": str(payload.get("space_name") or current.get("space_name") or space_dir.name.replace("-", " ").title()).strip(),
+        "camera_url": str(payload.get("camera_url") or current.get("camera_url") or "").strip(),
+        "business_hours": next_business_hours,
+        "scan_cadence_minutes": max(1, int(payload.get("scan_cadence_minutes") or current.get("scan_cadence_minutes") or 5)),
+        "busy_threshold": max(1, int(payload.get("busy_threshold") or current.get("busy_threshold") or 15)),
+        "telegram_recipients": [
+            str(item).strip()
+            for item in (payload.get("telegram_recipients") if isinstance(payload.get("telegram_recipients"), list) else current.get("telegram_recipients") if isinstance(current.get("telegram_recipients"), list) else [])
+            if str(item).strip()
+        ],
+        "hotel_name": str(payload.get("hotel_name") or current.get("hotel_name") or "").strip(),
+        "timezone": str(payload.get("timezone") or current.get("timezone") or "").strip(),
+    }
+    _write_json(config_path, next_config)
+    return _space_card(space_dir)
+
+
+def handle_api_request(
+    solution: Dict[str, Any],
+    method: str,
+    subpath: str,
+    body: Optional[Dict[str, Any]] = None,
+    query: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any] | Response:
+    path = str(subpath or "").strip("/")
+    parts = [part for part in path.split("/") if part]
+    request_method = str(method or "GET").upper()
+    payload = body if isinstance(body, dict) else {}
+    params = query if isinstance(query, dict) else {}
+
+    if request_method == "GET" and parts == ["spaces"]:
+        return {"ok": True, "items": list_spaces(solution)}
+
+    if len(parts) >= 2 and parts[0] == "spaces":
+        space_id = parts[1]
+        if request_method == "GET" and len(parts) == 2:
+            return {"ok": True, "item": get_space(solution, space_id)}
+        if request_method == "GET" and len(parts) == 3 and parts[2] == "history":
+            hours = max(1, min(int(params.get("hours") or 24), 168))
+            return {"ok": True, "items": get_space_history(solution, space_id, hours=hours)}
+        if request_method == "GET" and len(parts) == 3 and parts[2] == "snapshot":
+            return FileResponse(get_snapshot_path(solution, space_id))
+        if request_method == "POST" and len(parts) == 3 and parts[2] == "ask":
+            question = str(payload.get("question") or "").strip()
+            if not question:
+                raise RuntimeError("question is required.")
+            return answer_space_question(solution, space_id, question)
+        if request_method == "PUT" and len(parts) == 3 and parts[2] == "config":
+            return {"ok": True, "item": update_space_config(solution, space_id, payload)}
+
+    if request_method == "GET" and parts == ["alerts"]:
+        unresolved_only = str(params.get("unresolved_only") or "").strip().lower() in {"1", "true", "yes", "on"}
+        days = max(1, min(int(params.get("days") or 7), 365))
+        space_id = str(params.get("space_id") or "").strip() or None
+        return {
+            "ok": True,
+            "items": list_alerts(solution, unresolved_only=unresolved_only, days=days, space_id=space_id),
+        }
+
+    if request_method == "POST" and len(parts) == 3 and parts[0] == "alerts" and parts[2] == "resolve":
+        return resolve_alert(solution, parts[1])
+
+    raise RuntimeError(f"Unsupported solution route: {request_method} /{path}")

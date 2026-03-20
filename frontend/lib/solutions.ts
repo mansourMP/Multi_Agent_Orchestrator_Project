@@ -21,47 +21,25 @@ export type InstalledSolution = {
     unresolved_alerts?: number;
     last_scan_at?: string | null;
     summary?: string;
+    recent_alerts?: Array<{
+      id: string;
+      ts: string;
+      title?: string;
+      message: string;
+      severity?: string;
+      solution_id?: string;
+    }>;
   };
 };
 
-export type HotelSpace = {
-  space_id: string;
-  space_name: string;
-  status: string;
-  occupancy_count: number;
+export type RecentRunItem = {
+  run_id: string;
+  status?: string | null;
+  agent_role?: string | null;
+  user_goal?: string | null;
+  result_summary?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
-  confidence?: number;
-  summary_line?: string;
-  summary_lines?: string[];
-  snapshot_url?: string;
-  unresolved_alert_count?: number;
-  business_hours?: Record<string, string>;
-  scan_cadence_minutes?: number;
-  busy_threshold?: number;
-  telegram_recipients?: string[];
-  camera_url?: string;
-  current_state?: Record<string, unknown>;
-};
-
-export type HotelAlert = {
-  id: string;
-  ts: string;
-  space_id: string;
-  space_name?: string;
-  severity: string;
-  code: string;
-  message: string;
-  resolved: boolean;
-};
-
-export type HotelHistoryItem = {
-  ts: string;
-  space_id: string;
-  occupancy_count: number;
-  status: string;
-  business_state?: string;
-  anomaly?: boolean;
-  confidence?: number;
 };
 
 function runtimeHeaders(): HeadersInit {
@@ -96,46 +74,12 @@ export async function fetchWeeklySchedules(): Promise<Array<Record<string, unkno
   return Array.isArray(body.items) ? body.items : [];
 }
 
-export async function fetchHotelSpaces(): Promise<HotelSpace[]> {
-  const body = await readJson<{ items?: HotelSpace[] }>(`${ORION_API_URL}/api/solutions/hotel-vision/spaces`, 'Failed to load spaces.');
+export async function fetchRecentRuns(limit: number = 5, workspaceId: string = 'default'): Promise<RecentRunItem[]> {
+  const params = new URLSearchParams();
+  params.set('limit', String(Math.max(1, limit)));
+  params.set('workspace_id', workspaceId);
+  const body = await readJson<{ items?: RecentRunItem[] }>(`${ORION_API_URL}/history/runs?${params.toString()}`, 'Failed to load recent activity.');
   return Array.isArray(body.items) ? body.items : [];
-}
-
-export async function fetchHotelSpace(spaceId: string): Promise<HotelSpace> {
-  const body = await readJson<{ item?: HotelSpace }>(`${ORION_API_URL}/api/solutions/hotel-vision/spaces/${encodeURIComponent(spaceId)}`, 'Failed to load space.');
-  return (body.item && typeof body.item === 'object' ? body.item : { space_id: spaceId, space_name: spaceId, status: 'unknown', occupancy_count: 0 }) as HotelSpace;
-}
-
-export async function fetchHotelSpaceHistory(spaceId: string): Promise<HotelHistoryItem[]> {
-  const body = await readJson<{ items?: HotelHistoryItem[] }>(`${ORION_API_URL}/api/solutions/hotel-vision/spaces/${encodeURIComponent(spaceId)}/history`, 'Failed to load history.');
-  return Array.isArray(body.items) ? body.items : [];
-}
-
-export async function fetchHotelAlerts(params?: { unresolvedOnly?: boolean; days?: number; spaceId?: string }): Promise<HotelAlert[]> {
-  const search = new URLSearchParams();
-  if (params?.unresolvedOnly) search.set('unresolved_only', 'true');
-  if (params?.days) search.set('days', String(params.days));
-  if (params?.spaceId) search.set('space_id', params.spaceId);
-  const suffix = search.toString() ? `?${search.toString()}` : '';
-  const body = await readJson<{ items?: HotelAlert[] }>(`${ORION_API_URL}/api/solutions/hotel-vision/alerts${suffix}`, 'Failed to load alerts.');
-  return Array.isArray(body.items) ? body.items : [];
-}
-
-export async function resolveHotelAlert(alertId: string): Promise<void> {
-  await readJson(`${ORION_API_URL}/api/solutions/hotel-vision/alerts/${encodeURIComponent(alertId)}/resolve`, 'Failed to resolve alert.');
-}
-
-export async function askHotelSpace(spaceId: string, question: string): Promise<string> {
-  const res = await fetch(`${ORION_API_URL}/api/solutions/hotel-vision/spaces/${encodeURIComponent(spaceId)}/ask`, {
-    method: 'POST',
-    headers: { ...runtimeHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(String((body as { detail?: string; message?: string })?.detail || (body as { message?: string })?.message || 'Failed to ask space.'));
-  }
-  return String((body as { answer?: string }).answer || '').trim();
 }
 
 export function formatRelativeTime(value: string | null | undefined): string {
@@ -151,26 +95,4 @@ export function formatRelativeTime(value: string | null | undefined): string {
   if (deltaHours < 24) return `${deltaHours} hr ago`;
   const deltaDays = Math.round(deltaHours / 24);
   return `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
-}
-
-export function statusTone(status: string): 'green' | 'yellow' | 'red' | 'grey' {
-  const token = String(status || '').trim().toLowerCase();
-  if (token === 'open_normal') {
-    return 'green';
-  }
-  if (token === 'open_busy') {
-    return 'yellow';
-  }
-  if (token === 'alert') {
-    return 'red';
-  }
-  return 'grey';
-}
-
-export function alertSeverityTone(severity: string): 'green' | 'yellow' | 'red' | 'grey' {
-  const token = String(severity || '').trim().toLowerCase();
-  if (token === 'critical') return 'red';
-  if (token === 'warning') return 'yellow';
-  if (token === 'info') return 'green';
-  return 'grey';
 }

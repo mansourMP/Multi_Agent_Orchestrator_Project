@@ -122,6 +122,35 @@ def _send_telegram_alert(recipients: List[str], text: str) -> None:
             continue
 
 
+def _send_wechat_work_alert(webhook_url: str, text: str) -> None:
+    endpoint = str(webhook_url or "").strip()
+    if not endpoint:
+        return
+    payload = json.dumps(
+        {
+            "msgtype": "text",
+            "text": {
+                "content": text,
+            },
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = urllib.request.Request(endpoint, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception:
+        return
+
+
+def _wechat_alert_message(space_config: Dict[str, Any], alert: Dict[str, Any]) -> str:
+    space_name = str(space_config.get("space_name") or space_config.get("space_id") or "Space").strip()
+    message = str(alert.get("message") or "").strip() or "Alert raised."
+    timestamp = str(alert.get("ts") or "").strip() or datetime.now().astimezone().isoformat()
+    return f"⚠️ {space_name}: {message}\nTime: {timestamp}\n— Empyralist"
+
+
 def _evaluate_alerts(config: Dict[str, Any], space_config: Dict[str, Any], state: Dict[str, Any]) -> List[Dict[str, Any]]:
     root = spaces_root(config)
     space_id = str(space_config.get("space_id") or "").strip()
@@ -176,6 +205,11 @@ def _evaluate_alerts(config: Dict[str, Any], space_config: Dict[str, Any], state
             [str(value).strip() for value in (space_config.get("telegram_recipients") if isinstance(space_config.get("telegram_recipients"), list) else []) if str(value).strip()],
             text,
         )
+        alert_channels = config.get("alert_channels") if isinstance(config.get("alert_channels"), dict) else {}
+        wechat_webhook_url = str(alert_channels.get("wechat_webhook_url") or "").strip()
+        if wechat_webhook_url:
+            for alert in created:
+                _send_wechat_work_alert(wechat_webhook_url, _wechat_alert_message(space_config, alert))
     return created
 
 

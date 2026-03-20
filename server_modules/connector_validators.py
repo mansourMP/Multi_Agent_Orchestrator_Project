@@ -211,6 +211,53 @@ def validate_telegram_connector(credentials: Dict[str, Any], http_json_request: 
     }
 
 
+def validate_wechat_work_connector(
+    credentials: Dict[str, Any],
+    http_json_request: HttpJsonRequest,
+    *,
+    send_test: bool = False,
+) -> Dict[str, Any]:
+    webhook_url = str(credentials.get("webhook_url") or "").strip()
+    if not webhook_url:
+        raise RuntimeError("WeChat Work webhook_url is required.")
+    if not webhook_url.startswith("http://") and not webhook_url.startswith("https://"):
+        raise RuntimeError("WeChat Work webhook_url must start with http:// or https://.")
+
+    content = (
+        "Empyralist test message\nTime: auto-generated\n— Empyralist"
+        if send_test
+        else "Empyralist connector check\n— Empyralist"
+    )
+    payload = {
+        "msgtype": "text",
+        "text": {
+            "content": content,
+        },
+    }
+    headers = {"Content-Type": "application/json"}
+    res = http_json_request(
+        webhook_url,
+        method="POST",
+        headers=headers,
+        payload=payload,
+    )
+    body = res.get("json") if isinstance(res.get("json"), dict) else {}
+    if int(res.get("status") or 0) != 200:
+        detail = str(body.get("errmsg") or body.get("message") or "").strip()
+        raise RuntimeError(detail or "WeChat Work webhook request failed.")
+    errcode = int(body.get("errcode") or 0) if isinstance(body, dict) else 0
+    if errcode != 0:
+        detail = str(body.get("errmsg") or "").strip()
+        raise RuntimeError(detail or "WeChat Work webhook was rejected.")
+
+    return {
+        "ok": True,
+        "status": 200,
+        "message": "WeChat Work test message sent." if send_test else "WeChat Work connector is valid.",
+        "webhook_url": webhook_url,
+    }
+
+
 def validate_whatsapp_twilio_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
     account_sid = str(credentials.get("account_sid") or "").strip()
     auth_token = str(credentials.get("auth_token") or "").strip()

@@ -101,6 +101,7 @@ from server_modules.connector_validators import (
     validate_google_workspace_connector as _validate_google_workspace_connector,
     validate_microsoft_365_connector as _validate_microsoft_365_connector,
     validate_telegram_connector as _validate_telegram_connector,
+    validate_wechat_work_connector as _validate_wechat_work_connector,
     validate_whatsapp_twilio_connector as _validate_whatsapp_twilio_connector,
     validate_discord_bot_connector as _validate_discord_bot_connector,
     validate_instagram_business_connector as _validate_instagram_business_connector,
@@ -538,6 +539,10 @@ CONNECTOR_CATALOG = {
     "telegram_bot": {
         "label": "Telegram Bot",
         "auth": ["bot_token", "chat_id"],
+    },
+    "wechat_work": {
+        "label": "WeChat Work",
+        "auth": ["webhook_url"],
     },
     "whatsapp_twilio": {
         "label": "WhatsApp (Twilio)",
@@ -1833,6 +1838,7 @@ _codex_token_from_vault = lambda: _codex_token_from_vault_impl(CODEX_AUTH_FILE, 
 validate_google_workspace_connector = lambda credentials: _validate_google_workspace_connector(credentials, http_json_request)
 validate_microsoft_365_connector = lambda credentials: _validate_microsoft_365_connector(credentials, http_json_request)
 validate_telegram_connector = lambda credentials: _validate_telegram_connector(credentials, http_json_request)
+validate_wechat_work_connector = lambda credentials, send_test=False: _validate_wechat_work_connector(credentials, http_json_request, send_test=send_test)
 validate_whatsapp_twilio_connector = lambda credentials: _validate_whatsapp_twilio_connector(credentials, http_json_request)
 validate_discord_bot_connector = lambda credentials: _validate_discord_bot_connector(credentials, http_json_request)
 validate_instagram_business_connector = lambda credentials: _validate_instagram_business_connector(credentials, http_json_request)
@@ -5038,6 +5044,8 @@ async def create_connector_vault(body: ConnectorUpsertRequest):
             test = validate_microsoft_365_connector(credentials)
         elif connector == "telegram_bot":
             test = validate_telegram_connector(credentials)
+        elif connector == "wechat_work":
+            test = validate_wechat_work_connector(credentials)
         elif connector == "whatsapp_twilio":
             test = validate_whatsapp_twilio_connector(credentials)
         elif connector == "discord_bot":
@@ -5212,6 +5220,11 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
     if connector == "telegram_bot":
         try:
             return validate_telegram_connector(credentials)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    if connector == "wechat_work":
+        try:
+            return validate_wechat_work_connector(credentials, send_test=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     if connector == "whatsapp_twilio":

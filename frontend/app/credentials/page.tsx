@@ -51,6 +51,7 @@ type ConnectModalState = {
   googleUseLocalAuth: boolean;
   botToken: string;
   chatId: string;
+  webhookUrl: string;
   discordBotToken: string;
   discordChannelId: string;
   discordGuildId: string;
@@ -139,6 +140,7 @@ const EMPTY_FORM: ConnectModalState = {
   googleUseLocalAuth: true,
   botToken: '',
   chatId: '',
+  webhookUrl: '',
   discordBotToken: '',
   discordChannelId: '',
   discordGuildId: '',
@@ -166,6 +168,12 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   telegram_bot: {
     assetSrc: '/connector-logos/telegram.png',
     accent: '#229ED9',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  wechat_work: {
+    assetSrc: '/connector-logos/webhook.png',
+    accent: '#07C160',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -468,6 +476,7 @@ function connectorRoadmapTier(entry: ConnectorCatalogEntry): ConnectorRoadmapTie
     entry.id === 'google_workspace'
     || entry.id === 'microsoft_365'
     || entry.id === 'telegram_bot'
+    || entry.id === 'wechat_work'
     || entry.id === 'whatsapp_twilio'
     || entry.id === 'discord'
     || entry.id === 'discord_bot'
@@ -1088,6 +1097,11 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       chat_id: state.chatId.trim(),
     };
   }
+  if (state.connector === 'wechat_work') {
+    return {
+      webhook_url: state.webhookUrl.trim(),
+    };
+  }
   if (state.connector === 'discord_bot') {
     return {
       bot_token: state.discordBotToken.trim(),
@@ -1136,6 +1150,10 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
     }
     if (form.connector === 'google_workspace' && !form.googleUseLocalAuth && !form.accessToken.trim()) {
       setCreateError('Enter a Google Workspace access token, or switch back to Local gws auth for the authenticated CLI session on this Mac.');
+      return;
+    }
+    if (form.connector === 'wechat_work' && !form.webhookUrl.trim()) {
+      setCreateError('Enter the WeChat Work webhook URL.');
       return;
     }
     setCreateBusy(true);
@@ -2172,6 +2190,18 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   <label style={{ display: 'grid', gap: 6 }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chat ID</span>
                     <input className="input" value={form.chatId} onChange={(event) => setForm((prev) => ({ ...prev, chatId: event.target.value }))} placeholder="1932934047" />
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 'wechat_work' ? (
+                <>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Paste the WeChat Work incoming webhook URL. The Test action sends a real message to that webhook.
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Webhook URL</span>
+                    <input className="input" value={form.webhookUrl} onChange={(event) => setForm((prev) => ({ ...prev, webhookUrl: event.target.value }))} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
                   </label>
                 </>
               ) : null}

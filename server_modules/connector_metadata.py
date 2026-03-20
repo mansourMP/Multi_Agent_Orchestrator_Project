@@ -44,6 +44,10 @@ def _connector_public_metadata(connector: str, credentials: Dict[str, Any]) -> D
         chat_id = str(credentials.get("chat_id") or "").strip()
         if chat_id:
             public["chat_id"] = chat_id
+    elif connector_id == "wechat_work":
+        webhook_url = str(credentials.get("webhook_url") or "").strip()
+        if webhook_url:
+            public["webhook_url"] = webhook_url
     elif connector_id == "whatsapp_twilio":
         from_number = str(credentials.get("from_number") or "").strip()
         to_number = str(credentials.get("to_number") or "").strip()
@@ -111,6 +115,10 @@ def _connector_identity_signature(connector: str, credentials: Dict[str, Any]) -
         chat_id = str(credentials.get("chat_id") or "").strip()
         if bot_token and chat_id:
             return f"telegram_bot:{bot_token}:{chat_id}"
+    if connector_id == "wechat_work":
+        webhook_url = str(credentials.get("webhook_url") or "").strip()
+        if webhook_url:
+            return f"wechat_work:{webhook_url}"
     if connector_id == "whatsapp_twilio":
         account_sid = str(credentials.get("account_sid") or "").strip()
         from_number = str(credentials.get("from_number") or "").strip()
@@ -190,4 +198,3 @@ def _find_duplicate_connector_entry(
         if existing_signature and existing_signature == signature:
             return item
     return None
-

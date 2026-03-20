@@ -32,6 +32,7 @@ export type ConnectorId =
   | 'google_workspace'
   | 'microsoft_365'
   | 'telegram_bot'
+  | 'wechat_work'
   | 'whatsapp_twilio'
   | 'discord_bot'
   | 'instagram_business';
@@ -938,6 +939,7 @@ export const DEFAULT_CONNECTOR_OPTIONS: ConnectorOption[] = [
   { id: 'google_workspace', label: 'Google Workspace', note: 'Gmail + Calendar actions' },
   { id: 'microsoft_365', label: 'Microsoft 365', note: 'Outlook + Graph-backed docs and files' },
   { id: 'telegram_bot', label: 'Telegram Bot', note: 'Bot token + chat delivery' },
+  { id: 'wechat_work', label: 'WeChat Work', note: 'Webhook alert delivery' },
   { id: 'whatsapp_twilio', label: 'WhatsApp (Twilio)', note: 'Twilio WhatsApp messaging' },
   { id: 'discord_bot', label: 'Discord Bot', note: 'Bot token + channel routing' },
   { id: 'instagram_business', label: 'Instagram Business', note: 'Business token + account routing' },
@@ -947,6 +949,7 @@ export const DEFAULT_CONNECTOR_LABELS: Record<ConnectorId, string> = {
   google_workspace: 'My Google Workspace',
   microsoft_365: 'My Microsoft 365',
   telegram_bot: 'My Telegram Bot',
+  wechat_work: 'My WeChat Work',
   whatsapp_twilio: 'My WhatsApp Twilio',
   discord_bot: 'My Discord Bot',
   instagram_business: 'My Instagram Business',
@@ -973,6 +976,14 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         detail: 'Useful for alerts, approvals, and direct assistant delivery.',
         status: 'native_now',
         connector: 'telegram_bot',
+      },
+      {
+        id: 'wechat_work',
+        label: 'WeChat Work',
+        note: 'Webhook alert delivery',
+        detail: 'Useful for operational alerts and live notifications inside WeChat Work.',
+        status: 'native_now',
+        connector: 'wechat_work',
       },
       {
         id: 'whatsapp_twilio',
@@ -1080,6 +1091,7 @@ export function isConnectorId(value: string): value is ConnectorId {
     value === 'google_workspace'
     || value === 'microsoft_365'
     || value === 'telegram_bot'
+    || value === 'wechat_work'
     || value === 'whatsapp_twilio'
     || value === 'discord_bot'
     || value === 'instagram_business'

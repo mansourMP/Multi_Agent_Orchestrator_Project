@@ -1,7 +1,7 @@
 'use client';
 import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Zap, Play } from 'lucide-react';
+import { Zap } from 'lucide-react';
 
 type TriggerNodeData = {
     label?: string;
@@ -10,7 +10,7 @@ type TriggerNodeData = {
 
 const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boolean }) => {
     const [isHovered, setIsHovered] = useState(false);
-    const accentColor = '#eab308'; // Yellow/gold for triggers
+    const accentColor = '#f59e0b';
 
     return (
         <div
@@ -18,75 +18,52 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
             onMouseLeave={() => setIsHovered(false)}
             style={{
                 background: 'var(--bg-surface)',
-                borderRadius: '16px',
+                borderRadius: '12px',
+                border: '1px solid rgba(15, 23, 42, 0.08)',
+                borderLeft: `4px solid ${accentColor}`,
                 boxShadow: selected
-                    ? `0 0 0 2px ${accentColor}, 0 20px 40px rgba(0,0,0,0.25), 0 0 60px ${accentColor}30`
+                    ? `0 0 0 2px ${accentColor}50, 0 14px 28px rgba(15, 23, 42, 0.14)`
                     : isHovered
-                        ? '0 12px 32px rgba(0,0,0,0.2), 0 4px 8px rgba(0,0,0,0.1)'
-                        : '0 4px 16px rgba(0,0,0,0.12), 0 2px 4px rgba(0,0,0,0.08)',
-                minWidth: '140px',
+                        ? '0 10px 22px rgba(15, 23, 42, 0.12)'
+                        : '0 6px 16px rgba(15, 23, 42, 0.08)',
+                minWidth: '220px',
                 overflow: 'hidden',
                 transition: 'all 0.2s ease',
-                transform: selected ? 'translateY(-2px)' : 'none',
+                transform: selected ? 'translateY(-2px)' : isHovered ? 'translateY(-1px)' : 'none',
+                animation: 'workflowNodeEnter 200ms ease-out both',
             }}
         >
-            {/* Gradient accent strip */}
             <div style={{
-                height: '4px',
-                background: `linear-gradient(90deg, ${accentColor}, #f59e0b)`,
-            }} />
-
-            <div style={{
-                padding: '18px 20px',
-                display: 'flex',
-                flexDirection: 'column',
+                padding: '16px',
+                display: 'grid',
+                gridTemplateColumns: '42px minmax(0, 1fr)',
                 alignItems: 'center',
-                gap: '10px',
+                gap: '12px',
             }}>
-                {/* Icon with special trigger styling */}
                 <div style={{
-                    width: 52,
-                    height: 52,
-                    borderRadius: '14px',
-                    background: `linear-gradient(135deg, ${accentColor}20 0%, ${accentColor}10 100%)`,
+                    width: 42,
+                    height: 42,
+                    borderRadius: '12px',
+                    background: `${accentColor}14`,
                     border: `1px solid ${accentColor}30`,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    position: 'relative',
                 }}>
-                    <Zap size={24} color={accentColor} strokeWidth={1.5} fill={`${accentColor}30`} />
-                    {/* Start indicator */}
-                    <div style={{
-                        position: 'absolute',
-                        top: -4,
-                        right: -4,
-                        width: 16,
-                        height: 16,
-                        borderRadius: '50%',
-                        background: accentColor,
-                        border: '2px solid var(--bg-surface)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        boxShadow: `0 2px 8px ${accentColor}50`,
-                    }}>
-                        <Play size={8} color="#fff" fill="#fff" />
-                    </div>
+                    <Zap size={20} color={accentColor} strokeWidth={1.8} />
                 </div>
 
-                <div style={{ textAlign: 'center' }}>
+                <div style={{ display: 'grid', gap: 4 }}>
                     <div style={{
                         fontSize: '14px',
-                        fontWeight: 600,
+                        fontWeight: 700,
                         color: 'var(--text-primary)',
                     }}>
                         {data.label || 'Start'}
                     </div>
                     <div style={{
-                        fontSize: '10px',
+                        fontSize: '12px',
                         color: 'var(--text-tertiary)',
-                        marginTop: '3px',
                     }}>
                         {data.triggerType || 'Webhook'}
                     </div>
@@ -101,9 +78,21 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
                     width: 12,
                     height: 12,
                     border: `3px solid ${accentColor}`,
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                 }}
             />
+
+            <style jsx>{`
+                @keyframes workflowNodeEnter {
+                    from {
+                        opacity: 0;
+                        transform: scale(0.8);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: scale(1);
+                    }
+                }
+            `}</style>
         </div>
     );
 };

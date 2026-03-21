@@ -1385,8 +1385,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (!raw.startsWith('/')) {
       setGoal(raw);
       if (!derivedSetupReady) {
-        setTopError('Setup is not complete yet. Open Setup and finish workspace access, account mode, and tools.');
-        router.push('/setup');
+        setTopError(null);
         return;
       }
       setDeckMode('inspect');
@@ -1445,8 +1444,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         setupStatus?.runtimeReady && setupStatus?.accountConnected && setupStatus?.connectionTested,
       );
       if (!commandSetupReady) {
-        setTopError('Finish Setup (workspace access, account mode, and tools) first.');
-        router.push('/setup');
+        setTopError(null);
         return;
       }
       window.setTimeout(() => {
@@ -1885,6 +1883,17 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       href: '/credentials?connector=telegram_bot&onboarding=1',
     };
   }, [derivedSetupReady]);
+  const inlineWorkbenchChatStatus = useMemo(() => {
+    if (derivedSetupReady) return null;
+    return 'To run this automation, connect Telegram first.';
+  }, [derivedSetupReady]);
+  const inlineWorkbenchChatAction = useMemo(() => {
+    if (derivedSetupReady) return null;
+    return {
+      label: 'Connect Telegram →',
+      href: '/credentials?connector=telegram_bot&onboarding=1',
+    };
+  }, [derivedSetupReady]);
 
   const appendWorkbenchAgentChat = useCallback((agentRole: string, message: WorkbenchAgentChatMessage) => {
     setWorkbenchAgentChats((current) => ({
@@ -1948,8 +1957,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
       if (detail.type === 'run_autopilot') {
         if (!derivedSetupReady) {
-          setTopError('Setup is not complete yet. Open Setup and finish workspace access, account mode, and tools.');
-          router.push('/setup');
+          setTopError(null);
           return;
         }
         void startAutopilot(experienceMode === 'simple' ? simpleChatRunOverrides : undefined);
@@ -2082,8 +2090,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const text = goal.trim();
     if (!text) return;
     if (!derivedSetupReady) {
-      setTopError('Setup is not complete yet. Open Setup and finish workspace access, account mode, and tools.');
-      router.push('/setup');
+      setTopError(null);
       return;
     }
     const now = new Date().toISOString();
@@ -2109,7 +2116,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingWorkbenchChat({ agentRole: selectedAgentRole, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text });
-  }, [appendWorkbenchAgentChat, derivedSetupReady, goal, router, selectedAgentRole, setGoal, setTopError, startAutopilot]);
+  }, [appendWorkbenchAgentChat, derivedSetupReady, goal, selectedAgentRole, setGoal, setTopError, startAutopilot]);
 
   useEffect(() => {
     if (status === 'queued_local' || status === 'running' || status === 'waiting' || status === 'error') {
@@ -2251,9 +2258,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             setupReady={setupReady}
             hasConnectedTools={connectorCredentials.length > 0}
             onRequireSetup={() => {
-              setTopError('Setup is not complete yet. Open Setup and finish workspace access, account mode, and tools.');
-              router.push('/setup');
+              setTopError(null);
             }}
+            setupGuidanceStatus={inlineWorkbenchChatStatus}
+            setupGuidanceAction={inlineWorkbenchChatAction}
             chatBusy={Boolean(pendingWorkbenchChat)}
             chatMessages={selectedWorkbenchAgentChat}
             workerOnline={controlCenter.workerOnline}

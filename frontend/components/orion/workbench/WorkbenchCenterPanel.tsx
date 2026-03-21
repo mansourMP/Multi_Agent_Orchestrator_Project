@@ -4,6 +4,7 @@ import { Fragment, createElement, useEffect, useMemo, useRef, type ReactNode, ty
 import { Bot, Camera, CheckCircle2, FileText, Globe, Send, ShieldCheck, Sparkles, Terminal } from 'lucide-react';
 import { UI, fmtTime, formatDurationMs, type AgentRoleOption, type ExecutionSummary, type LogEntry, type PackResult as PackResultType } from '@/app/page.catalog';
 import { LogViewer } from '@/components/orion/LogViewer';
+import { safeNavigate } from '@/lib/safeNavigate';
 import type { WorkbenchAgentChatMessage } from './WorkbenchControlDeck';
 
 type ApprovalQueueItem = {
@@ -131,6 +132,11 @@ type WorkbenchCenterPanelProps = {
   setupReady: boolean;
   hasConnectedTools: boolean;
   onRequireSetup: () => void;
+  setupGuidanceStatus?: string | null;
+  setupGuidanceAction?: {
+    label: string;
+    href: string;
+  } | null;
   chatBusy: boolean;
   chatMessages: WorkbenchAgentChatMessage[];
   workerOnline: number;
@@ -1309,6 +1315,8 @@ export function WorkbenchCenterPanel({
   setupReady,
   hasConnectedTools,
   onRequireSetup,
+  setupGuidanceStatus = null,
+  setupGuidanceAction = null,
   chatBusy,
   chatMessages,
   workerOnline,
@@ -1603,6 +1611,20 @@ export function WorkbenchCenterPanel({
             ) : null}
 
             {inlineProviderError ? <div className="orion-chat-inline-error">⚠ {inlineProviderError}</div> : null}
+            {setupGuidanceStatus ? (
+              <div className="orion-chat-v2-status-line" style={{ marginBottom: 8 }}>
+                <span>⚠ {setupGuidanceStatus}</span>
+                {setupGuidanceAction ? (
+                  <button
+                    type="button"
+                    className="orion-chat-v2-status-action"
+                    onClick={() => safeNavigate(setupGuidanceAction.href)}
+                  >
+                    {setupGuidanceAction.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className={`orion-chat-composer${renderedSimpleChatMessages.length > 0 ? ' is-docked' : ''}`}>
               <div className="orion-chat-composer-row">
@@ -1776,6 +1798,20 @@ export function WorkbenchCenterPanel({
             </div>
 
             <div style={{ display: 'grid', gap: 10 }}>
+              {setupGuidanceStatus ? (
+                <div className="orion-chat-v2-status-line">
+                  <span>⚠ {setupGuidanceStatus}</span>
+                  {setupGuidanceAction ? (
+                    <button
+                      type="button"
+                      className="orion-chat-v2-status-action"
+                      onClick={() => safeNavigate(setupGuidanceAction.href)}
+                    >
+                      {setupGuidanceAction.label}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <textarea
                 ref={primaryGoalRef}
                 value={goal}

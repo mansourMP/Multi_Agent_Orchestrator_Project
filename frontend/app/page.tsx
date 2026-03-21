@@ -1740,10 +1740,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
     if (!raw.startsWith('/')) {
       setGoal(raw);
-      if (!derivedSetupReady) {
-        setTopError(null);
-        return;
-      }
       setDeckMode('inspect');
       window.setTimeout(() => {
         void startAutopilot();
@@ -1796,20 +1792,13 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       if (nextGoal) {
         setGoal(nextGoal);
       }
-      const commandSetupReady = Boolean(
-        setupStatus?.runtimeReady && setupStatus?.accountConnected && setupStatus?.connectionTested,
-      );
-      if (!commandSetupReady) {
-        setTopError(null);
-        return;
-      }
       window.setTimeout(() => {
         void startAutopilot();
       }, 0);
       return;
     }
     setTopError('Unknown command. Try /help.');
-  }, [derivedSetupReady, goal, router, setGoal, setTopError, setupStatus, singleAgentMode, startAutopilot]);
+  }, [goal, router, setGoal, setTopError, singleAgentMode, startAutopilot]);
 
   useEffect(() => {
     const handleGlobalCommandDetail = (detail: PlatformGlobalCommandEventDetail | undefined) => {
@@ -1933,10 +1922,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
-    if (!derivedSetupReady) {
-      setTopError(null);
-      return;
-    }
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -1960,15 +1945,11 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingSimpleChat({ sessionId, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text, ...simpleChatRunOverrides });
-  }, [appendSimpleChatMessage, derivedSetupReady, goal, selectedChatSession?.id, setGoal, setTopError, simpleChatRunOverrides, startAutopilot]);
+  }, [appendSimpleChatMessage, goal, selectedChatSession?.id, setGoal, simpleChatRunOverrides, startAutopilot]);
 
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
     if (!text) return;
-    if (!derivedSetupReady) {
-      setTopError(null);
-      return;
-    }
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -1992,7 +1973,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingWorkbenchChat({ agentRole: selectedAgentRole, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text });
-  }, [appendWorkbenchAgentChat, derivedSetupReady, goal, selectedAgentRole, setGoal, setTopError, startAutopilot]);
+  }, [appendWorkbenchAgentChat, goal, selectedAgentRole, setGoal, startAutopilot]);
 
   useEffect(() => {
     if (status === 'queued_local' || status === 'running' || status === 'waiting' || status === 'error') {

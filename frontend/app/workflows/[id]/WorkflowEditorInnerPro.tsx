@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BrainCircuit, CheckCircle2, Loader2, Play, Save, Send, ShieldCheck, UploadCloud, Zap } from 'lucide-react';
-import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Loader2, Play, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
+import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
@@ -17,6 +17,10 @@ import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import ActionNode from '@/components/nodes/ActionNode';
+import HttpRequestNode from '@/components/nodes/HttpRequestNode';
+import ConditionNode from '@/components/nodes/ConditionNode';
+import TransformNode from '@/components/nodes/TransformNode';
+import CodeNode from '@/components/nodes/CodeNode';
 
 const ORION_API_URL =
     process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
@@ -122,7 +126,7 @@ interface AutopilotPack {
     prompt: string;
 }
 
-type CanvasNodeType = 'trigger' | 'agent' | 'action';
+type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
 type TriggerKind = 'schedule' | 'webhook' | 'manual';
 type ActionKind = 'send_wechat' | 'send_telegram' | 'send_whatsapp' | 'send_email' | 'write_file';
 
@@ -148,10 +152,38 @@ type ActionCanvasData = {
     actionType: ActionKind;
 };
 
-type CanvasNodeData = TriggerCanvasData | AgentCanvasData | ActionCanvasData;
+type HttpRequestCanvasData = {
+    label: string;
+    method: string;
+    url: string;
+};
+
+type ConditionCanvasData = {
+    label: string;
+    condition: string;
+};
+
+type TransformCanvasData = {
+    label: string;
+    mapping: string;
+};
+
+type CodeCanvasData = {
+    label: string;
+    summary: string;
+    code: string;
+};
+
+type CanvasNodeData =
+    | TriggerCanvasData
+    | AgentCanvasData
+    | ActionCanvasData
+    | HttpRequestCanvasData
+    | ConditionCanvasData
+    | TransformCanvasData
+    | CodeCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
-const CANVAS_NODE_WIDTH = 220;
 const CANVAS_NODE_X = 265;
 const CANVAS_NODE_TOP = 50;
 const CANVAS_NODE_GAP = 170;
@@ -198,7 +230,26 @@ const CANVAS_NODE_TYPES: NodeTypes = {
     trigger: TriggerNode,
     agent: AgentNode,
     action: ActionNode,
+    http_request: HttpRequestNode,
+    condition: ConditionNode,
+    transform: TransformNode,
+    code: CodeNode,
 };
+
+const CANVAS_NODE_LIBRARY: Array<{
+    type: CanvasNodeType;
+    label: string;
+    accent: string;
+    icon: React.ReactNode;
+}> = [
+    { type: 'trigger', label: 'Trigger', accent: '#f59e0b', icon: <Zap size={14} /> },
+    { type: 'agent', label: 'Agent', accent: '#7c3aed', icon: <BrainCircuit size={14} /> },
+    { type: 'action', label: 'Action', accent: '#10b981', icon: <Send size={14} /> },
+    { type: 'http_request', label: 'HTTP Request', accent: '#6b7280', icon: <Globe size={14} /> },
+    { type: 'condition', label: 'If / Condition', accent: '#f59e0b', icon: <GitBranch size={14} /> },
+    { type: 'transform', label: 'Transform', accent: '#3b82f6', icon: <Shuffle size={14} /> },
+    { type: 'code', label: 'Code', accent: '#1f2937', icon: <Code2 size={14} /> },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -213,6 +264,32 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
         return {
             label: 'Start Trigger',
             triggerType: 'manual',
+        };
+    }
+    if (type === 'http_request') {
+        return {
+            label: 'HTTP Request',
+            method: 'GET',
+            url: 'https://api.example.com',
+        };
+    }
+    if (type === 'condition') {
+        return {
+            label: 'Condition',
+            condition: 'occupancy_count > 10',
+        };
+    }
+    if (type === 'transform') {
+        return {
+            label: 'Transform',
+            mapping: 'Map fields to output payload',
+        };
+    }
+    if (type === 'code') {
+        return {
+            label: 'Code',
+            summary: 'Run custom logic',
+            code: 'return input;',
         };
     }
     if (type === 'action') {
@@ -259,6 +336,36 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
                     : 'send_whatsapp',
         };
     }
+    if (type === 'http_request') {
+        const base: HttpRequestCanvasData = { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' };
+        return {
+            label: String(raw.label || base.label).trim() || base.label,
+            method: String(raw.method || base.method).trim().toUpperCase() || base.method,
+            url: String(raw.url || base.url).trim() || base.url,
+        };
+    }
+    if (type === 'condition') {
+        const base: ConditionCanvasData = { label: 'Condition', condition: 'occupancy_count > 10' };
+        return {
+            label: String(raw.label || base.label).trim() || base.label,
+            condition: String(raw.condition || base.condition).trim() || base.condition,
+        };
+    }
+    if (type === 'transform') {
+        const base: TransformCanvasData = { label: 'Transform', mapping: 'Map fields to output payload' };
+        return {
+            label: String(raw.label || base.label).trim() || base.label,
+            mapping: String(raw.mapping || base.mapping).trim() || base.mapping,
+        };
+    }
+    if (type === 'code') {
+        const base: CodeCanvasData = { label: 'Code', summary: 'Run custom logic', code: 'return input;' };
+        return {
+            label: String(raw.label || base.label).trim() || base.label,
+            summary: String(raw.summary || base.summary).trim() || base.summary,
+            code: String(raw.code || base.code),
+        };
+    }
     const base: AgentCanvasData = {
         label: 'AI Agent',
         modelId: 'gpt-4.1',
@@ -283,42 +390,13 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     };
 }
 
-function layoutCanvasNodes(nodes: CanvasWorkflowNode[]): CanvasWorkflowNode[] {
-    return nodes.map((node, index) => ({
-        ...node,
-        position: {
-            x: CANVAS_NODE_X,
-            y: CANVAS_NODE_TOP + (index * CANVAS_NODE_GAP),
-        },
-    }));
-}
-
-function buildLinearEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
-    return nodes.slice(0, -1).map((node, index) => ({
-        id: `edge-${String(node.id)}-${String(nodes[index + 1].id)}`,
-        source: String(node.id),
-        target: String(nodes[index + 1].id),
-        sourceHandle: 'bottom',
-        targetHandle: 'top',
-        type: 'smoothstep',
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
-        animated: true,
-        selectable: false,
-        style: {
-            stroke: '#7c3aed',
-            strokeWidth: 2,
-            opacity: 0.7,
-        },
-    }));
-}
-
 function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
     if (!Array.isArray(rawNodes)) return [];
     const parsed: CanvasWorkflowNode[] = [];
     for (const item of rawNodes) {
         if (!isRecord(item)) continue;
         const type = String(item.type || '').trim().toLowerCase();
-        if (type !== 'trigger' && type !== 'agent' && type !== 'action') continue;
+        if (type !== 'trigger' && type !== 'agent' && type !== 'action' && type !== 'http_request' && type !== 'condition' && type !== 'transform' && type !== 'code') continue;
         const position = isRecord(item.position) ? item.position : {};
         const x = Number(position.x);
         const y = Number(position.y);
@@ -326,7 +404,7 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
             id: String(item.id || makeNodeId(type)).trim() || makeNodeId(type),
             type,
             position: {
-                x: Number.isFinite(x) ? x : -(CANVAS_NODE_WIDTH / 2),
+                x: Number.isFinite(x) ? x : CANVAS_NODE_X,
                 y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + (parsed.length * CANVAS_NODE_GAP),
             },
             data: normalizeCanvasNodeData(type, item.data),
@@ -335,72 +413,35 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
     return parsed;
 }
 
+function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
+    if (!Array.isArray(rawEdges)) return [];
+    const nodeIds = new Set(nodes.map((node) => String(node.id)));
+    const parsed: CanvasWorkflowEdge[] = [];
+    for (const item of rawEdges) {
+        if (!isRecord(item)) continue;
+        const source = String(item.source || '').trim();
+        const target = String(item.target || '').trim();
+        if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) continue;
+        parsed.push({
+            id: String(item.id || `edge-${source}-${target}-${parsed.length + 1}`),
+            source,
+            target,
+            sourceHandle: typeof item.sourceHandle === 'string' ? item.sourceHandle : undefined,
+            targetHandle: typeof item.targetHandle === 'string' ? item.targetHandle : undefined,
+        });
+    }
+    return parsed;
+}
+
 function buildDefaultCanvasNodes(): CanvasWorkflowNode[] {
-    return layoutCanvasNodes([
+    return [
         {
             id: 'trigger-default',
             type: 'trigger',
             position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP },
             data: { label: 'Start Trigger', triggerType: 'manual' },
         },
-        {
-            id: 'agent-default',
-            type: 'agent',
-            position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP + CANVAS_NODE_GAP },
-            data: {
-                label: 'AI Agent',
-                modelId: 'gpt-4.1',
-                prompt: 'Describe the task for this agent.',
-                tools: [],
-                provider: 'openai',
-                role: 'Worker',
-                duty: 'Complete the assigned task clearly and reliably.',
-                status: 'ready',
-                description: 'Autonomous reasoning',
-            },
-        },
-        {
-            id: 'action-default',
-            type: 'action',
-            position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP + (CANVAS_NODE_GAP * 2) },
-            data: { label: 'Send Telegram', actionType: 'send_telegram' },
-        },
-    ]);
-}
-
-function resolveCanvasCenterX(
-    reactFlow: Pick<ReactFlowInstance<CanvasWorkflowNode, Edge>, 'screenToFlowPosition'>,
-    host: HTMLDivElement | null,
-): number | null {
-    const rect = host?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return null;
-    const center = reactFlow.screenToFlowPosition({
-        x: rect.left + (rect.width / 2),
-        y: rect.top + (rect.height / 2),
-    });
-    return Number.isFinite(center.x) ? center.x : null;
-}
-
-function CanvasViewportCenter({
-    hostRef,
-    onCenterChange,
-}: {
-    hostRef: React.RefObject<HTMLDivElement | null>;
-    onCenterChange: (centerX: number) => void;
-}) {
-    const reactFlow = useReactFlow<CanvasWorkflowNode, Edge>();
-    const nodesInitialized = useNodesInitialized();
-    const hasSyncedRef = useRef(false);
-
-    useEffect(() => {
-        if (!nodesInitialized || hasSyncedRef.current) return;
-        const centerX = resolveCanvasCenterX(reactFlow, hostRef.current);
-        if (centerX === null) return;
-        hasSyncedRef.current = true;
-        onCenterChange(centerX);
-    }, [hostRef, nodesInitialized, onCenterChange, reactFlow]);
-
-    return null;
+    ];
 }
 
 function serializeCanvasNodes(nodes: CanvasWorkflowNode[]): Array<Record<string, unknown>> {
@@ -506,14 +547,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const streamRef = useRef<EventSource | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
     const canvasHostRef = useRef<HTMLDivElement | null>(null);
+    const canvasSearchInputRef = useRef<HTMLInputElement | null>(null);
     const onboardingToastShownRef = useRef(false);
     const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>(() => {
         return buildDefaultCanvasNodes();
     });
-    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>(() => {
-        const initialNodes = buildDefaultCanvasNodes();
-        return buildLinearEdges(initialNodes);
-    });
+    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>([]);
 
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -521,7 +560,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [workspaceId, setWorkspaceId] = useState<string>('default');
     const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
     const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+    const [canvasNodeSearch, setCanvasNodeSearch] = useState<{
+        screenX: number;
+        screenY: number;
+        flowX: number;
+        flowY: number;
+        query: string;
+    } | null>(null);
 
     const [runStatus, setRunStatus] = useState<RunStatus>('idle');
     const [runId, setRunId] = useState<string | null>(null);
@@ -703,6 +750,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 id: edge.id,
                 source: edge.source,
                 target: edge.target,
+                sourceHandle: edge.sourceHandle,
+                targetHandle: edge.targetHandle,
             })),
             meta: {
                 ...baseMeta,
@@ -831,14 +880,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 credentialId: typeof connectionStored?.credentialId === 'string' ? connectionStored.credentialId : '',
             });
             const parsedNodes = parseCanvasNodes(wf?.definition?.nodes);
-            const orderedNodes = parsedNodes.length > 0
-                ? layoutCanvasNodes(
-                    [...parsedNodes].sort((left, right) => (left.position.y - right.position.y) || (left.position.x - right.position.x)),
-                )
-                : buildDefaultCanvasNodes();
-            setCanvasNodes(orderedNodes);
-            setCanvasEdges(buildLinearEdges(orderedNodes));
-            setSelectedNodeId(orderedNodes[0]?.id || null);
+            const nextNodes = parsedNodes.length > 0 ? parsedNodes : buildDefaultCanvasNodes();
+            setCanvasNodes(nextNodes);
+            setCanvasEdges(parseCanvasEdges(wf?.definition?.edges, nextNodes));
+            setSelectedNodeId(nextNodes[0]?.id || null);
+            setSelectedEdgeId(null);
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Load Failed', message: getErrorMessage(error, 'Unable to load workflow.') });
         } finally {
@@ -929,29 +975,21 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             type: 'smoothstep' as const,
             animated: runStatus === 'running',
             style: {
-                stroke: '#7c3aed',
-                strokeWidth: 2,
-                opacity: 0.7,
+                stroke: selectedEdgeId === edge.id ? '#5b21b6' : '#7c3aed',
+                strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
+                opacity: selectedEdgeId === edge.id ? 1 : 0.7,
             },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
         })),
-        [canvasEdges, runStatus],
+        [canvasEdges, runStatus, selectedEdgeId],
     );
-
-    const handleCanvasCenterChange = useCallback(() => {
-        setCanvasNodes((prev) => layoutCanvasNodes(prev));
-    }, []);
 
     const handleCanvasInit = useCallback((instance: ReactFlowInstance<CanvasWorkflowNode, Edge>) => {
         flowInstanceRef.current = instance;
-        const nextCenterX = resolveCanvasCenterX(instance, canvasHostRef.current);
-        if (nextCenterX !== null) {
-            setCanvasNodes((prev) => layoutCanvasNodes(prev));
-        }
         instance.fitView({ padding: 0.4, duration: 400, maxZoom: 1.1 });
     }, []);
 
-    const addCanvasNode = useCallback((type: CanvasNodeType) => {
+    const addCanvasNode = useCallback((type: CanvasNodeType, position?: { x: number; y: number }) => {
         setCanvasNodes((prev) => {
             const maxY = prev.length > 0 ? Math.max(...prev.map((node) => Number(node.position.y) || CANVAS_NODE_TOP)) : (CANVAS_NODE_TOP - CANVAS_NODE_GAP);
             const nextNodes = [
@@ -959,14 +997,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 {
                     id: makeNodeId(type),
                     type,
-                    position: { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
+                    position: position || { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
                     data: defaultNodeData(type),
                 },
             ];
-            setCanvasEdges(buildLinearEdges(nextNodes));
             setSelectedNodeId(nextNodes[nextNodes.length - 1]?.id || null);
+            setSelectedEdgeId(null);
             return nextNodes;
         });
+        setCanvasNodeSearch(null);
     }, []);
 
     const updateSelectedNode = useCallback((updater: (node: CanvasWorkflowNode) => CanvasWorkflowNode) => {
@@ -978,23 +1017,71 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         setCanvasNodes((prev) => applyNodeChanges(changes, prev));
     }, []);
 
+    const handleCanvasEdgesChange = useCallback((changes: EdgeChange<CanvasWorkflowEdge>[]) => {
+        setCanvasEdges((prev) => applyEdgeChanges(changes, prev));
+    }, []);
+
+    const handleCanvasConnect = useCallback((connection: Connection) => {
+        setCanvasEdges((prev) => addEdge({
+            ...connection,
+            id: `edge-${connection.source || 'source'}-${connection.target || 'target'}-${Date.now()}`,
+            type: 'smoothstep',
+        }, prev));
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+        setCanvasNodeSearch(null);
+    }, []);
+
+    const handleCanvasPaneClick = useCallback((event: React.MouseEvent) => {
+        setSelectedNodeId(null);
+        setSelectedEdgeId(null);
+        const hostRect = canvasHostRef.current?.getBoundingClientRect();
+        const reactFlow = flowInstanceRef.current;
+        if (!hostRect || !reactFlow) return;
+        const flowPoint = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        setCanvasNodeSearch({
+            screenX: Math.max(12, event.clientX - hostRect.left),
+            screenY: Math.max(12, event.clientY - hostRect.top),
+            flowX: flowPoint.x,
+            flowY: flowPoint.y,
+            query: '',
+        });
+    }, []);
+
+    const filteredCanvasNodeLibrary = useMemo(() => {
+        const query = String(canvasNodeSearch?.query || '').trim().toLowerCase();
+        if (!query) return CANVAS_NODE_LIBRARY;
+        return CANVAS_NODE_LIBRARY.filter((item) => item.label.toLowerCase().includes(query));
+    }, [canvasNodeSearch?.query]);
+
     useEffect(() => {
-        if (!isCanvasMode || !selectedNodeId) return;
+        if (!canvasNodeSearch) return;
+        window.setTimeout(() => canvasSearchInputRef.current?.focus(), 0);
+    }, [canvasNodeSearch]);
+
+    useEffect(() => {
+        if (!isCanvasMode) return;
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Backspace') return;
             const tagName = (document.activeElement?.tagName || '').toLowerCase();
             if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
             event.preventDefault();
+            if (selectedEdgeId) {
+                setCanvasEdges((prev) => prev.filter((edge) => edge.id !== selectedEdgeId));
+                setSelectedEdgeId(null);
+                return;
+            }
+            if (!selectedNodeId) return;
             setCanvasNodes((prev) => {
                 const remaining = prev.filter((node) => node.id !== selectedNodeId);
-                setCanvasEdges(buildLinearEdges(remaining));
+                setCanvasEdges((edges) => edges.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
                 setSelectedNodeId(remaining[0]?.id || null);
                 return remaining;
             });
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isCanvasMode, selectedNodeId]);
+    }, [isCanvasMode, selectedEdgeId, selectedNodeId]);
 
     const handlePublish = useCallback(async () => {
         if (!workflowId) return;
@@ -1624,42 +1711,25 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     >
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
                             <div className="workflow-pro-section-title">Palette</div>
-                            <button
-                                className="btn-secondary workflow-canvas-palette-btn"
-                                onClick={() => addCanvasNode('trigger')}
-                                style={{ ['--workflow-palette-accent' as string]: '#f59e0b' }}
-                            >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b' }}>
-                                    <Zap size={14} />
-                                </span>
-                                Trigger
-                            </button>
-                            <button
-                                className="btn-secondary workflow-canvas-palette-btn"
-                                onClick={() => addCanvasNode('agent')}
-                                style={{ ['--workflow-palette-accent' as string]: '#7c3aed' }}
-                            >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(124, 58, 237, 0.12)', color: '#7c3aed' }}>
-                                    <BrainCircuit size={14} />
-                                </span>
-                                Agent
-                            </button>
-                            <button
-                                className="btn-secondary workflow-canvas-palette-btn"
-                                onClick={() => addCanvasNode('action')}
-                                style={{ ['--workflow-palette-accent' as string]: '#10b981' }}
-                            >
-                                <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}>
-                                    <Send size={14} />
-                                </span>
-                                Action
-                            </button>
+                            {CANVAS_NODE_LIBRARY.map((item) => (
+                                <button
+                                    key={item.type}
+                                    className="btn-secondary workflow-canvas-palette-btn"
+                                    onClick={() => addCanvasNode(item.type)}
+                                    style={{ ['--workflow-palette-accent' as string]: item.accent }}
+                                >
+                                    <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${item.accent}1f`, color: item.accent }}>
+                                        {item.icon}
+                                    </span>
+                                    {item.label}
+                                </button>
+                            ))}
                             <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.5 }}>
-                                Click a node type to add it. Drag nodes to reposition them on the canvas. Press Backspace to delete the selected node.
+                                Click a node type to add it, or click empty canvas to search and place a node. Drag handles to connect steps. Press Backspace to delete the selected node or edge.
                             </div>
                         </section>
 
-                        <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex' }}>
+                        <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex', position: 'relative' }}>
                             <ReactFlow
                                 style={{ flex: 1, minHeight: 0, height: 'calc(100vh - 120px)' }}
                                 nodes={canvasNodes}
@@ -1669,21 +1739,38 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 fitViewOptions={{ padding: 0.4 }}
                                 onInit={handleCanvasInit}
                                 onNodesChange={handleCanvasNodesChange}
-                                onNodeClick={(_event: unknown, node: CanvasWorkflowNode) => setSelectedNodeId(node.id)}
-                                onPaneClick={() => setSelectedNodeId(null)}
+                                onEdgesChange={handleCanvasEdgesChange}
+                                onConnect={handleCanvasConnect}
+                                onNodeClick={(_event: unknown, node: CanvasWorkflowNode) => {
+                                    setSelectedNodeId(node.id);
+                                    setSelectedEdgeId(null);
+                                    setCanvasNodeSearch(null);
+                                }}
+                                onPaneClick={handleCanvasPaneClick}
+                                onEdgeClick={(_event: unknown, edge: CanvasWorkflowEdge) => {
+                                    setSelectedNodeId(null);
+                                    setSelectedEdgeId(edge.id);
+                                    setCanvasNodeSearch(null);
+                                }}
+                                onEdgeContextMenu={(event: React.MouseEvent, edge: CanvasWorkflowEdge) => {
+                                    event.preventDefault();
+                                    setCanvasEdges((prev) => prev.filter((item) => item.id !== edge.id));
+                                    setSelectedEdgeId((prev) => (prev === edge.id ? null : prev));
+                                }}
                                 panOnDrag
                                 zoomOnScroll
                                 zoomOnPinch
                                 snapToGrid
                                 snapGrid={[20, 20]}
-                                nodesConnectable={false}
+                                nodesConnectable
                                 elementsSelectable
+                                edgesFocusable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
                                     type: 'smoothstep',
                                     animated: runStatus === 'running',
                                     markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
-                                    selectable: false,
+                                    selectable: true,
                                     style: { stroke: '#7c3aed', strokeWidth: 2, opacity: 0.7 },
                                 }}
                             >
@@ -1693,9 +1780,59 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     size={1.5}
                                     color="#c4c4c4"
                                 />
-                                <CanvasViewportCenter hostRef={canvasHostRef} onCenterChange={handleCanvasCenterChange} />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>
+                            {canvasNodeSearch ? (
+                                <div
+                                    className="workflow-pro-panel"
+                                    style={{
+                                        position: 'absolute',
+                                        top: Math.max(12, Math.min(canvasNodeSearch.screenY, (canvasHostRef.current?.clientHeight || 0) - 220)),
+                                        left: Math.max(12, Math.min(canvasNodeSearch.screenX, (canvasHostRef.current?.clientWidth || 0) - 240)),
+                                        width: 220,
+                                        padding: 10,
+                                        zIndex: 20,
+                                        display: 'grid',
+                                        gap: 8,
+                                        boxShadow: '0 18px 40px rgba(15, 23, 42, 0.18)',
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <Search size={14} color="var(--text-tertiary)" />
+                                        <input
+                                            ref={canvasSearchInputRef}
+                                            value={canvasNodeSearch.query}
+                                            onChange={(event) => setCanvasNodeSearch((prev) => prev ? { ...prev, query: event.target.value } : prev)}
+                                            placeholder="Search nodes"
+                                            style={{ ...workflowInputSurfaceStyle, minWidth: 0 }}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="btn-ghost"
+                                            onClick={() => setCanvasNodeSearch(null)}
+                                            style={{ padding: 0, width: 28, minWidth: 28 }}
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+                                        {filteredCanvasNodeLibrary.map((item) => (
+                                            <button
+                                                key={item.type}
+                                                type="button"
+                                                className="btn-secondary"
+                                                onClick={() => addCanvasNode(item.type, { x: canvasNodeSearch.flowX, y: canvasNodeSearch.flowY })}
+                                                style={{ justifyContent: 'flex-start', borderLeft: `3px solid ${item.accent}` }}
+                                            >
+                                                {item.label}
+                                            </button>
+                                        ))}
+                                        {filteredCanvasNodeLibrary.length === 0 ? (
+                                            <div style={{ ...workflowMutedCopyStyle, padding: '4px 2px' }}>No matching nodes</div>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            ) : null}
                         </section>
 
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
@@ -1792,6 +1929,81 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                                 <option value="write_file">Write File</option>
                                             </select>
                                         </div>
+                                    ) : null}
+
+                                    {selectedNode.type === 'http_request' ? (
+                                        <>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Method</label>
+                                                <select
+                                                    value={String((selectedNode.data as HttpRequestCanvasData).method || 'GET')}
+                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, method: e.target.value } }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                >
+                                                    <option value="GET">GET</option>
+                                                    <option value="POST">POST</option>
+                                                    <option value="PUT">PUT</option>
+                                                    <option value="PATCH">PATCH</option>
+                                                    <option value="DELETE">DELETE</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>URL</label>
+                                                <input
+                                                    value={String((selectedNode.data as HttpRequestCanvasData).url || '')}
+                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, url: e.target.value } }))}
+                                                    placeholder="https://api.example.com"
+                                                    style={workflowInputSurfaceStyle}
+                                                />
+                                            </div>
+                                        </>
+                                    ) : null}
+
+                                    {selectedNode.type === 'condition' ? (
+                                        <div>
+                                            <label style={workflowLabelStyle}>Condition</label>
+                                            <input
+                                                value={String((selectedNode.data as ConditionCanvasData).condition || '')}
+                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, condition: e.target.value } }))}
+                                                placeholder="status === 'open'"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                    ) : null}
+
+                                    {selectedNode.type === 'transform' ? (
+                                        <div>
+                                            <label style={workflowLabelStyle}>Mapping</label>
+                                            <input
+                                                value={String((selectedNode.data as TransformCanvasData).mapping || '')}
+                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, mapping: e.target.value } }))}
+                                                placeholder="Map fields to output payload"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                    ) : null}
+
+                                    {selectedNode.type === 'code' ? (
+                                        <>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Summary</label>
+                                                <input
+                                                    value={String((selectedNode.data as CodeCanvasData).summary || '')}
+                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, summary: e.target.value } }))}
+                                                    placeholder="Normalize data"
+                                                    style={workflowInputSurfaceStyle}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Code</label>
+                                                <textarea
+                                                    value={String((selectedNode.data as CodeCanvasData).code || '')}
+                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, code: e.target.value } }))}
+                                                    rows={5}
+                                                    style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                                />
+                                            </div>
+                                        </>
                                     ) : null}
                                 </>
                             )}

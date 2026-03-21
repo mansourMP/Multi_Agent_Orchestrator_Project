@@ -69,17 +69,7 @@ export default function Sidebar() {
     const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
     const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
     const [selectedChatSessionId, setSelectedChatSessionId] = useState<string | null>(null);
-    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>(() => {
-        if (typeof window === 'undefined') return [];
-        try {
-            const raw = window.sessionStorage.getItem(SIDEBAR_SOLUTIONS_CACHE_KEY);
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? (parsed as InstalledSolution[]) : [];
-        } catch {
-            return [];
-        }
-    });
+    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>([]);
 
     useEffect(() => {
         let alive = true;

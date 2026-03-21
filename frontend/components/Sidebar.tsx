@@ -312,7 +312,6 @@ export default function Sidebar() {
                                         aria-expanded={isChatItem ? chatSessionsOpen : undefined}
                                     >
                                         <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
-                                        <span className="sidebar-rail-label">{item.label}</span>
                                         {typeof item.badge === 'number' && item.badge > 0 ? (
                                             <span className="sidebar-icon-badge" aria-hidden>
                                                 {item.badge > 99 ? '99+' : item.badge}

@@ -234,7 +234,6 @@ function resolveAssistantLifecycle(status: ChatMessageRecord['status']): { label
   if (status === 'running') return { label: 'Working', tone: 'working' };
   if (status === 'waiting') return { label: 'Needs approval', tone: 'approval' };
   if (status === 'error') return { label: 'Failed', tone: 'failed' };
-  if (status === 'completed') return { label: 'Done', tone: 'done' };
   return null;
 }
 

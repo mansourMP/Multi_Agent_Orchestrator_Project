@@ -1653,12 +1653,27 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     () => ({
       agentRole: simpleChatRuntimeRole,
       metadata: {
+        outcome_pack: undefined,
+        outcome_pack_label: undefined,
+        outcome_scope: undefined,
+        pack_inputs: undefined,
         assistant_profile_id: defaultAssistantProfile.id,
         assistant_profile_label: defaultAssistantProfile.label,
         assistant_profile_subtitle: defaultAssistantProfile.subtitle,
       },
     }),
     [defaultAssistantProfile, simpleChatRuntimeRole],
+  );
+  const directAgentRunOverrides = useMemo(
+    () => ({
+      metadata: {
+        outcome_pack: undefined,
+        outcome_pack_label: undefined,
+        outcome_scope: undefined,
+        pack_inputs: undefined,
+      },
+    }),
+    [],
   );
   const selectedWorkbenchAgentChat = useMemo(
     () => workbenchAgentChats[selectedAgentRole] || [],
@@ -1742,7 +1757,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setGoal(raw);
       setDeckMode('inspect');
       window.setTimeout(() => {
-        void startAutopilot();
+        void startAutopilot(directAgentRunOverrides);
       }, 0);
       return;
     }
@@ -1793,12 +1808,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         setGoal(nextGoal);
       }
       window.setTimeout(() => {
-        void startAutopilot();
+        void startAutopilot(directAgentRunOverrides);
       }, 0);
       return;
     }
     setTopError('Unknown command. Try /help.');
-  }, [goal, router, setGoal, setTopError, singleAgentMode, startAutopilot]);
+  }, [directAgentRunOverrides, goal, router, setGoal, setTopError, singleAgentMode, startAutopilot]);
 
   useEffect(() => {
     const handleGlobalCommandDetail = (detail: PlatformGlobalCommandEventDetail | undefined) => {
@@ -1825,7 +1840,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           setTopError(null);
           return;
         }
-        void startAutopilot(experienceMode === 'simple' ? simpleChatRunOverrides : undefined);
+        void startAutopilot(experienceMode === 'simple' ? simpleChatRunOverrides : directAgentRunOverrides);
       }
     };
 
@@ -1854,7 +1869,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       window.removeEventListener(GLOBAL_COMMAND_EVENT, onGlobalCommand as EventListener);
       window.removeEventListener(LEGACY_ORION_GLOBAL_COMMAND_EVENT, onGlobalCommand as EventListener);
     };
-  }, [derivedSetupReady, experienceMode, router, setTopError, simpleChatRunOverrides, startAutopilot]);
+  }, [derivedSetupReady, directAgentRunOverrides, experienceMode, router, setTopError, simpleChatRunOverrides, startAutopilot]);
 
   useEffect(() => {
     if (!pendingSimpleChat) return;
@@ -1972,8 +1987,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     appendWorkbenchAgentChat(selectedAgentRole, placeholder);
     setPendingWorkbenchChat({ agentRole: selectedAgentRole, placeholderId, runId: null });
     setGoal('');
-    await startAutopilot({ goal: text });
-  }, [appendWorkbenchAgentChat, goal, selectedAgentRole, setGoal, startAutopilot]);
+    await startAutopilot({ goal: text, ...directAgentRunOverrides });
+  }, [appendWorkbenchAgentChat, directAgentRunOverrides, goal, selectedAgentRole, setGoal, startAutopilot]);
 
   useEffect(() => {
     if (status === 'queued_local' || status === 'running' || status === 'waiting' || status === 'error') {

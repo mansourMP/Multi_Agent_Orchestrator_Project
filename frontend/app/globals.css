@@ -3294,14 +3294,14 @@ a.orion-list-row {
 .sidebar-nav-btn.is-rail {
   width: var(--sidebar-rail-size);
   max-width: var(--sidebar-rail-size);
-  min-height: 58px;
+  min-height: var(--sidebar-rail-size);
   margin: 0 auto 5px auto;
-  padding: 6px 4px;
+  padding: 0;
   border-radius: var(--btn-radius);
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 0;
   background: transparent;
   border-color: transparent;
   overflow: visible;
@@ -3376,7 +3376,7 @@ body.orion-chat-home .sidebar-brandmark {
 }
 
 .sidebar-rail-label {
-  display: block;
+  display: none;
   max-width: 64px;
   font-size: 10px;
   font-weight: 650;
@@ -3533,14 +3533,6 @@ body.orion-chat-home .sidebar-brandmark {
 
 .sidebar-nav-btn.is-rail.is-app.is-active .sidebar-app-glyph {
   color: var(--text-primary);
-}
-
-.sidebar-nav-btn.is-rail:hover .sidebar-rail-label {
-  color: var(--text-primary);
-}
-
-.sidebar-nav-btn.is-rail.is-active .sidebar-rail-label {
-  color: #ffffff;
 }
 
 .sidebar-nav-btn.is-collapsed {

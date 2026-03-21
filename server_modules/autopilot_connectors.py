@@ -950,6 +950,7 @@ def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[st
         out = dict(item) if isinstance(item, dict) else {}
     return {
         "active": bool(out.get("stage")),
+        "intent": str(out.get("intent") or "").strip().upper() or "CAMERA_MONITOR",
         "stage": str(out.get("stage") or "").strip(),
         "original_prompt": str(out.get("original_prompt") or "").strip(),
         "space_name": str(out.get("space_name") or "").strip(),
@@ -957,7 +958,14 @@ def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[st
     }
 
 
-def _set_telegram_camera_setup_state(workspace_id: str, chat_id: str, stage: str, original_prompt: str, space_name: str = "") -> Dict[str, Any]:
+def _set_telegram_camera_setup_state(
+    workspace_id: str,
+    chat_id: str,
+    stage: str,
+    original_prompt: str,
+    space_name: str = "",
+    intent: str = "CAMERA_MONITOR",
+) -> Dict[str, Any]:
     _ensure_telegram_camera_setup_state_loaded()
     key = _telegram_camera_setup_key(workspace_id, chat_id)
     now = _utc_now_iso()
@@ -967,6 +975,7 @@ def _set_telegram_camera_setup_state(workspace_id: str, chat_id: str, stage: str
             items = {}
             _TELEGRAM_CAMERA_SETUP_STATE["items"] = items
         items[key] = {
+            "intent": str(intent or "CAMERA_MONITOR").strip().upper() or "CAMERA_MONITOR",
             "stage": stage,
             "original_prompt": str(original_prompt or "").strip(),
             "space_name": str(space_name or "").strip(),
@@ -1002,6 +1011,29 @@ def _data_url_from_local_file(path_value: str, mime_type: str = "") -> str:
     guessed_mime = str(mime_type or "").strip().lower() or mimetypes.guess_type(str(path.name))[0] or "image/jpeg"
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{guessed_mime};base64,{encoded}"
+
+
+def _workspace_connector_flags(workspace_id: str) -> Dict[str, bool]:
+    _init()
+    list_fn = globals().get("list_vault_connectors")
+    if not callable(list_fn):
+        return {"telegram": False, "email": False}
+    try:
+        rows = list_fn(str(workspace_id or "").strip() or "default")
+    except Exception:
+        rows = []
+    flags = {"telegram": False, "email": False}
+    if not isinstance(rows, list):
+        return flags
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        connector = str(row.get("connector") or row.get("provider") or "").strip().lower()
+        if connector == "telegram_bot":
+            flags["telegram"] = True
+        if connector in {"google_workspace", "microsoft_365"}:
+            flags["email"] = True
+    return flags
 
 
 def _camera_monitor_workflow_definition(space_name: str) -> Dict[str, Any]:
@@ -1059,6 +1091,121 @@ def _camera_monitor_workflow_definition(space_name: str) -> Dict[str, Any]:
     }
 
 
+def _email_summary_workflow_definition(target_label: str, *, telegram_connected: bool) -> Dict[str, Any]:
+    label = str(target_label or "").strip() or "Inbox"
+    return {
+        "nodes": [
+            {
+                "id": "trigger-daily",
+                "type": "trigger",
+                "position": {"x": 265, "y": 50},
+                "data": {"label": "Daily Summary", "triggerType": "schedule"},
+            },
+            {
+                "id": "agent-summary",
+                "type": "agent",
+                "position": {"x": 265, "y": 220},
+                "data": {
+                    "label": "Inbox Summary",
+                    "modelId": "gpt-4o",
+                    "prompt": f"Summarize important messages from {label} and highlight what needs action.",
+                    "tools": ["email"],
+                    "provider": "openai",
+                    "role": "Summary",
+                    "duty": f"Review {label} and produce a concise daily summary.",
+                    "status": "ready",
+                    "description": f"{label} daily summary",
+                },
+            },
+            {
+                "id": "action-summary",
+                "type": "action",
+                "position": {"x": 265, "y": 390},
+                "data": {
+                    "label": "Send Telegram" if telegram_connected else "Write Report",
+                    "actionType": "send_telegram" if telegram_connected else "write_file",
+                },
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge-daily-summary",
+                "source": "trigger-daily",
+                "target": "agent-summary",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+            {
+                "id": "edge-summary-action",
+                "source": "agent-summary",
+                "target": "action-summary",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+        ],
+        "meta": {"automationMode": "scheduled", "created_from": "email_summary_chat_bridge"},
+    }
+
+
+def _lead_followup_workflow_definition(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Dict[str, Any]:
+    label = str(flow_label or "").strip() or "Leads"
+    action_type = "send_email" if email_connected else "send_telegram" if telegram_connected else "write_file"
+    action_label = "Send Email" if email_connected else "Send Telegram" if telegram_connected else "Write Draft"
+    return {
+        "nodes": [
+            {
+                "id": "trigger-followup",
+                "type": "trigger",
+                "position": {"x": 265, "y": 50},
+                "data": {"label": "Follow-up Review", "triggerType": "schedule"},
+            },
+            {
+                "id": "agent-followup",
+                "type": "agent",
+                "position": {"x": 265, "y": 220},
+                "data": {
+                    "label": "Lead Follow-up",
+                    "modelId": "gpt-4o",
+                    "prompt": f"Review {label} and draft concise follow-up messages for the leads that need attention.",
+                    "tools": ["crm"],
+                    "provider": "openai",
+                    "role": "Follow-up",
+                    "duty": f"Prepare next-step follow-up messages for {label}.",
+                    "status": "ready",
+                    "description": f"{label} lead follow-up",
+                },
+            },
+            {
+                "id": "action-followup",
+                "type": "action",
+                "position": {"x": 265, "y": 390},
+                "data": {"label": action_label, "actionType": action_type},
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge-followup-agent",
+                "source": "trigger-followup",
+                "target": "agent-followup",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+            {
+                "id": "edge-followup-action",
+                "source": "agent-followup",
+                "target": "action-followup",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+        ],
+        "meta": {"automationMode": "scheduled", "created_from": "lead_followup_chat_bridge"},
+    }
+
+
 def _create_hotel_vision_space_via_api(
     *,
     space_name: str,
@@ -1106,16 +1253,16 @@ def _create_hotel_vision_space_via_api(
     return payload_json
 
 
-def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
+def _create_published_workflow_record(name: str, description: str, definition: Dict[str, Any]) -> Optional[str]:
     _init()
     create_res = http_json_request(
         f"{EMPYRALIST_WORKFLOW_API_URL}/workflows?workspaceId=default",
         method="POST",
         headers={"Content-Type": "application/json"},
         payload={
-            "name": f"Monitor {str(space_name or '').strip() or 'Space'}",
-            "description": f"Camera monitor for {str(space_name or '').strip() or 'this space'}",
-            "definition": _camera_monitor_workflow_definition(space_name),
+            "name": name,
+            "description": description,
+            "definition": definition,
         },
         timeout=20,
     )
@@ -1134,6 +1281,33 @@ def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
     return workflow_id or None
 
 
+def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
+    label = str(space_name or "").strip() or "Space"
+    return _create_published_workflow_record(
+        f"Monitor {label}",
+        f"Camera monitor for {label}",
+        _camera_monitor_workflow_definition(label),
+    )
+
+
+def _create_email_summary_visibility_record(target_label: str, *, telegram_connected: bool) -> Optional[str]:
+    label = str(target_label or "").strip() or "Inbox"
+    return _create_published_workflow_record(
+        f"Summarize {label} Daily",
+        f"Daily inbox summary for {label}",
+        _email_summary_workflow_definition(label, telegram_connected=telegram_connected),
+    )
+
+
+def _create_lead_followup_visibility_record(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Optional[str]:
+    label = str(flow_label or "").strip() or "Leads"
+    return _create_published_workflow_record(
+        f"Follow up {label}",
+        f"Lead follow-up automation for {label}",
+        _lead_followup_workflow_definition(label, email_connected=email_connected, telegram_connected=telegram_connected),
+    )
+
+
 def _camera_monitor_completion_text(space_name: str, channel_connected: bool, workflow_id: Optional[str] = None) -> str:
     label = str(space_name or "").strip() or "space"
     lines = [
@@ -1148,6 +1322,45 @@ def _camera_monitor_completion_text(space_name: str, channel_connected: bool, wo
     return "\n\n".join(lines)
 
 
+def _email_summary_completion_text(
+    target_label: str,
+    *,
+    email_connected: bool,
+    telegram_connected: bool,
+    workflow_id: Optional[str] = None,
+) -> str:
+    label = str(target_label or "").strip() or "Inbox"
+    is_active = email_connected and telegram_connected
+    lines = [
+        f"Done. Your {label} daily summary is {'active' if is_active else 'ready'}.",
+        "You'll get a Telegram summary every morning." if is_active else (
+            "Connect Telegram to receive daily summaries." if email_connected else "Connect Google Workspace or Microsoft 365 to start daily summaries."
+        ),
+        f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
+    ]
+    if workflow_id:
+        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
+    if not email_connected:
+        lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
+    if email_connected and not telegram_connected:
+        lines.append(f"Connect Telegram → {EMPYRALIST_WEB_URL}/credentials?connector=telegram_bot&onboarding=1")
+    return "\n\n".join(lines)
+
+
+def _lead_followup_completion_text(flow_label: str, *, email_connected: bool, workflow_id: Optional[str] = None) -> str:
+    label = str(flow_label or "").strip() or "Leads"
+    lines = [
+        f"Done. Your {label} follow-up automation is {'active' if email_connected else 'ready'}.",
+        "It is set to prepare outbound follow-ups on schedule." if email_connected else "Connect an email account to send follow-ups automatically.",
+        f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
+    ]
+    if workflow_id:
+        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
+    if not email_connected:
+        lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
+    return "\n\n".join(lines)
+
+
 def _telegram_handle_camera_monitor_setup(
     *,
     workspace_id: str,
@@ -1157,9 +1370,59 @@ def _telegram_handle_camera_monitor_setup(
 ) -> Dict[str, Any]:
     active_state = _get_telegram_camera_setup_state(workspace_id, chat_id)
     normalized_text = str(message_text or "").strip()
+    active_intent = str(active_state.get("intent") or "").strip().upper() or "CAMERA_MONITOR"
+    connector_flags = _workspace_connector_flags(workspace_id)
 
     if active_state.get("active"):
         stage = str(active_state.get("stage") or "").strip()
+        if active_intent == "EMAIL_SUMMARY" and stage == "awaiting_summary_target":
+            if not normalized_text:
+                return {"handled": True, "reply": "Which inbox should I summarize? (e.g. Work inbox, Support inbox)"}
+            try:
+                workflow_id = _create_email_summary_visibility_record(
+                    normalized_text,
+                    telegram_connected=connector_flags["telegram"],
+                )
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": _email_summary_completion_text(
+                        normalized_text,
+                        email_connected=connector_flags["email"],
+                        telegram_connected=connector_flags["telegram"],
+                        workflow_id=workflow_id,
+                    ),
+                }
+            except Exception as exc:
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the summary automation.'}",
+                }
+        if active_intent == "LEAD_FOLLOWUP" and stage == "awaiting_followup_target":
+            if not normalized_text:
+                return {"handled": True, "reply": "What should I call this lead flow? (e.g. Website leads, Telegram inquiries)"}
+            try:
+                workflow_id = _create_lead_followup_visibility_record(
+                    normalized_text,
+                    email_connected=connector_flags["email"],
+                    telegram_connected=connector_flags["telegram"],
+                )
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": _lead_followup_completion_text(
+                        normalized_text,
+                        email_connected=connector_flags["email"],
+                        workflow_id=workflow_id,
+                    ),
+                }
+            except Exception as exc:
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the follow-up automation.'}",
+                }
         if stage == "awaiting_space_name":
             if not normalized_text:
                 return {"handled": True, "reply": "What should I call this space? (e.g. Entrance, Reception, Parking)"}
@@ -1169,6 +1432,7 @@ def _telegram_handle_camera_monitor_setup(
                 "awaiting_camera_source",
                 str(active_state.get("original_prompt") or "").strip(),
                 space_name=normalized_text,
+                intent=active_intent,
             )
             return {
                 "handled": True,
@@ -1217,10 +1481,35 @@ def _telegram_handle_camera_monitor_setup(
             chat_id,
             "awaiting_space_name",
             original_prompt=normalized_text,
+            intent="CAMERA_MONITOR",
         )
         return {
             "handled": True,
             "reply": "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        }
+    if classify_automation_intent(normalized_text) == "EMAIL_SUMMARY":
+        _set_telegram_camera_setup_state(
+            workspace_id,
+            chat_id,
+            "awaiting_summary_target",
+            original_prompt=normalized_text,
+            intent="EMAIL_SUMMARY",
+        )
+        return {
+            "handled": True,
+            "reply": "I'll set up a daily email summary for you.\n\nWhich inbox should I summarize?\n\n(e.g. Work inbox, Support inbox)",
+        }
+    if classify_automation_intent(normalized_text) == "LEAD_FOLLOWUP":
+        _set_telegram_camera_setup_state(
+            workspace_id,
+            chat_id,
+            "awaiting_followup_target",
+            original_prompt=normalized_text,
+            intent="LEAD_FOLLOWUP",
+        )
+        return {
+            "handled": True,
+            "reply": "I'll set up lead follow-up for you.\n\nWhat should I call this lead flow?\n\n(e.g. Website leads, Telegram inquiries)",
         }
 
     return {"handled": False, "reply": ""}

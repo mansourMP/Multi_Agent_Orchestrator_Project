@@ -109,7 +109,8 @@ type PendingWorkbenchChat = {
 };
 
 type CameraMonitorSetupState = {
-  stage: 'awaiting_space_name' | 'awaiting_camera_source';
+  intent: 'CAMERA_MONITOR' | 'EMAIL_SUMMARY' | 'LEAD_FOLLOWUP';
+  stage: 'awaiting_space_name' | 'awaiting_camera_source' | 'awaiting_summary_target' | 'awaiting_followup_target';
   originalPrompt: string;
   spaceName?: string;
 };
@@ -1752,6 +1753,28 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     });
   }, []);
 
+  const hasTelegramConnector = useMemo(
+    () => connectorCredentials.some((item) => item.connector === 'telegram_bot'),
+    [connectorCredentials],
+  );
+  const hasEmailConnector = useMemo(
+    () => connectorCredentials.some((item) => item.connector === 'google_workspace' || item.connector === 'microsoft_365'),
+    [connectorCredentials],
+  );
+
+  const createPublishedVisibilityWorkflow = useCallback(async (name: string, description: string, definition: unknown) => {
+    const workflow = await createWorkflow(name, description, 'default', definition);
+    const workflowId = String((workflow as { id?: unknown })?.id || '').trim();
+    if (workflowId) {
+      try {
+        await publishWorkflow(workflowId);
+      } catch {
+        // Keep the created workflow even if publish fails.
+      }
+    }
+    return workflowId;
+  }, []);
+
   const buildCameraMonitorWorkflowDefinition = useCallback((spaceName: string) => {
     const safeName = spaceName.trim() || 'Space';
     return {
@@ -1803,22 +1826,130 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, []);
 
   const createCameraMonitorVisibilityWorkflow = useCallback(async (spaceName: string) => {
-    const workflow = await createWorkflow(
+    return createPublishedVisibilityWorkflow(
       `Monitor ${spaceName.trim() || 'Space'}`,
       `Camera monitor for ${spaceName.trim() || 'this space'}`,
-      'default',
       buildCameraMonitorWorkflowDefinition(spaceName),
     );
-    const workflowId = String((workflow as { id?: unknown })?.id || '').trim();
-    if (workflowId) {
-      try {
-        await publishWorkflow(workflowId);
-      } catch {
-        // Keep the created workflow even if publish fails.
-      }
-    }
-    return workflowId;
-  }, [buildCameraMonitorWorkflowDefinition]);
+  }, [buildCameraMonitorWorkflowDefinition, createPublishedVisibilityWorkflow]);
+
+  const buildEmailSummaryWorkflowDefinition = useCallback((targetLabel: string) => {
+    const safeLabel = targetLabel.trim() || 'Inbox';
+    return {
+      nodes: [
+        {
+          id: 'trigger-daily',
+          type: 'trigger',
+          position: { x: 265, y: 50 },
+          data: {
+            label: 'Daily Summary',
+            triggerType: 'schedule',
+          },
+        },
+        {
+          id: 'agent-summary',
+          type: 'agent',
+          position: { x: 265, y: 220 },
+          data: {
+            label: 'Inbox Summary',
+            modelId: 'gpt-4o',
+            prompt: `Summarize important messages from ${safeLabel} and highlight what needs action.`,
+            tools: ['email'],
+            provider: 'openai',
+            role: 'Summary',
+            duty: `Review ${safeLabel} and produce a concise daily summary.`,
+            status: 'ready',
+            description: `${safeLabel} daily summary`,
+          },
+        },
+        {
+          id: 'action-summary',
+          type: 'action',
+          position: { x: 265, y: 390 },
+          data: {
+            label: hasTelegramConnector ? 'Send Telegram' : 'Write Report',
+            actionType: hasTelegramConnector ? 'send_telegram' : 'write_file',
+          },
+        },
+      ],
+      edges: [
+        { id: 'edge-daily-summary', source: 'trigger-daily', target: 'agent-summary', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+        { id: 'edge-summary-action', source: 'agent-summary', target: 'action-summary', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+      ],
+      meta: {
+        automationMode: 'scheduled',
+        created_from: 'email_summary_chat_bridge',
+      },
+    };
+  }, [hasTelegramConnector]);
+
+  const createEmailSummaryVisibilityWorkflow = useCallback(async (targetLabel: string) => {
+    return createPublishedVisibilityWorkflow(
+      `Summarize ${targetLabel.trim() || 'Inbox'} Daily`,
+      `Daily inbox summary for ${targetLabel.trim() || 'this inbox'}`,
+      buildEmailSummaryWorkflowDefinition(targetLabel),
+    );
+  }, [buildEmailSummaryWorkflowDefinition, createPublishedVisibilityWorkflow]);
+
+  const buildLeadFollowupWorkflowDefinition = useCallback((flowLabel: string) => {
+    const safeLabel = flowLabel.trim() || 'Leads';
+    const actionType = hasEmailConnector ? 'send_email' : hasTelegramConnector ? 'send_telegram' : 'write_file';
+    const actionLabel = hasEmailConnector ? 'Send Email' : hasTelegramConnector ? 'Send Telegram' : 'Write Draft';
+    return {
+      nodes: [
+        {
+          id: 'trigger-followup',
+          type: 'trigger',
+          position: { x: 265, y: 50 },
+          data: {
+            label: 'Follow-up Review',
+            triggerType: 'schedule',
+          },
+        },
+        {
+          id: 'agent-followup',
+          type: 'agent',
+          position: { x: 265, y: 220 },
+          data: {
+            label: 'Lead Follow-up',
+            modelId: 'gpt-4o',
+            prompt: `Review ${safeLabel} and draft concise follow-up messages for the leads that need attention.`,
+            tools: ['crm'],
+            provider: 'openai',
+            role: 'Follow-up',
+            duty: `Prepare next-step follow-up messages for ${safeLabel}.`,
+            status: 'ready',
+            description: `${safeLabel} lead follow-up`,
+          },
+        },
+        {
+          id: 'action-followup',
+          type: 'action',
+          position: { x: 265, y: 390 },
+          data: {
+            label: actionLabel,
+            actionType,
+          },
+        },
+      ],
+      edges: [
+        { id: 'edge-followup-agent', source: 'trigger-followup', target: 'agent-followup', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+        { id: 'edge-followup-action', source: 'agent-followup', target: 'action-followup', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+      ],
+      meta: {
+        automationMode: 'scheduled',
+        created_from: 'lead_followup_chat_bridge',
+      },
+    };
+  }, [hasEmailConnector, hasTelegramConnector]);
+
+  const createLeadFollowupVisibilityWorkflow = useCallback(async (flowLabel: string) => {
+    return createPublishedVisibilityWorkflow(
+      `Follow up ${flowLabel.trim() || 'Leads'}`,
+      `Lead follow-up automation for ${flowLabel.trim() || 'this lead flow'}`,
+      buildLeadFollowupWorkflowDefinition(flowLabel),
+    );
+  }, [buildLeadFollowupWorkflowDefinition, createPublishedVisibilityWorkflow]);
 
   const provisionCameraMonitorFromChat = useCallback(async (spaceName: string, cameraSource: string) => {
     const onboarding = await fetchHotelOnboardingStatus();
@@ -1865,11 +1996,58 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     [],
   );
 
+  const buildEmailSummaryCompletionMessage = useCallback((targetLabel: string, workflowId: string | null) => {
+    const safeLabel = targetLabel.trim() || 'Inbox';
+    const isActive = hasEmailConnector && hasTelegramConnector;
+    const lines = [
+      isActive ? `Done. Your **${safeLabel}** daily summary is active.` : `Done. Your **${safeLabel}** daily summary is ready.`,
+      '',
+      isActive
+        ? "You'll get a Telegram summary every morning."
+        : hasEmailConnector
+          ? 'Connect Telegram to receive daily summaries.'
+          : 'Connect Google Workspace or Microsoft 365 to start daily summaries.',
+      '',
+      '[Open automations](/workflows)',
+    ];
+    if (workflowId) {
+      lines.push(`[Open automation](/workflows/${encodeURIComponent(workflowId)})`);
+    }
+    if (!hasEmailConnector) {
+      lines.push('[Connect email →](/credentials)');
+    }
+    if (hasEmailConnector && !hasTelegramConnector) {
+      lines.push('[Connect Telegram →](/credentials?connector=telegram_bot&onboarding=1)');
+    }
+    return lines.join('\n');
+  }, [hasEmailConnector, hasTelegramConnector]);
+
+  const buildLeadFollowupCompletionMessage = useCallback((flowLabel: string, workflowId: string | null) => {
+    const safeLabel = flowLabel.trim() || 'Leads';
+    const isActive = hasEmailConnector;
+    const lines = [
+      isActive ? `Done. Your **${safeLabel}** follow-up automation is active.` : `Done. Your **${safeLabel}** follow-up automation is ready.`,
+      '',
+      isActive
+        ? 'It is set to prepare outbound follow-ups on schedule.'
+        : 'Connect an email account to send follow-ups automatically.',
+      '',
+      '[Open automations](/workflows)',
+    ];
+    if (workflowId) {
+      lines.push(`[Open automation](/workflows/${encodeURIComponent(workflowId)})`);
+    }
+    if (!hasEmailConnector) {
+      lines.push('[Connect email →](/credentials)');
+    }
+    return lines.join('\n');
+  }, [hasEmailConnector]);
+
   const consumeSimpleCameraMonitorSetup = useCallback(async (sessionId: string, text: string) => {
     const stateKey = `simple:${sessionId}`;
     const activeState = cameraMonitorSetupStates[stateKey];
     const intent = classifyAutomationIntent(text);
-    if (!activeState && intent !== 'CAMERA_MONITOR') return false;
+    if (!activeState && !['CAMERA_MONITOR', 'EMAIL_SUMMARY', 'LEAD_FOLLOWUP'].includes(intent)) return false;
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -1882,17 +2060,129 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setGoal('');
 
     if (!activeState) {
+      const nextIntent = intent as CameraMonitorSetupState['intent'];
+      if (nextIntent === 'CAMERA_MONITOR') {
+        appendSimpleChatMessage(sessionId, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        setCameraMonitorSetupState(stateKey, {
+          intent: nextIntent,
+          stage: 'awaiting_space_name',
+          originalPrompt: text,
+        });
+        return true;
+      }
+      if (nextIntent === 'EMAIL_SUMMARY') {
+        appendSimpleChatMessage(sessionId, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: "I'll set up a daily email summary for you.\n\nWhich inbox should I summarize?\n\n(e.g. Work inbox, Support inbox)",
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        setCameraMonitorSetupState(stateKey, {
+          intent: nextIntent,
+          stage: 'awaiting_summary_target',
+          originalPrompt: text,
+        });
+        return true;
+      }
       appendSimpleChatMessage(sessionId, {
         id: createWorkbenchChatId('assistant'),
         role: 'assistant',
-        content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        content: "I'll set up lead follow-up for you.\n\nWhat should I call this lead flow?\n\n(e.g. Website leads, Telegram inquiries)",
         ts: new Date().toISOString(),
         status: 'completed',
       });
       setCameraMonitorSetupState(stateKey, {
-        stage: 'awaiting_space_name',
+        intent: nextIntent,
+        stage: 'awaiting_followup_target',
         originalPrompt: text,
       });
+      return true;
+    }
+
+    if (activeState.intent === 'EMAIL_SUMMARY') {
+      const targetLabel = text.trim();
+      if (!targetLabel) {
+        appendSimpleChatMessage(sessionId, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Tell me which inbox you want summarized.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      const placeholderId = createWorkbenchChatId('assistant');
+      appendSimpleChatMessage(sessionId, {
+        id: placeholderId,
+        role: 'assistant',
+        content: 'Creating your daily summary automation...',
+        ts: new Date().toISOString(),
+        status: 'running',
+      });
+      try {
+        const workflowId = await createEmailSummaryVisibilityWorkflow(targetLabel);
+        patchSimpleChatMessage(sessionId, placeholderId, {
+          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null),
+          status: 'completed',
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create the email summary automation.';
+        patchSimpleChatMessage(sessionId, placeholderId, {
+          content: `I couldn't finish the setup.\n\n${message}`,
+          status: 'error',
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setCameraMonitorSetupState(stateKey, null);
+      }
+      return true;
+    }
+
+    if (activeState.intent === 'LEAD_FOLLOWUP') {
+      const flowLabel = text.trim();
+      if (!flowLabel) {
+        appendSimpleChatMessage(sessionId, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Tell me what you want to call this lead flow.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      const placeholderId = createWorkbenchChatId('assistant');
+      appendSimpleChatMessage(sessionId, {
+        id: placeholderId,
+        role: 'assistant',
+        content: 'Creating your follow-up automation...',
+        ts: new Date().toISOString(),
+        status: 'running',
+      });
+      try {
+        const workflowId = await createLeadFollowupVisibilityWorkflow(flowLabel);
+        patchSimpleChatMessage(sessionId, placeholderId, {
+          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null),
+          status: 'completed',
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create the lead follow-up automation.';
+        patchSimpleChatMessage(sessionId, placeholderId, {
+          content: `I couldn't finish the setup.\n\n${message}`,
+          status: 'error',
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setCameraMonitorSetupState(stateKey, null);
+      }
       return true;
     }
 
@@ -1960,13 +2250,13 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, cameraMonitorSetupStates, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const consumeWorkbenchCameraMonitorSetup = useCallback(async (agentRole: string, text: string) => {
     const stateKey = `advanced:${agentRole}`;
     const activeState = cameraMonitorSetupStates[stateKey];
     const intent = classifyAutomationIntent(text);
-    if (!activeState && intent !== 'CAMERA_MONITOR') return false;
+    if (!activeState && !['CAMERA_MONITOR', 'EMAIL_SUMMARY', 'LEAD_FOLLOWUP'].includes(intent)) return false;
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -1979,17 +2269,129 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setGoal('');
 
     if (!activeState) {
+      const nextIntent = intent as CameraMonitorSetupState['intent'];
+      if (nextIntent === 'CAMERA_MONITOR') {
+        appendWorkbenchAgentChat(agentRole, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        setCameraMonitorSetupState(stateKey, {
+          intent: nextIntent,
+          stage: 'awaiting_space_name',
+          originalPrompt: text,
+        });
+        return true;
+      }
+      if (nextIntent === 'EMAIL_SUMMARY') {
+        appendWorkbenchAgentChat(agentRole, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: "I'll set up a daily email summary for you.\n\nWhich inbox should I summarize?\n\n(e.g. Work inbox, Support inbox)",
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        setCameraMonitorSetupState(stateKey, {
+          intent: nextIntent,
+          stage: 'awaiting_summary_target',
+          originalPrompt: text,
+        });
+        return true;
+      }
       appendWorkbenchAgentChat(agentRole, {
         id: createWorkbenchChatId('assistant'),
         role: 'assistant',
-        content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        content: "I'll set up lead follow-up for you.\n\nWhat should I call this lead flow?\n\n(e.g. Website leads, Telegram inquiries)",
         ts: new Date().toISOString(),
         status: 'completed',
       });
       setCameraMonitorSetupState(stateKey, {
-        stage: 'awaiting_space_name',
+        intent: nextIntent,
+        stage: 'awaiting_followup_target',
         originalPrompt: text,
       });
+      return true;
+    }
+
+    if (activeState.intent === 'EMAIL_SUMMARY') {
+      const targetLabel = text.trim();
+      if (!targetLabel) {
+        appendWorkbenchAgentChat(agentRole, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Tell me which inbox you want summarized.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      const placeholderId = createWorkbenchChatId('assistant');
+      appendWorkbenchAgentChat(agentRole, {
+        id: placeholderId,
+        role: 'assistant',
+        content: 'Creating your daily summary automation...',
+        ts: new Date().toISOString(),
+        status: 'running',
+      });
+      try {
+        const workflowId = await createEmailSummaryVisibilityWorkflow(targetLabel);
+        patchWorkbenchAgentChat(agentRole, placeholderId, {
+          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null),
+          status: 'completed',
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create the email summary automation.';
+        patchWorkbenchAgentChat(agentRole, placeholderId, {
+          content: `I couldn't finish the setup.\n\n${message}`,
+          status: 'error',
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setCameraMonitorSetupState(stateKey, null);
+      }
+      return true;
+    }
+
+    if (activeState.intent === 'LEAD_FOLLOWUP') {
+      const flowLabel = text.trim();
+      if (!flowLabel) {
+        appendWorkbenchAgentChat(agentRole, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Tell me what you want to call this lead flow.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      const placeholderId = createWorkbenchChatId('assistant');
+      appendWorkbenchAgentChat(agentRole, {
+        id: placeholderId,
+        role: 'assistant',
+        content: 'Creating your follow-up automation...',
+        ts: new Date().toISOString(),
+        status: 'running',
+      });
+      try {
+        const workflowId = await createLeadFollowupVisibilityWorkflow(flowLabel);
+        patchWorkbenchAgentChat(agentRole, placeholderId, {
+          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null),
+          status: 'completed',
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to create the lead follow-up automation.';
+        patchWorkbenchAgentChat(agentRole, placeholderId, {
+          content: `I couldn't finish the setup.\n\n${message}`,
+          status: 'error',
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setCameraMonitorSetupState(stateKey, null);
+      }
       return true;
     }
 
@@ -2057,7 +2459,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, cameraMonitorSetupStates, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const runWorkbenchCommand = useCallback(async (input?: string) => {
     const raw = String(input ?? goal).trim();

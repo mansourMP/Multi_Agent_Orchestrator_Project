@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -559,6 +560,7 @@ const CONNECTOR_CATALOG_BADGES: Record<ConnectorCatalogStatus, { label: string; 
 };
 
 export default function CredentialsPage() {
+  const searchParams = useSearchParams();
   const [runtimeApiKey] = useState<string>(() => readRuntimeApiKeyFromStorage(''));
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [catalogViewFilter, setCatalogViewFilter] = useState<CatalogViewFilter>('all');
@@ -575,8 +577,10 @@ export default function CredentialsPage() {
   const [googleDriveBrowsers, setGoogleDriveBrowsers] = useState<Record<string, GoogleDriveBrowserState>>({});
   const [configuredRowId, setConfiguredRowId] = useState('');
   const [focusedCatalogId, setFocusedCatalogId] = useState<string>('');
+  const [showTelegramAdvanced, setShowTelegramAdvanced] = useState(false);
   const focusedCatalogEntryRef = useRef<HTMLDivElement | null>(null);
   const modalScrollLockRef = useRef(0);
+  const onboardingModalOpenedRef = useRef(false);
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };
@@ -691,6 +695,13 @@ export default function CredentialsPage() {
       window.scrollTo(0, modalScrollLockRef.current);
     };
   }, [showAddModal]);
+
+  useEffect(() => {
+    const connector = String(searchParams.get('connector') || '').trim();
+    if (connector !== 'telegram_bot' || onboardingModalOpenedRef.current) return;
+    onboardingModalOpenedRef.current = true;
+    openCreateModal('telegram_bot', 'Telegram');
+  }, [searchParams]);
 
   const connectedConnectorIds = useMemo(() => new Set(connectors.map((row) => row.connector)), [connectors]);
   const connectorDirectoryItems = useMemo(() => {
@@ -1061,6 +1072,7 @@ export default function CredentialsPage() {
     setForm(EMPTY_FORM);
     setModalLockedConnector(null);
     setCreateError('');
+    setShowTelegramAdvanced(false);
     setShowAddModal(false);
   }
 
@@ -1071,6 +1083,7 @@ export default function CredentialsPage() {
     });
     setModalLockedConnector(null);
     setCreateError('');
+    setShowTelegramAdvanced(false);
     setShowAddModal(true);
   }
 
@@ -1082,6 +1095,7 @@ export default function CredentialsPage() {
     });
     setModalLockedConnector(connector);
     setCreateError('');
+    setShowTelegramAdvanced(false);
     setShowAddModal(true);
   }
 
@@ -1154,6 +1168,10 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
     }
     if (form.connector === 'wechat_work' && !form.webhookUrl.trim()) {
       setCreateError('Enter the WeChat Work webhook URL.');
+      return;
+    }
+    if (form.connector === 'telegram_bot' && !form.botToken.trim()) {
+      setCreateError('Paste the Telegram bot token first.');
       return;
     }
     setCreateBusy(true);
@@ -2109,8 +2127,11 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               const modalEntry = catalogEntryForConnector(form.connector);
               const visual = connectorVisual(form.connector);
               const title = modalLockedConnector ? `Connect ${connectorLabel(form.connector)}` : 'Add connection';
+              const isTelegramOnboarding = form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1';
               const copy = modalLockedConnector
-                ? (modalEntry?.detail || 'Create a runtime connection for this service and assign it if needed.')
+                ? (isTelegramOnboarding
+                    ? 'Finish Telegram in three steps, then send one message to your bot to start receiving notifications.'
+                    : (modalEntry?.detail || 'Create a runtime connection for this service and assign it if needed.'))
                 : 'Create a runtime connection and optionally assign it to one worker.';
               return (
             <div className="orion-modal-header">
@@ -2129,6 +2150,35 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             })()}
 
             <div style={{ display: 'grid', gap: 12 }}>
+              {form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1' ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    borderRadius: 14,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-element)',
+                    padding: '14px 16px',
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Telegram setup
+                  </div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                      <strong>Step 1:</strong> Create a Telegram bot at <Link href="https://t.me/BotFather" target="_blank" rel="noreferrer" style={{ color: 'var(--primary-base)', textDecoration: 'underline' }}>t.me/BotFather</Link>
+                    </div>
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Step 2: Paste your bot token here</span>
+                      <input className="input" value={form.botToken} onChange={(event) => setForm((prev) => ({ ...prev, botToken: event.target.value }))} placeholder="123456:ABC..." />
+                    </label>
+                    <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                      <strong>Step 3:</strong> Send any message to your bot to activate
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {modalLockedConnector ? (
                 <div
                   style={{
@@ -2166,31 +2216,68 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 </label>
               )}
 
-              <label style={{ display: 'grid', gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
-                <input className="input" value={form.label} onChange={(event) => setForm((prev) => ({ ...prev, label: event.target.value }))} placeholder={connectorLabel(form.connector)} />
-              </label>
+              {(form.connector !== 'telegram_bot' || String(searchParams.get('onboarding') || '') !== '1') ? (
+                <>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
+                    <input className="input" value={form.label} onChange={(event) => setForm((prev) => ({ ...prev, label: event.target.value }))} placeholder={connectorLabel(form.connector)} />
+                  </label>
 
-              <label style={{ display: 'grid', gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Assign to worker</span>
-                <select className="input" value={form.agentRole} onChange={(event) => setForm((prev) => ({ ...prev, agentRole: (event.target.value || '') as '' | AgentRoleId }))}>
-                  <option value="">Shared access</option>
-                  {AGENT_ROLE_OPTIONS.map((role) => (
-                    <option key={role.id} value={role.id}>{role.label}</option>
-                  ))}
-                </select>
-              </label>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Assign to worker</span>
+                    <select className="input" value={form.agentRole} onChange={(event) => setForm((prev) => ({ ...prev, agentRole: (event.target.value || '') as '' | AgentRoleId }))}>
+                      <option value="">Shared access</option>
+                      {AGENT_ROLE_OPTIONS.map((role) => (
+                        <option key={role.id} value={role.id}>{role.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
 
               {form.connector === 'telegram_bot' ? (
                 <>
-                  <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Bot token</span>
-                    <input className="input" value={form.botToken} onChange={(event) => setForm((prev) => ({ ...prev, botToken: event.target.value }))} placeholder="123456:ABC..." />
-                  </label>
-                  <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chat ID</span>
-                    <input className="input" value={form.chatId} onChange={(event) => setForm((prev) => ({ ...prev, chatId: event.target.value }))} placeholder="1932934047" />
-                  </label>
+                  {String(searchParams.get('onboarding') || '') !== '1' ? (
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Bot token</span>
+                      <input className="input" value={form.botToken} onChange={(event) => setForm((prev) => ({ ...prev, botToken: event.target.value }))} placeholder="123456:ABC..." />
+                    </label>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="orion-btn orion-btn-ghost"
+                    style={{ justifySelf: 'start' }}
+                    onClick={() => setShowTelegramAdvanced((prev) => !prev)}
+                  >
+                    {showTelegramAdvanced ? 'Hide Advanced' : 'Advanced'}
+                  </button>
+
+                  {showTelegramAdvanced ? (
+                    <>
+                      {String(searchParams.get('onboarding') || '') === '1' ? (
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
+                          <input className="input" value={form.label} onChange={(event) => setForm((prev) => ({ ...prev, label: event.target.value }))} placeholder={connectorLabel(form.connector)} />
+                        </label>
+                      ) : null}
+                      <label style={{ display: 'grid', gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chat ID</span>
+                        <input className="input" value={form.chatId} onChange={(event) => setForm((prev) => ({ ...prev, chatId: event.target.value }))} placeholder="1932934047" />
+                      </label>
+                      {String(searchParams.get('onboarding') || '') === '1' ? (
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Assign to worker</span>
+                          <select className="input" value={form.agentRole} onChange={(event) => setForm((prev) => ({ ...prev, agentRole: (event.target.value || '') as '' | AgentRoleId }))}>
+                            <option value="">Shared access</option>
+                            {AGENT_ROLE_OPTIONS.map((role) => (
+                              <option key={role.id} value={role.id}>{role.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
+                    </>
+                  ) : null}
                 </>
               ) : null}
 
@@ -2392,7 +2479,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               <button className="orion-btn orion-btn-ghost" onClick={resetModal}>Cancel</button>
               <button className="orion-btn orion-btn-primary" onClick={() => void handleCreateConnector()} disabled={createBusy}>
                 <Plus size={14} />
-                {createBusy ? 'Connecting…' : 'Connect'}
+                {createBusy ? 'Connecting…' : form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1' ? 'Done' : 'Connect'}
               </button>
             </div>
           </div>

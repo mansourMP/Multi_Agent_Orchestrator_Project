@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Loader2, Play, Save, Send, ShieldCheck, UploadCloud, Zap } from 'lucide-react';
 import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
@@ -56,6 +56,7 @@ interface RunLogEntry {
 interface WorkflowShape {
     name?: string;
     workspaceId?: string;
+    status?: string;
     definition?: {
         nodes?: unknown[];
         edges?: unknown[];
@@ -81,6 +82,12 @@ interface VaultCredentialItem {
     metadata?: Record<string, unknown>;
     created_at?: string;
     updated_at?: string;
+}
+
+interface WorkflowConnectorItem {
+    id: string;
+    connector: string;
+    metadata?: Record<string, unknown>;
 }
 
 interface StreamLogPayload {
@@ -494,6 +501,7 @@ function normalizeProvider(provider: string): ProviderId {
 
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
+    const router = useRouter();
     const searchParams = useSearchParams();
     const streamRef = useRef<EventSource | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
@@ -513,6 +521,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [workspaceId, setWorkspaceId] = useState<string>('default');
     const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
     const [runStatus, setRunStatus] = useState<RunStatus>('idle');
     const [runId, setRunId] = useState<string | null>(null);
@@ -535,6 +544,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [credentialsLoading, setCredentialsLoading] = useState(false);
     const [modelsLoading, setModelsLoading] = useState(false);
     const [credentialBusy, setCredentialBusy] = useState(false);
+    const [connectedChannels, setConnectedChannels] = useState<string[]>([]);
 
     const [newCredentialLabel, setNewCredentialLabel] = useState('');
     const [openaiKey, setOpenaiKey] = useState('');
@@ -578,6 +588,38 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const selectedProvider = useMemo(() => {
         return providerOptions.find((item) => normalizeProvider(item.id) === connection.provider) || providerOptions[0];
     }, [providerOptions, connection.provider]);
+
+    const primaryTriggerNode = useMemo(
+        () => canvasNodes.find((node) => node.type === 'trigger') || null,
+        [canvasNodes],
+    );
+
+    const primaryActionNode = useMemo(
+        () => canvasNodes.find((node) => node.type === 'action') || null,
+        [canvasNodes],
+    );
+
+    const statusChannel = useMemo(() => {
+        const actionType = String((primaryActionNode?.data as ActionCanvasData | undefined)?.actionType || '').trim().toLowerCase();
+        if (actionType === 'send_telegram') return { label: 'Telegram', connector: 'telegram_bot' };
+        if (actionType === 'send_whatsapp') return { label: 'WhatsApp', connector: 'whatsapp_twilio' };
+        if (actionType === 'send_wechat') return { label: 'WeChat', connector: 'wechat_work' };
+        if (actionType === 'send_email') return { label: 'email', connector: null };
+        if (actionType === 'write_file') return { label: 'a file', connector: null };
+        return { label: 'your channel', connector: null };
+    }, [primaryActionNode]);
+
+    const triggerSummary = useMemo(() => {
+        const triggerType = String((primaryTriggerNode?.data as TriggerCanvasData | undefined)?.triggerType || '').trim().toLowerCase();
+        if (triggerType === 'schedule') return 'on a schedule';
+        if (triggerType === 'webhook') return 'when triggered';
+        return 'when you start it';
+    }, [primaryTriggerNode]);
+
+    const channelConnected = useMemo(() => {
+        if (!statusChannel.connector) return true;
+        return connectedChannels.includes(statusChannel.connector);
+    }, [connectedChannels, statusChannel]);
 
     const providerAuthOptions = useMemo(() => {
         const items = Array.isArray(selectedProvider?.auth_modes) ? selectedProvider.auth_modes : [];
@@ -705,6 +747,30 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
     }, [buildHeaders, addToast, withWorkspaceQuery]);
 
+    const fetchConnectedChannels = useCallback(async () => {
+        try {
+            const res = await fetch(`${ORION_API_URL}/connectors/vault?workspace_id=${encodeURIComponent(workspaceId)}`, {
+                headers: buildHeaders(false),
+            });
+            if (!res.ok) return;
+            const payload = await res.json().catch(() => ({}));
+            const items = Array.isArray((payload as { items?: unknown[] }).items) ? (payload as { items: unknown[] }).items : [];
+            const nextChannels = items
+                .filter((item): item is WorkflowConnectorItem => typeof item === 'object' && item !== null)
+                .filter((item) => {
+                    const connector = String(item.connector || '').trim();
+                    if (!connector) return false;
+                    const metadata = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+                    return metadata.paused !== true;
+                })
+                .map((item) => String(item.connector || '').trim())
+                .filter(Boolean);
+            setConnectedChannels(nextChannels);
+        } catch {
+            setConnectedChannels([]);
+        }
+    }, [buildHeaders, workspaceId]);
+
     const fetchModels = useCallback(async (provider: ProviderId, credentialId?: string, suppressToast?: boolean) => {
         setModelsLoading(true);
         try {
@@ -784,10 +850,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         loadWorkflow();
         fetchProviders();
         fetchCredentials();
+        fetchConnectedChannels();
         return () => {
             if (streamRef.current) streamRef.current.close();
         };
-    }, [loadWorkflow, fetchProviders, fetchCredentials]);
+    }, [loadWorkflow, fetchProviders, fetchCredentials, fetchConnectedChannels]);
 
     useEffect(() => {
         if (connection.mode === 'managed') {
@@ -808,12 +875,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     useEffect(() => {
         if (onboardingToastShownRef.current) return;
-        if (searchParams.get('onboarding') !== 'activate-whatsapp') return;
+        if (searchParams.get('onboarding') !== 'activate-telegram') return;
         onboardingToastShownRef.current = true;
         addToast({
             type: 'success',
             title: 'Done!',
-            message: 'Connect your WhatsApp to activate.',
+            message: 'Connect Telegram to receive notifications.',
             duration: 5000,
         });
     }, [addToast, searchParams]);
@@ -838,6 +905,18 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     }, [workflowId, workflow, operator, connection, canvasNodes, canvasEdges, buildDefinition, buildCanvasDefinition, addToast]);
 
     const isCanvasMode = Array.isArray(workflow?.definition?.nodes);
+    const isOnboardingWorkflow = Boolean(workflow?.definition?.meta && typeof workflow.definition.meta === 'object' && 'onboarding_request' in workflow.definition.meta);
+    const isSimplifiedCanvasWorkflow = isCanvasMode && isOnboardingWorkflow;
+    const isWorkflowActive = String(workflow?.status || '').trim().toLowerCase() === 'published';
+    const workflowStatusSentence = useMemo(() => {
+        if (!channelConnected) {
+            return '⚠ Connect a channel to activate this automation';
+        }
+        if (isWorkflowActive) {
+            return `✓ Active — running ${triggerSummary} and sending alerts to ${statusChannel.label}`;
+        }
+        return '○ Not active — turn on to start receiving alerts';
+    }, [channelConnected, isWorkflowActive, statusChannel.label, triggerSummary]);
 
     const selectedNode = useMemo(
         () => canvasNodes.find((node) => node.id === selectedNodeId) || null,
@@ -922,11 +1001,20 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         try {
             await saveWorkflowState();
             await publishWorkflow(workflowId);
+            setWorkflow((prev) => ({ ...(prev || {}), status: 'published' }));
             addToast({ type: 'success', title: 'Published', message: 'Workflow published.' });
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Publish Failed', message: getErrorMessage(error, 'Unable to publish workflow.') });
         }
     }, [workflowId, saveWorkflowState, addToast]);
+
+    const handleActivationToggle = useCallback(async () => {
+        if (isWorkflowActive) {
+            addToast({ type: 'info', title: 'Already active', message: 'This automation is already turned on.' });
+            return;
+        }
+        await handlePublish();
+    }, [addToast, handlePublish, isWorkflowActive]);
 
     const resetCredentialForm = useCallback(() => {
         setNewCredentialLabel('');
@@ -1377,43 +1465,149 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }}
         >
             <div className="workflow-pro-toolbar">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <div className="workflow-pro-log-title">{workflow?.name || 'Automation'}</div>
-                    <span style={{
-                        borderRadius: 10,
-                        padding: '4px 10px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        background: runBadge.bg,
-                        color: runBadge.color,
-                        border: `1px solid ${runBadge.border}`,
-                    }}>
-                        {runBadge.label}
-                    </span>
+                <div style={{ display: 'grid', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <div className="workflow-pro-log-title">{workflow?.name || 'Automation'}</div>
+                        <span style={{
+                            borderRadius: 10,
+                            padding: '4px 10px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            background: isSimplifiedCanvasWorkflow
+                                ? (isWorkflowActive ? 'var(--success-bg)' : 'var(--bg-element)')
+                                : runBadge.bg,
+                            color: isSimplifiedCanvasWorkflow
+                                ? (isWorkflowActive ? 'var(--success-fg)' : 'var(--text-secondary)')
+                                : runBadge.color,
+                            border: `1px solid ${isSimplifiedCanvasWorkflow ? (isWorkflowActive ? 'var(--success-border)' : 'var(--border-default)') : runBadge.border}`,
+                        }}>
+                            {isSimplifiedCanvasWorkflow ? (isWorkflowActive ? 'Active' : 'Inactive') : runBadge.label}
+                        </span>
+                    </div>
+                    {isSimplifiedCanvasWorkflow ? (
+                        <div style={{ fontSize: 13, color: channelConnected ? 'var(--text-secondary)' : 'var(--warning-fg)' }}>
+                            {workflowStatusSentence}
+                        </div>
+                    ) : null}
                 </div>
                 <div className="workflow-pro-toolbar-actions">
-                    {lastSavedAt && (
-                        <span style={workflowMutedCopyStyle}>
-                            Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+                    {isSimplifiedCanvasWorkflow ? (
+                        <>
+                            <button
+                                onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                                className="orion-btn orion-btn-ghost"
+                            >
+                                {showAdvancedSettings ? 'Hide advanced settings' : 'Advanced settings'}
+                            </button>
+                            <button
+                                onClick={startRun}
+                                disabled={runStatus === 'running' || isPreflightChecking}
+                                className="orion-btn orion-btn-ghost"
+                            >
+                                <Play size={14} />
+                                {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Checking…' : 'Test once'}
+                            </button>
+                            <button
+                                onClick={() => void handleActivationToggle()}
+                                className={`orion-btn ${isWorkflowActive ? 'orion-btn-success' : 'orion-btn-primary'}`}
+                                disabled={isSaving}
+                            >
+                                {isWorkflowActive ? 'ON' : 'OFF'}
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            {lastSavedAt && (
+                                <span style={workflowMutedCopyStyle}>
+                                    Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                            )}
+                            <button
+                                onClick={saveWorkflowState}
+                                disabled={isSaving}
+                                className="orion-btn orion-btn-ghost"
+                            >
+                                <Save size={14} />
+                                {isSaving ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                                onClick={handlePublish}
+                                className="orion-btn orion-btn-primary"
+                            >
+                                <UploadCloud size={14} />
+                                Publish
+                            </button>
+                        </>
                     )}
-                    <button
-                        onClick={saveWorkflowState}
-                        disabled={isSaving}
-                        className="orion-btn orion-btn-ghost"
-                    >
-                        <Save size={14} />
-                        {isSaving ? 'Saving...' : 'Save'}
-                    </button>
-                    <button
-                        onClick={handlePublish}
-                        className="orion-btn orion-btn-primary"
-                    >
-                        <UploadCloud size={14} />
-                        Publish
-                    </button>
                 </div>
             </div>
+
+            {searchParams.get('onboarding') === 'activate-telegram' ? (
+                <div
+                    className="workflow-pro-panel"
+                    style={{
+                        margin: '12px 12px 0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        flexWrap: 'wrap',
+                        padding: '14px 16px',
+                    }}
+                >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Done! Connect Telegram to receive notifications.
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            Use BotFather once, paste the token, then message your bot to activate delivery.
+                        </div>
+                    </div>
+                    <button
+                        className="orion-btn orion-btn-primary"
+                        onClick={() => router.push('/credentials?connector=telegram_bot&onboarding=1')}
+                    >
+                        Connect Telegram
+                    </button>
+                </div>
+            ) : null}
+
+            {isSimplifiedCanvasWorkflow && showAdvancedSettings ? (
+                <div
+                    className="workflow-pro-panel"
+                    style={{
+                        margin: '12px 12px 0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        flexWrap: 'wrap',
+                        padding: '12px 16px',
+                    }}
+                >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Advanced settings</div>
+                        <div style={{ ...workflowMutedCopyStyle, fontSize: 12 }}>
+                            Save canvas edits, inspect node configuration, and adjust technical details only if needed.
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        {lastSavedAt ? (
+                            <span style={workflowMutedCopyStyle}>
+                                Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                        ) : null}
+                        <button
+                            onClick={saveWorkflowState}
+                            disabled={isSaving}
+                            className="orion-btn orion-btn-ghost"
+                        >
+                            <Save size={14} />
+                            {isSaving ? 'Saving...' : 'Save'}
+                        </button>
+                    </div>
+                </div>
+            ) : null}
 
             {isCanvasMode ? (
                 <div style={{ flex: 1, minHeight: 0, height: '100%', padding: 12 }}>
@@ -1536,42 +1730,50 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                                     {selectedNode.type === 'agent' ? (
                                         <>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Model</label>
-                                                <select
-                                                    value={String((selectedNode.data as AgentCanvasData).modelId || operator.modelId)}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, modelId: e.target.value } }))}
-                                                    style={workflowInputSurfaceStyle}
-                                                >
-                                                    {(models.length > 0 ? models : [operator.modelId || 'gpt-4.1']).map((model) => (
-                                                        <option key={model} value={model}>{model}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Prompt</label>
-                                                <textarea
-                                                    value={String((selectedNode.data as AgentCanvasData).prompt || '')}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, prompt: e.target.value } }))}
-                                                    rows={5}
-                                                    style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
-                                                />
-                                            </div>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Tools</label>
-                                                <input
-                                                    value={String(((selectedNode.data as AgentCanvasData).tools || []).join(', '))}
-                                                    onChange={(e) => updateSelectedNode((node) => ({
-                                                        ...node,
-                                                        data: {
-                                                            ...node.data,
-                                                            tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean),
-                                                        },
-                                                    }))}
-                                                    placeholder="browser, telegram, files"
-                                                    style={workflowInputSurfaceStyle}
-                                                />
-                                            </div>
+                                            {isSimplifiedCanvasWorkflow && !showAdvancedSettings ? (
+                                                <div style={workflowMutedCopyStyle}>
+                                                    Advanced agent settings are hidden for onboarding workflows. Open <strong style={{ color: 'var(--text-primary)' }}>Advanced settings</strong> to adjust the model, prompt, or tools.
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div>
+                                                        <label style={workflowLabelStyle}>Model</label>
+                                                        <select
+                                                            value={String((selectedNode.data as AgentCanvasData).modelId || operator.modelId)}
+                                                            onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, modelId: e.target.value } }))}
+                                                            style={workflowInputSurfaceStyle}
+                                                        >
+                                                            {(models.length > 0 ? models : [operator.modelId || 'gpt-4.1']).map((model) => (
+                                                                <option key={model} value={model}>{model}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label style={workflowLabelStyle}>Prompt</label>
+                                                        <textarea
+                                                            value={String((selectedNode.data as AgentCanvasData).prompt || '')}
+                                                            onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, prompt: e.target.value } }))}
+                                                            rows={5}
+                                                            style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label style={workflowLabelStyle}>Tools</label>
+                                                        <input
+                                                            value={String(((selectedNode.data as AgentCanvasData).tools || []).join(', '))}
+                                                            onChange={(e) => updateSelectedNode((node) => ({
+                                                                ...node,
+                                                                data: {
+                                                                    ...node.data,
+                                                                    tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean),
+                                                                },
+                                                            }))}
+                                                            placeholder="browser, telegram, files"
+                                                            style={workflowInputSurfaceStyle}
+                                                        />
+                                                    </div>
+                                                </>
+                                            )}
                                         </>
                                     ) : null}
 

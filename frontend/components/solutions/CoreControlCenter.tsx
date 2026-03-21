@@ -299,7 +299,7 @@ export function CoreControlCenter() {
       ]);
       const workflowId = String((created as { id?: string })?.id || '').trim();
       if (!workflowId) throw new Error('Workflow creation did not return an id.');
-      router.push(`/workflows/${encodeURIComponent(workflowId)}?onboarding=activate-whatsapp`);
+      router.push(`/workflows/${encodeURIComponent(workflowId)}?onboarding=activate-telegram`);
     } catch (createError) {
       setOnboardingError(createError instanceof Error ? createError.message : 'Failed to build automation.');
       setIsBuildingAutomation(false);

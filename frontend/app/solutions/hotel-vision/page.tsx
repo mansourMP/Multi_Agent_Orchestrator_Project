@@ -121,6 +121,7 @@ export default function HotelVisionDashboardPage() {
           <>
             <span>{summary.spaceCount} spaces</span>
             <span>{summary.alertCount} unresolved alerts</span>
+            <Link href="/solutions/hotel-vision/onboarding">Set up property</Link>
           </>
         }
       />
@@ -150,6 +151,14 @@ export default function HotelVisionDashboardPage() {
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 8, placeItems: 'center' }}>
           <div className="orion-panel-title">Dashboard is unavailable</div>
           <div className="orion-panel-copy">{error}</div>
+        </section>
+      ) : spaces.length === 0 ? (
+        <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 12, placeItems: 'center' }}>
+          <div className="orion-panel-title">No spaces are set up yet</div>
+          <div className="orion-panel-copy">Use the guided setup to add your hotel and first monitored space without editing files.</div>
+          <Link href="/solutions/hotel-vision/onboarding" className="orion-btn orion-btn-primary">
+            Start setup
+          </Link>
         </section>
       ) : (
         <section className="orion-panel">

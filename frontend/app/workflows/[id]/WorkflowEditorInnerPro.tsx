@@ -1505,7 +1505,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 className="orion-btn orion-btn-ghost"
                             >
                                 <Play size={14} />
-                                {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Checking…' : 'Test once'}
+                                {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Preparing…' : 'Test once'}
                             </button>
                             <button
                                 onClick={() => void handleActivationToggle()}
@@ -2200,8 +2200,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 <section className="workflow-pro-panel log">
                     <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <div>
-                            <div className="workflow-pro-log-title">Live Activity</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Time-stamped events.</div>
+                            <div className="workflow-pro-log-title">{isSimplifiedCanvasWorkflow ? 'Recent activity' : 'Live Activity'}</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                                {isSimplifiedCanvasWorkflow ? 'What happened the last time you tested this automation.' : 'Time-stamped events.'}
+                            </div>
                         </div>
                         {runStatus === 'waiting' && (
                             <div style={{ display: 'flex', gap: 8 }}>
@@ -2260,7 +2262,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         {logs.length === 0 ? (
                             <div style={{ padding: '12px 10px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-tertiary)', fontSize: 13 }}>
                                 <CheckCircle2 size={14} />
-                                No events yet. Press Run to start.
+                                {isSimplifiedCanvasWorkflow ? 'Nothing to show yet. Try it once to see activity here.' : 'No events yet. Press Run to start.'}
                             </div>
                         ) : (
                             logs.map((entry, idx) => {
@@ -2298,7 +2300,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             gap: 8,
                         }}>
                             <AlertTriangle size={14} />
-                            Run failed. Check the connection or model and try again.
+                            {isSimplifiedCanvasWorkflow ? 'This test did not complete. Check your connection and try again.' : 'Run failed. Check the connection or model and try again.'}
                         </div>
                     )}
                 </section>

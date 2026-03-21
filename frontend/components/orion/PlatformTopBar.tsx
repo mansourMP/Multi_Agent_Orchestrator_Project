@@ -49,7 +49,7 @@ function buildStatusPills(pathname: string, status: ReturnType<typeof usePlatfor
     });
   }
 
-  if (status.pendingApprovals > 0) {
+  if (!userSurface && status.pendingApprovals > 0) {
     items.push({
       label: `Approvals ${status.pendingApprovals}`,
       tone: 'warn',

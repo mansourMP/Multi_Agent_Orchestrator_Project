@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -14,6 +16,22 @@ from fastapi.responses import FileResponse, Response
 SOLUTION_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SOLUTION_DIR.parent.parent
 VISION_QUERY_HANDLER = PROJECT_ROOT / "skills" / "vision-monitor" / "query_handler.py"
+EMPYRALIS_STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+).expanduser()
+VISION_MONITOR_CONFIG = PROJECT_ROOT / "skills" / "vision-monitor" / "config.yaml"
+
+
+def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: Optional[str] = None) -> Path:
+    explicit = os.getenv(env_name)
+    if explicit is not None and explicit.strip():
+        return Path(explicit.strip()).expanduser()
+    preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
+    if legacy_filename:
+        legacy_path = Path(legacy_filename)
+        if legacy_path.exists() and not preferred.exists():
+            return legacy_path
+    return preferred
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -53,6 +71,91 @@ def _write_jsonl(path: Path, items: Iterable[Dict[str, Any]]) -> None:
 
 def _load_install(solution: Dict[str, Any]) -> Dict[str, Any]:
     return solution.get("install") if isinstance(solution.get("install"), dict) else {}
+
+
+def _normalize_workspace_id(value: Optional[str]) -> Optional[str]:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _workspace_visible(entry_workspace_id: Optional[str], requested_workspace_id: Optional[str]) -> bool:
+    entry_ws = _normalize_workspace_id(entry_workspace_id)
+    requested_ws = _normalize_workspace_id(requested_workspace_id)
+    if requested_ws is None:
+        return True
+    if entry_ws is None:
+        return True
+    return entry_ws == requested_ws
+
+
+def _vault_connectors(workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    vault_file = _resolve_state_file("CREDENTIAL_VAULT_FILE", "vault/credentials.json", ".orion_credentials_vault.json")
+    if not vault_file.exists():
+        return []
+    try:
+        payload = json.loads(vault_file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    credentials = payload.get("credentials") if isinstance(payload, dict) else []
+    items: List[Dict[str, Any]] = []
+    for entry in credentials if isinstance(credentials, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        provider = str(entry.get("provider") or "").strip().lower()
+        if provider not in {"telegram_bot", "whatsapp_twilio"}:
+            continue
+        if not _workspace_visible(entry.get("workspace_id"), workspace_id):
+            continue
+        items.append(entry)
+    return items
+
+
+def _connected_channel_summary(workspace_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    connectors = _vault_connectors(workspace_id)
+
+    def _latest(provider: str) -> Optional[Dict[str, Any]]:
+        matches = [item for item in connectors if str(item.get("provider") or "").strip().lower() == provider]
+        if not matches:
+            return None
+        matches.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+        return matches[0]
+
+    telegram_entry = _latest("telegram_bot")
+    telegram_meta = telegram_entry.get("metadata") if isinstance(telegram_entry, dict) and isinstance(telegram_entry.get("metadata"), dict) else {}
+    telegram_chat_id = str(telegram_meta.get("chat_id") or "").strip()
+    telegram_connected = bool(telegram_entry) and bool(telegram_chat_id)
+
+    whatsapp_entry = _latest("whatsapp_twilio")
+    whatsapp_meta = whatsapp_entry.get("metadata") if isinstance(whatsapp_entry, dict) and isinstance(whatsapp_entry.get("metadata"), dict) else {}
+    whatsapp_connected = bool(whatsapp_entry) and bool(str(whatsapp_meta.get("to_number") or whatsapp_meta.get("phone_number") or "").strip())
+
+    return {
+        "telegram": {
+            "connected": telegram_connected,
+            "label": str(telegram_entry.get("label") or "Telegram").strip() if telegram_entry else "Telegram",
+            "chat_id": telegram_chat_id or None,
+        },
+        "whatsapp": {
+            "connected": whatsapp_connected,
+            "label": str(whatsapp_entry.get("label") or "WhatsApp").strip() if whatsapp_entry else "WhatsApp",
+        },
+    }
+
+
+def _load_vision_monitor_config() -> Dict[str, Any]:
+    if not VISION_MONITOR_CONFIG.exists():
+        return {}
+    raw_text = VISION_MONITOR_CONFIG.read_text(encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+
+        payload = yaml.safe_load(raw_text)
+    except Exception:
+        try:
+            payload = json.loads(raw_text)
+        except Exception:
+            payload = {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _solution_roots(solution: Dict[str, Any]) -> List[Path]:
@@ -154,7 +257,10 @@ def _space_card(space_dir: Path) -> Dict[str, Any]:
         "space_name": str(config.get("space_name") or config.get("space_id") or space_dir.name).strip(),
         "camera_url": str(config.get("camera_url") or "").strip(),
         "hotel_name": str(config.get("hotel_name") or "").strip() or None,
+        "city": str(config.get("city") or "").strip() or None,
         "timezone": str(config.get("timezone") or "").strip() or None,
+        "monitoring_modes": [str(item).strip() for item in (config.get("monitoring_modes") if isinstance(config.get("monitoring_modes"), list) else []) if str(item).strip()],
+        "quiet_hours": config.get("quiet_hours") if isinstance(config.get("quiet_hours"), dict) else {},
         "business_hours": config.get("business_hours") if isinstance(config.get("business_hours"), dict) else {},
         "scan_cadence_minutes": int(config.get("scan_cadence_minutes") or 5),
         "busy_threshold": int(config.get("busy_threshold") or 15),
@@ -213,6 +319,162 @@ def build_status(solution: Dict[str, Any]) -> Dict[str, Any]:
         "last_scan_at": last_scan_at,
         "summary": f"{len(cards)} spaces · {unresolved_alerts} unresolved alerts",
         "recent_alerts": recent_alerts,
+    }
+
+
+def _slugify_space_id(value: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return token[:40] or "space"
+
+
+def _primary_space_root(solution: Dict[str, Any]) -> Path:
+    roots = _solution_roots(solution)
+    target = roots[0] if roots else (PROJECT_ROOT / "spaces").resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _unique_space_id(solution: Dict[str, Any], space_name: str) -> str:
+    existing = set(_space_dirs(solution).keys())
+    base = _slugify_space_id(space_name)
+    if base not in existing:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
+
+
+def _data_url_to_file(data_url: str, target_dir: Path, stem: str) -> Path:
+    token = str(data_url or "").strip()
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", token)
+    if not match:
+        raise RuntimeError("Uploaded photo is invalid.")
+    mime_type = match.group(1).lower()
+    encoded = match.group(2)
+    ext = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }.get(mime_type, ".jpg")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except Exception as exc:
+        raise RuntimeError("Uploaded photo could not be decoded.") from exc
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{stem}{ext}"
+    path.write_bytes(raw)
+    return path
+
+
+def _business_hours_from_quiet(quiet_from: str, quiet_to: str) -> Dict[str, str]:
+    start = str(quiet_from or "").strip() or "22:00"
+    end = str(quiet_to or "").strip() or "06:00"
+    time_pattern = re.compile(r"^\d{2}:\d{2}$")
+    if not time_pattern.match(start) or not time_pattern.match(end):
+        return {"mon-sun": "07:00-22:00"}
+    return {"mon-sun": f"{end}-{start}"}
+
+
+def get_onboarding_status(solution: Dict[str, Any], workspace_id: Optional[str] = None) -> Dict[str, Any]:
+    root = _primary_space_root(solution)
+    channels = _connected_channel_summary(workspace_id)
+    vision_config = _load_vision_monitor_config()
+    monitoring_enabled = bool(vision_config.get("enabled", True))
+    root.mkdir(parents=True, exist_ok=True)
+    return {
+        "ok": True,
+        "has_spaces": len(_space_dirs(solution)) > 0,
+        "space_count": len(_space_dirs(solution)),
+        "default_timezone": datetime.now().astimezone().tzinfo.tzname(datetime.now().astimezone()) or "UTC",
+        "connected_channels": channels,
+        "recommended_channel": "telegram",
+        "monitoring_ready": monitoring_enabled,
+        "monitoring_message": (
+            "Setup complete. Your first space will be scanned automatically."
+            if monitoring_enabled
+            else "Setup complete. Monitoring will begin when the vision worker is enabled."
+        ),
+        "worker_pickup_mode": "automatic",
+        "root_writable": os.access(root, os.W_OK),
+    }
+
+
+def create_onboarding_space(solution: Dict[str, Any], payload: Dict[str, Any], workspace_id: Optional[str] = None) -> Dict[str, Any]:
+    hotel_name = str(payload.get("hotel_name") or "").strip()
+    city = str(payload.get("city") or "").strip()
+    timezone = str(payload.get("timezone") or "").strip()
+    alert_channel = str(payload.get("alert_channel") or "telegram").strip().lower()
+    space_name = str(payload.get("space_name") or "").strip()
+    camera_mode = str(payload.get("camera_mode") or "").strip().lower()
+    camera_url = str(payload.get("camera_url") or "").strip()
+    uploaded_photo = str(payload.get("uploaded_photo_data_url") or "").strip()
+    busy_threshold = max(1, int(payload.get("busy_threshold") or 15))
+    quiet_hours_from = str(payload.get("quiet_hours_from") or "22:00").strip()
+    quiet_hours_to = str(payload.get("quiet_hours_to") or "06:00").strip()
+    monitoring_modes = [
+        str(item).strip()
+        for item in (payload.get("monitoring_modes") if isinstance(payload.get("monitoring_modes"), list) else [])
+        if str(item).strip()
+    ]
+
+    if not hotel_name:
+        raise RuntimeError("hotel_name is required.")
+    if not city:
+        raise RuntimeError("city is required.")
+    if not timezone:
+        raise RuntimeError("timezone is required.")
+    if not space_name:
+        raise RuntimeError("space_name is required.")
+    if camera_mode not in {"upload", "ip_camera"}:
+        raise RuntimeError("camera_mode must be upload or ip_camera.")
+    if camera_mode == "upload" and not uploaded_photo:
+        raise RuntimeError("Upload one photo to test this space.")
+    if camera_mode == "ip_camera" and not camera_url:
+        raise RuntimeError("Enter the IP camera URL for this space.")
+
+    channels = _connected_channel_summary(workspace_id)
+    telegram_recipients: List[str] = []
+    if alert_channel == "telegram" and channels["telegram"].get("connected"):
+        chat_id = str(channels["telegram"].get("chat_id") or "").strip()
+        if chat_id:
+            telegram_recipients = [chat_id]
+
+    root = _primary_space_root(solution)
+    space_id = _unique_space_id(solution, space_name)
+    space_dir = root / space_id
+    resolved_camera_url = camera_url
+    if camera_mode == "upload":
+        uploaded_path = _data_url_to_file(uploaded_photo, space_dir, "seed-upload")
+        resolved_camera_url = f"file://{uploaded_path}"
+
+    config_path = space_dir / "config.json"
+    payload_to_write = {
+        "space_id": space_id,
+        "space_name": space_name,
+        "camera_url": resolved_camera_url,
+        "business_hours": _business_hours_from_quiet(quiet_hours_from, quiet_hours_to),
+        "scan_cadence_minutes": max(1, int(payload.get("scan_cadence_minutes") or 5)),
+        "busy_threshold": busy_threshold,
+        "telegram_recipients": telegram_recipients,
+        "hotel_name": hotel_name,
+        "city": city,
+        "timezone": timezone,
+        "monitoring_modes": monitoring_modes,
+        "quiet_hours": {"from": quiet_hours_from, "to": quiet_hours_to},
+        "alert_channel": alert_channel,
+    }
+    _write_json(config_path, payload_to_write)
+    return {
+        "ok": True,
+        "item": _space_card(space_dir),
+        "monitoring_message": (
+            "Setup complete. Your first space will be scanned automatically."
+            if bool(_load_vision_monitor_config().get("enabled", True))
+            else "Setup complete. Monitoring will begin when the vision worker is enabled."
+        ),
+        "channel_connected": bool(telegram_recipients) if alert_channel == "telegram" else False,
     }
 
 
@@ -358,6 +620,7 @@ def update_space_config(solution: Dict[str, Any], space_id: str, payload: Dict[s
             if str(item).strip()
         ],
         "hotel_name": str(payload.get("hotel_name") or current.get("hotel_name") or "").strip(),
+        "city": str(payload.get("city") or current.get("city") or "").strip(),
         "timezone": str(payload.get("timezone") or current.get("timezone") or "").strip(),
     }
     _write_json(config_path, next_config)
@@ -379,6 +642,14 @@ def handle_api_request(
 
     if request_method == "GET" and parts == ["spaces"]:
         return {"ok": True, "items": list_spaces(solution)}
+
+    if request_method == "GET" and parts == ["onboarding", "status"]:
+        workspace_id = str(params.get("workspace_id") or "").strip() or None
+        return get_onboarding_status(solution, workspace_id)
+
+    if request_method == "POST" and parts == ["onboarding", "space"]:
+        workspace_id = str(payload.get("workspace_id") or params.get("workspace_id") or "").strip() or None
+        return create_onboarding_space(solution, payload, workspace_id)
 
     if len(parts) >= 2 and parts[0] == "spaces":
         space_id = parts[1]

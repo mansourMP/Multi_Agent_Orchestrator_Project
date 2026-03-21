@@ -20,8 +20,50 @@ export type HotelSpace = {
   telegram_recipients?: string[];
   camera_url?: string;
   hotel_name?: string;
+  city?: string;
   timezone?: string;
+  monitoring_modes?: string[];
+  quiet_hours?: Record<string, string>;
   current_state?: Record<string, unknown>;
+};
+
+export type HotelOnboardingStatus = {
+  has_spaces: boolean;
+  space_count: number;
+  default_timezone: string;
+  recommended_channel: 'telegram';
+  monitoring_ready: boolean;
+  monitoring_message: string;
+  worker_pickup_mode: 'automatic';
+  root_writable: boolean;
+  connected_channels: {
+    telegram: {
+      connected: boolean;
+      label: string;
+      chat_id?: string | null;
+    };
+    whatsapp: {
+      connected: boolean;
+      label: string;
+    };
+  };
+};
+
+export type HotelOnboardingPayload = {
+  hotel_name: string;
+  city: string;
+  timezone: string;
+  alert_channel: 'telegram';
+  space_name: string;
+  camera_mode: 'upload' | 'ip_camera';
+  camera_url?: string;
+  uploaded_photo_data_url?: string;
+  monitoring_modes: string[];
+  busy_threshold: number;
+  quiet_hours_from: string;
+  quiet_hours_to: string;
+  scan_cadence_minutes?: number;
+  workspace_id?: string;
 };
 
 export type HotelAlert = {
@@ -132,6 +174,37 @@ export async function updateHotelSpaceConfig(
     },
   );
   return (body.item && typeof body.item === 'object' ? body.item : { space_id: spaceId, space_name: spaceId, status: 'unknown', occupancy_count: 0 }) as HotelSpace;
+}
+
+export async function fetchHotelOnboardingStatus(): Promise<HotelOnboardingStatus> {
+  const body = await readJson<HotelOnboardingStatus>(
+    `${ORION_API_URL}/api/solutions/hotel-vision/onboarding/status`,
+    'Failed to load Hotel Vision onboarding.',
+  );
+  return body;
+}
+
+export async function createHotelOnboardingSpace(payload: HotelOnboardingPayload): Promise<{
+  item: HotelSpace;
+  monitoring_message: string;
+  channel_connected: boolean;
+}> {
+  const body = await readJson<{ item?: HotelSpace; monitoring_message?: string; channel_connected?: boolean }>(
+    `${ORION_API_URL}/api/solutions/hotel-vision/onboarding/space`,
+    'Failed to create the first monitored space.',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+  return {
+    item: (body.item && typeof body.item === 'object'
+      ? body.item
+      : { space_id: 'space', space_name: 'Space', status: 'unknown', occupancy_count: 0 }) as HotelSpace,
+    monitoring_message: String(body.monitoring_message || 'Setup complete.'),
+    channel_connected: body.channel_connected === true,
+  };
 }
 
 export function statusTone(status: string): 'green' | 'yellow' | 'red' | 'grey' {

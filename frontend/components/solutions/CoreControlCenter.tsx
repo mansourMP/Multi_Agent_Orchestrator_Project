@@ -548,7 +548,7 @@ export function CoreControlCenter() {
             <div className="orion-panel-header">
               <div>
                 <div className="orion-panel-title">Running workflows</div>
-                <div className="orion-panel-copy">Scheduled systems currently configured in the runtime.</div>
+                <div className="orion-panel-copy">Automations currently available in this workspace.</div>
               </div>
             </div>
             {workflows.length === 0 ? (
@@ -579,7 +579,7 @@ export function CoreControlCenter() {
             <div className="orion-panel-header">
               <div>
                 <div className="orion-panel-title">Recent alerts</div>
-                <div className="orion-panel-copy">Latest unresolved solution alerts exposed to the control center.</div>
+                <div className="orion-panel-copy">Latest items that may need your attention.</div>
               </div>
             </div>
             {recentAlerts.length === 0 ? (

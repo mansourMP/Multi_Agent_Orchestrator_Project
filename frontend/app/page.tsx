@@ -657,16 +657,6 @@ function buildHomeInboxSessionPreview(items: HomeInboxSessionPayload[]): HomeInb
   };
 }
 
-function formatChatTrustLabel(value: string | null | undefined): string {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'auto') return 'Auto';
-  if (normalized === 'guarded') return 'Ask first';
-  if (normalized === 'strict') return 'Strict';
-  if (normalized === 'cost_guard') return 'Cost guard';
-  if (normalized === 'sensitive_guard') return 'Sensitive guard';
-  return 'Ask first';
-}
-
 function formatChatExecutionLabel(
   packId: string | null | undefined,
   connectionMode: string | null | undefined,
@@ -681,27 +671,6 @@ function formatChatExecutionLabel(
   if (target === 'browser') return 'Browser';
   if (target === 'desktop') return 'Desktop';
   return 'Cloud runtime';
-}
-
-function formatChatAuthLabel(providerAuthMode: string | null | undefined, runtimeAuthMode: string | null | undefined): string {
-  const providerMode = String(providerAuthMode || '').trim().toLowerCase();
-  const runtimeMode = String(runtimeAuthMode || '').trim().toLowerCase();
-  if (providerMode === 'local_cli') return 'Claude subscription';
-  if (providerMode === 'api_key') return 'API key';
-  if (providerMode === 'access_token') return 'Access token';
-  if (providerMode === 'project_id') return 'Project ID';
-  if (providerMode === 'location') return 'Location';
-  if (runtimeMode === 'api_key') return 'Runtime key';
-  if (runtimeMode === 'disabled') return 'Open';
-  return 'Configured';
-}
-
-function formatConnectionModeLabel(value: string | null | undefined): string {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'managed') return 'Managed by Empyralis';
-  if (normalized === 'byok') return 'Bring your own key';
-  if (normalized === 'local_companion') return 'Local companion';
-  return 'Managed by Empyralis';
 }
 
 type ChatNextRecommendation = {
@@ -916,7 +885,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     localExecutionDraft,
     setLocalExecutionDraft,
     provider,
-    providerAuthMode,
     model,
     providerOptions,
     connectionMode,
@@ -1716,18 +1684,17 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   ]);
   const sessionIdentityItems = useMemo<ChatIdentityItem[]>(() => {
     const readinessLabel = setupReady ? 'Ready' : 'Needs setup';
-    const hasApprovals = controlCenter.pendingApprovals.length > 0;
     const hasTools = connectorCredentials.length > 0;
-    const approvalLabel = hasApprovals ? `${controlCenter.pendingApprovals.length} waiting` : 'Clear';
     const toolsLabel = hasTools ? `${connectorCredentials.length} connected` : 'Connect one';
     return [
       { label: 'Status', value: readinessLabel, tone: setupReady ? 'success' : 'warning' },
       { label: 'Channels', value: toolsLabel, tone: hasTools ? 'success' : 'warning' },
-      { label: 'Approvals', value: approvalLabel, tone: hasApprovals ? 'warning' : 'neutral' },
+      { label: 'Next step', value: sessionNextRecommendation.actionLabel, tone: sessionNextRecommendation.chipTone },
     ];
   }, [
-    controlCenter.pendingApprovals.length,
     connectorCredentials.length,
+    sessionNextRecommendation.actionLabel,
+    sessionNextRecommendation.chipTone,
     setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
@@ -1735,9 +1702,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const effectiveModel = controlCenter.recentRuns[0]?.usage_model || model || 'Unknown';
     const effectiveExecutionTarget = controlCenter.recentRuns[0]?.execution_target_selected || null;
     const executionLabel = formatChatExecutionLabel(selectedPack.id, connectionMode, effectiveExecutionTarget);
-    const runtimeLabel = controlCenter.runtimeOk ? 'Connected and reachable' : 'Offline or unavailable';
-    const runtimeTone: ChatIdentityItem['tone'] = controlCenter.runtimeOk ? 'success' : 'warning';
-    const approvalTone: ChatIdentityItem['tone'] = controlCenter.pendingApprovals.length > 0 ? 'warning' : 'success';
     const latestRun = controlCenter.recentRuns[0] || null;
     const connectedToolsValue =
       connectorCredentials.length > 0
@@ -1746,49 +1710,35 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             .map((item) => item.label)
             .filter(Boolean)
             .join(', ')
-        : 'No live tools connected';
+        : 'No channels connected yet';
 
     return [
       {
-        title: 'Profile',
-        note: 'This is the default working profile shaping how the assistant approaches the chat.',
+        title: 'Status',
+        note: 'This is the quickest summary of what you can do next.',
         items: [
-          { label: 'Active profile', value: defaultAssistantProfile.label },
-          { label: 'Behavior', value: defaultAssistantProfile.subtitle },
-          { label: 'Runtime role', value: workbenchAgentConfigs[defaultAssistantProfile.backendRole]?.name?.trim() || defaultAssistantProfile.backendRole },
+          { label: 'Status', value: setupReady ? 'Ready to run' : 'One step left', tone: setupReady ? 'success' : 'warning' },
+          { label: 'Channels', value: connectedToolsValue, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
+          { label: 'Next step', value: sessionNextRecommendation.actionLabel, tone: sessionNextRecommendation.chipTone },
         ],
       },
       {
         title: 'Assistant',
-        note: 'This defines who is answering and how the current chat is routed.',
+        note: 'This is who is helping with the current conversation.',
         items: [
+          { label: 'Profile', value: defaultAssistantProfile.label },
           { label: 'Provider', value: providerLabel },
           { label: 'Model', value: effectiveModel },
-          { label: 'Auth', value: formatChatAuthLabel(providerAuthMode, controlCenter.authMode) },
-          { label: 'Connection', value: formatConnectionModeLabel(connectionMode) },
+          { label: 'Style', value: defaultAssistantProfile.subtitle },
         ],
       },
       {
-        title: 'Execution',
-        note: 'This explains where actions run and how tightly the assistant is allowed to act.',
+        title: 'Recent activity',
+        note: 'This shows the latest result and where it went.',
         items: [
-          { label: 'Execution target', value: executionLabel },
-          { label: 'Autonomy mode', value: formatChatTrustLabel(trustMode) },
-          { label: 'Runtime', value: runtimeLabel, tone: runtimeTone },
-          {
-            label: 'Approvals',
-            value: controlCenter.pendingApprovals.length > 0 ? `${controlCenter.pendingApprovals.length} waiting` : 'No waiting approvals',
-            tone: approvalTone,
-          },
-        ],
-      },
-      {
-        title: 'Workspace',
-        note: 'This is the connected context the assistant can use from the web product.',
-        items: [
-          { label: 'Connected tools', value: connectedToolsValue },
-          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No run yet' },
-          { label: 'Latest route', value: latestRun?.execution_target_selected || executionLabel },
+          { label: 'Delivery path', value: executionLabel },
+          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No activity yet' },
+          { label: 'Latest result', value: latestRun?.result_summary || 'Nothing has run yet' },
           { label: 'Latest provider', value: latestRun?.usage_provider || providerLabel },
         ],
       },
@@ -1797,17 +1747,14 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     activeProviderOption,
     connectionMode,
     connectorCredentials,
-    controlCenter.authMode,
-    controlCenter.pendingApprovals.length,
     controlCenter.recentRuns,
-    controlCenter.runtimeOk,
     defaultAssistantProfile,
     model,
     provider,
-    providerAuthMode,
     selectedPack.id,
-    trustMode,
-    workbenchAgentConfigs,
+    sessionNextRecommendation.actionLabel,
+    sessionNextRecommendation.chipTone,
+    setupReady,
   ]);
   const sessionIdentityActions = useMemo<ChatIdentityAction[]>(
     () => {
@@ -1823,11 +1770,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const primaryAction = createAction(sessionNextRecommendation.actionLabel, sessionNextRecommendation.href, 'primary');
 
       const secondaryActions = [
-        createAction('Open Profiles', '/agents'),
-        createAction('Open Setup', '/setup'),
         createAction('Open Connections', '/credentials'),
+        createAction('Open Automations', '/workflows'),
         createAction('Open Approvals', '/approvals'),
-        createAction('Open Control Center', '/control-center'),
       ].filter((item) => item.label !== primaryAction.label);
 
       return [primaryAction, ...secondaryActions];

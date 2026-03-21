@@ -2009,6 +2009,59 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     return createdCount;
   }, [primaryEmailConnector?.id, provider, model, connectionMode, credentialId, trustMode, buildHeaders]);
 
+  const createLeadFollowupExecutionSchedules = useCallback(async (flowLabel: string) => {
+    if (!primaryEmailConnector?.id) return 0;
+    const weekdayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const runRequest = {
+      engine: 'orion',
+      workspace_id: 'default',
+      user_goal: `Review the most recent leads from ${flowLabel.trim() || 'this lead flow'} and draft the next outbound follow-ups.`,
+      agent_role: 'support',
+      provider,
+      model,
+      credential_id: connectionMode === 'byok' ? credentialId || undefined : undefined,
+      metadata: {
+        trust_mode: trustMode,
+        source: 'scheduled',
+        connection_mode: connectionMode,
+        execution_target: 'cloud',
+        outcome_pack: 'customer-ops-autopilot',
+        outcome_pack_label: 'Client Workflow Autopilot',
+        outcome_scope: ['Lead follow-up'],
+        connector_credential_id: primaryEmailConnector.id,
+        pack_inputs: {
+          inbox: '',
+          leads: '',
+          slots: '',
+        },
+        automation_kind: 'lead_followup_recent',
+        automation_label: flowLabel.trim() || 'Leads',
+        summary_limit: 5,
+      },
+    };
+    let createdCount = 0;
+    for (const day of weekdayNames) {
+      const response = await fetch(`${ORION_API_URL}/schedules/weekly`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify({
+          name: `Lead Follow-up · ${flowLabel.trim() || 'Leads'} · ${day}`,
+          workspace_id: 'default',
+          enabled: true,
+          day_of_week: day,
+          time_hhmm: '09:00',
+          timezone: 'local',
+          run_request: runRequest,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseMessage(response, 'Failed to create lead follow-up schedule.'));
+      }
+      createdCount += 1;
+    }
+    return createdCount;
+  }, [primaryEmailConnector?.id, provider, model, connectionMode, credentialId, trustMode, buildHeaders]);
+
   const provisionCameraMonitorFromChat = useCallback(async (spaceName: string, cameraSource: string) => {
     const onboarding = await fetchHotelOnboardingStatus();
     const created = await createHotelOnboardingSpace({
@@ -2080,15 +2133,17 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     return lines.join('\n');
   }, [hasEmailConnector]);
 
-  const buildLeadFollowupCompletionMessage = useCallback((flowLabel: string, workflowId: string | null) => {
+  const buildLeadFollowupCompletionMessage = useCallback((flowLabel: string, workflowId: string | null, scheduleCount: number) => {
     const safeLabel = flowLabel.trim() || 'Leads';
-    const isActive = hasEmailConnector;
+    const isActive = scheduleCount > 0;
     const lines = [
       isActive ? `Done. Your **${safeLabel}** follow-up automation is active.` : `Done. Your **${safeLabel}** follow-up automation is ready.`,
       '',
       isActive
-        ? 'It is set to prepare outbound follow-ups on schedule.'
-        : 'Connect an email account to send follow-ups automatically.',
+        ? 'It will review recent leads every morning and prepare outbound follow-ups.'
+        : hasEmailConnector
+          ? 'Finish AI setup to run follow-ups automatically.'
+          : 'Connect an email account to send follow-ups automatically.',
       '',
       '[Open automations](/workflows)',
     ];
@@ -2097,6 +2152,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     }
     if (!hasEmailConnector) {
       lines.push('[Connect email →](/credentials)');
+    }
+    if (hasEmailConnector && !isActive) {
+      lines.push('[Finish setup →](/setup)');
     }
     return lines.join('\n');
   }, [hasEmailConnector]);
@@ -2227,8 +2285,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       });
       try {
         const workflowId = await createLeadFollowupVisibilityWorkflow(flowLabel);
+        const scheduleCount = hasEmailConnector ? await createLeadFollowupExecutionSchedules(flowLabel) : 0;
         patchSimpleChatMessage(sessionId, placeholderId, {
-          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null),
+          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null, scheduleCount),
           status: 'completed',
           ts: new Date().toISOString(),
         });
@@ -2309,7 +2368,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupExecutionSchedules, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const consumeWorkbenchCameraMonitorSetup = useCallback(async (agentRole: string, text: string) => {
     const stateKey = `advanced:${agentRole}`;
@@ -2437,8 +2496,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       });
       try {
         const workflowId = await createLeadFollowupVisibilityWorkflow(flowLabel);
+        const scheduleCount = hasEmailConnector ? await createLeadFollowupExecutionSchedules(flowLabel) : 0;
         patchWorkbenchAgentChat(agentRole, placeholderId, {
-          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null),
+          content: buildLeadFollowupCompletionMessage(flowLabel, workflowId || null, scheduleCount),
           status: 'completed',
           ts: new Date().toISOString(),
         });
@@ -2519,7 +2579,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupExecutionSchedules, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const runWorkbenchCommand = useCallback(async (input?: string) => {
     const raw = String(input ?? goal).trim();

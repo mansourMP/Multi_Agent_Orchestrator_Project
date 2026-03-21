@@ -421,9 +421,10 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
                 report_lines.append(line)
         if links:
             report_lines.extend(["", "Links:"])
-            report_lines.extend(
-                [f"- {str(item.get('href') or '').strip()}{f' | {str(item.get('text') or '').strip()}' if str(item.get('text') or '').strip() else ''}" for item in links[:20]]
-            )
+            for item in links[:20]:
+                href = str(item.get("href") or "").strip()
+                text = str(item.get("text") or "").strip()
+                report_lines.append(f"- {href}{f' | {text}' if text else ''}")
         report_target.write_text("\n".join(report_lines).strip(), encoding="utf-8")
         action = {
             "step_index": op_index,
@@ -528,9 +529,13 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
     links = link_parser.links[:40]
 
     if mode == "extract_links":
+        link_lines = []
+        for item in links:
+            href = str(item.get("href") or "").strip()
+            item_title = str(item.get("title") or "").strip()
+            link_lines.append(f"- {href}{f' | {item_title}' if item_title else ''}")
         report_body = "\n".join(
-            [f"URL: {final_url}", f"Title: {title or '-'}", "", "Links:"]
-            + [f"- {item['href']}{f' | {item['title']}' if item['title'] else ''}" for item in links]
+            [f"URL: {final_url}", f"Title: {title or '-'}", "", "Links:"] + link_lines
         ).strip()
         preview = _bounded_text(report_body, 2000)
     elif mode == "save_html":

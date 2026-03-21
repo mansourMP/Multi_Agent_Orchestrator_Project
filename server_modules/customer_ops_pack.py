@@ -165,6 +165,27 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
             if isinstance(item, dict)
         ]
 
+    if not lead_items and automation_kind == "lead_followup_recent" and connector_details["enabled"]:
+        try:
+            recent_messages = _server.list_recent_connector_messages(connector_credentials, limit=summary_limit)
+        except Exception as exc:
+            connector_label = connector_provider or "Connector"
+            connector_details["warnings"].append(f"{connector_label} lead fetch failed: {exc}")
+            recent_messages = []
+        lead_items = [
+            " | ".join(
+                part for part in [
+                    str(item.get("from") or "").strip(),
+                    str(item.get("subject") or "").strip(),
+                    str(item.get("snippet") or "").strip(),
+                ] if part
+            )
+            for item in recent_messages
+            if isinstance(item, dict) and any(
+                str(item.get(field) or "").strip() for field in ("from", "subject", "snippet")
+            )
+        ]
+
     def evaluate_runtime_tool(tool_id: str, phase: str, lead_name: Optional[str] = None) -> Dict[str, Any]:
         evaluation = _server.evaluate_tool_policy_decision(
             tool_id=tool_id,

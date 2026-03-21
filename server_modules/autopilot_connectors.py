@@ -1365,6 +1365,50 @@ def _create_email_summary_execution_schedules(workspace_id: str, target_label: s
     return created
 
 
+def _create_lead_followup_execution_schedules(workspace_id: str, flow_label: str) -> int:
+    connector_id = _primary_email_connector_id(workspace_id)
+    if not connector_id:
+        return 0
+    label = str(flow_label or "").strip() or "Leads"
+    run_request = {
+        "engine": "orion",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "user_goal": f"Review the most recent leads from {label} and draft the next outbound follow-ups.",
+        "agent_role": "support",
+        "metadata": {
+            "source": "scheduled",
+            "execution_target": "cloud",
+            "outcome_pack": "customer-ops-autopilot",
+            "outcome_pack_label": "Client Workflow Autopilot",
+            "outcome_scope": ["Lead follow-up"],
+            "connector_credential_id": connector_id,
+            "pack_inputs": {"inbox": "", "leads": "", "slots": ""},
+            "automation_kind": "lead_followup_recent",
+            "automation_label": label,
+            "summary_limit": 5,
+        },
+    }
+    created = 0
+    for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
+        http_json_request(
+            f"{EMPYRALIST_RUNTIME_URL}/schedules/weekly",
+            method="POST",
+            headers=_runtime_api_headers(),
+            payload={
+                "name": f"Lead Follow-up · {label} · {day}",
+                "workspace_id": str(workspace_id or "").strip() or "default",
+                "enabled": True,
+                "day_of_week": day,
+                "time_hhmm": "09:00",
+                "timezone": "local",
+                "run_request": run_request,
+            },
+            timeout=20,
+        )
+        created += 1
+    return created
+
+
 def _create_lead_followup_visibility_record(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Optional[str]:
     label = str(flow_label or "").strip() or "Leads"
     return _create_published_workflow_record(
@@ -1413,17 +1457,28 @@ def _email_summary_completion_text(
     return "\n\n".join(lines)
 
 
-def _lead_followup_completion_text(flow_label: str, *, email_connected: bool, workflow_id: Optional[str] = None) -> str:
+def _lead_followup_completion_text(
+    flow_label: str,
+    *,
+    schedule_count: int,
+    email_connected: bool,
+    workflow_id: Optional[str] = None,
+) -> str:
     label = str(flow_label or "").strip() or "Leads"
+    is_active = schedule_count > 0
     lines = [
-        f"Done. Your {label} follow-up automation is {'active' if email_connected else 'ready'}.",
-        "It is set to prepare outbound follow-ups on schedule." if email_connected else "Connect an email account to send follow-ups automatically.",
+        f"Done. Your {label} follow-up automation is {'active' if is_active else 'ready'}.",
+        "It will review recent leads every morning and prepare outbound follow-ups." if is_active else (
+            "Finish setup to run follow-ups automatically." if email_connected else "Connect an email account to send follow-ups automatically."
+        ),
         f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
     ]
     if workflow_id:
         lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
     if not email_connected:
         lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
+    if email_connected and not is_active:
+        lines.append(f"Finish setup → {EMPYRALIST_WEB_URL}/setup")
     return "\n\n".join(lines)
 
 
@@ -1475,11 +1530,13 @@ def _telegram_handle_camera_monitor_setup(
                     email_connected=connector_flags["email"],
                     telegram_connected=connector_flags["telegram"],
                 )
+                schedule_count = _create_lead_followup_execution_schedules(workspace_id, normalized_text) if connector_flags["email"] else 0
                 _clear_telegram_camera_setup_state(workspace_id, chat_id)
                 return {
                     "handled": True,
                     "reply": _lead_followup_completion_text(
                         normalized_text,
+                        schedule_count=schedule_count,
                         email_connected=connector_flags["email"],
                         workflow_id=workflow_id,
                     ),

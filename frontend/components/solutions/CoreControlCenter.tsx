@@ -27,6 +27,7 @@ export function CoreControlCenter() {
   const [skills, setSkills] = useState<SkillCard[]>([]);
   const [workflows, setWorkflows] = useState<Array<Record<string, unknown>>>([]);
   const [recentRuns, setRecentRuns] = useState<RecentRunItem[]>([]);
+  const [mcpEndpoint, setMcpEndpoint] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -80,6 +81,7 @@ export function CoreControlCenter() {
         ]);
         if (cancelled) return;
         setSolutions(Array.isArray(solutionsState.active) ? solutionsState.active : []);
+        setMcpEndpoint(typeof solutionsState.mcp_endpoint === 'string' && solutionsState.mcp_endpoint.trim() ? solutionsState.mcp_endpoint.trim() : null);
         setSkills(Array.isArray(skillsState.installed) ? skillsState.installed.filter((item) => item.enabled) : []);
         setWorkflows(Array.isArray(weeklySchedules) ? weeklySchedules : []);
         setRecentRuns(Array.isArray(runItems) ? runItems.slice(0, 5) : []);
@@ -136,6 +138,7 @@ export function CoreControlCenter() {
           <>
             <span>{solutions.length} active solution{solutions.length === 1 ? '' : 's'}</span>
             <span>{skills.length} active skill{skills.length === 1 ? '' : 's'}</span>
+            {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">MCP Ready</span> : null}
           </>
         }
       />

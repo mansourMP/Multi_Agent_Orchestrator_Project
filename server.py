@@ -21,11 +21,18 @@ from urllib import error as urlerror
 from urllib.parse import quote_plus, parse_qs, urlencode
 import ssl
 import certifi
+from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from dotenv import load_dotenv
+from mcp_server import (
+    EMPYRALIST_MCP_ENDPOINT,
+    EMPYRALIST_MCP_TOOLS,
+    mount_empyralist_mcp,
+    empyralist_mcp_lifespan,
+)
 from scripts.platform_execution import (
     capability_metadata,
     capability_tool_id,
@@ -321,7 +328,14 @@ os.environ.setdefault("RICH_NO_COLOR", "1")
 os.environ.setdefault("NO_COLOR", "1")
 os.environ.setdefault("TERM", "dumb")
 
-app = FastAPI(title="Empyralis Runtime API")
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(empyralist_mcp_lifespan())
+        yield
+
+
+app = FastAPI(title="Empyralis Runtime API", lifespan=app_lifespan)
 
 # --- CONFIG ---
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
@@ -660,6 +674,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+mount_empyralist_mcp(app)
 
 # Global State
 runs: Dict[str, Dict[str, Any]] = {}
@@ -4287,6 +4302,8 @@ async def get_runtime_solutions_state():
         "ok": True,
         "installed": list_installed_solutions(),
         "active": active_installed_solutions(),
+        "mcp_endpoint": EMPYRALIST_MCP_ENDPOINT,
+        "mcp_tools": EMPYRALIST_MCP_TOOLS,
     }
 
 

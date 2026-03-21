@@ -45,7 +45,8 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
         >
             <Handle
                 type="target"
-                position={Position.Left}
+                id="top"
+                position={Position.Top}
                 style={{
                     background: 'var(--bg-surface)',
                     width: 12,
@@ -127,7 +128,8 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
 
             <Handle
                 type="source"
-                position={Position.Right}
+                id="bottom"
+                position={Position.Bottom}
                 style={{
                     background: 'var(--bg-surface)',
                     width: 12,

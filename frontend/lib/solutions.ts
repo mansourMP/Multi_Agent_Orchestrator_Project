@@ -32,6 +32,13 @@ export type InstalledSolution = {
   };
 };
 
+export type SolutionsState = {
+  installed: InstalledSolution[];
+  active: InstalledSolution[];
+  mcp_endpoint?: string | null;
+  mcp_tools?: string[];
+};
+
 export type RecentRunItem = {
   run_id: string;
   status?: string | null;
@@ -56,11 +63,13 @@ async function readJson<T>(url: string, fallbackMessage: string): Promise<T> {
   return body as T;
 }
 
-export async function fetchSolutionsState(): Promise<{ installed: InstalledSolution[]; active: InstalledSolution[] }> {
-  const body = await readJson<{ installed?: InstalledSolution[]; active?: InstalledSolution[] }>(`${ORION_API_URL}/solutions/state`, 'Failed to load solutions.');
+export async function fetchSolutionsState(): Promise<SolutionsState> {
+  const body = await readJson<{ installed?: InstalledSolution[]; active?: InstalledSolution[]; mcp_endpoint?: string | null; mcp_tools?: string[] }>(`${ORION_API_URL}/solutions/state`, 'Failed to load solutions.');
   return {
     installed: Array.isArray(body.installed) ? body.installed : [],
     active: Array.isArray(body.active) ? body.active : [],
+    mcp_endpoint: typeof body.mcp_endpoint === 'string' && body.mcp_endpoint.trim() ? body.mcp_endpoint.trim() : null,
+    mcp_tools: Array.isArray(body.mcp_tools) ? body.mcp_tools.map((item) => String(item || '').trim()).filter(Boolean) : [],
   };
 }
 

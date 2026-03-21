@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Loader2, Play, Save, Send, ShieldCheck, UploadCloud, Zap } from 'lucide-react';
-import { ReactFlow, Controls, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
@@ -144,8 +144,9 @@ type CanvasNodeData = TriggerCanvasData | AgentCanvasData | ActionCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
 const CANVAS_NODE_WIDTH = 220;
-const CANVAS_NODE_TOP = -150;
-const CANVAS_NODE_GAP = 150;
+const CANVAS_NODE_X = 265;
+const CANVAS_NODE_TOP = 50;
+const CANVAS_NODE_GAP = 170;
 
 const DEFAULT_OPERATOR: OperatorConfig = {
     modelId: 'gpt-4.1',
@@ -267,11 +268,11 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     };
 }
 
-function layoutCanvasNodes(nodes: CanvasWorkflowNode[], centerX = 0): CanvasWorkflowNode[] {
+function layoutCanvasNodes(nodes: CanvasWorkflowNode[]): CanvasWorkflowNode[] {
     return nodes.map((node, index) => ({
         ...node,
         position: {
-            x: centerX - (CANVAS_NODE_WIDTH / 2),
+            x: CANVAS_NODE_X,
             y: CANVAS_NODE_TOP + (index * CANVAS_NODE_GAP),
         },
     }));
@@ -279,9 +280,11 @@ function layoutCanvasNodes(nodes: CanvasWorkflowNode[], centerX = 0): CanvasWork
 
 function buildLinearEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
     return nodes.slice(0, -1).map((node, index) => ({
-        id: `edge-${node.id}-${nodes[index + 1].id}`,
-        source: node.id,
-        target: nodes[index + 1].id,
+        id: `edge-${String(node.id)}-${String(nodes[index + 1].id)}`,
+        source: String(node.id),
+        target: String(nodes[index + 1].id),
+        sourceHandle: 'bottom',
+        targetHandle: 'top',
         type: 'smoothstep',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
         animated: true,
@@ -317,18 +320,18 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
     return parsed;
 }
 
-function buildDefaultCanvasNodes(centerX = 0): CanvasWorkflowNode[] {
+function buildDefaultCanvasNodes(): CanvasWorkflowNode[] {
     return layoutCanvasNodes([
         {
             id: 'trigger-default',
             type: 'trigger',
-            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP },
+            position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP },
             data: { label: 'Start Trigger', triggerType: 'manual' },
         },
         {
             id: 'agent-default',
             type: 'agent',
-            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP + CANVAS_NODE_GAP },
+            position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP + CANVAS_NODE_GAP },
             data: {
                 label: 'AI Agent',
                 modelId: 'gpt-4.1',
@@ -344,10 +347,23 @@ function buildDefaultCanvasNodes(centerX = 0): CanvasWorkflowNode[] {
         {
             id: 'action-default',
             type: 'action',
-            position: { x: centerX - (CANVAS_NODE_WIDTH / 2), y: CANVAS_NODE_TOP + (CANVAS_NODE_GAP * 2) },
+            position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP + (CANVAS_NODE_GAP * 2) },
             data: { label: 'Send Telegram', actionType: 'send_telegram' },
         },
-    ], centerX);
+    ]);
+}
+
+function resolveCanvasCenterX(
+    reactFlow: Pick<ReactFlowInstance<CanvasWorkflowNode, Edge>, 'screenToFlowPosition'>,
+    host: HTMLDivElement | null,
+): number | null {
+    const rect = host?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return null;
+    const center = reactFlow.screenToFlowPosition({
+        x: rect.left + (rect.width / 2),
+        y: rect.top + (rect.height / 2),
+    });
+    return Number.isFinite(center.x) ? center.x : null;
 }
 
 function CanvasViewportCenter({
@@ -359,16 +375,14 @@ function CanvasViewportCenter({
 }) {
     const reactFlow = useReactFlow<CanvasWorkflowNode, Edge>();
     const nodesInitialized = useNodesInitialized();
+    const hasSyncedRef = useRef(false);
 
     useEffect(() => {
-        if (!nodesInitialized) return;
-        const rect = hostRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const center = reactFlow.screenToFlowPosition({
-            x: rect.left + (rect.width / 2),
-            y: rect.top + (rect.height / 2),
-        });
-        onCenterChange(center.x);
+        if (!nodesInitialized || hasSyncedRef.current) return;
+        const centerX = resolveCanvasCenterX(reactFlow, hostRef.current);
+        if (centerX === null) return;
+        hasSyncedRef.current = true;
+        onCenterChange(centerX);
     }, [hostRef, nodesInitialized, onCenterChange, reactFlow]);
 
     return null;
@@ -475,9 +489,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const streamRef = useRef<EventSource | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
     const canvasHostRef = useRef<HTMLDivElement | null>(null);
-    const [canvasCenterX, setCanvasCenterX] = useState(0);
-    const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>(() => buildDefaultCanvasNodes(0));
-    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>(() => buildLinearEdges(buildDefaultCanvasNodes(0)));
+    const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>(() => {
+        return buildDefaultCanvasNodes();
+    });
+    const [canvasEdges, setCanvasEdges] = useState<CanvasWorkflowEdge[]>(() => {
+        const initialNodes = buildDefaultCanvasNodes();
+        return buildLinearEdges(initialNodes);
+    });
 
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -590,6 +608,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     useEffect(() => {
         writeRuntimeApiKeyToStorage(runtimeApiKey);
     }, [runtimeApiKey]);
+
+    useEffect(() => {
+        console.log('workflow canvas edges', canvasEdges);
+    }, [canvasEdges]);
 
     const applyAutopilotPack = useCallback((pack: AutopilotPack) => {
         setOperator((prev) => ({
@@ -740,9 +762,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const orderedNodes = parsedNodes.length > 0
                 ? layoutCanvasNodes(
                     [...parsedNodes].sort((left, right) => (left.position.y - right.position.y) || (left.position.x - right.position.x)),
-                    canvasCenterX,
                 )
-                : buildDefaultCanvasNodes(canvasCenterX);
+                : buildDefaultCanvasNodes();
             setCanvasNodes(orderedNodes);
             setCanvasEdges(buildLinearEdges(orderedNodes));
             setSelectedNodeId(orderedNodes[0]?.id || null);
@@ -751,7 +772,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsLoading(false);
         }
-    }, [workflowId, addToast, canvasCenterX]);
+    }, [workflowId, addToast]);
 
     useEffect(() => {
         loadWorkflow();
@@ -820,9 +841,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         [canvasEdges, runStatus],
     );
 
-    const handleCanvasCenterChange = useCallback((nextCenterX: number) => {
-        setCanvasCenterX(nextCenterX);
-        setCanvasNodes((prev) => layoutCanvasNodes(prev, nextCenterX));
+    const handleCanvasCenterChange = useCallback(() => {
+        setCanvasNodes((prev) => layoutCanvasNodes(prev));
+    }, []);
+
+    const handleCanvasInit = useCallback((instance: ReactFlowInstance<CanvasWorkflowNode, Edge>) => {
+        flowInstanceRef.current = instance;
+        const nextCenterX = resolveCanvasCenterX(instance, canvasHostRef.current);
+        if (nextCenterX !== null) {
+            setCanvasNodes((prev) => layoutCanvasNodes(prev));
+        }
+        instance.fitView({ padding: 0.4, duration: 400, maxZoom: 1.1 });
     }, []);
 
     const addCanvasNode = useCallback((type: CanvasNodeType) => {
@@ -833,7 +862,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 {
                     id: makeNodeId(type),
                     type,
-                    position: { x: canvasCenterX - (CANVAS_NODE_WIDTH / 2), y: maxY + CANVAS_NODE_GAP },
+                    position: { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
                     data: defaultNodeData(type),
                 },
             ];
@@ -841,7 +870,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setSelectedNodeId(nextNodes[nextNodes.length - 1]?.id || null);
             return nextNodes;
         });
-    }, [canvasCenterX]);
+    }, []);
 
     const updateSelectedNode = useCallback((updater: (node: CanvasWorkflowNode) => CanvasWorkflowNode) => {
         if (!selectedNodeId) return;
@@ -1373,7 +1402,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     <div
                         className="workflow-pro-grid"
                         style={{
-                            height: '100%',
+                            height: 'calc(100vh - 120px)',
                             minHeight: 0,
                             display: 'grid',
                             gridTemplateColumns: '220px minmax(0, 1fr) 320px',
@@ -1420,16 +1449,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                         <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex' }}>
                             <ReactFlow
-                                style={{ flex: 1, minHeight: 0 }}
+                                style={{ flex: 1, minHeight: 0, height: 'calc(100vh - 120px)' }}
                                 nodes={canvasNodes}
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
                                 fitView
                                 fitViewOptions={{ padding: 0.4 }}
-                                onInit={(instance) => {
-                                    flowInstanceRef.current = instance;
-                                    instance.fitView({ padding: 0.4, duration: 400, maxZoom: 1.1 });
-                                }}
+                                onInit={handleCanvasInit}
                                 onNodesChange={handleCanvasNodesChange}
                                 onNodeClick={(_event: unknown, node: CanvasWorkflowNode) => setSelectedNodeId(node.id)}
                                 onPaneClick={() => setSelectedNodeId(null)}
@@ -1449,6 +1475,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     style: { stroke: '#7c3aed', strokeWidth: 2, opacity: 0.7 },
                                 }}
                             >
+                                <Background
+                                    variant={BackgroundVariant.Dots}
+                                    gap={20}
+                                    size={1.5}
+                                    color="#c4c4c4"
+                                />
                                 <CanvasViewportCenter hostRef={canvasHostRef} onCenterChange={handleCanvasCenterChange} />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>

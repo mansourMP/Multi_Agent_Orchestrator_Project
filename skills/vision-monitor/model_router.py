@@ -113,6 +113,22 @@ def _call_ollama(endpoint: str, model: str, image_path: Path, prompt: str) -> st
     return str(message.get("content") or "").strip()
 
 
+def _call_ollama_text(endpoint: str, model: str, prompt: str) -> str:
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+    }
+    parsed = _json_request(f"{endpoint.rstrip('/')}/api/chat", payload, timeout=120)
+    message = parsed.get("message") if isinstance(parsed.get("message"), dict) else {}
+    return str(message.get("content") or "").strip()
+
+
 def _call_openai(model: str, image_path: Path, prompt: str) -> str:
     api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
@@ -131,6 +147,32 @@ def _call_openai(model: str, image_path: Path, prompt: str) -> str:
                         },
                     },
                 ],
+            }
+        ],
+    }
+    parsed = _json_request(
+        "https://api.openai.com/v1/chat/completions",
+        payload,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=120,
+    )
+    choices = parsed.get("choices") if isinstance(parsed.get("choices"), list) else []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0].get("message"), dict) else {}
+    return str(message.get("content") or "").strip()
+
+
+def _call_openai_text(model: str, prompt: str) -> str:
+    api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set in the environment.")
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
             }
         ],
     }
@@ -183,6 +225,32 @@ def _call_anthropic(model: str, image_path: Path, prompt: str) -> str:
     return "\n".join(chunk for chunk in texts if chunk).strip()
 
 
+def _call_anthropic_text(model: str, prompt: str) -> str:
+    api_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    payload = {
+        "model": model,
+        "max_tokens": 400,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+    }
+    parsed = _json_request(
+        "https://api.anthropic.com/v1/messages",
+        payload,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        timeout=120,
+    )
+    content = parsed.get("content") if isinstance(parsed.get("content"), list) else []
+    texts = [str(item.get("text") or "").strip() for item in content if isinstance(item, dict) and str(item.get("type") or "") == "text"]
+    return "\n".join(chunk for chunk in texts if chunk).strip()
+
+
 def _call_gemini(model: str, image_path: Path, prompt: str) -> str:
     api_key = str(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     payload = {
@@ -196,6 +264,31 @@ def _call_gemini(model: str, image_path: Path, prompt: str) -> str:
                             "data": _image_b64(image_path),
                         }
                     },
+                ]
+            }
+        ]
+    }
+    parsed = _json_request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        payload,
+        timeout=120,
+    )
+    candidates = parsed.get("candidates") if isinstance(parsed.get("candidates"), list) else []
+    if not candidates or not isinstance(candidates[0], dict):
+        return ""
+    content = candidates[0].get("content") if isinstance(candidates[0].get("content"), dict) else {}
+    parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+    texts = [str(part.get("text") or "").strip() for part in parts if isinstance(part, dict)]
+    return "\n".join(chunk for chunk in texts if chunk).strip()
+
+
+def _call_gemini_text(model: str, prompt: str) -> str:
+    api_key = str(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
                 ]
             }
         ]
@@ -231,4 +324,24 @@ def summarize_scene(image_path: Path, prompt: str, vlm_config: Dict[str, Any]) -
         raise RuntimeError(f"Unsupported routed model provider: {provider}")
     if not text:
         raise RuntimeError(f"{provider} returned an empty scene summary.")
+    return {"provider": provider, "model": model, "text": text}
+
+
+def complete_text(prompt: str, vlm_config: Dict[str, Any]) -> Dict[str, Any]:
+    target = resolve_model_target(vlm_config)
+    provider = str(target.get("provider") or "").strip().lower()
+    model = str(target.get("model") or "").strip()
+    if provider == "ollama":
+        endpoint = str(((vlm_config.get("ollama") if isinstance(vlm_config.get("ollama"), dict) else {}) or {}).get("endpoint") or "http://127.0.0.1:11434").strip()
+        text = _call_ollama_text(endpoint, model, prompt)
+    elif provider == "openai":
+        text = _call_openai_text(model, prompt)
+    elif provider == "anthropic":
+        text = _call_anthropic_text(model, prompt)
+    elif provider == "gemini":
+        text = _call_gemini_text(model, prompt)
+    else:
+        raise RuntimeError(f"Unsupported routed model provider: {provider}")
+    if not text:
+        raise RuntimeError(f"{provider} returned an empty text completion.")
     return {"provider": provider, "model": model, "text": text}

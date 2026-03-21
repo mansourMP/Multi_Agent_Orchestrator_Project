@@ -49,7 +49,8 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
         >
             <Handle
                 type="target"
-                position={Position.Left}
+                id="top"
+                position={Position.Top}
                 style={{
                     background: 'var(--bg-surface)',
                     width: 12,
@@ -87,7 +88,8 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
 
             <Handle
                 type="source"
-                position={Position.Right}
+                id="bottom"
+                position={Position.Bottom}
                 style={{
                     background: 'var(--bg-surface)',
                     width: 12,

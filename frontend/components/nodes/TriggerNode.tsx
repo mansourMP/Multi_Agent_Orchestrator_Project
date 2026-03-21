@@ -72,7 +72,8 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
 
             <Handle
                 type="source"
-                position={Position.Right}
+                id="bottom"
+                position={Position.Bottom}
                 style={{
                     background: 'var(--bg-surface)',
                     width: 12,

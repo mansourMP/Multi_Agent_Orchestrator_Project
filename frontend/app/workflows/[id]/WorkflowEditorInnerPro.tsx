@@ -1625,7 +1625,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
                             <div className="workflow-pro-section-title">Palette</div>
                             <button
-                                className="workflow-canvas-palette-btn"
+                                className="btn-secondary workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('trigger')}
                                 style={{ ['--workflow-palette-accent' as string]: '#f59e0b' }}
                             >
@@ -1635,7 +1635,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 Trigger
                             </button>
                             <button
-                                className="workflow-canvas-palette-btn"
+                                className="btn-secondary workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('agent')}
                                 style={{ ['--workflow-palette-accent' as string]: '#7c3aed' }}
                             >
@@ -1645,7 +1645,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 Agent
                             </button>
                             <button
-                                className="workflow-canvas-palette-btn"
+                                className="btn-secondary workflow-canvas-palette-btn"
                                 onClick={() => addCanvasNode('action')}
                                 style={{ ['--workflow-palette-accent' as string]: '#10b981' }}
                             >

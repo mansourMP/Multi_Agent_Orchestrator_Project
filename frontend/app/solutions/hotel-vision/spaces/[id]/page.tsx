@@ -189,7 +189,6 @@ export default function HotelVisionSpaceDetailPage() {
             <div className="orion-panel-header" style={{ marginBottom: 0 }}>
               <div>
                 <div className="orion-panel-title">Ask about this space</div>
-                <div className="orion-panel-copy">Uses the same live file-backed answer path as Telegram.</div>
               </div>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>

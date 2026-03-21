@@ -1589,8 +1589,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
       {loading ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">Checking connected suites</div>
-          <div className="orion-empty-copy">Reading saved connection state, capability tests, and worker ownership from the local runtime.</div>
+          <div className="orion-empty-title">Loading...</div>
         </section>
       ) : pageError && connectors.length === 0 ? (
         <section className="orion-empty">

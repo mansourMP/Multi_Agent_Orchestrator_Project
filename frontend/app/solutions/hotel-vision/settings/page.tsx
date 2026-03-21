@@ -237,7 +237,7 @@ export default function HotelVisionSettingsPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <Link href="/settings" className="orion-btn orion-btn-ghost">Open core settings</Link>
+          <Link href="/settings" className="orion-btn orion-btn-ghost">Settings</Link>
           <Link href="/integrations" className="orion-btn orion-btn-ghost">Open connections</Link>
         </div>
       </section>

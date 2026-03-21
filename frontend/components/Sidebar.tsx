@@ -24,6 +24,8 @@ import {
 } from '@/components/orion/chat/chatSchema';
 import type { ComponentType, CSSProperties } from 'react';
 
+const SIDEBAR_SOLUTIONS_CACHE_KEY = 'empyralis_sidebar_active_solutions';
+
 type NavItem = {
     label: string;
     href: string;
@@ -67,7 +69,17 @@ export default function Sidebar() {
     const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
     const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
     const [selectedChatSessionId, setSelectedChatSessionId] = useState<string | null>(null);
-    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>([]);
+    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>(() => {
+        if (typeof window === 'undefined') return [];
+        try {
+            const raw = window.sessionStorage.getItem(SIDEBAR_SOLUTIONS_CACHE_KEY);
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? (parsed as InstalledSolution[]) : [];
+        } catch {
+            return [];
+        }
+    });
 
     useEffect(() => {
         let alive = true;
@@ -115,10 +127,16 @@ export default function Sidebar() {
                 if (!res.ok) return;
                 const items = Array.isArray(body?.active) ? body.active : [];
                 if (alive) {
-                    setActiveSolutions(items.filter((item: unknown) => Boolean(item) && typeof item === 'object') as InstalledSolution[]);
+                    const nextItems = items.filter((item: unknown) => Boolean(item) && typeof item === 'object') as InstalledSolution[];
+                    setActiveSolutions(nextItems);
+                    try {
+                        window.sessionStorage.setItem(SIDEBAR_SOLUTIONS_CACHE_KEY, JSON.stringify(nextItems));
+                    } catch {
+                        // ignore storage failures
+                    }
                 }
             } catch {
-                if (alive) setActiveSolutions([]);
+                // keep the last known sidebar solutions to avoid rail flicker on route changes
             }
         };
         void refreshSolutions();
@@ -152,11 +170,24 @@ export default function Sidebar() {
             }));
     }, [activeSolutions]);
 
+    const routePinnedSolutionItems = useMemo(() => {
+        if (pathname.startsWith('/solutions/hotel-vision')) {
+            return [
+                {
+                    label: 'Hotel Vision',
+                    href: '/solutions/hotel-vision',
+                    icon: LayoutDashboard,
+                },
+            ] satisfies NavItem[];
+        }
+        return [] as NavItem[];
+    }, [pathname]);
+
     const railItems = useMemo(() => {
         const items: NavItem[] = [];
         const seen = new Set<string>();
 
-        for (const item of [...solutionItems, ...workspaceItems]) {
+        for (const item of [...routePinnedSolutionItems, ...solutionItems, ...workspaceItems]) {
             if (item.href === '/workspace' && seen.has('/workspace')) continue;
             if (seen.has(item.href)) continue;
             seen.add(item.href);
@@ -164,7 +195,7 @@ export default function Sidebar() {
         }
 
         return items;
-    }, [solutionItems, workspaceItems]);
+    }, [routePinnedSolutionItems, solutionItems, workspaceItems]);
 
     useEffect(() => {
         const root = document.documentElement;
@@ -248,15 +279,13 @@ export default function Sidebar() {
                     justifyContent: 'center',
                 }}
             >
-                <button
-                    type="button"
+                <div
                     className="sidebar-brandmark"
-                    onClick={() => safeNavigate('/')}
                     title={BRAND.company}
-                    aria-label={`${BRAND.company} home`}
+                    aria-label={BRAND.company}
                 >
                     <span className="sidebar-brandmark-text">{BRAND.company}</span>
-                </button>
+                </div>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -280,7 +309,7 @@ export default function Sidebar() {
                                             }
                                             safeNavigate(item.href);
                                         }}
-                                        className={`sidebar-nav-btn is-rail${isSecondaryItem ? ' is-secondary' : ''}${isActive ? ' is-active' : ''}`}
+                                        className={`btn-ghost sidebar-nav-btn is-rail${isSecondaryItem ? ' is-secondary' : ''}${isActive ? ' is-active' : ''}`}
                                         style={isActive ? {
                                             backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
                                             color: '#ffffff',
@@ -361,7 +390,7 @@ export default function Sidebar() {
             >
                 <button
                     type="button"
-                    className={`sidebar-account-btn${pathname === '/settings' ? ' is-active' : ''}`}
+                    className={`btn-ghost sidebar-account-btn${pathname === '/settings' ? ' is-active' : ''}`}
                     style={pathname === '/settings' ? {
                         backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
                         color: '#ffffff',
@@ -378,7 +407,7 @@ export default function Sidebar() {
                 </button>
                 <button
                     type="button"
-                    className={`sidebar-account-btn${pathname === '/account' ? ' is-active' : ''}`}
+                    className={`btn-ghost sidebar-account-btn${pathname === '/account' ? ' is-active' : ''}`}
                     style={pathname === '/account' ? {
                         backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
                         color: '#ffffff',

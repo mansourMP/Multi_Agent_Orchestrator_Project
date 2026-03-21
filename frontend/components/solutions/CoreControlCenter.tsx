@@ -140,7 +140,7 @@ export function CoreControlCenter() {
           <>
             <span>{solutions.length} active solution{solutions.length === 1 ? '' : 's'}</span>
             <span>{skills.length} active skill{skills.length === 1 ? '' : 's'}</span>
-            {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">MCP Ready</span> : null}
+            {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">Connected</span> : null}
           </>
         }
       />
@@ -220,7 +220,7 @@ export function CoreControlCenter() {
               <div className="orion-empty">
                 <div className="orion-empty-title">Add your first solution to get started</div>
                 <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
-                  <Link href="/setup" className="orion-btn orion-btn-primary">
+                  <Link href="/setup" className="btn-primary">
                     Open Setup
                   </Link>
                 </div>

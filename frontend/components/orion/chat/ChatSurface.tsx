@@ -340,7 +340,7 @@ export function ChatSurface({
                 <button
                   key={task}
                   type="button"
-                  className="orion-chat-v2-premium-chip"
+                  className="btn-secondary orion-chat-v2-premium-chip"
                   onClick={() => {
                     setGoal(task);
                     requestAnimationFrame(() => primaryGoalRef.current?.focus());

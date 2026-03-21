@@ -366,30 +366,6 @@ body.orion-chat-home .orion-page-shell.is-chat-home {
   background-image: none !important;
 }
 
-body.orion-first-run-mode {
-  background: #ffffff !important;
-  background-image: none !important;
-}
-
-body.orion-first-run-mode .sidebar,
-body.orion-first-run-mode .orion-shellbar {
-  display: none !important;
-}
-
-body.orion-first-run-mode .orion-main-shell {
-  margin-left: 0;
-  padding-top: 0;
-  padding-right: 0;
-}
-
-body.orion-first-run-mode .orion-main-stage,
-body.orion-first-run-mode .orion-app-shell,
-body.orion-first-run-mode .orion-main-shell {
-  min-height: 100vh;
-  background: #ffffff !important;
-  background-image: none !important;
-}
-
 [data-theme='dark'] body.orion-chat-home .orion-app-shell,
 [data-theme='dark'] body.orion-chat-home .orion-main-shell,
 [data-theme='dark'] body.orion-chat-home .orion-main-stage,
@@ -1664,68 +1640,41 @@ input:focus-visible {
   padding: 32px 0 212px;
 }
 
-.orion-chat-v2-hero {
-  width: min(720px, calc(100vw - var(--sidebar-width) - 96px));
-  margin: 0 auto 28px;
-  text-align: center;
-  font-size: clamp(34px, 4.6vw, 56px);
-  line-height: 1.06;
-  letter-spacing: -0.05em;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.orion-chat-v2-hero-note {
-  width: min(720px, calc(100vw - var(--sidebar-width) - 96px));
-  margin: -12px auto 24px;
-  text-align: center;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-}
-
-.orion-chat-v2-onboarding {
+.orion-chat-v2-premium-empty {
   width: min(720px, calc(100vw - var(--sidebar-width) - 96px));
   margin: 0 auto 28px;
   display: grid;
-  gap: 12px;
-  padding: 18px 20px;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--bg-surface) 96%, transparent 4%);
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.06);
+  gap: 16px;
+  justify-items: center;
+  text-align: center;
 }
 
-.orion-chat-v2-onboarding-eyebrow {
-  font-size: 11px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-}
-
-.orion-chat-v2-onboarding-title {
-  font-size: 18px;
-  line-height: 1.3;
+.orion-chat-v2-premium-title {
+  margin: 0;
+  font-size: clamp(36px, 4.8vw, 56px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.orion-chat-v2-onboarding-copy {
+.orion-chat-v2-premium-copy {
+  width: min(600px, 100%);
   margin: 0;
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 18px;
+  line-height: 1.55;
   color: var(--text-secondary);
 }
 
-.orion-chat-v2-onboarding-actions {
+.orion-chat-v2-premium-chips {
+  width: min(720px, 100%);
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 10px;
 }
 
-.orion-chat-v2-onboarding-task {
+.orion-chat-v2-premium-chip {
   min-height: 38px;
   padding: 0 14px;
   border-radius: 999px;
@@ -1736,11 +1685,19 @@ input:focus-visible {
   font-weight: 600;
   cursor: pointer;
   text-align: left;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
 }
 
-.orion-chat-v2-onboarding-task:hover {
+.orion-chat-v2-premium-chip:hover {
   border-color: color-mix(in srgb, var(--primary-base) 42%, var(--border-default) 58%);
   background: color-mix(in srgb, var(--primary-soft) 52%, var(--bg-element) 48%);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
 }
 
 .orion-chat-v2-hero-ghost {
@@ -2356,30 +2313,25 @@ input:focus-visible {
     padding: 0 12px 18px;
   }
 
-  .orion-chat-v2-hero {
+  .orion-chat-v2-premium-title {
     width: min(640px, calc(100vw - var(--sidebar-width) - 40px));
     margin-bottom: 22px;
     font-size: clamp(28px, 7.8vw, 40px);
   }
 
-  .orion-chat-v2-hero-note {
+  .orion-chat-v2-premium-copy {
     width: min(640px, calc(100vw - var(--sidebar-width) - 40px));
     margin: -8px auto 18px;
     font-size: 13px;
   }
 
-  .orion-chat-v2-onboarding {
+  .orion-chat-v2-premium-empty {
     width: min(640px, calc(100vw - var(--sidebar-width) - 40px));
     margin-bottom: 24px;
-    padding: 16px;
     gap: 10px;
   }
 
-  .orion-chat-v2-onboarding-title {
-    font-size: 16px;
-  }
-
-  .orion-chat-v2-onboarding-task {
+  .orion-chat-v2-premium-chip {
     width: 100%;
     justify-content: flex-start;
   }
@@ -2804,128 +2756,6 @@ a.orion-list-row {
 .orion-empty-copy {
   font-size: var(--font-body);
   color: var(--text-tertiary);
-}
-
-.orion-first-run-premium {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: #ffffff;
-  position: relative;
-  padding: 32px 20px;
-}
-
-.orion-first-run-brand {
-  position: absolute;
-  top: 26px;
-  left: 28px;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--primary-base);
-}
-
-.orion-first-run-shell {
-  width: min(760px, 100%);
-  margin: 0 auto;
-  display: grid;
-  gap: 20px;
-  justify-items: center;
-  text-align: center;
-}
-
-.orion-first-run-title {
-  margin: 0;
-  font-size: 48px;
-  font-weight: 700;
-  line-height: 1.04;
-  letter-spacing: -0.04em;
-  color: #111111;
-}
-
-.orion-first-run-copy {
-  width: min(600px, 100%);
-  margin: 0;
-  color: #6b7280;
-  font-size: 18px;
-  line-height: 1.5;
-}
-
-.orion-first-run-composer {
-  width: min(600px, 100%);
-  display: grid;
-  gap: 16px;
-}
-
-.orion-first-run-search {
-  width: 100%;
-  height: 64px;
-  padding: 0 22px;
-  border-radius: 999px;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
-  color: #111111;
-  font-size: 16px;
-  line-height: 1;
-  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
-}
-
-.orion-first-run-search::placeholder {
-  color: #9ca3af;
-}
-
-.orion-first-run-actions {
-  display: flex;
-  justify-content: center;
-}
-
-.orion-first-run-submit {
-  min-width: 180px;
-  min-height: 46px;
-  border-radius: 999px;
-  box-shadow: 0 12px 30px rgba(109, 40, 217, 0.22);
-}
-
-.orion-first-run-chip-row {
-  width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-}
-
-.orion-first-run-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 999px;
-  border: 1px solid #e5e7eb;
-  background: #f3f4f6;
-  color: #111111;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    border-color 150ms ease,
-    background 150ms ease,
-    color 150ms ease,
-    transform 150ms ease,
-    box-shadow 150ms ease;
-}
-
-.orion-first-run-chip:hover {
-  border-color: #d1d5db;
-  background: #edeef0;
-  color: #111111;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
-}
-
-.orion-first-run-footer {
-  font-size: 14px;
-  color: #6b7280;
 }
 
 .orion-first-run-status {

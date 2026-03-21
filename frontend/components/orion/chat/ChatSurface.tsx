@@ -25,12 +25,6 @@ export type ChatIdentityAction = {
   priority?: 'primary' | 'default';
 };
 
-export type ChatOnboardingPrompt = {
-  toolLabel: string;
-  welcome: string;
-  tasks: string[];
-};
-
 type ChatSurfaceProps = {
   isMobile: boolean;
   goal: string;
@@ -44,10 +38,7 @@ type ChatSurfaceProps = {
     label: string;
     href: string;
   } | null;
-  heroTitle?: string;
-  heroNote?: string | null;
-  onboardingPrompt?: ChatOnboardingPrompt | null;
-  onSelectOnboardingTask?: (task: string) => void;
+  emptyStateSuggestions?: string[];
   identityItems: ChatIdentityItem[];
   identityDrawerOpen: boolean;
   onToggleIdentityDrawer: () => void;
@@ -266,10 +257,7 @@ export function ChatSurface({
   messages,
   inlineStatus,
   inlineAction = null,
-  heroTitle = 'What should we work on next?',
-  heroNote = null,
-  onboardingPrompt = null,
-  onSelectOnboardingTask,
+  emptyStateSuggestions = [],
   identityItems,
   identityDrawerOpen,
   onToggleIdentityDrawer,
@@ -343,20 +331,20 @@ export function ChatSurface({
             <span className="orion-chat-v2-identity-cta">{identityDrawerOpen ? 'Hide details' : 'Open details'}</span>
           </button>
         ) : null}
-        {!hasMessages ? <h1 className="orion-chat-v2-hero">{heroTitle}</h1> : null}
-        {!hasMessages && heroNote ? <p className="orion-chat-v2-hero-note">{heroNote}</p> : null}
-        {!hasMessages && onboardingPrompt ? (
-          <section className="orion-chat-v2-onboarding" aria-label={`${onboardingPrompt.toolLabel} starter tasks`}>
-            <div className="orion-chat-v2-onboarding-eyebrow">Connected tool</div>
-            <div className="orion-chat-v2-onboarding-title">{onboardingPrompt.toolLabel} is ready</div>
-            <p className="orion-chat-v2-onboarding-copy">{onboardingPrompt.welcome}</p>
-            <div className="orion-chat-v2-onboarding-actions">
-              {onboardingPrompt.tasks.map((task) => (
+        {!hasMessages ? (
+          <section className="orion-chat-v2-premium-empty" aria-label="Automation suggestions">
+            <h1 className="orion-chat-v2-premium-title">Automate anything.</h1>
+            <p className="orion-chat-v2-premium-copy">Describe what you want. I&apos;ll build it for you.</p>
+            <div className="orion-chat-v2-premium-chips">
+              {emptyStateSuggestions.map((task) => (
                 <button
                   key={task}
                   type="button"
-                  className="orion-chat-v2-onboarding-task"
-                  onClick={() => onSelectOnboardingTask?.(task)}
+                  className="orion-chat-v2-premium-chip"
+                  onClick={() => {
+                    setGoal(task);
+                    requestAnimationFrame(() => primaryGoalRef.current?.focus());
+                  }}
                 >
                   {task}
                 </button>
@@ -364,7 +352,7 @@ export function ChatSurface({
             </div>
           </section>
         ) : null}
-        {isFirstThread ? <div className="orion-chat-v2-hero-ghost" aria-hidden>{heroTitle}</div> : null}
+        {isFirstThread ? <div className="orion-chat-v2-hero-ghost" aria-hidden>Automate anything.</div> : null}
 
         {renderedMessages.length > 0 ? (
           <div className="orion-chat-v2-thread" aria-live="polite">

@@ -17,7 +17,7 @@ import { ORION_API_URL, usePlatformApi } from './page.api';
 import { usePageActions } from './page.actions';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { EMPYRALIS_NEW_CHAT_EVENT } from '@/components/orion/PlatformTopBar';
-import { ChatSurface, type ChatIdentityAction, type ChatIdentityItem, type ChatIdentitySection, type ChatOnboardingPrompt } from '@/components/orion/chat/ChatSurface';
+import { ChatSurface, type ChatIdentityAction, type ChatIdentityItem, type ChatIdentitySection } from '@/components/orion/chat/ChatSurface';
 import {
   CHAT_SESSION_SELECT_EVENT,
   CHAT_STORE_STORAGE_KEY,
@@ -735,47 +735,6 @@ function resolveChatNextRecommendation(args: {
   };
 }
 
-function resolveFirstRunOnboardingPrompt(args: {
-  setupReady: boolean;
-  connectorCredentials: Array<{ label: string; connector: string }>;
-  hasMessages: boolean;
-  recentRunCount: number;
-  forceDisplay: boolean;
-}): ChatOnboardingPrompt | null {
-  if (!args.setupReady || args.hasMessages) return null;
-  if (!args.forceDisplay && args.recentRunCount > 0) return null;
-  if (args.connectorCredentials.length !== 1) return null;
-
-  const connector = args.connectorCredentials[0];
-  const toolLabel = connector.label?.trim() || homeTitleCase(connector.connector);
-
-  if (connector.connector === 'google_workspace') {
-    return {
-      toolLabel,
-      welcome: 'I can now read and summarize recent email, check your calendar, and help draft follow-ups inside Google Workspace.',
-      tasks: [
-        'Read my last 3 emails and summarize what matters.',
-        'Check my calendar for today and tell me what needs prep.',
-        'Draft a reply to my most important unread email.',
-      ],
-    };
-  }
-
-  if (connector.connector === 'telegram_bot') {
-    return {
-      toolLabel,
-      welcome: 'I can now work through Telegram, keep track of the active chat, and help send or draft replies for you.',
-      tasks: [
-        'Send a test Telegram message and confirm it worked.',
-        'Show me the latest Telegram conversation and summarize it.',
-        'Draft a reply to the last Telegram message.',
-      ],
-    };
-  }
-
-  return null;
-}
-
 function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null, topError: string | null, status: string): string {
   const pending = lastRunPayload?.pending_approval;
   if (status === 'waiting' && pending && typeof pending === 'object') {
@@ -942,7 +901,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     };
   });
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
-  const [forceFirstRunOnboarding, setForceFirstRunOnboarding] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<{ sessionId: string; placeholderId: string; runId: string | null } | null>(null);
   const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
   const [selectedAgentChannelsLoading, setSelectedAgentChannelsLoading] = useState(false);
@@ -1512,15 +1470,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [setGoal, setInboxInput, setLeadsInput, setSelectedPackId, setSlotsInput]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const url = new URL(window.location.href);
-    if (url.searchParams.get('onboarding') !== 'tool-connected') return;
-    setForceFirstRunOnboarding(true);
-    url.searchParams.delete('onboarding');
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-  }, []);
-
-  useEffect(() => {
     if (selectedPack.id !== 'local-execution-v1') return;
     const localExecutionDefaultGoal = OUTCOME_PACKS.find((item) => item.id === 'local-execution-v1')?.defaultGoal;
     if (!localExecutionDefaultGoal || goal.trim() !== localExecutionDefaultGoal) return;
@@ -1778,24 +1727,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       return [primaryAction, ...secondaryActions];
     },
     [router, sessionNextRecommendation],
-  );
-  const firstRunOnboardingPrompt = useMemo(
-    () =>
-      resolveFirstRunOnboardingPrompt({
-        setupReady,
-        connectorCredentials,
-        hasMessages: selectedChatMessages.length > 0,
-        recentRunCount: controlCenter.recentRuns.length,
-        forceDisplay: forceFirstRunOnboarding,
-      }),
-    [connectorCredentials, controlCenter.recentRuns.length, forceFirstRunOnboarding, selectedChatMessages.length, setupReady],
-  );
-  const applyOnboardingTask = useCallback(
-    (task: string) => {
-      setGoal(task);
-      primaryGoalRef.current?.focus();
-    },
-    [setGoal],
   );
   const simpleChatRunOverrides = useMemo(
     () => ({
@@ -2168,14 +2099,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             messages={selectedChatMessages}
             inlineStatus={inlineSimpleChatStatus}
             inlineAction={inlineSimpleChatAction}
-            heroTitle={setupReady && connectorCredentials.length > 0 ? 'What’s next?' : 'What should we work on next?'}
-            heroNote={
-              selectedChatMessages.length === 0
-                ? `${defaultAssistantProfile.label} profile · ${sessionNextRecommendation.chipText}`
-                : null
-            }
-            onboardingPrompt={firstRunOnboardingPrompt}
-            onSelectOnboardingTask={applyOnboardingTask}
+            emptyStateSuggestions={[
+              'Monitor a camera',
+              'Summarize emails daily',
+              'Alert me on Telegram',
+              'Follow up with leads',
+            ]}
             identityItems={sessionIdentityItems}
             identityDrawerOpen={chatIdentityDrawerOpen}
             onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}

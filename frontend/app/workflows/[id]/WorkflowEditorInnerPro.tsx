@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Loader2, Play, Save, Send, ShieldCheck, UploadCloud, Zap } from 'lucide-react';
 import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, applyNodeChanges, useNodesInitialized, useReactFlow, type Edge, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { useSearchParams } from 'next/navigation';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
@@ -116,7 +117,7 @@ interface AutopilotPack {
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action';
 type TriggerKind = 'schedule' | 'webhook' | 'manual';
-type ActionKind = 'send_wechat' | 'send_telegram' | 'write_file';
+type ActionKind = 'send_wechat' | 'send_telegram' | 'send_whatsapp' | 'send_email' | 'write_file';
 
 type TriggerCanvasData = {
     label: string;
@@ -209,8 +210,8 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
     }
     if (type === 'action') {
         return {
-            label: 'Send Telegram',
-            actionType: 'send_telegram',
+            label: 'Send WhatsApp',
+            actionType: 'send_whatsapp',
         };
     }
     return {
@@ -237,11 +238,18 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
         };
     }
     if (type === 'action') {
-        const base: ActionCanvasData = { label: 'Send Telegram', actionType: 'send_telegram' };
+        const base: ActionCanvasData = { label: 'Send WhatsApp', actionType: 'send_whatsapp' };
         const actionType = String(raw.actionType || base.actionType).trim().toLowerCase();
         return {
             label: String(raw.label || base.label).trim() || base.label,
-            actionType: actionType === 'send_wechat' || actionType === 'write_file' ? actionType : 'send_telegram',
+            actionType:
+                actionType === 'send_wechat'
+                || actionType === 'send_telegram'
+                || actionType === 'send_whatsapp'
+                || actionType === 'send_email'
+                || actionType === 'write_file'
+                    ? actionType
+                    : 'send_whatsapp',
         };
     }
     const base: AgentCanvasData = {
@@ -486,9 +494,11 @@ function normalizeProvider(provider: string): ProviderId {
 
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
+    const searchParams = useSearchParams();
     const streamRef = useRef<EventSource | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
     const canvasHostRef = useRef<HTMLDivElement | null>(null);
+    const onboardingToastShownRef = useRef(false);
     const [canvasNodes, setCanvasNodes] = useState<CanvasWorkflowNode[]>(() => {
         return buildDefaultCanvasNodes();
     });
@@ -608,10 +618,6 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     useEffect(() => {
         writeRuntimeApiKeyToStorage(runtimeApiKey);
     }, [runtimeApiKey]);
-
-    useEffect(() => {
-        console.log('workflow canvas edges', canvasEdges);
-    }, [canvasEdges]);
 
     const applyAutopilotPack = useCallback((pack: AutopilotPack) => {
         setOperator((prev) => ({
@@ -799,6 +805,18 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         if (providerAuthOptions.some((item) => item.id === providerAuthMode)) return;
         setProviderAuthMode(selectedProvider?.default_auth_mode || providerAuthOptions[0]?.id || 'api_key');
     }, [providerAuthMode, providerAuthOptions, selectedProvider]);
+
+    useEffect(() => {
+        if (onboardingToastShownRef.current) return;
+        if (searchParams.get('onboarding') !== 'activate-whatsapp') return;
+        onboardingToastShownRef.current = true;
+        addToast({
+            type: 'success',
+            title: 'Done!',
+            message: 'Connect your WhatsApp to activate.',
+            duration: 5000,
+        });
+    }, [addToast, searchParams]);
 
     const saveWorkflowState = useCallback(async () => {
         if (!workflowId) return;
@@ -1561,10 +1579,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                         <div>
                                             <label style={workflowLabelStyle}>Action</label>
                                             <select
-                                                value={String((selectedNode.data as ActionCanvasData).actionType || 'send_telegram')}
+                                                value={String((selectedNode.data as ActionCanvasData).actionType || 'send_whatsapp')}
                                                 onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, actionType: e.target.value as ActionKind } }))}
                                                 style={workflowInputSurfaceStyle}
                                             >
+                                                <option value="send_whatsapp">Send WhatsApp</option>
+                                                <option value="send_email">Send Email</option>
                                                 <option value="send_wechat">Send WeChat</option>
                                                 <option value="send_telegram">Send Telegram</option>
                                                 <option value="write_file">Write File</option>

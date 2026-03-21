@@ -2,7 +2,7 @@
 
 import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { BellRing, FileText, Send } from 'lucide-react';
+import { BellRing, FileText, Mail, MessageCircle, Send } from 'lucide-react';
 
 type ActionNodeData = {
     label?: string;
@@ -10,12 +10,16 @@ type ActionNodeData = {
 };
 
 function actionIcon(actionType: string) {
+    if (actionType === 'send_whatsapp') return <MessageCircle size={20} color="#10b981" strokeWidth={1.75} />;
+    if (actionType === 'send_email') return <Mail size={20} color="#10b981" strokeWidth={1.75} />;
     if (actionType === 'send_wechat') return <BellRing size={20} color="#10b981" strokeWidth={1.75} />;
     if (actionType === 'send_telegram') return <Send size={20} color="#10b981" strokeWidth={1.75} />;
     return <FileText size={20} color="#10b981" strokeWidth={1.75} />;
 }
 
 const ACTION_LABELS: Record<string, string> = {
+    send_whatsapp: 'Send WhatsApp',
+    send_email: 'Send Email',
     send_wechat: 'Send WeChat',
     send_telegram: 'Send Telegram',
     write_file: 'Write File',

@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Boxes, LayoutDashboard, Puzzle, Workflow } from 'lucide-react';
+import { Bell, Boxes, LayoutDashboard, Loader2, Puzzle, Sparkles, Workflow } from 'lucide-react';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
+import { createWorkflow, fetchWorkflows } from '@/lib/api';
 import {
   type InstalledSolution,
   type RecentRunItem,
@@ -22,12 +24,152 @@ type SkillCard = {
   enabled: boolean;
 };
 
+type FirstRunWorkflowDraft = {
+  name: string;
+  description: string;
+  definition: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+    meta: Record<string, unknown>;
+  };
+};
+
+const FIRST_RUN_EXAMPLES = [
+  'Alert me when someone enters my shop',
+  'Summarize my emails every morning',
+  'Monitor my camera and notify me on WhatsApp',
+  'Follow up with leads automatically',
+] as const;
+
+function slugifyLabel(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'step';
+}
+
+function buildFirstRunWorkflowDraft(request: string): FirstRunWorkflowDraft {
+  const prompt = request.trim();
+  const normalized = prompt.toLowerCase();
+  const triggerType = /every|daily|morning|night|hour|schedule/.test(normalized)
+    ? 'schedule'
+    : /when|lead|leads|someone enters|incoming|new /.test(normalized)
+      ? 'webhook'
+      : 'manual';
+
+  let name = 'Custom Automation';
+  let description = prompt;
+  let agentLabel = 'AI Agent';
+  let agentPrompt = prompt;
+  let agentDescription = 'Automation planner';
+  let actionType: 'send_whatsapp' | 'send_telegram' | 'send_wechat' | 'send_email' | 'write_file' = 'write_file';
+  let actionLabel = 'Complete workflow';
+  let automationMode: 'reusable' | 'scheduled' | 'triggered' = triggerType === 'schedule' ? 'scheduled' : triggerType === 'webhook' ? 'triggered' : 'reusable';
+
+  if (normalized.includes('shop')) {
+    name = 'Shop Entry Alerts';
+    description = 'Watch for new arrivals and notify the owner immediately.';
+    agentLabel = 'Entry Monitor';
+    agentPrompt = 'Watch for someone entering the shop, confirm it is a real entry event, and prepare a short alert.';
+    agentDescription = 'Detects new arrivals';
+    actionType = 'send_whatsapp';
+    actionLabel = 'Send WhatsApp alert';
+  } else if (normalized.includes('email')) {
+    name = 'Morning Email Summary';
+    description = 'Summarize the inbox every morning and deliver the digest.';
+    agentLabel = 'Inbox Summarizer';
+    agentPrompt = 'Read the latest emails, group them by priority, and prepare a short morning summary with recommended actions.';
+    agentDescription = 'Summarizes new inbox activity';
+    actionType = 'send_email';
+    actionLabel = 'Send email summary';
+  } else if (normalized.includes('camera') || normalized.includes('whatsapp')) {
+    name = 'Camera Monitor Alerts';
+    description = 'Review camera updates and send a WhatsApp notification when something needs attention.';
+    agentLabel = 'Camera Monitor';
+    agentPrompt = 'Monitor camera updates, detect noteworthy activity, and prepare a concise operational alert.';
+    agentDescription = 'Monitors live camera activity';
+    actionType = 'send_whatsapp';
+    actionLabel = 'Send WhatsApp alert';
+    automationMode = 'scheduled';
+  } else if (normalized.includes('lead')) {
+    name = 'Lead Follow-up';
+    description = 'Watch for new leads and send fast follow-up messages automatically.';
+    agentLabel = 'Lead Assistant';
+    agentPrompt = 'Review new lead details, draft a personalized follow-up, and push the next step toward a booked conversation.';
+    agentDescription = 'Moves warm leads forward';
+    actionType = 'send_email';
+    actionLabel = 'Send lead follow-up';
+    automationMode = 'triggered';
+  }
+
+  const triggerId = `trigger-${slugifyLabel(name)}`;
+  const agentId = `agent-${slugifyLabel(agentLabel)}`;
+  const actionId = `action-${slugifyLabel(actionLabel)}`;
+
+  return {
+    name,
+    description,
+    definition: {
+      nodes: [
+        {
+          id: triggerId,
+          type: 'trigger',
+          position: { x: 265, y: 50 },
+          data: { label: 'Start Trigger', triggerType },
+        },
+        {
+          id: agentId,
+          type: 'agent',
+          position: { x: 265, y: 220 },
+          data: {
+            label: agentLabel,
+            modelId: normalized.includes('camera') ? 'gpt-4o' : 'gpt-4.1',
+            prompt: agentPrompt,
+            tools: normalized.includes('camera') ? ['vision-monitor', 'whatsapp'] : normalized.includes('email') ? ['inbox', 'email'] : [],
+            provider: 'openai',
+            role: 'Worker',
+            duty: agentPrompt,
+            status: 'ready',
+            description: agentDescription,
+          },
+        },
+        {
+          id: actionId,
+          type: 'action',
+          position: { x: 265, y: 390 },
+          data: {
+            label: actionLabel,
+            actionType,
+          },
+        },
+      ],
+      edges: [
+        { id: `${triggerId}-${agentId}`, source: triggerId, target: agentId },
+        { id: `${agentId}-${actionId}`, source: agentId, target: actionId },
+      ],
+      meta: {
+        mode: 'visual_builder',
+        automationMode,
+        onboarding_request: prompt,
+      },
+    },
+  };
+}
+
 export function CoreControlCenter() {
+  const router = useRouter();
   const [solutions, setSolutions] = useState<InstalledSolution[]>([]);
   const [skills, setSkills] = useState<SkillCard[]>([]);
   const [workflows, setWorkflows] = useState<Array<Record<string, unknown>>>([]);
   const [recentRuns, setRecentRuns] = useState<RecentRunItem[]>([]);
   const [mcpEndpoint, setMcpEndpoint] = useState<string | null>(null);
+  const [workflowCount, setWorkflowCount] = useState<number | null>(null);
+  const [firstRunPrompt, setFirstRunPrompt] = useState('');
+  const [isBuildingAutomation, setIsBuildingAutomation] = useState(false);
+  const [buildingStep, setBuildingStep] = useState('Building your automation...');
+  const [onboardingError, setOnboardingError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -73,11 +215,12 @@ export function CoreControlCenter() {
       setLoading(true);
       setError('');
       try {
-        const [solutionsState, skillsState, weeklySchedules, runItems] = await Promise.all([
+        const [solutionsState, skillsState, weeklySchedules, runItems, workflowItems] = await Promise.all([
           fetchSolutionsState(),
           fetchSkillsState(),
           fetchWeeklySchedules(),
           fetchRecentRuns(5),
+          fetchWorkflows().catch(() => null),
         ]);
         if (cancelled) return;
         setSolutions(Array.isArray(solutionsState.active) ? solutionsState.active : []);
@@ -85,8 +228,17 @@ export function CoreControlCenter() {
         setSkills(Array.isArray(skillsState.installed) ? skillsState.installed.filter((item) => item.enabled) : []);
         setWorkflows(Array.isArray(weeklySchedules) ? weeklySchedules : []);
         setRecentRuns(Array.isArray(runItems) ? runItems.slice(0, 5) : []);
+        const nextWorkflowItems = Array.isArray(workflowItems)
+          ? workflowItems
+          : Array.isArray((workflowItems as { items?: unknown[] } | null | undefined)?.items)
+            ? ((workflowItems as { items: unknown[] }).items)
+            : [];
+        setWorkflowCount(workflowItems === null ? null : nextWorkflowItems.length);
       } catch (fetchError) {
-        if (!cancelled) setError(fetchError instanceof Error ? fetchError.message : 'Failed to load control center.');
+        if (!cancelled) {
+          setWorkflowCount(null);
+          setError(fetchError instanceof Error ? fetchError.message : 'Failed to load control center.');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -127,6 +279,110 @@ export function CoreControlCenter() {
       .sort((left, right) => Date.parse(String(right.ts || '')) - Date.parse(String(left.ts || '')))
       .slice(0, 6);
   }, [solutions]);
+
+  const shouldShowFirstRunOverlay = !loading && !error && workflowCount === 0;
+
+  const launchFirstRunWorkflow = async (request: string) => {
+    const prompt = request.trim();
+    if (!prompt || isBuildingAutomation) return;
+    setFirstRunPrompt(prompt);
+    setIsBuildingAutomation(true);
+    setBuildingStep('Building your automation...');
+    setOnboardingError('');
+    const analyzingTimer = window.setTimeout(() => setBuildingStep('Analyzing your request...'), 240);
+    const creatingTimer = window.setTimeout(() => setBuildingStep('Creating the workflow canvas...'), 680);
+    try {
+      const draft = buildFirstRunWorkflowDraft(prompt);
+      const [created] = await Promise.all([
+        createWorkflow(draft.name, draft.description, 'default', draft.definition),
+        new Promise((resolve) => window.setTimeout(resolve, 950)),
+      ]);
+      const workflowId = String((created as { id?: string })?.id || '').trim();
+      if (!workflowId) throw new Error('Workflow creation did not return an id.');
+      router.push(`/workflows/${encodeURIComponent(workflowId)}?onboarding=activate-whatsapp`);
+    } catch (createError) {
+      setOnboardingError(createError instanceof Error ? createError.message : 'Failed to build automation.');
+      setIsBuildingAutomation(false);
+      setBuildingStep('Building your automation...');
+    } finally {
+      window.clearTimeout(analyzingTimer);
+      window.clearTimeout(creatingTimer);
+    }
+  };
+
+  if (shouldShowFirstRunOverlay) {
+    return (
+      <div className="orion-page-shell narrow orion-animate-in" style={{ minHeight: 'calc(100vh - 120px)', justifyContent: 'center' }}>
+        <section className="orion-first-run-shell">
+          <div className="orion-first-run-eyebrow">New automation</div>
+          <h1 className="orion-first-run-title">What do you want to automate?</h1>
+          <p className="orion-first-run-copy">
+            Describe the outcome once. {`Empyralist`} will assemble the workflow and open it on canvas.
+          </p>
+
+          <form
+            className="orion-first-run-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void launchFirstRunWorkflow(firstRunPrompt);
+            }}
+          >
+            <textarea
+              value={firstRunPrompt}
+              onChange={(event) => setFirstRunPrompt(event.target.value)}
+              className="orion-first-run-input"
+              rows={3}
+              placeholder="What do you want to automate?"
+              disabled={isBuildingAutomation}
+            />
+            <div className="orion-first-run-actions">
+              <button
+                type="submit"
+                className="orion-btn orion-btn-primary"
+                disabled={isBuildingAutomation || !firstRunPrompt.trim()}
+              >
+                {isBuildingAutomation ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+                {isBuildingAutomation ? 'Building your automation...' : 'Build automation'}
+              </button>
+            </div>
+          </form>
+
+          <div className="orion-first-run-chip-row">
+            {FIRST_RUN_EXAMPLES.map((example) => (
+              <button
+                key={example}
+                type="button"
+                className="orion-first-run-chip"
+                onClick={() => {
+                  setFirstRunPrompt(example);
+                  void launchFirstRunWorkflow(example);
+                }}
+                disabled={isBuildingAutomation}
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+
+          {isBuildingAutomation ? (
+            <div className="orion-first-run-status">
+              <div className="orion-first-run-status-title">{buildingStep}</div>
+              <div className="orion-first-run-status-copy">
+                Agent is mapping your request into a trigger, an AI step, and an action.
+              </div>
+            </div>
+          ) : null}
+
+          {onboardingError ? (
+            <div className="orion-first-run-status">
+              <div className="orion-first-run-status-title" style={{ color: 'var(--status-red)' }}>Could not build automation</div>
+              <div className="orion-first-run-status-copy">{onboardingError}</div>
+            </div>
+          ) : null}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">

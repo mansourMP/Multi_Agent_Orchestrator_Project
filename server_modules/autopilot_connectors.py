@@ -1036,6 +1036,28 @@ def _workspace_connector_flags(workspace_id: str) -> Dict[str, bool]:
     return flags
 
 
+def _primary_email_connector_id(workspace_id: str) -> Optional[str]:
+    _init()
+    list_fn = globals().get("list_vault_connectors")
+    if not callable(list_fn):
+        return None
+    try:
+        rows = list_fn(str(workspace_id or "").strip() or "default")
+    except Exception:
+        rows = []
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        connector = str(row.get("connector") or row.get("provider") or "").strip().lower()
+        if connector in {"google_workspace", "microsoft_365"}:
+            connector_id = str(row.get("id") or "").strip()
+            if connector_id:
+                return connector_id
+    return None
+
+
 def _camera_monitor_workflow_definition(space_name: str) -> Dict[str, Any]:
     label = str(space_name or "").strip() or "Space"
     return {
@@ -1299,6 +1321,50 @@ def _create_email_summary_visibility_record(target_label: str, *, telegram_conne
     )
 
 
+def _create_email_summary_execution_schedules(workspace_id: str, target_label: str) -> int:
+    connector_id = _primary_email_connector_id(workspace_id)
+    if not connector_id:
+        return 0
+    label = str(target_label or "").strip() or "Inbox"
+    run_request = {
+        "engine": "orion",
+        "workspace_id": str(workspace_id or "").strip() or "default",
+        "user_goal": f"Summarize the most recent emails from {label} and highlight what needs attention.",
+        "agent_role": "support",
+        "metadata": {
+            "source": "scheduled",
+            "execution_target": "cloud",
+            "outcome_pack": "customer-ops-autopilot",
+            "outcome_pack_label": "Client Workflow Autopilot",
+            "outcome_scope": ["Inbox triage"],
+            "connector_credential_id": connector_id,
+            "pack_inputs": {"inbox": "", "leads": "", "slots": ""},
+            "automation_kind": "email_summary_recent",
+            "automation_label": label,
+            "summary_limit": 5,
+        },
+    }
+    created = 0
+    for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
+        http_json_request(
+            f"{EMPYRALIST_RUNTIME_URL}/schedules/weekly",
+            method="POST",
+            headers=_runtime_api_headers(),
+            payload={
+                "name": f"Email Summary · {label} · {day}",
+                "workspace_id": str(workspace_id or "").strip() or "default",
+                "enabled": True,
+                "day_of_week": day,
+                "time_hhmm": "08:00",
+                "timezone": "local",
+                "run_request": run_request,
+            },
+            timeout=20,
+        )
+        created += 1
+    return created
+
+
 def _create_lead_followup_visibility_record(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Optional[str]:
     label = str(flow_label or "").strip() or "Leads"
     return _create_published_workflow_record(
@@ -1325,16 +1391,16 @@ def _camera_monitor_completion_text(space_name: str, channel_connected: bool, wo
 def _email_summary_completion_text(
     target_label: str,
     *,
+    schedule_count: int,
     email_connected: bool,
-    telegram_connected: bool,
     workflow_id: Optional[str] = None,
 ) -> str:
     label = str(target_label or "").strip() or "Inbox"
-    is_active = email_connected and telegram_connected
+    is_active = schedule_count > 0
     lines = [
         f"Done. Your {label} daily summary is {'active' if is_active else 'ready'}.",
-        "You'll get a Telegram summary every morning." if is_active else (
-            "Connect Telegram to receive daily summaries." if email_connected else "Connect Google Workspace or Microsoft 365 to start daily summaries."
+        "It will run every morning and add results to your activity feed." if is_active else (
+            "Finish setup to run daily summaries automatically." if email_connected else "Connect Google Workspace or Microsoft 365 to start daily summaries."
         ),
         f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
     ]
@@ -1342,8 +1408,8 @@ def _email_summary_completion_text(
         lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
     if not email_connected:
         lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
-    if email_connected and not telegram_connected:
-        lines.append(f"Connect Telegram → {EMPYRALIST_WEB_URL}/credentials?connector=telegram_bot&onboarding=1")
+    if email_connected and not is_active:
+        lines.append(f"Finish setup → {EMPYRALIST_WEB_URL}/setup")
     return "\n\n".join(lines)
 
 
@@ -1383,13 +1449,14 @@ def _telegram_handle_camera_monitor_setup(
                     normalized_text,
                     telegram_connected=connector_flags["telegram"],
                 )
+                schedule_count = _create_email_summary_execution_schedules(workspace_id, normalized_text) if connector_flags["email"] else 0
                 _clear_telegram_camera_setup_state(workspace_id, chat_id)
                 return {
                     "handled": True,
                     "reply": _email_summary_completion_text(
                         normalized_text,
+                        schedule_count=schedule_count,
                         email_connected=connector_flags["email"],
-                        telegram_connected=connector_flags["telegram"],
                         workflow_id=workflow_id,
                     ),
                 }

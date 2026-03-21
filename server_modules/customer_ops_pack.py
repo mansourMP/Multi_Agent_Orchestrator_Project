@@ -84,6 +84,8 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
     slot_items = _server.parse_text_items(pack_inputs.get("slots", ""))
     if not slot_items:
         slot_items = list(_server.DEFAULT_BOOKING_SLOTS)
+    automation_kind = str(metadata.get("automation_kind") or "").strip().lower()
+    summary_limit = max(1, min(int(metadata.get("summary_limit") or 5), 10))
 
     connector_details: Dict[str, Any] = {
         "enabled": False,
@@ -143,6 +145,25 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
         and bool(str(connector_credentials.get("access_token") or "").strip())
     ):
         connector_details["enabled"] = True
+
+    if not inbox_items and automation_kind == "email_summary_recent" and connector_details["enabled"]:
+        try:
+            recent_messages = _server.list_recent_connector_messages(connector_credentials, limit=summary_limit)
+        except Exception as exc:
+            connector_label = connector_provider or "Connector"
+            connector_details["warnings"].append(f"{connector_label} inbox fetch failed: {exc}")
+            recent_messages = []
+        inbox_items = [
+            "\n".join(
+                part for part in [
+                    f"From: {str(item.get('from') or '').strip()}".strip(),
+                    f"Subject: {str(item.get('subject') or '').strip()}".strip(),
+                    str(item.get("snippet") or "").strip(),
+                ] if part
+            )
+            for item in recent_messages
+            if isinstance(item, dict)
+        ]
 
     def evaluate_runtime_tool(tool_id: str, phase: str, lead_name: Optional[str] = None) -> Dict[str, Any]:
         evaluation = _server.evaluate_tool_policy_decision(
@@ -540,4 +561,3 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
         "connector": connector_details,
         "next_steps": next_steps,
     }
-

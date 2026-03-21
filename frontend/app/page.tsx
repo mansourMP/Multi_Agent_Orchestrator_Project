@@ -13,7 +13,7 @@ import {
   isAgentRoleId,
 } from './page.catalog';
 import { usePageState } from './page.state';
-import { ORION_API_URL, usePlatformApi } from './page.api';
+import { ORION_API_URL, readResponseMessage, usePlatformApi } from './page.api';
 import { usePageActions } from './page.actions';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { EMPYRALIS_NEW_CHAT_EVENT } from '@/components/orion/PlatformTopBar';
@@ -873,6 +873,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     viewportWidth, setViewportWidth,
     runtimeApiKey,
     connectorCredentials,
+    credentialId,
     inboxInput,
     setInboxInput,
     leadsInput,
@@ -1761,6 +1762,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     () => connectorCredentials.some((item) => item.connector === 'google_workspace' || item.connector === 'microsoft_365'),
     [connectorCredentials],
   );
+  const primaryEmailConnector = useMemo(
+    () => connectorCredentials.find((item) => item.connector === 'google_workspace' || item.connector === 'microsoft_365') || null,
+    [connectorCredentials],
+  );
 
   const createPublishedVisibilityWorkflow = useCallback(async (name: string, description: string, definition: unknown) => {
     const workflow = await createWorkflow(name, description, 'default', definition);
@@ -1951,6 +1956,59 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     );
   }, [buildLeadFollowupWorkflowDefinition, createPublishedVisibilityWorkflow]);
 
+  const createEmailSummaryExecutionSchedules = useCallback(async (targetLabel: string) => {
+    if (!primaryEmailConnector?.id) return 0;
+    const weekdayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const runRequest = {
+      engine: 'orion',
+      workspace_id: 'default',
+      user_goal: `Summarize the most recent emails from ${targetLabel.trim() || 'this inbox'} and highlight what needs attention.`,
+      agent_role: 'support',
+      provider,
+      model,
+      credential_id: connectionMode === 'byok' ? credentialId || undefined : undefined,
+      metadata: {
+        trust_mode: trustMode,
+        source: 'scheduled',
+        connection_mode: connectionMode,
+        execution_target: 'cloud',
+        outcome_pack: 'customer-ops-autopilot',
+        outcome_pack_label: 'Client Workflow Autopilot',
+        outcome_scope: ['Inbox triage'],
+        connector_credential_id: primaryEmailConnector.id,
+        pack_inputs: {
+          inbox: '',
+          leads: '',
+          slots: '',
+        },
+        automation_kind: 'email_summary_recent',
+        automation_label: targetLabel.trim() || 'Inbox',
+        summary_limit: 5,
+      },
+    };
+    let createdCount = 0;
+    for (const day of weekdayNames) {
+      const response = await fetch(`${ORION_API_URL}/schedules/weekly`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify({
+          name: `Email Summary · ${targetLabel.trim() || 'Inbox'} · ${day}`,
+          workspace_id: 'default',
+          enabled: true,
+          day_of_week: day,
+          time_hhmm: '08:00',
+          timezone: 'local',
+          run_request: runRequest,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readResponseMessage(response, 'Failed to create email summary schedule.'));
+      }
+      createdCount += 1;
+    }
+    return createdCount;
+  }, [primaryEmailConnector?.id, provider, model, connectionMode, credentialId, trustMode, buildHeaders]);
+
   const provisionCameraMonitorFromChat = useCallback(async (spaceName: string, cameraSource: string) => {
     const onboarding = await fetchHotelOnboardingStatus();
     const created = await createHotelOnboardingSpace({
@@ -1996,16 +2054,16 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     [],
   );
 
-  const buildEmailSummaryCompletionMessage = useCallback((targetLabel: string, workflowId: string | null) => {
+  const buildEmailSummaryCompletionMessage = useCallback((targetLabel: string, workflowId: string | null, scheduleCount: number) => {
     const safeLabel = targetLabel.trim() || 'Inbox';
-    const isActive = hasEmailConnector && hasTelegramConnector;
+    const isActive = scheduleCount > 0;
     const lines = [
       isActive ? `Done. Your **${safeLabel}** daily summary is active.` : `Done. Your **${safeLabel}** daily summary is ready.`,
       '',
       isActive
-        ? "You'll get a Telegram summary every morning."
+        ? 'It will run every morning and add results to your activity feed.'
         : hasEmailConnector
-          ? 'Connect Telegram to receive daily summaries.'
+          ? 'Finish AI setup to run daily summaries automatically.'
           : 'Connect Google Workspace or Microsoft 365 to start daily summaries.',
       '',
       '[Open automations](/workflows)',
@@ -2016,11 +2074,11 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (!hasEmailConnector) {
       lines.push('[Connect email →](/credentials)');
     }
-    if (hasEmailConnector && !hasTelegramConnector) {
-      lines.push('[Connect Telegram →](/credentials?connector=telegram_bot&onboarding=1)');
+    if (hasEmailConnector && !isActive) {
+      lines.push('[Finish setup →](/setup)');
     }
     return lines.join('\n');
-  }, [hasEmailConnector, hasTelegramConnector]);
+  }, [hasEmailConnector]);
 
   const buildLeadFollowupCompletionMessage = useCallback((flowLabel: string, workflowId: string | null) => {
     const safeLabel = flowLabel.trim() || 'Leads';
@@ -2128,8 +2186,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       });
       try {
         const workflowId = await createEmailSummaryVisibilityWorkflow(targetLabel);
+        const scheduleCount = hasEmailConnector ? await createEmailSummaryExecutionSchedules(targetLabel) : 0;
         patchSimpleChatMessage(sessionId, placeholderId, {
-          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null),
+          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null, scheduleCount),
           status: 'completed',
           ts: new Date().toISOString(),
         });
@@ -2250,7 +2309,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const consumeWorkbenchCameraMonitorSetup = useCallback(async (agentRole: string, text: string) => {
     const stateKey = `advanced:${agentRole}`;
@@ -2337,8 +2396,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       });
       try {
         const workflowId = await createEmailSummaryVisibilityWorkflow(targetLabel);
+        const scheduleCount = hasEmailConnector ? await createEmailSummaryExecutionSchedules(targetLabel) : 0;
         patchWorkbenchAgentChat(agentRole, placeholderId, {
-          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null),
+          content: buildEmailSummaryCompletionMessage(targetLabel, workflowId || null, scheduleCount),
           status: 'completed',
           ts: new Date().toISOString(),
         });
@@ -2459,7 +2519,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setCameraMonitorSetupState(stateKey, null);
     }
     return true;
-  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, buildEmailSummaryCompletionMessage, buildLeadFollowupCompletionMessage, cameraMonitorSetupStates, createEmailSummaryExecutionSchedules, createEmailSummaryVisibilityWorkflow, createLeadFollowupVisibilityWorkflow, hasEmailConnector, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
 
   const runWorkbenchCommand = useCallback(async (input?: string) => {
     const raw = String(input ?? goal).trim();

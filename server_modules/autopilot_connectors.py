@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
 from scripts.platform_execution import stack_start_command_hint
+from server_modules.automation_intents import classify_automation_intent, looks_like_camera_source
 from server_modules.installed_skills import query_active_installed_skills
 try:
     from mcp import ClientSession
@@ -75,6 +76,9 @@ EMPYRALIS_STATE_HOME = Path(
 ).expanduser()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EMPYRALIST_MCP_URL = os.getenv("EMPYRALIST_MCP_URL", "http://127.0.0.1:8001/mcp").strip() or "http://127.0.0.1:8001/mcp"
+EMPYRALIST_RUNTIME_URL = os.getenv("EMPYRALIST_RUNTIME_URL", "http://127.0.0.1:8001").strip().rstrip("/") or "http://127.0.0.1:8001"
+EMPYRALIST_WORKFLOW_API_URL = os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:4000/api/v1").strip().rstrip("/") or "http://127.0.0.1:4000/api/v1"
+EMPYRALIST_WEB_URL = os.getenv("EMPYRALIST_WEB_URL", "http://127.0.0.1:3000").strip().rstrip("/") or "http://127.0.0.1:3000"
 
 
 def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: Optional[str] = None) -> Path:
@@ -99,6 +103,13 @@ def _resolve_state_dir(env_name: str, default_relative: str, legacy_dirname: Opt
         if legacy_path.exists() and not preferred.exists():
             return legacy_path
     return preferred
+
+
+ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE = _resolve_state_file(
+    "ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE",
+    "channels/telegram/camera_setup_state.json",
+    ".orion_telegram_camera_setup_state.json",
+)
 
 
 def _telegram_space_catalog() -> List[Dict[str, str]]:
@@ -261,6 +272,11 @@ _TELEGRAM_PROFILE_STATE: Dict[str, Any] = {
 }
 _TELEGRAM_ONBOARDING_LOCK = threading.Lock()
 _TELEGRAM_ONBOARDING_STATE: Dict[str, Any] = {
+    "loaded": False,
+    "items": {},
+}
+_TELEGRAM_CAMERA_SETUP_LOCK = threading.Lock()
+_TELEGRAM_CAMERA_SETUP_STATE: Dict[str, Any] = {
     "loaded": False,
     "items": {},
 }
@@ -877,6 +893,337 @@ def _advance_telegram_onboarding(workspace_id: str, chat_id: str, step_index: in
             items.pop(key, None)
     _persist_telegram_onboarding_state()
     return _get_telegram_onboarding_state(workspace_id, chat_id)
+
+
+def _telegram_camera_setup_key(workspace_id: str, chat_id: str) -> str:
+    return _telegram_profile_key(workspace_id, chat_id)
+
+
+def _load_telegram_camera_setup_state() -> None:
+    _init()
+    payload = _safe_read_json(
+        ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
+        {"version": 1, "items": {}},
+    )
+    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    parsed: Dict[str, Dict[str, Any]] = {}
+    for key, value in items.items():
+        if not isinstance(value, dict):
+            continue
+        stage = str(value.get("stage") or "").strip().lower()
+        if stage not in {"awaiting_space_name", "awaiting_camera_source"}:
+            continue
+        parsed[str(key)] = {
+            "stage": stage,
+            "original_prompt": str(value.get("original_prompt") or "").strip(),
+            "space_name": str(value.get("space_name") or "").strip(),
+            "updated_at": str(value.get("updated_at") or "").strip() or _utc_now_iso(),
+        }
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        _TELEGRAM_CAMERA_SETUP_STATE["items"] = parsed
+        _TELEGRAM_CAMERA_SETUP_STATE["loaded"] = True
+
+
+def _ensure_telegram_camera_setup_state_loaded() -> None:
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        loaded = bool(_TELEGRAM_CAMERA_SETUP_STATE.get("loaded"))
+    if not loaded:
+        _load_telegram_camera_setup_state()
+
+
+def _persist_telegram_camera_setup_state() -> None:
+    _init()
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
+        data = dict(items) if isinstance(items, dict) else {}
+    _safe_write_json(
+        ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
+        {"version": 1, "items": data},
+    )
+
+
+def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
+    _ensure_telegram_camera_setup_state_loaded()
+    key = _telegram_camera_setup_key(workspace_id, chat_id)
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        item = _TELEGRAM_CAMERA_SETUP_STATE.get("items", {}).get(key)
+        out = dict(item) if isinstance(item, dict) else {}
+    return {
+        "active": bool(out.get("stage")),
+        "stage": str(out.get("stage") or "").strip(),
+        "original_prompt": str(out.get("original_prompt") or "").strip(),
+        "space_name": str(out.get("space_name") or "").strip(),
+        "updated_at": str(out.get("updated_at") or "").strip(),
+    }
+
+
+def _set_telegram_camera_setup_state(workspace_id: str, chat_id: str, stage: str, original_prompt: str, space_name: str = "") -> Dict[str, Any]:
+    _ensure_telegram_camera_setup_state_loaded()
+    key = _telegram_camera_setup_key(workspace_id, chat_id)
+    now = _utc_now_iso()
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
+        if not isinstance(items, dict):
+            items = {}
+            _TELEGRAM_CAMERA_SETUP_STATE["items"] = items
+        items[key] = {
+            "stage": stage,
+            "original_prompt": str(original_prompt or "").strip(),
+            "space_name": str(space_name or "").strip(),
+            "updated_at": now,
+        }
+    _persist_telegram_camera_setup_state()
+    return _get_telegram_camera_setup_state(workspace_id, chat_id)
+
+
+def _clear_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> None:
+    _ensure_telegram_camera_setup_state_loaded()
+    key = _telegram_camera_setup_key(workspace_id, chat_id)
+    with _TELEGRAM_CAMERA_SETUP_LOCK:
+        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
+        if isinstance(items, dict):
+            items.pop(key, None)
+    _persist_telegram_camera_setup_state()
+
+
+def _runtime_api_headers() -> Dict[str, str]:
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    api_key = str(globals().get("ORION_API_KEY") or "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
+def _data_url_from_local_file(path_value: str, mime_type: str = "") -> str:
+    path = Path(str(path_value or "").strip()).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise RuntimeError("Attached image file is not available.")
+    raw = path.read_bytes()
+    guessed_mime = str(mime_type or "").strip().lower() or mimetypes.guess_type(str(path.name))[0] or "image/jpeg"
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:{guessed_mime};base64,{encoded}"
+
+
+def _camera_monitor_workflow_definition(space_name: str) -> Dict[str, Any]:
+    label = str(space_name or "").strip() or "Space"
+    return {
+        "nodes": [
+            {
+                "id": "trigger-schedule",
+                "type": "trigger",
+                "position": {"x": 265, "y": 50},
+                "data": {"label": "Scheduled Scan", "triggerType": "schedule"},
+            },
+            {
+                "id": "agent-vision",
+                "type": "agent",
+                "position": {"x": 265, "y": 220},
+                "data": {
+                    "label": "Vision Agent",
+                    "modelId": "gpt-4o",
+                    "prompt": f"Monitor {label} and report unusual activity.",
+                    "tools": ["vision-monitor"],
+                    "provider": "openai",
+                    "role": "Vision",
+                    "duty": f"Watch {label} and summarize unusual activity clearly.",
+                    "status": "ready",
+                    "description": f"{label} monitoring",
+                },
+            },
+            {
+                "id": "action-telegram",
+                "type": "action",
+                "position": {"x": 265, "y": 390},
+                "data": {"label": "Send Telegram", "actionType": "send_telegram"},
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge-trigger-agent",
+                "source": "trigger-schedule",
+                "target": "agent-vision",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+            {
+                "id": "edge-agent-action",
+                "source": "agent-vision",
+                "target": "action-telegram",
+                "sourceHandle": "bottom",
+                "targetHandle": "top",
+                "type": "smoothstep",
+            },
+        ],
+        "meta": {"automationMode": "scheduled", "created_from": "camera_monitor_chat_bridge"},
+    }
+
+
+def _create_hotel_vision_space_via_api(
+    *,
+    space_name: str,
+    camera_source: str,
+    workspace_id: str,
+    uploaded_mime_type: str = "",
+) -> Dict[str, Any]:
+    _init()
+    status_res = http_json_request(
+        f"{EMPYRALIST_RUNTIME_URL}/api/solutions/hotel-vision/onboarding/status",
+        headers=_runtime_api_headers(),
+        timeout=20,
+    )
+    status_json = status_res.get("json") if isinstance(status_res.get("json"), dict) else {}
+    payload = {
+        "hotel_name": "My Property",
+        "city": "Unknown",
+        "timezone": str(status_json.get("default_timezone") or "UTC").strip() or "UTC",
+        "alert_channel": "telegram",
+        "space_name": str(space_name or "").strip(),
+        "monitoring_modes": ["people count", "after-hours movement", "occupancy level"],
+        "busy_threshold": 15,
+        "quiet_hours_from": "22:00",
+        "quiet_hours_to": "06:00",
+        "scan_cadence_minutes": 5,
+        "workspace_id": str(workspace_id or "").strip() or "default",
+    }
+    if looks_like_camera_source(camera_source) and str(camera_source or "").strip().lower().startswith("data:image/"):
+        payload["camera_mode"] = "upload"
+        payload["uploaded_photo_data_url"] = camera_source
+    elif str(camera_source or "").strip().lower().startswith(("http://", "https://", "rtsp://", "rtmp://", "rtmps://")):
+        payload["camera_mode"] = "ip_camera"
+        payload["camera_url"] = str(camera_source or "").strip()
+    else:
+        payload["camera_mode"] = "upload"
+        payload["uploaded_photo_data_url"] = _data_url_from_local_file(camera_source, uploaded_mime_type)
+    response = http_json_request(
+        f"{EMPYRALIST_RUNTIME_URL}/api/solutions/hotel-vision/onboarding/space",
+        method="POST",
+        headers=_runtime_api_headers(),
+        payload=payload,
+        timeout=30,
+    )
+    payload_json = response.get("json") if isinstance(response.get("json"), dict) else {}
+    return payload_json
+
+
+def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
+    _init()
+    create_res = http_json_request(
+        f"{EMPYRALIST_WORKFLOW_API_URL}/workflows?workspaceId=default",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        payload={
+            "name": f"Monitor {str(space_name or '').strip() or 'Space'}",
+            "description": f"Camera monitor for {str(space_name or '').strip() or 'this space'}",
+            "definition": _camera_monitor_workflow_definition(space_name),
+        },
+        timeout=20,
+    )
+    create_json = create_res.get("json") if isinstance(create_res.get("json"), dict) else {}
+    workflow_id = str(create_json.get("id") or "").strip()
+    if workflow_id:
+        try:
+            http_json_request(
+                f"{EMPYRALIST_WORKFLOW_API_URL}/workflows/{quote_plus(workflow_id)}/publish",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                timeout=20,
+            )
+        except Exception:
+            pass
+    return workflow_id or None
+
+
+def _camera_monitor_completion_text(space_name: str, channel_connected: bool, workflow_id: Optional[str] = None) -> str:
+    label = str(space_name or "").strip() or "space"
+    lines = [
+        f"Done. Your {label} monitor is active.",
+        "I'll alert you on Telegram when anything unusual happens.",
+        f"Open Hotel Vision: {EMPYRALIST_WEB_URL}/solutions/hotel-vision",
+    ]
+    if workflow_id:
+        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
+    if not channel_connected:
+        lines.append(f"Connect Telegram to receive alerts → {EMPYRALIST_WEB_URL}/credentials?connector=telegram_bot&onboarding=1")
+    return "\n\n".join(lines)
+
+
+def _telegram_handle_camera_monitor_setup(
+    *,
+    workspace_id: str,
+    chat_id: str,
+    message_text: str,
+    stored_attachments: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    active_state = _get_telegram_camera_setup_state(workspace_id, chat_id)
+    normalized_text = str(message_text or "").strip()
+
+    if active_state.get("active"):
+        stage = str(active_state.get("stage") or "").strip()
+        if stage == "awaiting_space_name":
+            if not normalized_text:
+                return {"handled": True, "reply": "What should I call this space? (e.g. Entrance, Reception, Parking)"}
+            _set_telegram_camera_setup_state(
+                workspace_id,
+                chat_id,
+                "awaiting_camera_source",
+                str(active_state.get("original_prompt") or "").strip(),
+                space_name=normalized_text,
+            )
+            return {
+                "handled": True,
+                "reply": "Got it. Upload a photo of the space or paste a camera URL to get started.",
+            }
+        if stage == "awaiting_camera_source":
+            source_value = normalized_text if looks_like_camera_source(normalized_text) else ""
+            source_mime = ""
+            if not source_value and isinstance(stored_attachments, list) and stored_attachments:
+                first = stored_attachments[0] if isinstance(stored_attachments[0], dict) else {}
+                source_value = str(first.get("path") or "").strip()
+                source_mime = str(first.get("mime_type") or "").strip()
+            if not source_value:
+                return {
+                    "handled": True,
+                    "reply": "Paste a camera URL to continue, or upload one photo of the space.",
+                }
+            space_name = str(active_state.get("space_name") or "").strip() or "Space"
+            try:
+                created = _create_hotel_vision_space_via_api(
+                    space_name=space_name,
+                    camera_source=source_value,
+                    workspace_id=workspace_id,
+                    uploaded_mime_type=source_mime,
+                )
+                workflow_id = _create_workflow_visibility_record(space_name)
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": _camera_monitor_completion_text(
+                        space_name,
+                        bool(created.get("channel_connected")),
+                        workflow_id,
+                    ),
+                }
+            except Exception as exc:
+                _clear_telegram_camera_setup_state(workspace_id, chat_id)
+                return {
+                    "handled": True,
+                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the monitor.'}",
+                }
+
+    if classify_automation_intent(normalized_text) == "CAMERA_MONITOR":
+        _set_telegram_camera_setup_state(
+            workspace_id,
+            chat_id,
+            "awaiting_space_name",
+            original_prompt=normalized_text,
+        )
+        return {
+            "handled": True,
+            "reply": "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        }
+
+    return {"handled": False, "reply": ""}
 
 
 def _telegram_profile_has_context(profile_data: Dict[str, str]) -> bool:
@@ -3839,6 +4186,43 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                 },
             )
             source_event_id = str((inbound_event or {}).get("id") or "").strip()
+            camera_setup = _telegram_handle_camera_monitor_setup(
+                workspace_id=workspace_id,
+                chat_id=chat_id,
+                message_text=message_text,
+                stored_attachments=stored_attachments,
+            )
+            if bool(camera_setup.get("handled")):
+                _record_channel_event(
+                    channel="telegram",
+                    direction="system",
+                    event_type="camera_setup_reply",
+                    text=str(camera_setup.get("reply") or "").strip(),
+                    workspace_id=workspace_id,
+                    session_key=session_key,
+                    session_id=session_key,
+                    parent_id=inbound_message_id or None,
+                    action="camera_setup",
+                    metadata={
+                        "connector_id": connector_id,
+                        "profile_id": profile.get("id"),
+                        "trace_id": trace_id,
+                        "source_event_id": source_event_id,
+                    },
+                )
+                _telegram_send_message(
+                    bot_token,
+                    chat_id,
+                    str(camera_setup.get("reply") or "").strip(),
+                    workspace_id=workspace_id,
+                    action="camera_setup",
+                    connector_id=connector_id,
+                    parent_message_id=inbound_message_id or None,
+                    profile=profile,
+                    trace_id=trace_id,
+                    source_event_id=source_event_id,
+                )
+                continue
             if action == "ignore":
                 continue
 

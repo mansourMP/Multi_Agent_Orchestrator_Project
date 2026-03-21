@@ -54,6 +54,9 @@ import {
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { classifyAutomationIntent, looksLikeCameraSource } from '@/lib/automationIntents';
+import { createWorkflow, publishWorkflow } from '@/lib/api';
+import { createHotelOnboardingSpace, fetchHotelOnboardingStatus } from '@/lib/hotelVision';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
 const WORKBENCH_AGENT_CHAT_STORAGE_KEY = 'orion.workbench.agent.chat.v1';
@@ -103,6 +106,12 @@ type PendingWorkbenchChat = {
   agentRole: string;
   placeholderId: string;
   runId: string | null;
+};
+
+type CameraMonitorSetupState = {
+  stage: 'awaiting_space_name' | 'awaiting_camera_source';
+  originalPrompt: string;
+  spaceName?: string;
 };
 
 type WorkbenchAgentChannelBinding = {
@@ -904,6 +913,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   const [pendingSimpleChat, setPendingSimpleChat] = useState<{ sessionId: string; placeholderId: string; runId: string | null } | null>(null);
   const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
   const [selectedAgentChannelsLoading, setSelectedAgentChannelsLoading] = useState(false);
+  const [cameraMonitorSetupStates, setCameraMonitorSetupStates] = useState<Record<string, CameraMonitorSetupState>>({});
   const [workbenchDeckVisible, setWorkbenchDeckVisible] = useState(true);
   const [workbenchDeckSize, setWorkbenchDeckSize] = useState<'compact' | 'standard' | 'expanded'>('standard');
   const preloadQuerySignatureRef = useRef('');
@@ -1037,6 +1047,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setPendingSimpleChat(null);
       setSelectedWorkbenchRunId(null);
       setWorkbenchAgentChats({});
+      setCameraMonitorSetupStates({});
       setChatStore((current) => {
         const nextSession = createEmptyChatSession();
         const preservedSessions = current.sessions.filter((session) => session.messages.length > 0).slice(0, CHAT_SESSION_LIMIT - 1);
@@ -1301,85 +1312,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     },
     [appendLog, buildHeaders, refreshControlCenter, setTopError],
   );
-
-  const runWorkbenchCommand = useCallback(async (input?: string) => {
-    const raw = String(input ?? goal).trim();
-    if (!raw) return;
-    const command = raw.toLowerCase();
-    setGoal('');
-
-    if (!raw.startsWith('/')) {
-      setGoal(raw);
-      if (!derivedSetupReady) {
-        setTopError(null);
-        return;
-      }
-      setDeckMode('inspect');
-      window.setTimeout(() => {
-        void startAutopilot();
-      }, 0);
-      return;
-    }
-
-    if (command === '/setup') {
-      router.push('/setup');
-      return;
-    }
-    if (command === '/skills' || command === '/extensions') {
-      router.push('/skills');
-      return;
-    }
-    if (command === '/integrations' || command === '/credentials' || command === '/channels') {
-      router.push('/credentials');
-      return;
-    }
-    if (command === '/agents' || command === '/assistant') {
-      router.push('/agents');
-      return;
-    }
-    if (command === '/workflows' || command === '/automations') {
-      router.push('/workflows');
-      return;
-    }
-    if (command === '/runs' || command === '/executions' || command === '/history') {
-      router.push('/executions');
-      return;
-    }
-    if (command === '/approvals') {
-      router.push('/approvals');
-      return;
-    }
-    if (command === '/restart' || command === '/readiness' || command === '/health') {
-      router.push('/health');
-      return;
-    }
-    if (command === '/help') {
-      setTopError(
-        singleAgentMode
-          ? 'Commands: /run <goal>, /run, /setup, /assistant, /automations, /runs, /approvals, /integrations, /health.'
-          : 'Commands: /run <goal>, /run, /setup, /agents, /automations, /runs, /approvals, /integrations, /health.',
-      );
-      return;
-    }
-    if (command === '/run' || command.startsWith('/run ')) {
-      const nextGoal = command.startsWith('/run ') ? raw.slice(5).trim() : '';
-      if (nextGoal) {
-        setGoal(nextGoal);
-      }
-      const commandSetupReady = Boolean(
-        setupStatus?.runtimeReady && setupStatus?.accountConnected && setupStatus?.connectionTested,
-      );
-      if (!commandSetupReady) {
-        setTopError(null);
-        return;
-      }
-      window.setTimeout(() => {
-        void startAutopilot();
-      }, 0);
-      return;
-    }
-    setTopError('Unknown command. Try /help.');
-  }, [derivedSetupReady, goal, router, setGoal, setTopError, setupStatus, singleAgentMode, startAutopilot]);
 
   useEffect(() => {
     if (setupHydrated) {
@@ -1811,6 +1743,403 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     }));
   }, []);
 
+  const setCameraMonitorSetupState = useCallback((key: string, next: CameraMonitorSetupState | null) => {
+    setCameraMonitorSetupStates((current) => {
+      const updated = { ...current };
+      if (next) updated[key] = next;
+      else delete updated[key];
+      return updated;
+    });
+  }, []);
+
+  const buildCameraMonitorWorkflowDefinition = useCallback((spaceName: string) => {
+    const safeName = spaceName.trim() || 'Space';
+    return {
+      nodes: [
+        {
+          id: 'trigger-schedule',
+          type: 'trigger',
+          position: { x: 265, y: 50 },
+          data: {
+            label: 'Scheduled Scan',
+            triggerType: 'schedule',
+          },
+        },
+        {
+          id: 'agent-vision',
+          type: 'agent',
+          position: { x: 265, y: 220 },
+          data: {
+            label: 'Vision Agent',
+            modelId: 'gpt-4o',
+            prompt: `Monitor ${safeName} and report unusual activity.`,
+            tools: ['vision-monitor'],
+            provider: 'openai',
+            role: 'Vision',
+            duty: `Watch ${safeName} and summarize unusual activity clearly.`,
+            status: 'ready',
+            description: `${safeName} monitoring`,
+          },
+        },
+        {
+          id: 'action-telegram',
+          type: 'action',
+          position: { x: 265, y: 390 },
+          data: {
+            label: 'Send Telegram',
+            actionType: 'send_telegram',
+          },
+        },
+      ],
+      edges: [
+        { id: 'edge-trigger-agent', source: 'trigger-schedule', target: 'agent-vision', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+        { id: 'edge-agent-action', source: 'agent-vision', target: 'action-telegram', sourceHandle: 'bottom', targetHandle: 'top', type: 'smoothstep' },
+      ],
+      meta: {
+        automationMode: 'scheduled',
+        created_from: 'camera_monitor_chat_bridge',
+      },
+    };
+  }, []);
+
+  const createCameraMonitorVisibilityWorkflow = useCallback(async (spaceName: string) => {
+    const workflow = await createWorkflow(
+      `Monitor ${spaceName.trim() || 'Space'}`,
+      `Camera monitor for ${spaceName.trim() || 'this space'}`,
+      'default',
+      buildCameraMonitorWorkflowDefinition(spaceName),
+    );
+    const workflowId = String((workflow as { id?: unknown })?.id || '').trim();
+    if (workflowId) {
+      try {
+        await publishWorkflow(workflowId);
+      } catch {
+        // Keep the created workflow even if publish fails.
+      }
+    }
+    return workflowId;
+  }, [buildCameraMonitorWorkflowDefinition]);
+
+  const provisionCameraMonitorFromChat = useCallback(async (spaceName: string, cameraSource: string) => {
+    const onboarding = await fetchHotelOnboardingStatus();
+    const created = await createHotelOnboardingSpace({
+      hotel_name: 'My Property',
+      city: 'Unknown',
+      timezone: onboarding.default_timezone || 'UTC',
+      alert_channel: 'telegram',
+      space_name: spaceName.trim(),
+      camera_mode: /^data:image\/[a-z0-9.+-]+;base64,/i.test(cameraSource) ? 'upload' : 'ip_camera',
+      camera_url: /^(https?|rtsp|rtmps?|rtmp):\/\//i.test(cameraSource) ? cameraSource.trim() : '',
+      uploaded_photo_data_url: /^data:image\/[a-z0-9.+-]+;base64,/i.test(cameraSource) ? cameraSource.trim() : '',
+      monitoring_modes: ['people count', 'after-hours movement', 'occupancy level'],
+      busy_threshold: 15,
+      quiet_hours_from: '22:00',
+      quiet_hours_to: '06:00',
+      scan_cadence_minutes: 5,
+    });
+    const workflowId = await createCameraMonitorVisibilityWorkflow(spaceName);
+    return {
+      created,
+      workflowId,
+    };
+  }, [createCameraMonitorVisibilityWorkflow]);
+
+  const buildCameraMonitorCompletionMessage = useCallback(
+    (spaceName: string, channelConnected: boolean, workflowId: string | null) => {
+      const lines = [
+        `Done. Your **${spaceName}** monitor is active.`,
+        '',
+        "I'll alert you on Telegram when anything unusual happens.",
+        '',
+        '[Open Hotel Vision](/solutions/hotel-vision)',
+      ];
+      if (workflowId) {
+        lines.push(`[Open automation](/workflows/${encodeURIComponent(workflowId)})`);
+      }
+      if (!channelConnected) {
+        lines.push('[Connect Telegram to receive alerts →](/credentials?connector=telegram_bot&onboarding=1)');
+      }
+      return lines.join('\n');
+    },
+    [],
+  );
+
+  const consumeSimpleCameraMonitorSetup = useCallback(async (sessionId: string, text: string) => {
+    const stateKey = `simple:${sessionId}`;
+    const activeState = cameraMonitorSetupStates[stateKey];
+    const intent = classifyAutomationIntent(text);
+    if (!activeState && intent !== 'CAMERA_MONITOR') return false;
+    const now = new Date().toISOString();
+    const userMessage: WorkbenchAgentChatMessage = {
+      id: createWorkbenchChatId('user'),
+      role: 'user',
+      content: text,
+      ts: now,
+      status: 'completed',
+    };
+    appendSimpleChatMessage(sessionId, userMessage);
+    setGoal('');
+
+    if (!activeState) {
+      appendSimpleChatMessage(sessionId, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      setCameraMonitorSetupState(stateKey, {
+        stage: 'awaiting_space_name',
+        originalPrompt: text,
+      });
+      return true;
+    }
+
+    if (activeState.stage === 'awaiting_space_name') {
+      const spaceName = text.trim();
+      if (!spaceName) {
+        appendSimpleChatMessage(sessionId, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Please send the name you want to use for this space.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      setCameraMonitorSetupState(stateKey, {
+        ...activeState,
+        stage: 'awaiting_camera_source',
+        spaceName,
+      });
+      appendSimpleChatMessage(sessionId, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: 'Got it. Upload a photo of the space or paste a camera URL to get started.',
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      return true;
+    }
+
+    if (!looksLikeCameraSource(text)) {
+      appendSimpleChatMessage(sessionId, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: 'Paste a camera URL to continue. Example: `rtsp://camera.local/stream`',
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      return true;
+    }
+
+    const placeholderId = createWorkbenchChatId('assistant');
+    appendSimpleChatMessage(sessionId, {
+      id: placeholderId,
+      role: 'assistant',
+      content: 'Setting up your monitor...',
+      ts: new Date().toISOString(),
+      status: 'running',
+    });
+    try {
+      const result = await provisionCameraMonitorFromChat(activeState.spaceName || 'Space', text.trim());
+      patchSimpleChatMessage(sessionId, placeholderId, {
+        content: buildCameraMonitorCompletionMessage(activeState.spaceName || 'Space', result.created.channel_connected, result.workflowId || null),
+        status: 'completed',
+        ts: new Date().toISOString(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to set up the camera monitor.';
+      patchSimpleChatMessage(sessionId, placeholderId, {
+        content: `I couldn't finish the setup.\n\n${message}`,
+        status: 'error',
+        ts: new Date().toISOString(),
+      });
+    } finally {
+      setCameraMonitorSetupState(stateKey, null);
+    }
+    return true;
+  }, [appendSimpleChatMessage, buildCameraMonitorCompletionMessage, cameraMonitorSetupStates, patchSimpleChatMessage, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+
+  const consumeWorkbenchCameraMonitorSetup = useCallback(async (agentRole: string, text: string) => {
+    const stateKey = `advanced:${agentRole}`;
+    const activeState = cameraMonitorSetupStates[stateKey];
+    const intent = classifyAutomationIntent(text);
+    if (!activeState && intent !== 'CAMERA_MONITOR') return false;
+    const now = new Date().toISOString();
+    const userMessage: WorkbenchAgentChatMessage = {
+      id: createWorkbenchChatId('user'),
+      role: 'user',
+      content: text,
+      ts: now,
+      status: 'completed',
+    };
+    appendWorkbenchAgentChat(agentRole, userMessage);
+    setGoal('');
+
+    if (!activeState) {
+      appendWorkbenchAgentChat(agentRole, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      setCameraMonitorSetupState(stateKey, {
+        stage: 'awaiting_space_name',
+        originalPrompt: text,
+      });
+      return true;
+    }
+
+    if (activeState.stage === 'awaiting_space_name') {
+      const spaceName = text.trim();
+      if (!spaceName) {
+        appendWorkbenchAgentChat(agentRole, {
+          id: createWorkbenchChatId('assistant'),
+          role: 'assistant',
+          content: 'Please send the name you want to use for this space.',
+          ts: new Date().toISOString(),
+          status: 'completed',
+        });
+        return true;
+      }
+      setCameraMonitorSetupState(stateKey, {
+        ...activeState,
+        stage: 'awaiting_camera_source',
+        spaceName,
+      });
+      appendWorkbenchAgentChat(agentRole, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: 'Got it. Upload a photo of the space or paste a camera URL to get started.',
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      return true;
+    }
+
+    if (!looksLikeCameraSource(text)) {
+      appendWorkbenchAgentChat(agentRole, {
+        id: createWorkbenchChatId('assistant'),
+        role: 'assistant',
+        content: 'Paste a camera URL to continue. Example: `rtsp://camera.local/stream`',
+        ts: new Date().toISOString(),
+        status: 'completed',
+      });
+      return true;
+    }
+
+    const placeholderId = createWorkbenchChatId('assistant');
+    appendWorkbenchAgentChat(agentRole, {
+      id: placeholderId,
+      role: 'assistant',
+      content: 'Setting up your monitor...',
+      ts: new Date().toISOString(),
+      status: 'running',
+    });
+    try {
+      const result = await provisionCameraMonitorFromChat(activeState.spaceName || 'Space', text.trim());
+      patchWorkbenchAgentChat(agentRole, placeholderId, {
+        content: buildCameraMonitorCompletionMessage(activeState.spaceName || 'Space', result.created.channel_connected, result.workflowId || null),
+        status: 'completed',
+        ts: new Date().toISOString(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to set up the camera monitor.';
+      patchWorkbenchAgentChat(agentRole, placeholderId, {
+        content: `I couldn't finish the setup.\n\n${message}`,
+        status: 'error',
+        ts: new Date().toISOString(),
+      });
+    } finally {
+      setCameraMonitorSetupState(stateKey, null);
+    }
+    return true;
+  }, [appendWorkbenchAgentChat, buildCameraMonitorCompletionMessage, cameraMonitorSetupStates, patchWorkbenchAgentChat, provisionCameraMonitorFromChat, setCameraMonitorSetupState, setGoal]);
+
+  const runWorkbenchCommand = useCallback(async (input?: string) => {
+    const raw = String(input ?? goal).trim();
+    if (!raw) return;
+    const command = raw.toLowerCase();
+    setGoal('');
+
+    if (!raw.startsWith('/')) {
+      if (await consumeWorkbenchCameraMonitorSetup(selectedAgentRole, raw)) {
+        return;
+      }
+      setGoal(raw);
+      if (!derivedSetupReady) {
+        setTopError(null);
+        return;
+      }
+      setDeckMode('inspect');
+      window.setTimeout(() => {
+        void startAutopilot();
+      }, 0);
+      return;
+    }
+
+    if (command === '/setup') {
+      router.push('/setup');
+      return;
+    }
+    if (command === '/skills' || command === '/extensions') {
+      router.push('/skills');
+      return;
+    }
+    if (command === '/integrations' || command === '/credentials' || command === '/channels') {
+      router.push('/credentials');
+      return;
+    }
+    if (command === '/agents' || command === '/assistant') {
+      router.push('/agents');
+      return;
+    }
+    if (command === '/workflows' || command === '/automations') {
+      router.push('/workflows');
+      return;
+    }
+    if (command === '/runs' || command === '/executions' || command === '/history') {
+      router.push('/executions');
+      return;
+    }
+    if (command === '/approvals') {
+      router.push('/approvals');
+      return;
+    }
+    if (command === '/restart' || command === '/readiness' || command === '/health') {
+      router.push('/health');
+      return;
+    }
+    if (command === '/help') {
+      setTopError(
+        singleAgentMode
+          ? 'Commands: /run <goal>, /run, /setup, /assistant, /automations, /runs, /approvals, /integrations, /health.'
+          : 'Commands: /run <goal>, /run, /setup, /agents, /automations, /runs, /approvals, /integrations, /health.',
+      );
+      return;
+    }
+    if (command === '/run' || command.startsWith('/run ')) {
+      const nextGoal = command.startsWith('/run ') ? raw.slice(5).trim() : '';
+      if (nextGoal) {
+        setGoal(nextGoal);
+      }
+      const commandSetupReady = Boolean(
+        setupStatus?.runtimeReady && setupStatus?.accountConnected && setupStatus?.connectionTested,
+      );
+      if (!commandSetupReady) {
+        setTopError(null);
+        return;
+      }
+      window.setTimeout(() => {
+        void startAutopilot();
+      }, 0);
+      return;
+    }
+    setTopError('Unknown command. Try /help.');
+  }, [consumeWorkbenchCameraMonitorSetup, derivedSetupReady, goal, router, selectedAgentRole, setGoal, setTopError, setupStatus, singleAgentMode, startAutopilot]);
+
   useEffect(() => {
     const handleGlobalCommandDetail = (detail: PlatformGlobalCommandEventDetail | undefined) => {
       if (!detail) return;
@@ -1933,6 +2262,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
+    if (await consumeSimpleCameraMonitorSetup(sessionId, text)) {
+      return;
+    }
     if (!derivedSetupReady) {
       setTopError(null);
       return;
@@ -1960,11 +2292,14 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingSimpleChat({ sessionId, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text, ...simpleChatRunOverrides });
-  }, [appendSimpleChatMessage, derivedSetupReady, goal, selectedChatSession?.id, setGoal, setTopError, simpleChatRunOverrides, startAutopilot]);
+  }, [appendSimpleChatMessage, consumeSimpleCameraMonitorSetup, derivedSetupReady, goal, selectedChatSession?.id, setGoal, setTopError, simpleChatRunOverrides, startAutopilot]);
 
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
     if (!text) return;
+    if (await consumeWorkbenchCameraMonitorSetup(selectedAgentRole, text)) {
+      return;
+    }
     if (!derivedSetupReady) {
       setTopError(null);
       return;
@@ -1992,7 +2327,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingWorkbenchChat({ agentRole: selectedAgentRole, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text });
-  }, [appendWorkbenchAgentChat, derivedSetupReady, goal, selectedAgentRole, setGoal, setTopError, startAutopilot]);
+  }, [appendWorkbenchAgentChat, consumeWorkbenchCameraMonitorSetup, derivedSetupReady, goal, selectedAgentRole, setGoal, setTopError, startAutopilot]);
 
   useEffect(() => {
     if (status === 'queued_local' || status === 'running' || status === 'waiting' || status === 'error') {

@@ -35,11 +35,12 @@ type NavItem = {
 };
 
 const WORKSPACE_ITEMS: NavItem[] = [
+    { label: 'Dashboard', href: '/', icon: LayoutDashboard },
     { label: 'Chat', href: '/workspace', icon: MessageSquare },
-    { label: 'Runs', href: '/executions', icon: Activity },
-    { label: 'Outputs', href: '/artifacts', icon: FileStack },
-    { label: 'Connections', href: '/credentials', icon: Key },
     { label: 'Automations', href: '/workflows', icon: Workflow },
+    { label: 'Activity', href: '/executions', icon: Activity },
+    { label: 'Files', href: '/artifacts', icon: FileStack },
+    { label: 'Connections', href: '/credentials', icon: Key },
 ];
 
 type SolutionNavItem = {
@@ -177,7 +178,7 @@ export default function Sidebar() {
         const items: NavItem[] = [];
         const seen = new Set<string>();
 
-        for (const item of [...routePinnedSolutionItems, ...solutionItems, ...workspaceItems]) {
+        for (const item of [...workspaceItems, ...routePinnedSolutionItems, ...solutionItems]) {
             if (item.href === '/workspace' && seen.has('/workspace')) continue;
             if (seen.has(item.href)) continue;
             seen.add(item.href);
@@ -311,6 +312,7 @@ export default function Sidebar() {
                                         aria-expanded={isChatItem ? chatSessionsOpen : undefined}
                                     >
                                         <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
+                                        <span className="sidebar-rail-label">{item.label}</span>
                                         {typeof item.badge === 'number' && item.badge > 0 ? (
                                             <span className="sidebar-icon-badge" aria-hidden>
                                                 {item.badge > 99 ? '99+' : item.badge}

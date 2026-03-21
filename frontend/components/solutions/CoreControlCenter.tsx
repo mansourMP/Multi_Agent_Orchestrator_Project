@@ -8,6 +8,7 @@ import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import { createWorkflow, fetchWorkflows } from '@/lib/api';
+import { BRAND } from '@/lib/brand';
 import {
   type InstalledSolution,
   type RecentRunItem,
@@ -35,10 +36,10 @@ type FirstRunWorkflowDraft = {
 };
 
 const FIRST_RUN_EXAMPLES = [
-  'Alert me when someone enters my shop',
-  'Summarize my emails every morning',
-  'Monitor my camera and notify me on WhatsApp',
-  'Follow up with leads automatically',
+  'Monitor a camera',
+  'Summarize emails daily',
+  'Alert me on Telegram',
+  'Follow up with leads',
 ] as const;
 
 function slugifyLabel(value: string): string {
@@ -158,7 +159,7 @@ function buildFirstRunWorkflowDraft(request: string): FirstRunWorkflowDraft {
   };
 }
 
-export function CoreControlCenter() {
+export function CoreControlCenter({ forceFirstRun = false }: { forceFirstRun?: boolean } = {}) {
   const router = useRouter();
   const [solutions, setSolutions] = useState<InstalledSolution[]>([]);
   const [skills, setSkills] = useState<SkillCard[]>([]);
@@ -280,7 +281,18 @@ export function CoreControlCenter() {
       .slice(0, 6);
   }, [solutions]);
 
-  const shouldShowFirstRunOverlay = !loading && !error && workflowCount === 0;
+  const shouldShowFirstRunOverlay = forceFirstRun || (!loading && !error && workflowCount === 0);
+
+  useEffect(() => {
+    if (!shouldShowFirstRunOverlay) {
+      document.body.classList.remove('orion-first-run-mode');
+      return;
+    }
+    document.body.classList.add('orion-first-run-mode');
+    return () => {
+      document.body.classList.remove('orion-first-run-mode');
+    };
+  }, [shouldShowFirstRunOverlay]);
 
   const launchFirstRunWorkflow = async (request: string) => {
     const prompt = request.trim();
@@ -312,13 +324,11 @@ export function CoreControlCenter() {
 
   if (shouldShowFirstRunOverlay) {
     return (
-      <div className="orion-page-shell narrow orion-animate-in" style={{ minHeight: 'calc(100vh - 120px)', justifyContent: 'center' }}>
+      <div className="orion-first-run-premium orion-animate-in">
+        <div className="orion-first-run-brand">{BRAND.company}</div>
         <section className="orion-first-run-shell">
-          <div className="orion-first-run-eyebrow">New automation</div>
-          <h1 className="orion-first-run-title">What do you want to automate?</h1>
-          <p className="orion-first-run-copy">
-            Describe the outcome once. {`Empyralist`} will assemble the workflow and open it on canvas.
-          </p>
+          <h1 className="orion-first-run-title">Automate anything.</h1>
+          <p className="orion-first-run-copy">Describe what you want. Empyralist builds it for you.</p>
 
           <form
             className="orion-first-run-composer"
@@ -327,49 +337,47 @@ export function CoreControlCenter() {
               void launchFirstRunWorkflow(firstRunPrompt);
             }}
           >
-            <textarea
+            <input
               value={firstRunPrompt}
               onChange={(event) => setFirstRunPrompt(event.target.value)}
-              className="orion-first-run-input"
-              rows={3}
-              placeholder="What do you want to automate?"
+              className="orion-first-run-search"
+              placeholder="e.g. Alert me when someone enters my shop"
               disabled={isBuildingAutomation}
             />
+            <div className="orion-first-run-chip-row">
+              {FIRST_RUN_EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="orion-first-run-chip"
+                  onClick={() => {
+                    setFirstRunPrompt(example);
+                    void launchFirstRunWorkflow(example);
+                  }}
+                  disabled={isBuildingAutomation}
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
             <div className="orion-first-run-actions">
               <button
                 type="submit"
-                className="orion-btn orion-btn-primary"
+                className="orion-btn orion-btn-primary orion-first-run-submit"
                 disabled={isBuildingAutomation || !firstRunPrompt.trim()}
               >
                 {isBuildingAutomation ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
-                {isBuildingAutomation ? 'Building your automation...' : 'Build automation'}
+                {isBuildingAutomation ? 'Building your automation...' : 'Build this →'}
               </button>
             </div>
           </form>
 
-          <div className="orion-first-run-chip-row">
-            {FIRST_RUN_EXAMPLES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                className="orion-first-run-chip"
-                onClick={() => {
-                  setFirstRunPrompt(example);
-                  void launchFirstRunWorkflow(example);
-                }}
-                disabled={isBuildingAutomation}
-              >
-                {example}
-              </button>
-            ))}
-          </div>
+          <div className="orion-first-run-footer">No setup required. Connect your tools after.</div>
 
           {isBuildingAutomation ? (
             <div className="orion-first-run-status">
               <div className="orion-first-run-status-title">{buildingStep}</div>
-              <div className="orion-first-run-status-copy">
-                Agent is mapping your request into a trigger, an AI step, and an action.
-              </div>
+              <div className="orion-first-run-status-copy">Empyralist is mapping your request into a working automation.</div>
             </div>
           ) : null}
 

@@ -24,9 +24,9 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   },
   {
     id: 'advanced-workspace',
-    title: SINGLE_AGENT_MODE ? 'Advanced Workspace' : 'Workspace',
-    breadcrumb: 'Control Center',
-    slotLabel: SINGLE_AGENT_MODE ? 'Assistant control and inspect' : 'Workers, routing, and inspect',
+    title: 'Chat',
+    breadcrumb: 'Workspace',
+    slotLabel: 'Continue the conversation',
     match: (pathname: string) => pathname === '/workspace',
   },
   {
@@ -95,7 +95,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
     id: 'connections',
     title: 'Connections',
-    breadcrumb: 'Workspace',
+    breadcrumb: 'Setup',
     slotLabel: 'Connected tools and channels',
     match: (pathname: string) => pathname === '/credentials',
   },

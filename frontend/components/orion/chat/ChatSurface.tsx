@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
 import type { ChatMessageRecord } from './chatSchema';
@@ -39,6 +40,10 @@ type ChatSurfaceProps = {
   chatBusy: boolean;
   messages: ChatMessageRecord[];
   inlineStatus: string | null;
+  inlineAction?: {
+    label: string;
+    href: string;
+  } | null;
   heroTitle?: string;
   heroNote?: string | null;
   onboardingPrompt?: ChatOnboardingPrompt | null;
@@ -260,6 +265,7 @@ export function ChatSurface({
   chatBusy,
   messages,
   inlineStatus,
+  inlineAction = null,
   heroTitle = 'What should we work on next?',
   heroNote = null,
   onboardingPrompt = null,
@@ -271,6 +277,7 @@ export function ChatSurface({
   identitySections,
   identityActions,
 }: ChatSurfaceProps) {
+  const router = useRouter();
   const hasMessages = messages.length > 0;
   const sendDisabled = chatBusy || goal.trim().length === 0;
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -411,7 +418,20 @@ export function ChatSurface({
 
       <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
         <div className="orion-chat-v2-composer-frame">
-          {inlineStatus ? <div className="orion-chat-v2-status-line">⚠ {inlineStatus}</div> : null}
+          {inlineStatus ? (
+            <div className="orion-chat-v2-status-line">
+              <span>⚠ {inlineStatus}</span>
+              {inlineAction ? (
+                <button
+                  type="button"
+                  className="orion-chat-v2-status-action"
+                  onClick={() => router.push(inlineAction.href)}
+                >
+                  {inlineAction.label}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="orion-chat-v2-composer">
             <button type="button" className="orion-chat-v2-plus" aria-label="Add context">
               +

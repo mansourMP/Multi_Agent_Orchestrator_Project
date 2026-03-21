@@ -1921,6 +1921,31 @@ input:focus-visible {
   color: #b64545;
 }
 
+.orion-chat-v2-status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.orion-chat-v2-status-action {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary-base) 24%, var(--border-default) 76%);
+  background: color-mix(in srgb, var(--bg-surface) 84%, var(--primary-base) 16%);
+  color: var(--primary-base);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform var(--motion-fast) var(--easing-standard), background var(--motion-fast) var(--easing-standard);
+}
+
+.orion-chat-v2-status-action:hover {
+  background: color-mix(in srgb, var(--bg-hover) 82%, var(--primary-base) 18%);
+  transform: translateY(-1px);
+}
+
 [data-theme='dark'] .orion-chat-v2-inline-error,
 [data-theme='dark'] .orion-chat-v2-status-line {
   color: #ff8d8d;
@@ -3454,6 +3479,15 @@ body.orion-chat-home .sidebar-brandmark {
 .sidebar-nav-btn.is-rail svg {
   width: 16px;
   height: 16px;
+}
+
+.sidebar-nav-btn.is-rail.is-secondary {
+  opacity: 0.68;
+}
+
+.sidebar-nav-btn.is-rail.is-secondary:hover,
+.sidebar-nav-btn.is-rail.is-secondary.is-active {
+  opacity: 1;
 }
 
 .sidebar-icon-badge {

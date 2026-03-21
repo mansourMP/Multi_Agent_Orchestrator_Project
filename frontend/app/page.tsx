@@ -718,12 +718,28 @@ function resolveChatNextRecommendation(args: {
   connectedTools: number;
   executionLabel: string;
 }): ChatNextRecommendation {
-  if (!args.setupReady || !args.runtimeOk) {
+  if (!args.setupReady) {
+    if (args.connectedTools === 0) {
+      return {
+        chipText: 'Connect Telegram to activate',
+        chipTone: 'warning',
+        actionLabel: 'Connect Telegram',
+        href: '/credentials?connector=telegram_bot&onboarding=1',
+      };
+    }
     return {
-      chipText: 'Runtime offline — open setup',
+      chipText: 'Finish setup to start automations',
       chipTone: 'warning',
       actionLabel: 'Open Setup',
       href: '/setup',
+    };
+  }
+  if (!args.runtimeOk) {
+    return {
+      chipText: 'Workspace needs attention',
+      chipTone: 'warning',
+      actionLabel: 'Open Health',
+      href: '/health',
     };
   }
   if (args.pendingApprovals > 0) {
@@ -1701,20 +1717,20 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setupReady,
   ]);
   const sessionIdentityItems = useMemo<ChatIdentityItem[]>(() => {
-    const runtimeLabel = controlCenter.runtimeOk ? 'Connected' : 'Offline';
+    const readinessLabel = setupReady ? 'Ready' : 'Needs setup';
     const hasApprovals = controlCenter.pendingApprovals.length > 0;
     const hasTools = connectorCredentials.length > 0;
     const approvalLabel = hasApprovals ? `${controlCenter.pendingApprovals.length} waiting` : 'Clear';
-    const toolsLabel = hasTools ? `${connectorCredentials.length} connected` : 'None connected';
+    const toolsLabel = hasTools ? `${connectorCredentials.length} connected` : 'Connect one';
     return [
-      { label: 'Runtime', value: runtimeLabel, tone: controlCenter.runtimeOk ? 'success' : 'warning' },
-      { label: 'Tools', value: toolsLabel, tone: hasTools ? 'success' : 'warning' },
+      { label: 'Status', value: readinessLabel, tone: setupReady ? 'success' : 'warning' },
+      { label: 'Channels', value: toolsLabel, tone: hasTools ? 'success' : 'warning' },
       { label: 'Approvals', value: approvalLabel, tone: hasApprovals ? 'warning' : 'neutral' },
     ];
   }, [
     controlCenter.pendingApprovals.length,
-    controlCenter.runtimeOk,
     connectorCredentials.length,
+    setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
     const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
@@ -1859,8 +1875,16 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
     if (providerError) return null;
     if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
+    if (!derivedSetupReady) return 'To run this automation, connect Telegram first.';
     return null;
-  }, [selectedChatMessages, topError]);
+  }, [derivedSetupReady, selectedChatMessages, topError]);
+  const inlineSimpleChatAction = useMemo(() => {
+    if (derivedSetupReady) return null;
+    return {
+      label: 'Connect Telegram →',
+      href: '/credentials?connector=telegram_bot&onboarding=1',
+    };
+  }, [derivedSetupReady]);
 
   const appendWorkbenchAgentChat = useCallback((agentRole: string, message: WorkbenchAgentChatMessage) => {
     setWorkbenchAgentChats((current) => ({
@@ -2026,8 +2050,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
     if (!derivedSetupReady) {
-      setTopError('Setup is not complete yet. Open Setup and finish workspace access, account mode, and tools.');
-      router.push('/setup');
+      setTopError(null);
       return;
     }
     const now = new Date().toISOString();
@@ -2053,7 +2076,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setPendingSimpleChat({ sessionId, placeholderId, runId: null });
     setGoal('');
     await startAutopilot({ goal: text, ...simpleChatRunOverrides });
-  }, [appendSimpleChatMessage, derivedSetupReady, goal, router, selectedChatSession?.id, setGoal, setTopError, simpleChatRunOverrides, startAutopilot]);
+  }, [appendSimpleChatMessage, derivedSetupReady, goal, selectedChatSession?.id, setGoal, setTopError, simpleChatRunOverrides, startAutopilot]);
 
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
@@ -2192,6 +2215,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             chatBusy={Boolean(pendingSimpleChat)}
             messages={selectedChatMessages}
             inlineStatus={inlineSimpleChatStatus}
+            inlineAction={inlineSimpleChatAction}
             heroTitle={setupReady && connectorCredentials.length > 0 ? 'What’s next?' : 'What should we work on next?'}
             heroNote={
               selectedChatMessages.length === 0

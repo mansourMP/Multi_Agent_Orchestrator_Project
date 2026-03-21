@@ -265,6 +265,7 @@ export default function Sidebar() {
                         {railItems.map((item) => {
                             const isActive = isNavItemActive(item);
                             const isChatItem = item.href === '/workspace';
+                            const isSecondaryItem = item.href === '/executions' || item.href === '/credentials' || item.href === '/artifacts';
                             return (
                                 <div
                                     key={`workspace:${item.href}:${item.label}`}
@@ -279,7 +280,7 @@ export default function Sidebar() {
                                             }
                                             safeNavigate(item.href);
                                         }}
-                                        className={`sidebar-nav-btn is-rail${isActive ? ' is-active' : ''}`}
+                                        className={`sidebar-nav-btn is-rail${isSecondaryItem ? ' is-secondary' : ''}${isActive ? ' is-active' : ''}`}
                                         style={isActive ? {
                                             backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
                                             color: '#ffffff',

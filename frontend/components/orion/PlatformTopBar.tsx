@@ -17,18 +17,23 @@ type ShellStatusPill = {
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 
-function buildStatusPills(status: ReturnType<typeof usePlatformShell>['status']): ShellStatusPill[] {
+function isUserSurface(pathname: string): boolean {
+  return pathname === '/' || pathname === '/workspace' || pathname.startsWith('/solutions/');
+}
+
+function buildStatusPills(pathname: string, status: ReturnType<typeof usePlatformShell>['status']): ShellStatusPill[] {
   const items: ShellStatusPill[] = [];
+  const userSurface = isUserSurface(pathname);
 
   if (!status.setupReady) {
     items.push({
-      label: `Setup ${status.setupProgressCount}/3`,
-      tone: 'warn',
+      label: userSurface ? 'Finish setup' : `Setup ${status.setupProgressCount}/3`,
+      tone: userSurface ? 'neutral' : 'warn',
       href: '/setup',
     });
   }
 
-  if (status.runtimeHealthy === false) {
+  if (!userSurface && status.runtimeHealthy === false) {
     items.push({
       label: 'Runtime attention',
       tone: 'error',
@@ -36,7 +41,7 @@ function buildStatusPills(status: ReturnType<typeof usePlatformShell>['status'])
     });
   }
 
-  if (status.runtimeHealthy === true && status.onlineWorkers <= 0) {
+  if (!userSurface && status.runtimeHealthy === true && status.onlineWorkers <= 0) {
     items.push({
       label: 'Workers offline',
       tone: 'warn',
@@ -68,7 +73,7 @@ export default function PlatformTopBar() {
   const meta = useMemo(() => resolveShellRouteMeta(pathname), [pathname]);
   const { status } = usePlatformShell();
   const { theme, setTheme } = useTheme();
-  const statusPills = useMemo(() => buildStatusPills(status), [status]);
+  const statusPills = useMemo(() => buildStatusPills(pathname, status), [pathname, status]);
 
   useEffect(() => {
     document.documentElement.style.setProperty('--topbar-height', isChatRoute ? '56px' : '68px');
@@ -84,7 +89,7 @@ export default function PlatformTopBar() {
           <div className="orion-shellbar-page">
             <div className="orion-shellbar-page-row">
               <div className="orion-shellbar-title">Chat</div>
-              <span className="orion-shellbar-slot">One assistant</span>
+              <span className="orion-shellbar-slot">Describe the outcome you want</span>
             </div>
           </div>
         </div>

@@ -699,14 +699,14 @@ function resolveChatNextRecommendation(args: {
   if (!args.setupReady) {
     if (args.connectedTools === 0) {
       return {
-        chipText: 'Connect Telegram to activate',
+        chipText: 'Connect Telegram to activate alerts',
         chipTone: 'warning',
         actionLabel: 'Connect Telegram',
         href: '/credentials?connector=telegram_bot&onboarding=1',
       };
     }
     return {
-      chipText: 'Finish setup to start automations',
+      chipText: 'Finish setup to run automations',
       chipTone: 'warning',
       actionLabel: 'Open Setup',
       href: '/setup',
@@ -714,7 +714,7 @@ function resolveChatNextRecommendation(args: {
   }
   if (!args.runtimeOk) {
     return {
-      chipText: 'Workspace needs attention',
+      chipText: 'Check workspace status',
       chipTone: 'warning',
       actionLabel: 'Open Health',
       href: '/health',
@@ -1681,7 +1681,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
     if (providerError) return null;
     if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
-    if (!derivedSetupReady) return 'To run this automation, connect Telegram first.';
+    if (!derivedSetupReady) return 'Connect Telegram to activate alerts.';
     return null;
   }, [derivedSetupReady, selectedChatMessages, topError]);
   const inlineSimpleChatAction = useMemo(() => {
@@ -1693,7 +1693,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [derivedSetupReady]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
-    return 'To run this automation, connect Telegram first.';
+    return 'Connect Telegram to activate alerts.';
   }, [derivedSetupReady]);
   const inlineWorkbenchChatAction = useMemo(() => {
     if (derivedSetupReady) return null;
@@ -1846,10 +1846,11 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
   const buildCameraMonitorCompletionMessage = useCallback(
     (spaceName: string, channelConnected: boolean, workflowId: string | null) => {
+      const normalizedName = spaceName.trim() || 'Space';
       const lines = [
-        `Done. Your **${spaceName}** monitor is active.`,
+        channelConnected ? `Done. Your **${normalizedName}** monitor is active.` : `Done. Your **${normalizedName}** monitor is ready.`,
         '',
-        "I'll alert you on Telegram when anything unusual happens.",
+        channelConnected ? "You'll get Telegram alerts when anything unusual happens." : 'Connect Telegram to receive alerts.',
         '',
         '[Open Hotel Vision](/solutions/hotel-vision)',
       ];

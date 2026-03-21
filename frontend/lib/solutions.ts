@@ -1,6 +1,7 @@
 'use client';
 
 import { ORION_API_URL } from '@/app/page.api';
+import { fetchWorkflows } from '@/lib/api';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 export type InstalledSolution = {
@@ -49,6 +50,15 @@ export type RecentRunItem = {
   updated_at?: string | null;
 };
 
+export type AutomationRecord = {
+  id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  updatedAt?: string | null;
+  lastRun?: string | null;
+};
+
 function runtimeHeaders(): HeadersInit {
   const runtimeKey = readRuntimeApiKeyFromStorage(process.env.NEXT_PUBLIC_ORION_API_KEY || 'replace-with-strong-key');
   return runtimeKey ? { 'X-API-Key': runtimeKey } : {};
@@ -81,6 +91,16 @@ export async function fetchSkillsState(): Promise<{ installed: Array<{ id: strin
 export async function fetchWeeklySchedules(): Promise<Array<Record<string, unknown>>> {
   const body = await readJson<{ items?: Array<Record<string, unknown>> }>(`${ORION_API_URL}/schedules/weekly`, 'Failed to load schedules.');
   return Array.isArray(body.items) ? body.items : [];
+}
+
+export async function fetchAutomations(workspaceId: string = 'default'): Promise<AutomationRecord[]> {
+  const body = await fetchWorkflows(workspaceId);
+  const items = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { items?: unknown[] } | null | undefined)?.items)
+      ? (body as { items: AutomationRecord[] }).items
+      : [];
+  return items.filter((item): item is AutomationRecord => Boolean(item && typeof item === 'object' && String((item as { id?: unknown }).id || '').trim()));
 }
 
 export async function fetchRecentRuns(limit: number = 5, workspaceId: string = 'default'): Promise<RecentRunItem[]> {

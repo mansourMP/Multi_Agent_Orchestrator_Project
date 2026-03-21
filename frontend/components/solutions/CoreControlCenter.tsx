@@ -7,12 +7,13 @@ import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import {
+  type AutomationRecord,
   type InstalledSolution,
   type RecentRunItem,
+  fetchAutomations,
   fetchRecentRuns,
   fetchSkillsState,
   fetchSolutionsState,
-  fetchWeeklySchedules,
   formatRelativeTime,
 } from '@/lib/solutions';
 
@@ -25,7 +26,7 @@ type SkillCard = {
 export function CoreControlCenter() {
   const [solutions, setSolutions] = useState<InstalledSolution[]>([]);
   const [skills, setSkills] = useState<SkillCard[]>([]);
-  const [workflows, setWorkflows] = useState<Array<Record<string, unknown>>>([]);
+  const [workflows, setWorkflows] = useState<AutomationRecord[]>([]);
   const [recentRuns, setRecentRuns] = useState<RecentRunItem[]>([]);
   const [mcpEndpoint, setMcpEndpoint] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,23 +68,40 @@ export function CoreControlCenter() {
       .join(' ');
   };
 
+  const workflowTone = (status: string | null | undefined): 'green' | 'yellow' | 'red' | 'grey' => {
+    const token = String(status || '').trim().toLowerCase();
+    if (token === 'published' || token === 'active') return 'green';
+    if (token === 'paused' || token === 'draft') return 'yellow';
+    if (token === 'error' || token === 'failed') return 'red';
+    return 'grey';
+  };
+
+  const workflowLabel = (status: string | null | undefined): string => {
+    const token = String(status || '').trim().toLowerCase();
+    if (token === 'published') return 'Active';
+    if (token === 'draft') return 'Ready';
+    if (token === 'paused') return 'Paused';
+    if (token === 'error') return 'Error';
+    return statusLabel(status);
+  };
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       setError('');
       try {
-        const [solutionsState, skillsState, weeklySchedules, runItems] = await Promise.all([
+        const [solutionsState, skillsState, automationItems, runItems] = await Promise.all([
           fetchSolutionsState(),
           fetchSkillsState(),
-          fetchWeeklySchedules(),
+          fetchAutomations(),
           fetchRecentRuns(5),
         ]);
         if (cancelled) return;
         setSolutions(Array.isArray(solutionsState.active) ? solutionsState.active : []);
         setMcpEndpoint(typeof solutionsState.mcp_endpoint === 'string' && solutionsState.mcp_endpoint.trim() ? solutionsState.mcp_endpoint.trim() : null);
         setSkills(Array.isArray(skillsState.installed) ? skillsState.installed.filter((item) => item.enabled) : []);
-        setWorkflows(Array.isArray(weeklySchedules) ? weeklySchedules : []);
+        setWorkflows(Array.isArray(automationItems) ? automationItems : []);
         setRecentRuns(Array.isArray(runItems) ? runItems.slice(0, 5) : []);
       } catch (fetchError) {
         if (!cancelled) {
@@ -149,7 +167,7 @@ export function CoreControlCenter() {
         items={[
           { label: 'Active solutions', value: String(solutions.length) },
           { label: 'Active skills', value: String(skills.length) },
-          { label: 'Running workflows', value: String(workflows.length) },
+          { label: 'Automations', value: String(workflows.length) },
           { label: 'Unresolved alerts', value: String(summary.alerts) },
         ]}
       />
@@ -293,29 +311,41 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
-                <div className="orion-panel-title">Running workflows</div>
-                <div className="orion-panel-copy">Automations currently available in this workspace.</div>
+                <div className="orion-panel-title">Automations</div>
+                <div className="orion-panel-copy">Systems currently available in this workspace.</div>
               </div>
             </div>
             {workflows.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No automations running</div>
+                <div className="orion-empty-title">No automations yet</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                {workflows.slice(0, 8).map((workflow, index) => (
-                  <div key={String(workflow.id || index)} className="orion-list-row">
+                {workflows.slice(0, 8).map((workflow) => (
+                  <Link
+                    key={workflow.id}
+                    href={`/workflows/${encodeURIComponent(workflow.id)}`}
+                    className="orion-list-row"
+                    style={{ textDecoration: 'none', color: 'inherit' }}
+                  >
                     <div className="orion-list-row-main">
                       <div className="orion-list-row-title" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
                         <Workflow size={14} />
-                        {String(workflow.name || workflow.id || 'Workflow')}
+                        {String(workflow.name || workflow.id || 'Automation')}
                       </div>
                       <div className="orion-list-row-subtitle">
-                        {String(workflow.schedule_label || workflow.timezone || workflow.day || 'Scheduled')}
+                        {String(workflow.description || 'Open to view details.')}
                       </div>
                     </div>
-                    <span className="orion-chip" data-status-tone="grey">{String(workflow.status || 'Active')}</span>
-                  </div>
+                    <div style={{ display: 'grid', justifyItems: 'end', gap: 6 }}>
+                      <span className="orion-chip" data-status-tone={workflowTone(workflow.status)}>
+                        {workflowLabel(workflow.status)}
+                      </span>
+                      <span className="orion-panel-copy" style={{ margin: 0 }}>
+                        {formatRelativeTime(workflow.updatedAt || workflow.lastRun || null)}
+                      </span>
+                    </div>
+                  </Link>
                 ))}
               </div>
             )}

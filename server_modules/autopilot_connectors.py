@@ -1137,8 +1137,8 @@ def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
 def _camera_monitor_completion_text(space_name: str, channel_connected: bool, workflow_id: Optional[str] = None) -> str:
     label = str(space_name or "").strip() or "space"
     lines = [
-        f"Done. Your {label} monitor is active.",
-        "I'll alert you on Telegram when anything unusual happens.",
+        f"Done. Your {label} monitor is {'active' if channel_connected else 'ready'}.",
+        "You'll get Telegram alerts when anything unusual happens." if channel_connected else "Connect Telegram to receive alerts.",
         f"Open Hotel Vision: {EMPYRALIST_WEB_URL}/solutions/hotel-vision",
     ]
     if workflow_id:

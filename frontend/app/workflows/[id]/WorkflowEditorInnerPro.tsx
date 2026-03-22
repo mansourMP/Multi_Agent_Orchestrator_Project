@@ -428,6 +428,17 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
             target,
             sourceHandle: typeof item.sourceHandle === 'string' ? item.sourceHandle : undefined,
             targetHandle: typeof item.targetHandle === 'string' ? item.targetHandle : undefined,
+            type: 'smoothstep',
+            animated: false,
+            style: {
+                stroke: 'rgba(124, 58, 237, 0.75)',
+                strokeWidth: 2,
+                strokeLinecap: 'square' as const,
+            },
+            markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: '#7c3aed',
+            },
         });
     }
     return parsed;
@@ -973,15 +984,19 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         () => canvasEdges.map((edge) => ({
             ...edge,
             type: 'smoothstep' as const,
-            animated: runStatus === 'running',
+            animated: false,
+            selected: selectedEdgeId === edge.id,
             style: {
-                stroke: selectedEdgeId === edge.id ? '#5b21b6' : '#7c3aed',
-                strokeWidth: selectedEdgeId === edge.id ? 3 : 2,
-                opacity: selectedEdgeId === edge.id ? 1 : 0.7,
+                stroke: 'rgba(124, 58, 237, 0.75)',
+                strokeWidth: 2,
+                strokeLinecap: 'square' as const,
             },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
+            markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: '#7c3aed',
+            },
         })),
-        [canvasEdges, runStatus, selectedEdgeId],
+        [canvasEdges, selectedEdgeId],
     );
 
     const handleCanvasInit = useCallback((instance: ReactFlowInstance<CanvasWorkflowNode, Edge>) => {
@@ -1026,6 +1041,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             ...connection,
             id: `edge-${connection.source || 'source'}-${connection.target || 'target'}-${Date.now()}`,
             type: 'smoothstep',
+            animated: false,
+            style: {
+                stroke: 'rgba(124, 58, 237, 0.75)',
+                strokeWidth: 2,
+                strokeLinecap: 'square' as const,
+            },
+            markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: '#7c3aed',
+            },
         }, prev));
         setSelectedNodeId(null);
         setSelectedEdgeId(null);
@@ -1736,7 +1761,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
                                 fitView
-                                fitViewOptions={{ padding: 0.4 }}
+                                fitViewOptions={{ padding: 0.38 }}
                                 onInit={handleCanvasInit}
                                 onNodesChange={handleCanvasNodesChange}
                                 onEdgesChange={handleCanvasEdgesChange}
@@ -1767,18 +1792,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 edgesFocusable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
-                                    type: 'smoothstep',
+                                    type: 'rope',
                                     animated: runStatus === 'running',
-                                    markerEnd: { type: MarkerType.ArrowClosed, color: '#7c3aed' },
                                     selectable: true,
-                                    style: { stroke: '#7c3aed', strokeWidth: 2, opacity: 0.7 },
+                                    style: { stroke: '#7c3aed', strokeWidth: 2.8, opacity: 0.9 },
                                 }}
                             >
                                 <Background
                                     variant={BackgroundVariant.Dots}
-                                    gap={20}
+                                    gap={16}
                                     size={1.5}
-                                    color="#c4c4c4"
+                                    color="var(--canvas-dot-color)"
                                 />
                                 <Controls position="bottom-right" showInteractive={false} showFitView />
                             </ReactFlow>

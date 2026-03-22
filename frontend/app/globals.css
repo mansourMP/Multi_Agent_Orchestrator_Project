@@ -2,6 +2,10 @@
 @import '../components/reactflow-override.css';
 
 :root {
+  --canvas-dot-color: #e0e0e0;
+  --canvas-background: #fcfcfc;
+  --canvas-node-border-color: #e5e7eb;
+  --canvas-selected-glow: rgba(124, 58, 237, 0.2);
   /* SPACING */
   --space-1: 4px;
   --space-2: 8px;
@@ -149,6 +153,11 @@
 
   --font-sans: 'Outfit', 'Plus Jakarta Sans', -apple-system, sans-serif;
   --font-mono: 'Space Mono', monospace;
+}
+
+[data-theme='dark'] {
+  --canvas-dot-color: #333333;
+  --canvas-background: #0a0a0a;
 }
 
 [data-theme='light'] {
@@ -1290,6 +1299,962 @@ input:focus-visible {
   padding: 0 28px 28px;
   animation: none;
   transform: none !important;
+}
+
+.orion-workspace-studio-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.72fr) minmax(360px, 1fr);
+  gap: 16px;
+  align-items: start;
+  width: 100%;
+}
+
+.orion-builder-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px;
+  align-items: start;
+}
+
+.orion-builder-canvas-panel,
+.orion-builder-drawer {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 92%, white 8%) 0%, var(--bg-panel) 100%);
+  box-shadow: var(--shadow-soft);
+}
+
+.orion-builder-canvas-panel {
+  min-height: calc(100vh - var(--topbar-height) - 56px);
+  display: grid;
+  grid-template-rows: auto minmax(520px, 1fr);
+  overflow: hidden;
+}
+
+.orion-builder-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 18px 18px 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.orion-builder-toolbar-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0 18px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.orion-builder-view-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 18px 0;
+}
+
+.orion-builder-view-tab {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 88%, white 12%);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.orion-builder-view-tab.is-active {
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  background: color-mix(in srgb, var(--primary-soft) 28%, var(--bg-element) 72%);
+  color: var(--primary-base);
+}
+
+.orion-builder-palette {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.orion-builder-palette-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--builder-accent) 24%, var(--border-default) 76%);
+  background: color-mix(in srgb, var(--builder-accent) 10%, var(--bg-element) 90%);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.orion-builder-palette-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--builder-accent) 18%, white 82%);
+  color: var(--builder-accent);
+}
+
+.orion-builder-node-search {
+  position: absolute;
+  z-index: 14;
+  width: 220px;
+  max-height: 280px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-panel) 94%, white 6%);
+  box-shadow: var(--shadow-soft);
+}
+
+.orion-builder-node-search-input {
+  width: 100%;
+  min-height: 40px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  padding: 0 12px;
+  outline: none;
+}
+
+.orion-builder-node-search-list {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+}
+
+.orion-builder-node-search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+}
+
+.orion-builder-node-search-item:hover {
+  background: color-mix(in srgb, var(--primary-soft) 26%, transparent 74%);
+}
+
+.orion-builder-eyebrow,
+.orion-builder-drawer-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.orion-builder-title,
+.orion-builder-drawer-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.orion-builder-copy,
+.orion-builder-drawer-copy,
+.orion-builder-inspector-empty,
+.orion-builder-inspector-value,
+.orion-builder-step-id {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.orion-builder-toolbar-actions,
+.orion-builder-drawer-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-builder-canvas-frame {
+  min-height: 520px;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--primary-soft) 18%, transparent 82%) 0%, transparent 28%),
+    var(--bg-app);
+  position: relative;
+}
+
+.orion-builder-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  gap: 20px;
+}
+
+.orion-builder-empty.is-panel {
+  min-height: 520px;
+}
+
+.orion-builder-empty-copy {
+  display: grid;
+  gap: 8px;
+  text-align: center;
+  max-width: 460px;
+}
+
+.orion-builder-empty-copy h2 {
+  font-size: clamp(1.5rem, 2vw, 2rem);
+  letter-spacing: -0.04em;
+}
+
+.orion-builder-empty-copy p {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.orion-builder-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.orion-builder-empty-card {
+  width: 124px;
+  height: 124px;
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 76%, white 24%);
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: center;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.orion-builder-empty-card small {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.orion-builder-empty-card.is-accent {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  color: var(--primary-base);
+  background: color-mix(in srgb, var(--primary-soft) 36%, var(--bg-element) 64%);
+}
+
+.orion-builder-empty-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--primary-base) 24%, var(--border-default) 76%);
+}
+
+.orion-builder-empty-card:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.orion-builder-empty-or {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.orion-builder-drawer {
+  padding: 18px;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-height: calc(100vh - var(--topbar-height) - 56px);
+}
+
+.orion-builder-drawer-header,
+.orion-builder-drawer-body {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-builder-textarea {
+  width: 100%;
+  min-height: 140px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.55;
+  resize: vertical;
+  padding: 14px 16px;
+  outline: none;
+}
+
+.orion-builder-textarea:focus {
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-base) 12%, transparent 88%);
+}
+
+.orion-builder-submit {
+  width: 100%;
+  justify-content: center;
+}
+
+.orion-builder-starters {
+  display: grid;
+  gap: 8px;
+}
+
+.orion-builder-starter {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.orion-builder-inspector {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.orion-builder-inspector-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-builder-existing-list {
+  display: grid;
+  gap: 8px;
+}
+
+.orion-builder-existing-item {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  color: var(--text-primary);
+}
+
+.orion-builder-existing-item span {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.orion-builder-existing-item.is-active {
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-base) 12%, transparent 88%);
+}
+
+.orion-builder-inspector-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-builder-step-type {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 88%, white 12%);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.orion-builder-selected-label {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-builder-inspector-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-builder-inspector-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.orion-builder-inspector-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+}
+
+.orion-builder-inspector-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.orion-builder-field {
+  display: grid;
+  gap: 6px;
+}
+
+.orion-builder-field-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.orion-builder-field-input {
+  width: 100%;
+  min-height: 42px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.orion-builder-field-input:focus {
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary-base) 12%, transparent 88%);
+}
+
+.orion-builder-field-input.is-textarea {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.orion-builder-field-input.code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  line-height: 1.5;
+}
+
+.orion-builder-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 86%, white 14%);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.orion-builder-meta-chip.is-success {
+  border-color: color-mix(in srgb, var(--green-500) 28%, var(--border-default) 72%);
+  background: color-mix(in srgb, var(--green-50) 72%, white 28%);
+  color: var(--green-700);
+}
+
+.orion-builder-meta-chip.is-danger {
+  border-color: color-mix(in srgb, var(--danger-500) 28%, var(--border-default) 72%);
+  background: color-mix(in srgb, var(--danger-50) 72%, white 28%);
+  color: var(--danger-700);
+}
+
+.orion-workspace-studio {
+  display: grid;
+  gap: 16px;
+  align-self: stretch;
+}
+
+.orion-workspace-studio-panel {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel) 92%, white 8%) 0%, var(--bg-panel) 100%);
+  box-shadow: var(--shadow-soft);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.orion-workspace-studio-header,
+.orion-workspace-studio-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.orion-workspace-studio-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.orion-workspace-studio-title,
+.orion-workspace-studio-section-title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.orion-workspace-studio-copy,
+.orion-workspace-studio-section-copy {
+  margin-top: 4px;
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 56ch;
+}
+
+.orion-workspace-studio-link {
+  white-space: nowrap;
+}
+
+.orion-workspace-studio-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-workspace-studio-canvas {
+  border: 1px solid color-mix(in srgb, var(--primary-base) 14%, var(--border-default) 86%);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 84%, white 16%) 0%, var(--bg-panel) 100%);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.orion-workspace-studio-canvas-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-workspace-studio-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-element) 86%, white 14%);
+  padding: 12px 14px;
+}
+
+.orion-workspace-studio-actions-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-workspace-studio-actions-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-workspace-studio-actions-note {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.orion-workspace-studio-actions-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-workspace-studio-status,
+.orion-workspace-studio-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.orion-workspace-studio-status {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-element) 84%, transparent 16%);
+  border: 1px solid var(--border-default);
+}
+
+.orion-workspace-studio-chip {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-element) 88%, transparent 12%);
+  border: 1px solid var(--border-default);
+}
+
+.orion-workspace-studio-chip.is-success {
+  color: var(--success-fg);
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.orion-workspace-studio-chip.is-live {
+  color: var(--primary-base);
+  background: color-mix(in srgb, var(--primary-soft) 78%, white 22%);
+  border-color: color-mix(in srgb, var(--primary-base) 20%, var(--border-default) 80%);
+}
+
+.orion-workspace-studio-prompt {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--primary-base) 14%, var(--border-default) 86%);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--primary-soft) 18%, var(--bg-element) 82%);
+}
+
+.orion-workspace-studio-prompt-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.orion-workspace-studio-prompt-text {
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.orion-workspace-studio-prompt-note {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-workspace-studio-graph {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-workspace-studio-flow-frame {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: radial-gradient(circle at top, color-mix(in srgb, var(--primary-soft) 24%, transparent 76%) 0%, transparent 36%), var(--bg-app);
+  overflow: hidden;
+  height: 420px;
+}
+
+.orion-workspace-studio-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.orion-workspace-studio-inspector {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-element) 92%, white 8%);
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 420px;
+}
+
+.orion-workspace-studio-inspector-header {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-workspace-studio-inspector-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.orion-workspace-studio-inspector-title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-workspace-studio-inspector-copy,
+.orion-workspace-studio-inspector-note,
+.orion-workspace-studio-inspector-item-value,
+.orion-workspace-studio-inspector-id {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-workspace-studio-inspector-type-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.orion-workspace-studio-inspector-id {
+  font-family: var(--font-mono);
+}
+
+.orion-workspace-studio-inspector-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-workspace-studio-inspector-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+.orion-workspace-studio-inspector-item-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.orion-workspace-studio-node {
+  position: relative;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-element);
+  padding: 14px 16px;
+  display: grid;
+  gap: 5px;
+}
+
+.orion-workspace-studio-node.is-accent {
+  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary-base) 16%, transparent 84%);
+}
+
+.orion-workspace-studio-node.is-warning {
+  border-color: var(--warning-border);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning-fg) 10%, transparent 90%);
+}
+
+.orion-workspace-studio-node-type {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-workspace-studio-node-detail,
+.orion-workspace-studio-footnote,
+.orion-workspace-studio-list-copy,
+.orion-workspace-studio-list-meta {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-workspace-studio-node-arrow {
+  position: absolute;
+  left: 50%;
+  bottom: -18px;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: var(--bg-panel);
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orion-workspace-studio-principles,
+.orion-workspace-studio-list {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-workspace-studio-principle,
+.orion-workspace-studio-list-item {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-element);
+  padding: 14px 16px;
+}
+
+.orion-workspace-studio-principle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.orion-workspace-studio-principle strong,
+.orion-workspace-studio-list-title {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.orion-workspace-studio-principle span {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-workspace-studio-list-item {
+  appearance: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  text-decoration: none;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.orion-workspace-studio-list-item:hover {
+  border-color: color-mix(in srgb, var(--primary-base) 24%, var(--border-default) 76%);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+.orion-workspace-studio-list-item.is-selected {
+  border-color: color-mix(in srgb, var(--primary-base) 34%, var(--border-default) 66%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary-base) 20%, transparent 80%);
+  background: color-mix(in srgb, var(--primary-soft) 40%, var(--bg-element) 60%);
+}
+
+.orion-workspace-studio-list-meta {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  white-space: nowrap;
+}
+
+.orion-workspace-studio-list-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 90%, transparent 10%);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.orion-workspace-studio-empty {
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--bg-element) 75%, transparent 25%);
+}
+
+.orion-spin {
+  animation: orionWorkspaceSpin 1s linear infinite;
+}
+
+@keyframes orionWorkspaceSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1180px) {
+  .orion-workspace-studio-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .orion-workspace-studio-panel {
+    padding: 16px;
+  }
+
+  .orion-workspace-studio-builder {
+    grid-template-columns: 1fr;
+  }
+
+  .orion-workspace-studio-header,
+  .orion-workspace-studio-section-header,
+  .orion-workspace-studio-canvas-header,
+  .orion-workspace-studio-actions,
+  .orion-workspace-studio-list-item {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .orion-workspace-studio-header-actions {
+    justify-content: start;
+  }
+
+  .orion-workspace-studio-actions-buttons {
+    justify-content: start;
+  }
+
+  .orion-workspace-studio-list-meta {
+    justify-items: start;
+  }
 }
 
 .orion-chat-surface {
@@ -3678,13 +4643,14 @@ body.orion-chat-home .sidebar-brandmark {
 
 .workflow-pro-panel {
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-surface);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, white 8%) 0%, var(--bg-surface) 100%);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
 }
 
 .workflow-pro-panel input,
@@ -3740,33 +4706,101 @@ body.orion-chat-home .sidebar-brandmark {
 
 .workflow-canvas-palette-btn {
   width: 100%;
-  min-height: var(--btn-height);
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 14px;
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
   gap: var(--space-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--workflow-palette-accent, var(--primary-base)) 18%, var(--border) 82%);
   border-left: 4px solid var(--workflow-palette-accent, var(--primary-base));
-  border-radius: var(--btn-radius);
-  background: transparent;
+  border-radius: 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 88%, white 12%) 0%, var(--bg-element) 100%);
   color: var(--text-primary);
   font-size: var(--btn-font-size);
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
-  box-shadow: none;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
 .workflow-canvas-palette-btn:hover {
-  background: var(--surface-hover);
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  border-color: color-mix(in srgb, var(--workflow-palette-accent, var(--primary-base)) 28%, var(--border) 72%);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px rgba(15, 23, 42, 0.08);
 }
 
 .workflow-pro-log-title {
   font-size: 14px;
   font-weight: 750;
   letter-spacing: -0.02em;
+}
+
+.workflow-canvas-panel {
+  background:
+    radial-gradient(circle at top, rgba(124, 58, 237, 0.08) 0%, rgba(124, 58, 237, 0) 36%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-app) 78%, white 22%) 0%, var(--bg-app) 100%);
+}
+
+.workflow-canvas-panel .react-flow__renderer {
+  background: transparent;
+}
+
+.orion-rope-edge-hitbox {
+  stroke: transparent;
+  stroke-width: 26;
+  pointer-events: stroke;
+}
+
+.orion-rope-edge-main {
+  stroke: rgba(124, 58, 237, 0.8);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 150ms ease, stroke-width 150ms ease, filter 150ms ease;
+  filter: drop-shadow(0 2px 8px rgba(124, 58, 237, 0.16));
+}
+
+.orion-rope-edge-flow {
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2 10;
+  animation: workflowEdgeFlow 800ms linear infinite;
+}
+
+.orion-rope-edge:hover .orion-rope-edge-main {
+  stroke: rgba(124, 58, 237, 0.88);
+}
+
+.orion-rope-edge.is-selected .orion-rope-edge-main {
+  stroke: rgba(124, 58, 237, 0.92);
+}
+
+.orion-rope-connection-line-glow {
+  stroke: rgba(124, 58, 237, 0.18);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.orion-rope-connection-line-main {
+  stroke: rgba(124, 58, 237, 0.8);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 8;
+}
+
+@keyframes workflowEdgeFlow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -36;
+  }
 }
 
 /* Global command palette */

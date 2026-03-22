@@ -323,7 +323,7 @@ function rowIdentity(row: ConnectorRow): string {
       || (metadata as Record<string, unknown>).calendar_id
       || ''
   ).trim();
-  return value || 'Shared workspace access';
+  return value || 'Shared access';
 }
 
 function rowPaused(row: ConnectorRow): boolean {
@@ -338,7 +338,7 @@ function rowAssignedRole(row: ConnectorRow): '' | AgentRoleId {
 
 function rowRoutingLabel(row: ConnectorRow): string {
   const assigned = rowAssignedRole(row);
-  return assigned ? `${agentRoleLabel(assigned)} owns this connection` : 'Shared workspace access';
+  return assigned ? `Used by ${agentRoleLabel(assigned)}` : 'Available to shared automations';
 }
 
 function busyActionLabel(value: string): string {
@@ -596,7 +596,7 @@ export default function CredentialsPage() {
 
   const loadConnectors = useCallback(async () => {
     if (!runtimeApiKey) {
-      setPageError('Runtime key is missing. Open Setup and enter the same runtime key used by the local stack.');
+      setPageError('This local app is not connected yet. Add the local access key, then try again.');
       setConnectors([]);
       setLoading(false);
       return;
@@ -1155,7 +1155,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
   async function handleCreateConnector() {
     if (!runtimeApiKey) {
-      setCreateError('Runtime key is missing. Open Setup first and use the same runtime key as the local stack.');
+      setCreateError('This local app is not connected yet. Add the local access key, then try again.');
       return;
     }
     if (form.connector === 'microsoft_365' && !form.accessToken.trim()) {
@@ -1215,7 +1215,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           <div style={{ display: 'grid', gap: 2 }}>
             <div className="orion-panel-title">Connections</div>
             <div className="orion-panel-copy">
-              Browse connectors and manage live accounts. This is the dedicated place to link the assistant to tools and channels.
+              Connect the tools your assistant and automations should use.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1226,7 +1226,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
             <button className="orion-btn orion-btn-primary" style={{ minHeight: 34, paddingInline: 12 }} onClick={openGenericCreateModal}>
               <Plus size={13} />
-              Connect
+              Add connection
             </button>
           </div>
         </div>
@@ -1417,16 +1417,16 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   }}
                 >
                   <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Delivery path
+                    Availability
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                     {focusedCatalogEntry.status === 'provider_next' && focusedConnectorId
-                      ? 'This connector can already be connected from this page through its provider-backed auth path. Keep the native product language honest while deeper app-specific actions continue expanding.'
+                      ? 'You can connect this here today. Deeper app-specific actions can be added later without changing the core flow.'
                       : focusedCatalogEntry.status === 'provider_next'
-                        ? 'Use a connector platform first, keep the channel visible in Empyralis, and only invest in a deeper native layer once usage proves it is core.'
+                        ? 'Show this as available next. Add it natively only when usage proves it is important.'
                         : focusedCatalogEntry.status === 'custom_build'
-                          ? 'Treat this as a branded business integration with custom auth, policy checks, and your own approval-safe connection flow.'
-                          : 'This connector is already supported by the runtime and can be created, tested, paused, and removed directly from this page.'}
+                          ? 'This needs a custom connection flow with its own setup and approval rules.'
+                          : 'This connection is ready here now. You can add it, test it, pause it, and remove it from this page.'}
                   </div>
                 </div>
 
@@ -1600,14 +1600,14 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               <RefreshCw size={14} />
               Retry
             </button>
-            <Link href="/setup" className="orion-btn orion-btn-ghost">Open Setup</Link>
+            <Link href="/workspace" className="orion-btn orion-btn-ghost">Open Assistant</Link>
           </div>
         </section>
       ) : connectors.length === 0 ? (
         <section className="orion-empty">
           <div className="orion-empty-title">Connect the first live tool</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-            This page is already the dedicated place for channels and tools. Keep the first step narrow: connect one real account, verify it works, then go back Home.
+            Start with one real account, test it once, then go back to the assistant.
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 10 }}>
             <button className="orion-btn orion-btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
@@ -1624,15 +1624,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
           </div>
           <div className="orion-empty-copy" style={{ maxWidth: 560, margin: '0 auto' }}>
-            Recommended starting point: Google Workspace for files, docs, and calendar, or Telegram if you want the assistant reachable from a live chat first.
+            Recommended starting point: Google Workspace for files and calendar, or Telegram if you want alerts and chat first.
           </div>
         </section>
       ) : selectedConnectorRow ? (
         <section className="orion-panel" style={{ display: 'grid', gap: 12 }}>
           <div className="orion-panel-header" style={{ marginBottom: 0 }}>
             <div>
-              <div className="orion-panel-title">Connection detail</div>
-              <div className="orion-panel-copy">Manage the live connection you selected from the directory above.</div>
+              <div className="orion-panel-title">Selected connection</div>
+              <div className="orion-panel-copy">Test it, pause it, or update how your automations use it.</div>
             </div>
           </div>
           <section className="orion-list">
@@ -1708,7 +1708,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             {paused ? 'Paused' : 'Active'}
                           </span>
                           <span className="orion-chip" style={{ border: '1px solid var(--border-default)', background: 'var(--bg-element)', color: 'var(--text-secondary)' }}>
-                            {assignedRole ? `Owned by ${agentRoleLabel(assignedRole)}` : 'Shared'}
+                            {assignedRole ? `Used by ${agentRoleLabel(assignedRole)}` : 'Shared'}
                           </span>
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{rowRoutingLabel(row)}</span>
                         </div>
@@ -1719,7 +1719,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                           </div>
                         ) : isSuite ? (
                           <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                            Test this suite once, then open files or launch work from the suite actions.
+                            Test this once, then open files or launch work from the actions here.
                           </div>
                         ) : null}
                         {busyCopy ? (
@@ -1798,7 +1798,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             Configure
                           </div>
                           <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                            Ownership, testing, pause state, and connector-level suite access.
+                            Choose who uses this connection, test it, or pause it.
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

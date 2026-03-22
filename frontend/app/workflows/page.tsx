@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, MoreHorizontal, Clock, Workflow as WorkflowIcon, Search, Trash, Copy, PlayCircle, CalendarClock, Zap } from 'lucide-react';
+import { Plus, Clock, Workflow as WorkflowIcon, Search, Trash, Copy } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { fetchWorkflows, createWorkflow, deleteWorkflow, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -28,74 +28,11 @@ function formatApiError(error: unknown, fallback: string): string {
     return `${fallback}: ${message}`;
 }
 
-const WORKFLOW_TEMPLATES = [
-    {
-        id: 'quick-start',
-        name: 'Quick Start',
-        description: 'One assistant, one clear goal.',
-        definition: { nodes: [], edges: [], meta: { mode: 'simple_operator' } }
-    },
-    {
-        id: 'inbox-triage',
-        name: 'Inbox Triage',
-        description: 'Classify incoming messages and prepare clear replies.',
-        definition: {
-            nodes: [],
-            edges: [],
-            meta: {
-                mode: 'simple_operator',
-                operator: { userGoal: 'Triage incoming customer messages and draft responses.' }
-            }
-        }
-    },
-    {
-        id: 'booking-assistant',
-        name: 'Booking Assistant',
-        description: 'Handle booking requests and propose available slots.',
-        definition: {
-            nodes: [],
-            edges: [],
-            meta: {
-                mode: 'simple_operator',
-                operator: { userGoal: 'Confirm appointment details and help customers complete booking.' }
-            }
-        }
-    },
-];
-
-const AUTOMATION_MODES = [
-    {
-        id: 'reusable',
-        label: 'Reusable',
-        description: 'Manual system your agents can run again anytime.',
-        icon: PlayCircle,
-    },
-    {
-        id: 'scheduled',
-        label: 'Scheduled',
-        description: 'Runs on a cadence for repeatable operations.',
-        icon: CalendarClock,
-    },
-    {
-        id: 'triggered',
-        label: 'Triggered',
-        description: 'Runs from a channel, webhook, or incoming event.',
-        icon: Zap,
-    },
-] as const;
-
-type AutomationModeId = (typeof AUTOMATION_MODES)[number]['id'];
-
 export default function WorkflowsPage() {
     const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
     const [query, setQuery] = useState('');
-    const [showModal, setShowModal] = useState(false);
-    const [newWfName, setNewWfName] = useState('');
-    const [newWfDesc, setNewWfDesc] = useState('');
-    const [selectedTemplateId, setSelectedTemplateId] = useState('quick-start');
-    const [automationMode, setAutomationMode] = useState<AutomationModeId>('reusable');
     const [deleteTarget, setDeleteTarget] = useState<WorkflowRecord | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const router = useRouter();
@@ -122,25 +59,6 @@ export default function WorkflowsPage() {
             setLoadError(formatApiError(err, 'Failed to load workflows'));
         } finally {
             setLoading(false);
-        }
-    }
-
-    async function handleCreateSubmit(e: React.FormEvent) {
-        e.preventDefault();
-        if (!newWfName) return;
-        try {
-            const template = WORKFLOW_TEMPLATES.find(t => t.id === selectedTemplateId) || WORKFLOW_TEMPLATES[0];
-            const nextDefinition = {
-                ...template.definition,
-                meta: {
-                    ...(template.definition.meta || {}),
-                    automationMode,
-                },
-            };
-            const newWorkflow = await createWorkflow(newWfName, newWfDesc, 'default', nextDefinition);
-            router.push(`/workflows/${newWorkflow.id}`);
-        } catch (error) {
-            alert(formatApiError(error, 'Failed to create workflow'));
         }
     }
 
@@ -228,7 +146,7 @@ export default function WorkflowsPage() {
             <OsPageHeader
                 icon={<WorkflowIcon size={16} />}
                 title="Automations"
-                subtitle="Reusable workflows your assistant can run."
+                subtitle="Open, test, and manage the systems your assistant can run."
                 meta={
                     workflows.length > 0 ? (
                         <>
@@ -242,10 +160,15 @@ export default function WorkflowsPage() {
                     )
                 }
                 actions={
-                    <button className="orion-btn orion-btn-primary" onClick={() => setShowModal(true)}>
-                        <Plus size={14} />
-                        New Automation
-                    </button>
+                    <>
+                        <Link href="/workspace" className="btn-secondary">
+                            Open Assistant
+                        </Link>
+                        <Link href="/builder" className="btn-primary">
+                            <Plus size={14} />
+                            New Automation
+                        </Link>
+                    </>
                 }
             />
 
@@ -254,7 +177,6 @@ export default function WorkflowsPage() {
                     { label: 'Automations', value: String(statusSummary.total) },
                     { label: 'Active', value: String(statusSummary.active) },
                     { label: 'Draft', value: String(statusSummary.draft) },
-                    { label: 'Scheduled', value: String(statusSummary.scheduled), note: 'Paused or timed routines' },
                     { label: 'Needs attention', value: String(statusSummary.needsAttention) },
                 ]}
             />
@@ -276,7 +198,7 @@ export default function WorkflowsPage() {
                             <div className="orion-panel-header" style={{ marginBottom: 0 }}>
                                 <div>
                                     <div className="orion-panel-title">Find an automation</div>
-                                    <div className="orion-panel-copy">Search your reusable systems and jump back into editing.</div>
+                                    <div className="orion-panel-copy">Search the library and jump back into editing.</div>
                                 </div>
                             </div>
                             <div className="orion-toolbar">
@@ -308,9 +230,12 @@ export default function WorkflowsPage() {
                             </div>
                             <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
                                 {workflows.length === 0 ? (
-                                    <Link href="/" className="orion-btn orion-btn-ghost">
-                                        Open Home
+                                    <Link href="/workspace" className="btn-primary">
+                                        Open Assistant
                                     </Link>
+                                ) : null}
+                                {workflows.length === 0 ? (
+                                    <Link href="/builder" className="btn-secondary">Create Automation</Link>
                                 ) : null}
                             </div>
                         </section>
@@ -326,7 +251,7 @@ export default function WorkflowsPage() {
                             >
                                 <div>
                                     <div className="orion-panel-title">Automation library</div>
-                                    <div className="orion-panel-copy">Reusable systems your team can run again, schedule, or trigger from channels.</div>
+                                    <div className="orion-panel-copy">Reusable systems you can open, test, and activate.</div>
                                 </div>
                             </div>
                             <section className="orion-list" style={{ padding: '0 12px 10px' }}>
@@ -414,9 +339,6 @@ export default function WorkflowsPage() {
                                         />
                                         {status.label}
                                     </span>
-                                    <button type="button" className="orion-icon-btn" aria-label="Workflow options">
-                                        <MoreHorizontal size={14} />
-                                    </button>
                                 </div>
                             </article>
                         );
@@ -426,144 +348,6 @@ export default function WorkflowsPage() {
                     )}
                 </>
             )}
-
-            {/* CREATE MODAL */}
-            {showModal && modalPortalTarget
-                ? createPortal(
-                    <div className="orion-modal-overlay" onClick={() => setShowModal(false)}>
-                        <form
-                            onSubmit={handleCreateSubmit}
-                            onClick={(e) => e.stopPropagation()}
-                            className="orion-modal orion-modal-builder"
-                        >
-                        <header className="orion-modal-builder-header">
-                            <div>
-                                <h2 className="orion-modal-builder-title">New automation</h2>
-                                <div className="orion-modal-builder-subtitle">
-                                    Build a reusable system with a clear goal, starter, and run mode.
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                className="orion-icon-btn orion-modal-builder-close"
-                                onClick={() => setShowModal(false)}
-                                aria-label="Close modal"
-                            >
-                                ×
-                            </button>
-                        </header>
-
-                        <div className="orion-field">
-                            <label className="orion-field-label">Mode</label>
-                            <div style={{ display: 'grid', gap: 8 }}>
-                                {AUTOMATION_MODES.map((mode) => {
-                                    const Icon = mode.icon;
-                                    const active = automationMode === mode.id;
-                                    return (
-                                        <button
-                                            key={mode.id}
-                                            type="button"
-                                            onClick={() => setAutomationMode(mode.id)}
-                                            style={{
-                                                textAlign: 'left',
-                                                padding: 14,
-                                                borderRadius: 12,
-                                                border: active ? '1px solid var(--primary-border-strong)' : '1px solid var(--border-default)',
-                                                background: active ? 'var(--primary-soft)' : 'transparent',
-                                                color: 'var(--text-primary)',
-                                                cursor: 'pointer',
-                                                display: 'grid',
-                                                gap: 6,
-                                            }}
-                                        >
-                                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 14.5, fontWeight: 700 }}>
-                                                <Icon size={15} />
-                                                {mode.label}
-                                            </div>
-                                            <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>{mode.description}</div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        <div className="orion-field">
-                            <label className="orion-field-label">Name</label>
-                            <input
-                                autoFocus
-                                required
-                                type="text"
-                                value={newWfName}
-                                onChange={(e) => setNewWfName(e.target.value)}
-                                placeholder="e.g. Weekly content plan"
-                                className="orion-input"
-                            />
-                        </div>
-
-                        <div className="orion-field">
-                            <label className="orion-field-label">Goal Summary</label>
-                            <textarea
-                                value={newWfDesc}
-                                onChange={(e) => setNewWfDesc(e.target.value)}
-                                placeholder="What repeatable result should this automation deliver?"
-                                rows={3}
-                                className="orion-input"
-                                style={{ resize: 'none', lineHeight: 1.5 }}
-                            />
-                        </div>
-
-                        <div className="orion-field">
-                            <label className="orion-field-label">Starter</label>
-                            <div style={{ display: 'grid', gap: 8 }}>
-                                {WORKFLOW_TEMPLATES.map((template) => (
-                                    <button
-                                        key={template.id}
-                                        type="button"
-                                        onClick={() => setSelectedTemplateId(template.id)}
-                                        style={{
-                                            textAlign: 'left',
-                                            padding: 14,
-                                            borderRadius: 12,
-                                            border:
-                                                selectedTemplateId === template.id
-                                                    ? '1px solid var(--primary-border-strong)'
-                                                    : '1px solid var(--border-default)',
-                                            background:
-                                                selectedTemplateId === template.id
-                                                    ? 'var(--primary-soft)'
-                                                    : 'transparent',
-                                            color: 'var(--text-primary)',
-                                            cursor: 'pointer',
-                                        }}
-                                    >
-                                        <div style={{ fontSize: 14.5, fontWeight: 700 }}>{template.name}</div>
-                                        <div style={{ fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
-                                            {template.description}
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
-                            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
-                                This creates a repeatable system. It does not create a new agent.
-                            </div>
-                        </div>
-
-                        <footer className="orion-modal-builder-footer">
-                            <div />
-                            <div className="orion-modal-builder-footer-actions">
-                            <button type="button" onClick={() => setShowModal(false)} className="orion-btn orion-btn-ghost">
-                                Cancel
-                            </button>
-                            <button type="submit" className="orion-btn orion-btn-primary">
-                                Create Automation
-                            </button>
-                            </div>
-                        </footer>
-                        </form>
-                    </div>,
-                    modalPortalTarget,
-                )
-                : null}
 
             {deleteTarget && modalPortalTarget
                 ? createPortal(
@@ -584,7 +368,7 @@ export default function WorkflowsPage() {
                             This will delete <strong>{deleteTarget.name}</strong>.
                         </div>
                         <footer style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--border-default)' }}>
-                            <button type="button" onClick={() => setDeleteTarget(null)} className="orion-btn">
+                            <button type="button" onClick={() => setDeleteTarget(null)} className="btn-secondary">
                                 Cancel
                             </button>
                             <button

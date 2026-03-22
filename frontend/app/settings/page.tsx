@@ -23,8 +23,8 @@ type AccountProfile = {
 };
 
 const DEFAULT_PROFILE: AccountProfile = {
-  displayName: 'Workspace Owner',
-  roleLabel: 'Local operator',
+  displayName: 'Account owner',
+  roleLabel: 'Primary account',
 };
 
 function loadStoredProfile(): AccountProfile {
@@ -71,7 +71,7 @@ export default function SettingsPage() {
     if (!runtimeKey) {
       setConnectors([]);
       setLoading(false);
-      setError('Runtime key is missing. Open Setup to reconnect this device.');
+      setError('This app is not connected on this device yet. Open Connections to reconnect it.');
       return;
     }
 
@@ -133,7 +133,7 @@ export default function SettingsPage() {
       <OsPageHeader
         icon={<Settings size={18} />}
         title="Settings"
-        subtitle="Connected tools, account info, and sign out."
+        subtitle="Account details, connected tools, and sign out."
         meta={
           <>
             <span>{connectedCount} connected</span>
@@ -150,7 +150,7 @@ export default function SettingsPage() {
 
       <MetricStrip
         items={[
-          { label: 'Connected tools', value: String(connectedCount) },
+          { label: 'Connections', value: String(connectedCount) },
           { label: 'Account', value: profile.displayName },
           { label: 'Email', value: accountEmail },
         ]}
@@ -160,8 +160,8 @@ export default function SettingsPage() {
       <section className="orion-panel">
         <div className="orion-panel-header">
           <div>
-            <div className="orion-panel-title">Connected connectors</div>
-            <div className="orion-panel-copy">Live tools currently available to the assistant in this workspace.</div>
+            <div className="orion-panel-title">Connected tools</div>
+            <div className="orion-panel-copy">The accounts currently available to your assistant and automations.</div>
           </div>
         </div>
 
@@ -171,13 +171,13 @@ export default function SettingsPage() {
           </div>
         ) : error ? (
           <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">Could not load connectors</div>
+            <div className="orion-empty-title">Could not load connected tools</div>
             <div className="orion-empty-copy">{error}</div>
           </div>
         ) : connectors.length === 0 ? (
           <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">No connectors connected</div>
-            <div className="orion-empty-copy">Go to Connections to add Google Workspace, Telegram, or another live tool.</div>
+            <div className="orion-empty-title">No connected tools yet</div>
+            <div className="orion-empty-copy">Open Connections to add Google Workspace, Telegram, or another account.</div>
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
@@ -192,7 +192,7 @@ export default function SettingsPage() {
                       {connector.label}
                     </div>
                     <div className="orion-list-row-subtitle">
-                      {identity || 'Shared workspace access'}
+                      {identity || 'Shared access'}
                     </div>
                   </div>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -210,7 +210,7 @@ export default function SettingsPage() {
         <div className="orion-panel-header">
           <div>
             <div className="orion-panel-title">Account info</div>
-            <div className="orion-panel-copy">Basic local profile information for this workspace.</div>
+            <div className="orion-panel-copy">Basic profile details stored on this device.</div>
           </div>
         </div>
 

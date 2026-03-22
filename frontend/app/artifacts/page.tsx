@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AlertTriangle, FileStack, Image as ImageIcon, RefreshCw, Search } from 'lucide-react';
 import { ORION_API_URL } from '../page.api';
 import { AGENT_ROLE_OPTIONS, type AgentRoleId } from '../page.catalog';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 type ArtifactItem = {
@@ -229,7 +230,7 @@ function artifactActionHint(item: ArtifactItem): string {
   const view = artifactViewGroup(item);
   if (view === 'deliverables') return 'Ready to open, share, or continue from.';
   if (view === 'evidence') return 'Captured proof from the run.';
-  return 'Technical byproduct kept for deeper inspection.';
+  return 'Saved support file for deeper inspection.';
 }
 
 function artifactStatusTone(status?: string | null): { color: string; border: string; background: string } {
@@ -278,8 +279,8 @@ function artifactViewGroup(item: ArtifactItem): ArtifactView {
 function artifactViewLabel(view: ArtifactView): string {
   if (view === 'deliverables') return 'Deliverables';
   if (view === 'evidence') return 'Evidence';
-  if (view === 'system') return 'System traces';
-  return 'All outputs';
+  if (view === 'system') return 'System files';
+  return 'All files';
 }
 
 function connectorBindingText(
@@ -506,6 +507,24 @@ export default function ArtifactsPage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
+      <OsPageHeader
+        icon={<FileStack size={18} />}
+        title="Files"
+        subtitle="Open finished work, supporting proof, and saved outputs from recent activity."
+        meta={
+          <>
+            <span>{filteredItems.length} visible</span>
+            {payload ? <span>{payload.summary.total} total</span> : null}
+          </>
+        }
+        actions={
+          <button className="orion-btn orion-btn-ghost" onClick={() => void loadArtifacts()}>
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        }
+      />
+
       <section className="orion-panel muted" style={{ display: 'grid', gap: 10, padding: '10px 14px' }}>
         <div
           style={{
@@ -516,16 +535,12 @@ export default function ArtifactsPage() {
           }}
         >
           <div style={{ display: 'grid', gap: 2 }}>
-            <div className="orion-panel-title">Files</div>
-            <div className="orion-panel-copy">Open finished work, evidence, and system traces.</div>
+            <div className="orion-panel-title">Browse files</div>
+            <div className="orion-panel-copy">Filter finished work, proof, and support files by type, handler, or channel.</div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <span className="orion-chip">{filteredItems.length} shown</span>
             {payload ? <span className="orion-chip">{payload.summary.total} saved</span> : null}
-            <button className="orion-btn orion-btn-ghost" onClick={() => void loadArtifacts()} style={{ minHeight: 38, paddingInline: 12 }}>
-              <RefreshCw size={14} />
-              Refresh
-            </button>
           </div>
         </div>
         <div style={{ display: 'grid', gap: 10 }}>
@@ -559,7 +574,7 @@ export default function ArtifactsPage() {
                 className="input"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search files, runs, or channels"
+                placeholder="Search files, tasks, or channels"
                 style={{ paddingLeft: 36, height: 42, borderRadius: 11 }}
               />
             </div>
@@ -581,7 +596,7 @@ export default function ArtifactsPage() {
               <option value="files">Saved files</option>
             </select>
             <select className="input" value={agentFilter} onChange={(event) => setAgentFilter(event.target.value as 'all' | AgentRoleId)} style={{ height: 42, minWidth: 0, borderRadius: 11 }}>
-              <option value="all">All workers</option>
+              <option value="all">All handlers</option>
               {AGENT_ROLE_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
@@ -607,9 +622,9 @@ export default function ArtifactsPage() {
 
       {loading ? (
         <section className="orion-panel muted" style={{ minHeight: 180, display: 'grid', gap: 10, placeItems: 'center', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Checking workspace outputs</div>
+          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Loading files</div>
           <div style={{ maxWidth: 420, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.55 }}>
-            Reading finished work, evidence, and system traces from the local runtime.
+            Reading finished work, proof, and support files from recent activity.
           </div>
         </section>
       ) : error ? (
@@ -628,28 +643,28 @@ export default function ArtifactsPage() {
           >
             <AlertTriangle size={18} />
           </div>
-          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Outputs are not available yet</div>
+          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Files are not available yet</div>
           <div style={{ maxWidth: 480, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 }}>{error}</div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
             <button className="orion-btn orion-btn-primary" onClick={() => void loadArtifacts()}>
               Retry
             </button>
-            <Link href="/" className="orion-btn orion-btn-ghost">Open Home</Link>
+            <Link href="/workspace" className="orion-btn orion-btn-ghost">Open Assistant</Link>
           </div>
         </section>
       ) : filteredItems.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">No outputs found</div>
+          <div className="orion-empty-title">No files found</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
             {viewMode === 'deliverables'
               ? 'Run something new or loosen the filters to surface more finished work.'
               : viewMode === 'evidence'
                 ? 'Capture screenshots or browser proof, or widen the filters to show more evidence.'
                 : viewMode === 'system'
-                  ? 'No system traces match this view yet. Try another filter or switch back to deliverables.'
+                  ? 'No support files match this view yet. Try another filter or switch back to deliverables.'
                   : 'Change the filters or run something new.'}
           </div>
-          <Link href="/" className="orion-btn orion-btn-primary">Open Home</Link>
+          <Link href="/workspace" className="orion-btn orion-btn-primary">Open Assistant</Link>
         </section>
       ) : (
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr' }}>
@@ -808,7 +823,7 @@ export default function ArtifactsPage() {
                       </div>
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-tertiary)' }}>
                         <span>{toDateLabel(item.updated_at)}</span>
-                        {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
+                        {item.run_id ? <span>Activity {item.run_id.slice(0, 8)}</span> : null}
                         {connectorBindingText(item.connector_binding) ? <span>{connectorBindingText(item.connector_binding)}</span> : null}
                         {viewMode === 'system' && item.source ? <span>{item.source}</span> : null}
                       </div>

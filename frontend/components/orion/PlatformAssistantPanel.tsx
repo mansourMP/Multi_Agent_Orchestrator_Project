@@ -43,6 +43,7 @@ const QUICK_NAV_ITEMS = [
   { label: 'Setup', path: '/setup' },
   { label: 'Admin', path: '/control-center' },
   { label: 'Assistant Chat', path: '/workspace' },
+  { label: 'Builder', path: '/builder' },
   { label: 'Activity', path: '/executions' },
   { label: 'Files', path: '/artifacts' },
   { label: 'Automations', path: '/workflows' },
@@ -98,6 +99,19 @@ function resolvePageGuide(pathname: string): PageGuide {
         ? ['Check the active run.', 'Review approvals.', 'Apply the next control with intent.']
         : ['Choose the work mode.', 'Check the active lane or run.', 'Apply the next control with intent.'],
       sections: ['Conversation', 'Activity rail', 'Control deck', 'Run snapshot', 'Approvals'],
+    };
+  }
+  if (pathname === '/builder') {
+    return {
+      title: 'Builder',
+      purpose: 'Design a workflow visually and use AI guidance without cluttering the main assistant chat.',
+      actions: [
+        'Describe the workflow you want to build.',
+        'Start from a blank canvas, template, or import path.',
+        'Review the graph and selected step details before saving.',
+      ],
+      nextSteps: ['Define the workflow goal.', 'Shape the graph.', 'Save into Automations when ready.'],
+      sections: ['Canvas', 'Builder AI', 'Selected step', 'Templates/import'],
     };
   }
   if (pathname.startsWith('/workflows/')) {
@@ -262,6 +276,7 @@ function locationHint(question: string): string | null {
 function normalizePathForNav(pathname: string): string {
   if (pathname === '/control-center') return '/control-center';
   if (pathname === '/workspace') return '/workspace';
+  if (pathname === '/builder') return '/builder';
   if (pathname.startsWith('/workflows/')) return '/workflows';
   if (pathname === '/executions' || pathname.startsWith('/runs/')) return '/executions';
   if (pathname === '/account') return '/settings';

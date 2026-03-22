@@ -482,8 +482,8 @@ export default function ExecutionsPage() {
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<Activity size={18} />}
-        title="Runs"
-        subtitle="See what ran, what finished, and where work needs a closer look."
+        title="Activity"
+        subtitle="See what your assistant started, finished, or needs attention."
         meta={
           <>
             <span>{filteredExecutions.length} visible</span>
@@ -502,19 +502,19 @@ export default function ExecutionsPage() {
         minWidth={160}
         items={[
           { label: 'Total', value: String(runSummary.total) },
-          { label: 'Running', value: String(runSummary.running) },
+          { label: 'In progress', value: String(runSummary.running) },
           { label: 'Completed', value: String(runSummary.completed) },
-          { label: 'Failed', value: String(runSummary.failed) },
+          { label: 'Needs attention', value: String(runSummary.failed) },
           { label: 'Recent 24h', value: String(recentRunCount) },
-          { label: 'Orchestrator', value: String(orchestratorRunCount) },
+          { label: 'Coordinated', value: String(orchestratorRunCount) },
         ]}
       />
 
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Find a run</div>
-            <div className="orion-panel-copy">Search by run, status, worker, or channel.</div>
+            <div className="orion-panel-title">Find activity</div>
+            <div className="orion-panel-copy">Search by task, status, handler, or channel.</div>
           </div>
         </div>
         <div
@@ -531,7 +531,7 @@ export default function ExecutionsPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="input"
-              placeholder="Search by run ID, goal, or summary"
+              placeholder="Search by task name, run ID, or summary"
               style={{ height: 42, borderRadius: 11, paddingLeft: 36 }}
             />
           </div>
@@ -555,7 +555,7 @@ export default function ExecutionsPage() {
             onChange={(event) => setAgentFilter(event.target.value)}
             style={{ height: 42, minWidth: 0, width: '100%', borderRadius: 11 }}
           >
-            <option value="all">All workers</option>
+            <option value="all">All handlers</option>
             {AGENT_ROLE_OPTIONS.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.label}
@@ -578,20 +578,20 @@ export default function ExecutionsPage() {
           </select>
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-          {filteredExecutions.length} of {executions.length} runs
+          {filteredExecutions.length} of {executions.length} activity items
         </div>
       </section>
 
       {loading ? (
         <section className="orion-panel muted" style={{ minHeight: 140, display: 'grid', placeItems: 'center' }}>
-          <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading runs...</div>
+          <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading activity...</div>
         </section>
       ) : filteredExecutions.length === 0 ? (
         <section className="orion-panel" style={{ padding: '18px 20px', display: 'grid', gap: 6, justifyItems: 'start' }}>
-          <div className="orion-empty-title" style={{ marginBottom: 0 }}>No runs found</div>
-          <div className="orion-empty-copy">Run history will appear here.</div>
-          <Link href="/" className="orion-btn orion-btn-primary" style={{ minHeight: 34, paddingInline: 12 }}>
-            Open Home
+          <div className="orion-empty-title" style={{ marginBottom: 0 }}>No activity found</div>
+          <div className="orion-empty-copy">Recent assistant work will appear here.</div>
+          <Link href="/workspace" className="orion-btn orion-btn-primary" style={{ minHeight: 34, paddingInline: 12 }}>
+            Open Assistant
           </Link>
         </section>
       ) : (
@@ -605,8 +605,8 @@ export default function ExecutionsPage() {
             }}
           >
             <div>
-              <div className="orion-panel-title">Run history</div>
-              <div className="orion-panel-copy">Open a run to inspect results, replay steps, and delegated work when you need more detail.</div>
+              <div className="orion-panel-title">Recent activity</div>
+              <div className="orion-panel-copy">Open an item to review results, steps, and any follow-up needed.</div>
             </div>
           </div>
           {filteredExecutions.map((execution) => {
@@ -623,7 +623,7 @@ export default function ExecutionsPage() {
             const isRecent = isRecentExecution(execution);
             const routeLabel = execution.triggeredBy || 'Manual';
             const runChips = [
-              isOrchestrator ? 'Orchestrator' : null,
+              isOrchestrator ? 'Coordinated' : null,
               isRecent ? 'Recent' : null,
               bindingText ? `Channel ${bindingText}` : null,
             ].filter(Boolean);
@@ -669,7 +669,7 @@ export default function ExecutionsPage() {
                             style={
                               chip === 'Recent'
                                 ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
-                                : chip === 'Orchestrator'
+                                : chip === 'Coordinated'
                                   ? { color: 'var(--primary-base)', border: '1px solid var(--primary-border-soft)', background: 'var(--primary-soft)' }
                                   : undefined
                             }
@@ -680,23 +680,23 @@ export default function ExecutionsPage() {
                       </div>
                     ) : null}
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-                      <span>Agent {executionAgentRoleLabel(execution)}</span>
-                      {parentRunId ? <span>Child of {parentRunId.slice(0, 8)}</span> : null}
-                      {!parentRunId && childRunCount > 0 ? <span>Delegated {childRunCount} child run{childRunCount === 1 ? '' : 's'}</span> : null}
+                      <span>Handled by {executionAgentRoleLabel(execution)}</span>
+                      {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
+                      {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>
                     {!parentRunId && delegationNextAction ? (
                       <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
-                        Next action: {titleCaseWords(delegationNextAction)}
+                        Next step: {titleCaseWords(delegationNextAction)}
                       </div>
                     ) : null}
                     {!parentRunId && retryableFailedChildren > 0 ? (
                       <div style={{ fontSize: 11.5, color: 'var(--warning-fg)' }}>
-                        {retryableFailedChildren} failed child run{retryableFailedChildren === 1 ? '' : 's'} can be retried
+                        {retryableFailedChildren} linked task{retryableFailedChildren === 1 ? '' : 's'} need another try
                       </div>
                     ) : null}
                     {!parentRunId && readyForMerge ? (
                       <div style={{ fontSize: 11.5, color: 'var(--success-fg)' }}>
-                        Ready for merge
+                        Ready to wrap up
                       </div>
                     ) : null}
                   </div>
@@ -755,7 +755,7 @@ export default function ExecutionsPage() {
                         style={{ minHeight: 30, padding: '0 10px', fontSize: 11 }}
                       >
                         <Eye size={12} />
-                        Replay
+                        Open details
                       </button>
                     )}
                     <Link
@@ -763,7 +763,7 @@ export default function ExecutionsPage() {
                       href={`/runs/${encodeURIComponent(execution.id)}/inspect?focus=timeline`}
                       style={{ minHeight: 30, padding: '0 10px', fontSize: 11 }}
                     >
-                      Inspect
+                      Full timeline
                     </Link>
                   </div>
                 </div>
@@ -778,12 +778,12 @@ export default function ExecutionsPage() {
           <section className="orion-modal" onClick={(event) => event.stopPropagation()}>
             <header className="orion-panel-header" style={{ marginBottom: 0 }}>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 800 }}>Run Replay</h2>
+                <h2 style={{ fontSize: 17, fontWeight: 800 }}>Activity detail</h2>
                 <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
                   {selectedExecution.workflow?.name || 'Untitled Automation'}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                  Agent {executionAgentRoleLabel(selectedExecution)}
+                  Handled by {executionAgentRoleLabel(selectedExecution)}
                 </div>
                 {connectorBindingText(runtimeRunMeta[selectedExecution.id]) ? (
                   <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
@@ -797,9 +797,9 @@ export default function ExecutionsPage() {
                   Export
                 </button>
                 <Link className="orion-btn orion-btn-ghost" href={`/runs/${encodeURIComponent(selectedExecution.id)}/inspect?focus=timeline`}>
-                  Inspect
+                  Full timeline
                 </Link>
-                <button className="orion-btn" onClick={() => setSelectedExecution(null)}>
+                <button className="orion-btn orion-btn-secondary" onClick={() => setSelectedExecution(null)}>
                   Close
                 </button>
               </div>
@@ -913,7 +913,7 @@ export default function ExecutionsPage() {
           }}
         >
           <AlertTriangle size={12} />
-          Filters are hiding all runs
+          Filters are hiding all activity
         </div>
       )}
     </div>

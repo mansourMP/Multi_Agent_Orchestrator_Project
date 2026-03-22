@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Boxes, LayoutDashboard, Puzzle, Workflow } from 'lucide-react';
+import { Bell, Boxes, LayoutDashboard, Workflow } from 'lucide-react';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
@@ -130,9 +130,11 @@ export function CoreControlCenter() {
       alerts: alertCount,
       skills: skills.length,
       workflows: workflows.length,
+      activeWorkflows: workflows.filter((item) => String(item.status || '').trim().toLowerCase() === 'published').length,
+      recentRuns: recentRuns.length,
       lastScan: lastScanValues[0] || null,
     };
-  }, [skills.length, solutions, workflows.length]);
+  }, [recentRuns.length, skills.length, solutions, workflows]);
 
   const recentAlerts = useMemo(() => {
     return solutions
@@ -153,12 +155,22 @@ export function CoreControlCenter() {
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
         title="Dashboard"
-        subtitle="Your assistant, automations, and recent activity in one place."
+        subtitle="See what is active, what changed, and where to continue."
         meta={
           <>
             <span>{workflows.length} automation{workflows.length === 1 ? '' : 's'}</span>
-            <span>{skills.length} active skill{skills.length === 1 ? '' : 's'}</span>
+            <span>{summary.activeWorkflows} active</span>
             {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">Connected</span> : null}
+          </>
+        }
+        actions={
+          <>
+            <Link href="/workflows" className="btn-secondary">
+              Automations
+            </Link>
+            <Link href="/workspace" className="btn-primary">
+              Open Assistant
+            </Link>
           </>
         }
       />
@@ -166,9 +178,9 @@ export function CoreControlCenter() {
       <MetricStrip
         items={[
           { label: 'Automations', value: String(workflows.length) },
-          { label: 'Active skills', value: String(skills.length) },
-          { label: 'Solutions', value: String(solutions.length) },
-          { label: 'Unresolved alerts', value: String(summary.alerts) },
+          { label: 'Active', value: String(summary.activeWorkflows) },
+          { label: 'Recent activity', value: String(summary.recentRuns) },
+          { label: 'Needs attention', value: String(summary.alerts) },
         ]}
       />
 
@@ -196,8 +208,11 @@ export function CoreControlCenter() {
             <div className="orion-panel-header">
               <div>
                 <div className="orion-panel-title">Recent activity</div>
-                <div className="orion-panel-copy">The latest agent work completed or still in progress.</div>
+                <div className="orion-panel-copy">Latest runs and outcomes. Use Activity for the full history.</div>
               </div>
+              <Link href="/executions" className="btn-secondary">
+                Open Activity
+              </Link>
             </div>
             {recentRuns.length === 0 ? (
               <div className="orion-empty">
@@ -205,7 +220,7 @@ export function CoreControlCenter() {
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                {recentRuns.map((run) => (
+                {recentRuns.slice(0, 3).map((run) => (
                   <div key={run.run_id} className="orion-list-row">
                     <div className="orion-list-row-main">
                       <div className="orion-list-row-title">{humanizeAgentName(run.agent_role)}</div>
@@ -228,93 +243,14 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
-                <div className="orion-panel-title">Active skills</div>
-                <div className="orion-panel-copy">Reusable capabilities currently enabled in this deployment.</div>
-              </div>
-            </div>
-            {skills.length === 0 ? (
-              <div className="orion-empty">
-                <div className="orion-empty-title">No skills active</div>
-              </div>
-            ) : (
-              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-                {skills.map((skill) => (
-                  <div key={skill.id} className="orion-list-row" style={{ minHeight: 76 }}>
-                    <div className="orion-list-row-main">
-                      <div className="orion-list-row-title" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-                        <Puzzle size={14} />
-                        {skill.name}
-                      </div>
-                      <div className="orion-list-row-subtitle">{skill.id}</div>
-                    </div>
-                    <span className="orion-chip" data-status-tone="green">Active</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
-                <div className="orion-panel-title">Solutions</div>
-                <div className="orion-panel-copy">
-                  Optional packaged experiences built on top of the core platform.
-                </div>
-              </div>
-              <Link href="/solutions" className="btn-secondary">
-                View solutions
-              </Link>
-            </div>
-            {solutions.length === 0 ? (
-              <div className="orion-empty">
-                <div className="orion-empty-title">No solutions installed</div>
-                <div className="orion-panel-copy" style={{ margin: 0 }}>
-                  Start with the assistant and automations. Add packaged solutions only when they simplify a specific workflow.
-                </div>
-              </div>
-            ) : (
-              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-                {solutions.map((solution) => (
-                  <Link
-                    key={solution.id}
-                    href={solution.primary_route || solution.route_base || '/solutions'}
-                    className="orion-panel orion-surface-lift"
-                    style={{ display: 'grid', gap: 10, textDecoration: 'none', color: 'inherit' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                      <div style={{ display: 'grid', gap: 4 }}>
-                        <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
-                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Packaged workflow experience'}</div>
-                      </div>
-                      <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
-                        {solution.enabled ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      <span className="orion-chip"><Boxes size={12} /> {solution.status?.spaces_monitored || 0} monitors</span>
-                      <span className="orion-chip" data-status-tone={Number(solution.status?.unresolved_alerts || 0) > 0 ? 'red' : 'grey'}>
-                        <Bell size={12} /> {solution.status?.unresolved_alerts || 0} alerts
-                      </span>
-                    </div>
-                    <div className="orion-panel-copy" style={{ margin: 0 }}>
-                      {solution.status?.summary || 'No live summary available.'}
-                    </div>
-                    <div className="orion-panel-copy" style={{ margin: 0 }}>
-                      Updated {formatRelativeTime(solution.status?.last_scan_at || null)}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
                 <div className="orion-panel-title">Automations</div>
-                <div className="orion-panel-copy">Systems currently available in this workspace.</div>
+                <div className="orion-panel-copy">
+                  Systems currently available in this workspace.
+                </div>
               </div>
+              <Link href="/workflows" className="btn-secondary">
+                Open Automations
+              </Link>
             </div>
             {workflows.length === 0 ? (
               <div className="orion-empty">
@@ -322,7 +258,7 @@ export function CoreControlCenter() {
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                {workflows.slice(0, 8).map((workflow) => (
+                {workflows.slice(0, 4).map((workflow) => (
                   <Link
                     key={workflow.id}
                     href={`/workflows/${encodeURIComponent(workflow.id)}`}
@@ -352,20 +288,61 @@ export function CoreControlCenter() {
             )}
           </section>
 
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
-                <div className="orion-panel-title">Recent alerts</div>
-                <div className="orion-panel-copy">Latest items that may need your attention.</div>
+          {solutions.length > 0 ? (
+            <section className="orion-panel">
+              <div className="orion-panel-header">
+                <div>
+                  <div className="orion-panel-title">Solutions</div>
+                  <div className="orion-panel-copy">
+                    Optional packaged experiences built on top of the core platform.
+                  </div>
+                </div>
+                <Link href="/solutions" className="btn-secondary">
+                  View Solutions
+                </Link>
               </div>
-            </div>
-            {recentAlerts.length === 0 ? (
-              <div className="orion-empty">
-                <div className="orion-empty-title">All clear</div>
+              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+                {solutions.slice(0, 2).map((solution) => (
+                  <Link
+                    key={solution.id}
+                    href={solution.primary_route || solution.route_base || '/solutions'}
+                    className="orion-panel orion-surface-lift"
+                    style={{ display: 'grid', gap: 10, textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
+                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Packaged workflow experience'}</div>
+                      </div>
+                      <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
+                        {solution.enabled ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <span className="orion-chip"><Boxes size={12} /> {solution.status?.spaces_monitored || 0} monitors</span>
+                      <span className="orion-chip" data-status-tone={Number(solution.status?.unresolved_alerts || 0) > 0 ? 'red' : 'grey'}>
+                        <Bell size={12} /> {solution.status?.unresolved_alerts || 0} alerts
+                      </span>
+                    </div>
+                    <div className="orion-panel-copy" style={{ margin: 0 }}>
+                      {solution.status?.summary || 'No live summary available.'}
+                    </div>
+                  </Link>
+                ))}
               </div>
-            ) : (
+            </section>
+          ) : null}
+
+          {recentAlerts.length > 0 ? (
+            <section className="orion-panel">
+              <div className="orion-panel-header">
+                <div>
+                  <div className="orion-panel-title">Needs attention</div>
+                  <div className="orion-panel-copy">Items that may need a quick decision.</div>
+                </div>
+              </div>
               <div style={{ display: 'grid', gap: 10 }}>
-                {recentAlerts.map((alert) => (
+                {recentAlerts.slice(0, 3).map((alert) => (
                   <div key={alert.id} className="orion-list-row">
                     <div className="orion-list-row-main">
                       <div className="orion-list-row-title">{alert.title}</div>
@@ -375,8 +352,8 @@ export function CoreControlCenter() {
                   </div>
                 ))}
               </div>
-            )}
-          </section>
+            </section>
+          ) : null}
         </>
       )}
     </div>

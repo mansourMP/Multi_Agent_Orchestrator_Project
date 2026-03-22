@@ -18,7 +18,7 @@ type ShellStatusPill = {
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 
 function isUserSurface(pathname: string): boolean {
-  return pathname === '/' || pathname === '/workspace' || pathname.startsWith('/solutions/');
+  return pathname === '/' || pathname === '/workspace' || pathname === '/builder' || pathname.startsWith('/solutions/');
 }
 
 function buildStatusPills(pathname: string, status: ReturnType<typeof usePlatformShell>['status']): ShellStatusPill[] {

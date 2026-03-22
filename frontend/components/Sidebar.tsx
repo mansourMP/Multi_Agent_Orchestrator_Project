@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import {
     LayoutDashboard,
+    GitBranch,
     Workflow,
     Activity,
     FileStack,
@@ -25,8 +26,6 @@ import {
 } from '@/components/orion/chat/chatSchema';
 import type { ComponentType, CSSProperties } from 'react';
 
-const SIDEBAR_SOLUTIONS_CACHE_KEY = 'empyralis_sidebar_active_solutions';
-
 type NavItem = {
     label: string;
     href: string;
@@ -38,32 +37,13 @@ type NavItem = {
 const CORE_NAV_ITEMS: NavItem[] = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard },
     { label: 'Assistant', href: '/workspace', icon: MessageSquare },
+    { label: 'Builder', href: '/builder', icon: GitBranch },
     { label: 'Automations', href: '/workflows', icon: Workflow },
     { label: 'Activity', href: '/executions', icon: Activity },
     { label: 'Files', href: '/artifacts', icon: FileStack },
     { label: 'Connections', href: '/credentials', icon: Key },
     { label: 'Solutions', href: '/solutions', icon: Boxes },
 ];
-
-type SolutionNavItem = {
-    label?: string;
-    href?: string;
-    icon?: string;
-};
-
-type InstalledSolution = {
-    id: string;
-    enabled: boolean;
-    route_base?: string;
-    primary_route?: string;
-    status?: {
-        unresolved_alerts?: number;
-    };
-    ui_preset?: {
-        nav_items?: SolutionNavItem[];
-        admin_bottom_items?: SolutionNavItem[];
-    };
-};
 
 export default function Sidebar() {
     const pathname = usePathname();
@@ -72,7 +52,6 @@ export default function Sidebar() {
     const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
     const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
     const [selectedChatSessionId, setSelectedChatSessionId] = useState<string | null>(null);
-    const [activeSolutions, setActiveSolutions] = useState<InstalledSolution[]>([]);
 
     useEffect(() => {
         let alive = true;
@@ -106,42 +85,6 @@ export default function Sidebar() {
         };
     }, []);
 
-    useEffect(() => {
-        let alive = true;
-        const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
-        const runtimeKey = readRuntimeApiKeyFromStorage('replace-with-strong-key');
-        if (!runtimeKey) {
-            return;
-        }
-        const refreshSolutions = async () => {
-            try {
-                const res = await fetch(`${runtimeUrl}/solutions/state`, { headers: { 'X-API-Key': runtimeKey } });
-                const body = await res.json().catch(() => ({}));
-                if (!res.ok) return;
-                const items = Array.isArray(body?.active) ? body.active : [];
-                if (alive) {
-                    const nextItems = items.filter((item: unknown) => Boolean(item) && typeof item === 'object') as InstalledSolution[];
-                    setActiveSolutions(nextItems);
-                    try {
-                        window.sessionStorage.setItem(SIDEBAR_SOLUTIONS_CACHE_KEY, JSON.stringify(nextItems));
-                    } catch {
-                        // ignore storage failures
-                    }
-                }
-            } catch {
-                // keep the last known sidebar solutions to avoid rail flicker on route changes
-            }
-        };
-        void refreshSolutions();
-        const timer = window.setInterval(() => {
-            void refreshSolutions();
-        }, 20000);
-        return () => {
-            alive = false;
-            window.clearInterval(timer);
-        };
-    }, []);
-
     const coreNavItems = useMemo(
         () =>
             CORE_NAV_ITEMS.map((item) => {
@@ -151,43 +94,6 @@ export default function Sidebar() {
             }),
         [pendingApprovalsCount],
     );
-
-    const solutionItems = useMemo(() => {
-        return activeSolutions
-            .filter((solution) => solution.enabled && String(solution.route_base || '').trim())
-            .map((solution) => ({
-                label: solution.id === 'hotel-vision' ? 'Hotel Vision' : solution.id,
-                href: solution.primary_route || solution.route_base || '/',
-                icon: LayoutDashboard,
-                badge: Number(solution.status?.unresolved_alerts || 0) || undefined,
-            }));
-    }, [activeSolutions]);
-
-    const routePinnedSolutionItems = useMemo(() => {
-        if (pathname.startsWith('/solutions/hotel-vision')) {
-            return [
-                {
-                    label: 'Hotel Vision',
-                    href: '/solutions/hotel-vision',
-                    icon: LayoutDashboard,
-                },
-            ] satisfies NavItem[];
-        }
-        return [] as NavItem[];
-    }, [pathname]);
-
-    const solutionRailItems = useMemo(() => {
-        const items: NavItem[] = [];
-        const seen = new Set<string>();
-
-        for (const item of [...routePinnedSolutionItems, ...solutionItems]) {
-            if (seen.has(item.href)) continue;
-            seen.add(item.href);
-            items.push(item);
-        }
-
-        return items;
-    }, [routePinnedSolutionItems, solutionItems]);
 
     useEffect(() => {
         const root = document.documentElement;
@@ -253,6 +159,7 @@ export default function Sidebar() {
 
     const isNavItemActive = (item: NavItem): boolean => {
         if (item.href === '/') return pathname === '/';
+        if (item.href === '/builder') return pathname === '/builder';
         if (item.href === '/workflows') return pathname === '/workflows' || pathname.startsWith('/workflows/');
         if (item.href === '/executions') return pathname === '/executions' || pathname.startsWith('/runs/');
         if (item.href === '/solutions') return pathname === '/solutions' || pathname.startsWith('/solutions/');
@@ -374,44 +281,7 @@ export default function Sidebar() {
 
                 </div>
 
-                {solutionRailItems.length > 0 ? (
-                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 6px 10px', display: 'grid', gap: 8 }}>
-                        <div className="sidebar-rail-divider" aria-hidden />
-                        <div className="sidebar-rail-group sidebar-rail-group-apps">
-                            {solutionRailItems.map((item) => {
-                                const isActive = isNavItemActive(item);
-                                return (
-                                    <div
-                                        key={`solution:${item.href}:${item.label}`}
-                                        className="sidebar-rail-entry"
-                                    >
-                                        <button
-                                            onClick={() => {
-                                                safeNavigate(item.href);
-                                            }}
-                                            className={`btn-ghost sidebar-nav-btn is-rail is-app${isActive ? ' is-active' : ''}`}
-                                            style={isActive ? {
-                                                backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
-                                                color: '#ffffff',
-                                                border: 'none',
-                                                boxShadow: 'none',
-                                            } : undefined}
-                                            title={item.label}
-                                            aria-label={item.label}
-                                        >
-                                            <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
-                                            {typeof item.badge === 'number' && item.badge > 0 ? (
-                                                <span className="sidebar-icon-badge" aria-hidden>
-                                                    {item.badge > 99 ? '99+' : item.badge}
-                                                </span>
-                                            ) : null}
-                                        </button>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                ) : <div style={{ flex: 1 }} />}
+                <div style={{ flex: 1 }} />
             </div>
 
             <div

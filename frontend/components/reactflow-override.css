@@ -1,5 +1,5 @@
 div.react-flow__pane {
-    background: #f5f5f5 !important;
+    background: var(--canvas-background) !important;
 }
 
 div.react-flow__background {
@@ -44,45 +44,68 @@ svg.react-flow__minimap-node {
 }
 
 path.react-flow__edge-path {
-    stroke: #7c3aed !important;
-    stroke-width: 1.6px !important;
+    stroke: rgba(124, 58, 237, 0.75) !important;
+    stroke-width: 2px !important;
     transition: stroke 160ms ease, stroke-width 160ms ease !important;
 }
 
 g.react-flow__edge.selected path.react-flow__edge-path {
-    stroke: #7c3aed !important;
+    stroke: rgba(124, 58, 237, 0.75) !important;
     stroke-width: 2px !important;
 }
 
 g.react-flow__edge.animated path.react-flow__edge-path {
     stroke-dasharray: none !important;
-    animation: workflow-edge-pulse 1.2s ease-in-out infinite !important;
+    animation: none !important;
 }
 
 div.react-flow__handle {
-    background: var(--bg-surface) !important;
-    border: 2px solid #7c3aed !important;
-    width: 10px !important;
-    height: 10px !important;
+    width: 12px !important;
+    height: 12px !important;
+    border-radius: 50% !important;
+    background: white !important;
+    border: 1px solid #d1d1d1 !important;
+    transition: transform 0.2s ease, background 0.2s ease, border 0.2s ease !important;
 }
 
 div.react-flow__handle:hover {
-    background: #ede9fe !important;
+    background: #f5f5f5 !important;
+    border: 1.5px solid #7c3aed !important;
+    transform: scale(1.5) !important;
+}
+
+[data-theme='dark'] div.react-flow__handle {
+    background: #1a1a1a !important;
+    border-color: #555 !important;
 }
 
 div.react-flow__node {
     transition: transform 160ms ease, filter 160ms ease !important;
 }
 
-div.react-flow__node:hover {
-    filter: brightness(1.01);
+.react-flow__node.selected .canvas-node {
+    border: 1.5px solid #7c3aed !important;
+    box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.15), 0 4px 12px rgba(0, 0, 0, 0.12) !important;
 }
 
-@keyframes workflow-edge-pulse {
-    0%, 100% {
-        opacity: 0.7;
-    }
-    50% {
-        opacity: 1;
+.react-flow__node.running .canvas-node::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 10px;
+    z-index: -1;
+    background: conic-gradient(
+        from var(--node-gradient-angle, 0deg),
+        #7c3aed,
+        #7c3aed 20%,
+        rgba(124, 58, 237, 0.2) 35%,
+        #7c3aed 90%
+    );
+    animation: border-rotate 1.5s linear infinite;
+}
+
+@keyframes border-rotate {
+    to {
+        --node-gradient-angle: 360deg;
     }
 }

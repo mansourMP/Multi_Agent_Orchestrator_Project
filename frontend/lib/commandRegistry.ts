@@ -90,6 +90,14 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'navigate', href: '/workspace' },
   },
   {
+    id: 'nav.builder',
+    title: 'Go to Builder',
+    description: 'Open the workflow builder and design a new automation visually.',
+    group: 'Navigate',
+    keywords: ['builder', 'workflow', 'canvas', 'editor', 'design'],
+    action: { type: 'navigate', href: '/builder' },
+  },
+  {
     id: 'nav.files',
     title: 'Go to Files',
     description: 'Browse finished work, evidence, and generated files.',
@@ -116,7 +124,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.workflows',
     title: 'Go to Automations',
-    description: 'Open reusable automations and the builder surface.',
+    description: 'Open reusable automations and saved workflow library.',
     group: 'Navigate',
     keywords: ['flows', 'automation', 'builder', 'automations'],
     action: { type: 'navigate', href: '/workflows' },

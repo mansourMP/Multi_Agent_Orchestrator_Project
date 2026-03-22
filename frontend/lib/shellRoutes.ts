@@ -30,6 +30,13 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     match: (pathname: string) => pathname === '/workspace',
   },
   {
+    id: 'builder',
+    title: 'Builder',
+    breadcrumb: 'Builder',
+    slotLabel: 'Design workflows visually',
+    match: (pathname: string) => pathname === '/builder',
+  },
+  {
     id: 'automations',
     title: 'Automations',
     breadcrumb: 'Automations',

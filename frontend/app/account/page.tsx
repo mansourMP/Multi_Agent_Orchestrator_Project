@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { FolderRoot, Settings, ShieldCheck, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { MetricStrip } from '@/components/ui/MetricStrip';
@@ -20,7 +20,6 @@ const DEFAULT_PROFILE: AccountProfile = {
 };
 
 function loadStoredProfile(): AccountProfile {
-  if (typeof window === 'undefined') return DEFAULT_PROFILE;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_PROFILE;
@@ -35,18 +34,25 @@ function loadStoredProfile(): AccountProfile {
 }
 
 export default function AccountPage() {
-  const [profile, setProfile] = useState<AccountProfile>(() => loadStoredProfile());
-  const [draft, setDraft] = useState<AccountProfile>(() => loadStoredProfile());
+  const subscribe = () => () => {};
+  const profile = useSyncExternalStore(subscribe, loadStoredProfile, () => DEFAULT_PROFILE);
+  const runtimeKeyPresent = useSyncExternalStore(
+    subscribe,
+    () => readRuntimeApiKeyFromStorage('')?.trim().length > 0,
+    () => false,
+  );
+  const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
+  const [draftDirty, setDraftDirty] = useState(false);
   const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
-
-  const runtimeKeyPresent = useMemo(() => readRuntimeApiKeyFromStorage('')?.trim().length > 0, []);
+  const effectiveDraft = draftDirty ? draft : profile;
 
   const persist = () => {
     const next = {
-      displayName: draft.displayName.trim() || DEFAULT_PROFILE.displayName,
-      roleLabel: draft.roleLabel.trim() || DEFAULT_PROFILE.roleLabel,
+      displayName: effectiveDraft.displayName.trim() || DEFAULT_PROFILE.displayName,
+      roleLabel: effectiveDraft.roleLabel.trim() || DEFAULT_PROFILE.roleLabel,
     };
-    setProfile(next);
+    setDraft(next);
+    setDraftDirty(false);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     }
@@ -96,8 +102,11 @@ export default function AccountPage() {
           <input
             id="account-display-name"
             className="input"
-            value={draft.displayName}
-            onChange={(event) => setDraft((prev) => ({ ...prev, displayName: event.target.value }))}
+            value={effectiveDraft.displayName}
+            onChange={(event) => {
+              setDraft((prev) => ({ ...(draftDirty ? prev : profile), displayName: event.target.value }));
+              setDraftDirty(true);
+            }}
             placeholder="Workspace Owner"
             style={{ height: 40, borderRadius: 10 }}
           />
@@ -110,8 +119,11 @@ export default function AccountPage() {
           <input
             id="account-role-label"
             className="input"
-            value={draft.roleLabel}
-            onChange={(event) => setDraft((prev) => ({ ...prev, roleLabel: event.target.value }))}
+            value={effectiveDraft.roleLabel}
+            onChange={(event) => {
+              setDraft((prev) => ({ ...(draftDirty ? prev : profile), roleLabel: event.target.value }));
+              setDraftDirty(true);
+            }}
             placeholder="Local operator"
             style={{ height: 40, borderRadius: 10 }}
           />

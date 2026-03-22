@@ -1,4 +1,6 @@
-from fastapi import Request
+import os
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from server_modules import runtime_config as runtime_config
@@ -77,7 +79,18 @@ from server_modules.routes_runs import router as runs_router
 from server_modules.routes_workflows import router as workflows_router
 
 
-app = shared.app
+docs_url = "/docs" if os.getenv("ENV") == "development" else None
+redoc_url = "/redoc" if os.getenv("ENV") == "development" else None
+openapi_url = "/openapi.json" if os.getenv("ENV") == "development" else None
+
+app = FastAPI(
+    title="Empyralis Runtime API",
+    lifespan=shared.app_lifespan,
+    docs_url=docs_url,
+    redoc_url=redoc_url,
+    openapi_url=openapi_url,
+)
+shared.app = app
 
 app.add_middleware(
     CORSMiddleware,

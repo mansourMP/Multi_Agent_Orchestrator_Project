@@ -6,10 +6,10 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, Request
@@ -17,7 +17,7 @@ from fastapi import Header, HTTPException, Request
 from server_modules.runtime_config import EMPYRALIS_STATE_HOME, ORION_API_KEY, ORION_AUTH_REQUIRED
 
 
-AUTH_USERS_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.json").expanduser()
+AUTH_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
 AUTH_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
@@ -42,21 +42,23 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(f"{value}{padding}".encode("utf-8"))
 
 
-def _load_users() -> Dict[str, Any]:
-    if not AUTH_USERS_FILE.exists():
-        return {"users": []}
-    try:
-        payload = json.loads(AUTH_USERS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {"users": []}
-    if not isinstance(payload, dict) or not isinstance(payload.get("users"), list):
-        return {"users": []}
-    return payload
-
-
-def _save_users(payload: Dict[str, Any]) -> None:
-    AUTH_USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AUTH_USERS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+def _connect_auth_db() -> sqlite3.Connection:
+    AUTH_DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(AUTH_DB_FILE)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            name TEXT,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
+    connection.commit()
+    return connection
 
 
 def _hash_password(password: str, *, salt: Optional[bytes] = None) -> str:
@@ -77,10 +79,13 @@ def _verify_password(password: str, password_hash: str) -> bool:
 def _find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     email_token = str(email or "").strip().lower()
     with AUTH_LOCK:
-        payload = _load_users()
-        for user in payload.get("users", []):
-            if isinstance(user, dict) and str(user.get("email") or "").strip().lower() == email_token:
-                return dict(user)
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                "SELECT id, email, name, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
+                (email_token,),
+            ).fetchone()
+        if row is not None:
+            return dict(row)
     return None
 
 
@@ -175,26 +180,26 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
         raise HTTPException(status_code=400, detail="Valid email is required.")
     if not isinstance(password, str) or len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    user_id = str(uuid.uuid4())
+    created_at = int(time.time())
+    user_name = str(name or "").strip() or None
+    password_hash = _hash_password(password)
     with AUTH_LOCK:
-        payload = _load_users()
-        users = payload.get("users", [])
-        for user in users:
-            if isinstance(user, dict) and str(user.get("email") or "").strip().lower() == email_token:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT id FROM users WHERE lower(email) = lower(?)",
+                (email_token,),
+            ).fetchone()
+            if existing is not None:
                 raise HTTPException(status_code=409, detail="User already exists.")
-        user_id = str(uuid.uuid4())
-        user = {
-            "id": user_id,
-            "email": email_token,
-            "name": str(name or "").strip() or None,
-            "password_hash": _hash_password(password),
-            "created_at": int(time.time()),
-        }
-        users.append(user)
-        payload["users"] = users
-        _save_users(payload)
+            connection.execute(
+                "INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, email_token, user_name, password_hash, created_at),
+            )
+            connection.commit()
     return {
         "ok": True,
-        "user": {"id": user_id, "email": email_token, "name": user.get("name")},
+        "user": {"id": user_id, "email": email_token, "name": user_name},
         "token": issue_token(user_id, email=email_token),
     }
 

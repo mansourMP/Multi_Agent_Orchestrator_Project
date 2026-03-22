@@ -38,7 +38,7 @@ function AppGrid({
             style={{ width: 92 }}
           >
             <View>
-              <BrandedAppIcon appId={app.id} icon={app.icon} size={58} />
+              <BrandedAppIcon appId={app.id} icon={app.icon ?? "apps-outline"} size={58} />
               {badgeLabel ? (
                 <View
                   style={{

@@ -27,7 +27,7 @@ export const BarChartWidget: React.FC<BarChartWidgetProps> = ({ data }) => {
         meta="Aggregated from signals"
       />
       <View style={{ gap: 8 }}>
-        {rows.map((row) => (
+        {rows.map((row: { label: string; total: number }) => (
           <TimelineRow
             key={row.label}
             title={row.label}

@@ -28,7 +28,7 @@ export default function NotFoundScreen() {
             paddingHorizontal: 18,
             paddingVertical: 12,
             borderRadius: 12,
-            backgroundColor: theme.colors.primary,
+            backgroundColor: theme.colors.accent,
             color: "#FFFFFF",
             fontWeight: "700",
           }}

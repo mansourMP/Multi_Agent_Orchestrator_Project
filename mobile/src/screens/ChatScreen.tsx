@@ -171,14 +171,15 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
       const created = await mobileApi.createRun(session, finalInput, undefined, {
         appId: activeApp?.id,
       });
-      runId = created.run_id || created.runId || null;
+      runId = created.run_id || null;
       if (!runId) {
         throw new Error("Core did not return a run_id");
       }
+      const currentRunId = runId;
 
       const pollRun = async () => {
         for (let i = 0; i < 40; i += 1) {
-          const run = await mobileApi.getRun(session, runId);
+          const run = await mobileApi.getRun(session, currentRunId);
           const status = String(run?.status || "").toLowerCase();
 
           if (status === "waiting_approval") {
@@ -198,7 +199,7 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
               target: target ? String(target) : undefined,
               reason: pending?.prompt ? String(pending.prompt) : "Approval required.",
               approvalId: pending?.approval_id ? String(pending.approval_id) : undefined,
-              runId,
+              runId: currentRunId,
             };
             addMessage(sessionId, {
               intent: "assistant",

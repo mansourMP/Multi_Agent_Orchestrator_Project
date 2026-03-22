@@ -50,7 +50,7 @@ export default function SpaceDetailScreen() {
             borderRadius: 16,
             borderWidth: 1,
             borderColor: theme.colors.border,
-            backgroundColor: theme.colors.panelMuted,
+            backgroundColor: theme.colors.cardHover,
             padding: 16,
             gap: 12,
           }}
@@ -63,7 +63,7 @@ export default function SpaceDetailScreen() {
             style={{
               height: 44,
               borderRadius: 12,
-              backgroundColor: theme.colors.primary,
+              backgroundColor: theme.colors.accent,
               alignItems: "center",
               justifyContent: "center",
             }}

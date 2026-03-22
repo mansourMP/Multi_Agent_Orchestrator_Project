@@ -59,8 +59,8 @@ export default function NewSpaceScreen() {
                 style={{
                   borderRadius: 16,
                   borderWidth: 1,
-                  borderColor: active ? theme.colors.primary : theme.colors.border,
-                  backgroundColor: active ? theme.colors.primaryMuted : theme.colors.surface,
+                  borderColor: active ? theme.colors.accent : theme.colors.border,
+                  backgroundColor: active ? theme.colors.cardHover : theme.colors.surface,
                   padding: 16,
                   gap: 6,
                 }}
@@ -143,7 +143,7 @@ export default function NewSpaceScreen() {
         style={{
           height: 46,
           borderRadius: 14,
-          backgroundColor: theme.colors.primary,
+          backgroundColor: theme.colors.accent,
           alignItems: "center",
           justifyContent: "center",
         }}

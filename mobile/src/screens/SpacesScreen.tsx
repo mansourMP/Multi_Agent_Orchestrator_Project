@@ -70,7 +70,7 @@ export default function SpacesScreen() {
           size: typeof item?.size === "number" ? item.size : undefined,
           updated_at: item?.updated_at ?? item?.modified_at ?? undefined,
         }))
-        .filter((item) => item.path);
+        .filter((item: FileItem) => item.path);
       setItems(normalized);
     } catch (err) {
       console.warn("Failed to load files", err);

@@ -10,7 +10,7 @@ export function TransientBanner({ message, tone = "neutral" }: { message: string
       ? { bg: "#DCFCE7", border: "#22C55E", text: "#166534" }
       : tone === "error"
       ? { bg: "#FEE2E2", border: "#EF4444", text: "#991B1B" }
-      : { bg: theme.colors.panelMuted, border: theme.colors.border, text: theme.colors.textSecondary };
+      : { bg: theme.colors.panelMuted, border: theme.colors.border, text: theme.colors.textMuted };
 
   return (
     <View

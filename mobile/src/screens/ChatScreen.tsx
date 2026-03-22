@@ -16,7 +16,6 @@ import { TransientBanner } from "@/src/components/TransientBanner";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
 import { useChatStore } from "@/src/stores/chatStore";
-import { useAppContextStore } from "@/src/stores/appContextStore";
 import { useSessionState } from "@/src/lib/session-context";
 import { mobileApi } from "@/src/lib/api";
 import { buildAgentDirectory, getAgentById } from "@/src/lib/agents";
@@ -45,7 +44,6 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
   const { session } = useSessionState();
   const { agents } = useMobileOverviewData();
   const { sessions, ensureSessionForAgent, addMessage, setActiveSession } = useChatStore();
-  const { activeApp } = useAppContextStore();
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
@@ -115,17 +113,18 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     }
 
     try {
-      const response = await fetch(`${session.runtimeUrl}/chat`, {
+      const response = await fetch(`${session.runtimeUrl}/runs/start`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": session.runtimeKey,
+          "X-API-Key": session.runtimeKey || "",
         },
         body: JSON.stringify({
-          message: finalInput,
+          input: finalInput,
           agent_role: agentId,
           workspace_id: "default",
           session_id: sessionId,
+          stream: false,
         }),
       });
 
@@ -134,11 +133,82 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
       }
 
       const payload = await response.json();
+      const runId = String(payload?.run_id ?? payload?.id ?? "");
+
+      if (!runId) {
+        throw new Error("Run start did not return run_id");
+      }
+
+      let finalRun: any = null;
+
+      for (let i = 0; i < 30; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+
+        const poll = await fetch(`${session.runtimeUrl}/runs/${encodeURIComponent(runId)}`, {
+          headers: {
+            "X-API-Key": session.runtimeKey || "",
+          },
+        });
+
+        if (!poll.ok) {
+          throw new Error(`API request failed: ${poll.status}`);
+        }
+
+        const run = await poll.json();
+        const status = String(run?.status ?? "").toLowerCase();
+
+        if (status === "waiting_approval") {
+          const pending = run?.pending_approval || {};
+          const operation = run?.context?.metadata?.pack_inputs?.operations?.[0] || {};
+          const actionLabel =
+            operation?.mode === "delete"
+              ? "Delete File"
+              : operation?.mode === "write"
+              ? "Write File"
+              : operation?.tool === "execute_shell_command"
+              ? "Device Action"
+              : "Approval Required";
+          const target = operation?.path || operation?.file_path;
+          const approvalCard: ApprovalCard = {
+            action: actionLabel,
+            target: target ? String(target) : undefined,
+            reason: pending?.prompt ? String(pending.prompt) : "Approval required.",
+            approvalId: pending?.approval_id ? String(pending.approval_id) : undefined,
+            runId,
+          };
+          addMessage(sessionId, {
+            intent: "assistant",
+            speech: "Approval required",
+            messageType: "approval",
+            approval: approvalCard,
+          } as AgentPayload);
+          return;
+        }
+
+        if (status === "completed") {
+          finalRun = run;
+          break;
+        }
+
+        if (status === "failed") {
+          finalRun = run;
+          break;
+        }
+      }
+
+      if (!finalRun) {
+        throw new Error("Run polling timed out");
+      }
+
+      if (String(finalRun?.status ?? "").toLowerCase() === "failed") {
+        throw new Error("Run failed");
+      }
+
       const responseText =
-        (typeof payload?.message === "string" && payload.message.trim()) ||
-        (typeof payload?.response === "string" && payload.response.trim()) ||
-        (typeof payload?.reply === "string" && payload.reply.trim()) ||
-        (typeof payload?.content === "string" && payload.content.trim()) ||
+        (typeof finalRun?.output === "string" && finalRun.output.trim()) ||
+        (typeof finalRun?.result === "string" && finalRun.result.trim()) ||
+        (typeof finalRun?.result_data === "string" && finalRun.result_data.trim()) ||
+        (finalRun?.result_data ? JSON.stringify(finalRun.result_data) : "") ||
         "Received.";
 
       addMessage(sessionId, {

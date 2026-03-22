@@ -1,7 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
-from server_modules.runs_delegation import _detect_agent_role, _refresh_parent_delegation_state, normalize_agent_role
+from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
 from server_modules.runs_history import (
     _append_approval_audit,

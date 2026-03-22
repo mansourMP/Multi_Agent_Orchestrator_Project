@@ -177,3 +177,20 @@ const useStyles = (theme: any) => StyleSheet.create({
     fontWeight: '500',
   }
 });
+
+const styles = StyleSheet.create({
+  stat: {
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+  },
+  statLabel: {
+    fontSize: 11,
+    color: '#8E8E93',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+});

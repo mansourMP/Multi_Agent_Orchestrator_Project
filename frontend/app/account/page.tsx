@@ -5,6 +5,7 @@ import { FolderRoot, Settings, ShieldCheck, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 const STORAGE_KEY = 'empyralis_account_profile_v1';
@@ -43,7 +44,7 @@ export default function AccountPage() {
   );
   const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
   const [draftDirty, setDraftDirty] = useState(false);
-  const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+  const runtimeUrl = API_BASE;
   const effectiveDraft = draftDirty ? draft : profile;
 
   const persist = () => {

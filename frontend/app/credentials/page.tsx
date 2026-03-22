@@ -28,10 +28,11 @@ import {
   type ConnectorId,
   isConnectorId,
 } from '../page.catalog';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
 
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 const WORKSPACE_ID = 'default';
 const RUNTIME_TIMEOUT_MS = 3500;
 

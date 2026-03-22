@@ -34,10 +34,11 @@ import {
 import { type PageState } from './page.state';
 import { resolveActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 import { getLocalExecutionCapabilityTitle, inferLocalExecutionCapabilityFromCommand } from '@/lib/localExecutionCapabilities';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
-export const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
 const SCREENSHOT_PATH_PATTERN = /\.(png|jpg|jpeg|webp)$/i;
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';

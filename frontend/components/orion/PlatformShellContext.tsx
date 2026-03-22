@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 export type PlatformAccessMode = 'default' | 'full';
@@ -21,8 +22,6 @@ type PlatformShellContextValue = {
 };
 
 const ACCESS_MODE_STORAGE_KEY = 'orion.platform.access.mode.v1';
-const RUNTIME_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
-
 const PlatformShellContext = createContext<PlatformShellContextValue | null>(null);
 
 function readSetupSnapshot(): { setupReady: boolean; setupProgressCount: number; accessMode: PlatformAccessMode | null } {
@@ -103,9 +102,9 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
       try {
         const headers: HeadersInit = { 'X-API-Key': readRuntimeApiKeyFromStorage('replace-with-strong-key') };
         const [healthRes, workersRes, historyRes] = await Promise.allSettled([
-          fetch(`${RUNTIME_URL}/health`, { headers }),
-          fetch(`${RUNTIME_URL}/local/workers/status`, { headers }),
-          fetch(`${RUNTIME_URL}/history/runs?limit=40&workspace_id=default`, { headers }),
+          fetch(`${API_BASE}/health`, { headers }),
+          fetch(`${API_BASE}/local/workers/status`, { headers }),
+          fetch(`${API_BASE}/history/runs?limit=40&workspace_id=default`, { headers }),
         ]);
 
         const runtimeHealthy =

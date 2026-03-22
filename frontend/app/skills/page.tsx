@@ -19,6 +19,7 @@ import {
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import {
   BUILTIN_SKILLS,
@@ -31,7 +32,7 @@ import {
   type SkillPolicyMode,
 } from '@/lib/skills';
 
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 const ORION_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type TrustMode = 'auto' | 'guarded' | 'strict';

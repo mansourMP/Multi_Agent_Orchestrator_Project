@@ -15,11 +15,11 @@ import {
 } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
-const BACKEND_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4000/api/v1';
-const ORION_API_URL =
-  process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const BACKEND_API_URL = API_BASE;
+const ORION_API_URL = API_BASE;
 const ORION_API_KEY =
   process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
@@ -295,7 +295,7 @@ export default function HealthPage() {
   const [showPassChecks, setShowPassChecks] = useState(false);
   const [opsDaemon, setOpsDaemon] = useState<OpsDaemonSnapshot>({
     running: false,
-    url: 'http://127.0.0.1:8787',
+    url: API_BASE,
     transport: 'route',
     updatedAt: null,
     watchdogHealthy: null,
@@ -499,7 +499,7 @@ export default function HealthPage() {
     const watchdog = (record?.watchdog ?? null) as Record<string, unknown> | null;
     setOpsDaemon({
       running: Boolean(record?.running),
-      url: typeof record?.url === 'string' && record.url.trim() ? record.url : 'http://127.0.0.1:8787',
+      url: typeof record?.url === 'string' && record.url.trim() ? record.url : API_BASE,
       transport: typeof record?.transport === 'string' && record.transport.trim() ? record.transport : 'route',
       updatedAt: new Date().toISOString(),
       watchdogHealthy:

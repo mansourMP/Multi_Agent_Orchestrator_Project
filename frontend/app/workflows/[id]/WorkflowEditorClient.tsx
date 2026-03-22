@@ -20,18 +20,10 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
                 const mod = await import('./WorkflowEditorInnerPro');
                 if (mounted) setEditor(() => mod.default);
             } catch (err: unknown) {
-                console.error('Failed to load full editor, falling back to simple mode', err);
                 if (!mounted) return;
-                setUsingFallback(true);
-                try {
-                    const lite = await import('./WorkflowEditorInnerLite');
-                    if (mounted) setEditor(() => lite.default);
-                } catch (liteErr: unknown) {
-                    if (mounted) {
-                        const message = liteErr instanceof Error ? liteErr.message : 'Failed to load editor';
-                        setError(message);
-                    }
-                }
+                const message = err instanceof Error ? err.message : 'Failed to load editor';
+                setUsingFallback(false);
+                setError(message);
             }
         })();
 

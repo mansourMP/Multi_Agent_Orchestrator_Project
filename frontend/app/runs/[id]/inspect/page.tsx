@@ -17,12 +17,13 @@ import {
 } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 const ORION_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type HistoryItem = {

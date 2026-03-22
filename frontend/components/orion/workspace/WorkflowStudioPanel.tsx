@@ -12,7 +12,7 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
-import RopeEdge from '@/components/nodes/RopeEdge';
+import SmoothActionEdge from '@/components/nodes/SmoothActionEdge';
 
 type WorkflowRecord = {
   id: string;
@@ -88,7 +88,7 @@ const CANVAS_NODE_TYPES: NodeTypes = {
 };
 
 const CANVAS_EDGE_TYPES: EdgeTypes = {
-  rope: RopeEdge,
+  rope: SmoothActionEdge,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-
-const SOCKET_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { WS_BASE } from '@/lib/config';
 
 interface ExecutionLog {
     executionId: string;
@@ -51,7 +50,7 @@ export function useExecutionSocket(options: UseExecutionSocketOptions = {}) {
 
     // Connect to socket
     useEffect(() => {
-        socketRef.current = io(`${SOCKET_URL}/executions`, {
+        socketRef.current = io(`${WS_BASE}/executions`, {
             transports: ['websocket'],
             autoConnect: true,
         });

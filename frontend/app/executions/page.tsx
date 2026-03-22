@@ -14,10 +14,11 @@ import {
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { API_BASE } from '@/lib/config';
 import { fetchExecution, fetchExecutions } from '@/lib/api';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 
 type ExecutionRecord = {
   id: string;

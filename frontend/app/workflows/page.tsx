@@ -8,6 +8,7 @@ import { fetchWorkflows, createWorkflow, deleteWorkflow, getWorkflow, updateWork
 import { useRouter } from 'next/navigation';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { MetricStrip } from '@/components/ui/MetricStrip';
+import { API_BASE } from '@/lib/config';
 
 type WorkflowRecord = {
     id: string;
@@ -23,7 +24,7 @@ function formatApiError(error: unknown, fallback: string): string {
     const message = error instanceof Error ? error.message : '';
     if (!message) return fallback;
     if (message.includes('Failed to fetch')) {
-        return `${fallback}. Backend API may be offline on http://127.0.0.1:4000.`;
+        return `${fallback}. Backend API may be offline on ${API_BASE}.`;
     }
     return `${fallback}: ${message}`;
 }

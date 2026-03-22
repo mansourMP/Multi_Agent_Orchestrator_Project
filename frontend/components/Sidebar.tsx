@@ -15,6 +15,7 @@ import {
     UserRound,
 } from 'lucide-react';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { safeNavigate } from '@/lib/safeNavigate';
 import {
@@ -55,13 +56,12 @@ export default function Sidebar() {
 
     useEffect(() => {
         let alive = true;
-        const runtimeUrl = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
         const runtimeKey = readRuntimeApiKeyFromStorage('replace-with-strong-key');
         const headers: HeadersInit = { 'X-API-Key': runtimeKey };
 
         const refreshAttention = async () => {
             try {
-                const res = await fetch(`${runtimeUrl}/history/runs?limit=40&workspace_id=default`, { headers });
+                const res = await fetch(`${API_BASE}/history/runs?limit=40&workspace_id=default`, { headers });
                 if (!res.ok) return;
                 const payload = await res.json().catch(() => null);
                 const items = Array.isArray(payload?.items) ? payload.items : [];

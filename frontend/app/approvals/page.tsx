@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ClipboardCheck, ExternalLink, RefreshCw } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '../page.catalog';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 
 type PendingApproval = {
   runId: string;

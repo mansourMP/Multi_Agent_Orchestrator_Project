@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4000/api/v1';
+import { API_BASE } from '@/lib/config';
 
 /**
  * Enhanced fetch wrapper to handle JSON errors and provide better feedback
@@ -18,7 +18,7 @@ export class ApiError extends Error {
 }
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-    const res = await fetch(`${API_URL}${endpoint}`, options);
+    const res = await fetch(`${API_BASE}${endpoint}`, options);
 
     if (!res.ok) {
         let errorMsg = `API Error: ${res.status} ${res.statusText}`;

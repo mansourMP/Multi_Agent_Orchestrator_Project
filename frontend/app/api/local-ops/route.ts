@@ -3,11 +3,12 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_OPS_DAEMON_URL = process.env.ORION_OPS_DAEMON_URL || 'http://127.0.0.1:8787';
+const DEFAULT_OPS_DAEMON_URL = process.env.ORION_OPS_DAEMON_URL || API_BASE;
 const OPS_DAEMON_TIMEOUT_MS = 25000;
 const SENSITIVE_KEYS = new Set([
   'api_key',
@@ -368,7 +369,7 @@ async function runtimeRequest(
   runtimePath: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; status: number; payload: unknown }> {
-  const base = process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+  const base = API_BASE;
   const res = await fetch(`${base}${runtimePath}`, {
     ...init,
     headers: {

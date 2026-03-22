@@ -13,6 +13,7 @@ import {
     type AgentRoleId,
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
+import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
@@ -24,8 +25,7 @@ import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 
-const ORION_API_URL =
-    process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
+const ORION_API_URL = API_BASE;
 const ORION_API_KEY =
     process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 

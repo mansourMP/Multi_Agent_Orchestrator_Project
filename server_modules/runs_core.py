@@ -296,7 +296,7 @@ def initialize_runtime_services() -> None:
     _load_setup_sessions()
     _load_provider_profiles()
     _load_idempotency()
-    from server_modules.health_core import _load_runtime_skills_state
+    from server_modules.health_diagnostics import _load_runtime_skills_state
 
     _load_runtime_skills_state()
     _load_telegram_autopilot_state()

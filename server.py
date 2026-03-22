@@ -11,7 +11,9 @@ from server_modules import runs_output as runs_output
 from server_modules import runs_delegation as runs_delegation
 from server_modules import runs_engine as runs_engine
 from server_modules import health_core as health_core
+from server_modules import health_diagnostics as health_diagnostics
 from server_modules import connectors_core as connectors_core
+from server_modules import connectors_actions as connectors_actions
 
 for module in (
     runtime_config,
@@ -24,7 +26,9 @@ for module in (
     runs_delegation,
     runs_engine,
     health_core,
+    health_diagnostics,
     connectors_core,
+    connectors_actions,
 ):
     globals().update({key: value for key, value in vars(module).items() if not key.startswith("__")})
 
@@ -96,4 +100,6 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(connectors_router)
 
-runs_core.initialize_runtime_services()
+@app.on_event("startup")
+async def initialize_runtime_services_on_startup():
+    runs_core.initialize_runtime_services()

@@ -43,10 +43,10 @@ export type PlatformCommand = {
 const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.home',
-    title: 'Go to Chat',
-    description: 'Open the main assistant conversation surface.',
+    title: 'Go to Dashboard',
+    description: 'Open the main platform overview.',
     group: 'Navigate',
-    keywords: ['chat', 'conversation', 'workspace', 'home'],
+    keywords: ['dashboard', 'home', 'overview'],
     action: { type: 'navigate', href: '/' },
   },
   {
@@ -83,7 +83,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.workspace',
-    title: 'Go to Chat',
+    title: 'Go to Assistant',
     description: SINGLE_AGENT_MODE ? 'Open the assistant conversation.' : 'Open the assistant conversation.',
     group: 'Navigate',
     keywords: SINGLE_AGENT_MODE ? ['chat', 'assistant', 'conversation'] : ['chat', 'assistant', 'conversation'],
@@ -99,11 +99,19 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.runs',
-    title: 'Go to Runs',
+    title: 'Go to Activity',
     description: 'Review run traces, statuses, and output summaries.',
     group: 'Navigate',
-    keywords: ['history', 'runs', 'executions', 'logs'],
+    keywords: ['history', 'runs', 'executions', 'activity', 'logs'],
     action: { type: 'navigate', href: '/executions' },
+  },
+  {
+    id: 'nav.solutions',
+    title: 'Go to Solutions',
+    description: 'Browse packaged experiences built on the core platform.',
+    group: 'Navigate',
+    keywords: ['solutions', 'packages', 'apps', 'hotel vision'],
+    action: { type: 'navigate', href: '/solutions' },
   },
   {
     id: 'nav.workflows',
@@ -124,9 +132,9 @@ const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.team',
     title: 'Go to Team',
-    description: 'Manage people, roles, and workspace access.',
+    description: 'Manage people, roles, and platform access.',
     group: 'Navigate',
-    keywords: ['team', 'people', 'roles', 'owner', 'admin', 'viewer'],
+    keywords: ['team', 'people', 'roles', 'owner', 'admin', 'viewer', 'access'],
     action: { type: 'navigate', href: '/team' },
   },
   {

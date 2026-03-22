@@ -36,12 +36,13 @@ const STARTER_PROMPTS = [
 ];
 
 const QUICK_NAV_ITEMS = [
-  { label: 'Assistant', path: '/' },
+  { label: 'Dashboard', path: '/' },
   { label: SINGLE_AGENT_MODE ? 'Assistant' : 'Agents', path: '/agents' },
+  { label: 'Solutions', path: '/solutions' },
   { label: 'Connections', path: '/credentials' },
   { label: 'Setup', path: '/setup' },
   { label: 'Admin', path: '/control-center' },
-  { label: 'Chat', path: '/workspace' },
+  { label: 'Assistant Chat', path: '/workspace' },
   { label: 'Activity', path: '/executions' },
   { label: 'Files', path: '/artifacts' },
   { label: 'Automations', path: '/workflows' },

@@ -9,6 +9,7 @@ import {
     FileStack,
     Key,
     MessageSquare,
+    Boxes,
     Settings,
     UserRound,
 } from 'lucide-react';
@@ -36,11 +37,12 @@ type NavItem = {
 
 const WORKSPACE_ITEMS: NavItem[] = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard },
-    { label: 'Chat', href: '/workspace', icon: MessageSquare },
+    { label: 'Assistant', href: '/workspace', icon: MessageSquare },
     { label: 'Automations', href: '/workflows', icon: Workflow },
     { label: 'Activity', href: '/executions', icon: Activity },
     { label: 'Files', href: '/artifacts', icon: FileStack },
     { label: 'Connections', href: '/credentials', icon: Key },
+    { label: 'Solutions', href: '/solutions', icon: Boxes },
 ];
 
 type SolutionNavItem = {
@@ -250,6 +252,10 @@ export default function Sidebar() {
     }, []);
 
     const isNavItemActive = (item: NavItem): boolean => {
+        if (item.href === '/') return pathname === '/';
+        if (item.href === '/workflows') return pathname === '/workflows' || pathname.startsWith('/workflows/');
+        if (item.href === '/executions') return pathname === '/executions' || pathname.startsWith('/runs/');
+        if (item.href === '/solutions') return pathname === '/solutions' || pathname.startsWith('/solutions/');
         return pathname === item.href;
     };
 

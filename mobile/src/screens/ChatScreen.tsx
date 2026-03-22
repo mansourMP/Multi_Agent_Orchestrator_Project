@@ -48,6 +48,7 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
   const { activeApp } = useAppContextStore();
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const { banner, showBanner } = useTransientBanner();
   const initializedSessions = useRef<Set<string>>(new Set());
   const directory = useMemo(() => buildAgentDirectory(agents), [agents]);
@@ -101,122 +102,52 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
     const userMessage: AgentPayload = { intent: "user", speech: finalInput };
+    const nextUserMessageIndex = messages.length;
     addMessage(sessionId, userMessage);
+    setFailedMessageIndex(null);
     setInput("");
     setIsLoading(true);
 
     if (!session?.runtimeUrl || !session?.runtimeKey) {
-      addMessage(sessionId, {
-        intent: "assistant",
-        speech: "Core offline. Connect in Settings to start.",
-      } as AgentPayload);
-      showBanner("Core offline. Connect in Settings.", "error");
+      setFailedMessageIndex(nextUserMessageIndex);
       setIsLoading(false);
       return;
     }
 
-    let runId: string | null = null;
     try {
-      const created = await mobileApi.createRun(session, finalInput, activeSession?.runtimeRole || activeAgent.runtimeRole, {
-        appId: activeApp?.id,
+      const response = await fetch(`${session.runtimeUrl}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": session.runtimeKey,
+        },
+        body: JSON.stringify({
+          message: finalInput,
+          agent_role: agentId,
+          workspace_id: "default",
+          session_id: sessionId,
+        }),
       });
-      runId = created.run_id || null;
-      if (!runId) {
-        throw new Error("Core did not return a run_id");
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
       }
-      const currentRunId = runId;
 
-      const pollRun = async () => {
-        for (let i = 0; i < 40; i += 1) {
-          const run = await mobileApi.getRun(session, currentRunId);
-          const status = String(run?.status || "").toLowerCase();
+      const payload = await response.json();
+      const responseText =
+        (typeof payload?.message === "string" && payload.message.trim()) ||
+        (typeof payload?.response === "string" && payload.response.trim()) ||
+        (typeof payload?.reply === "string" && payload.reply.trim()) ||
+        (typeof payload?.content === "string" && payload.content.trim()) ||
+        "Received.";
 
-          if (status === "waiting_approval") {
-            const pending = run?.pending_approval || {};
-            const operation = run?.context?.metadata?.pack_inputs?.operations?.[0] || {};
-            const actionLabel =
-              operation?.mode === "delete"
-                ? "Delete File"
-                : operation?.mode === "write"
-                ? "Write File"
-                : operation?.tool === "execute_shell_command"
-                ? "Device Action"
-                : "Approval Required";
-            const target = operation?.path || operation?.file_path;
-            const approvalCard: ApprovalCard = {
-              action: actionLabel,
-              target: target ? String(target) : undefined,
-              reason: pending?.prompt ? String(pending.prompt) : "Approval required.",
-              approvalId: pending?.approval_id ? String(pending.approval_id) : undefined,
-              runId: currentRunId,
-            };
-            addMessage(sessionId, {
-              intent: "assistant",
-              speech: "Approval required",
-              messageType: "approval",
-              approval: approvalCard,
-            } as AgentPayload);
-            showBanner("Approval required.", "neutral");
-            return;
-          }
-
-          if (status === "completed") {
-            const resultText =
-              (typeof run?.result === "string" && run.result.trim()) ||
-              (typeof run?.result_data === "string" && run.result_data.trim()) ||
-              (run?.result_data ? JSON.stringify(run.result_data) : "") ||
-              "Completed.";
-            addMessage(sessionId, {
-              intent: "assistant",
-              speech: resultText,
-            } as AgentPayload);
-            showBanner("Action completed.", "success");
-            return;
-          }
-
-          if (status === "failed") {
-            const resultText =
-              (typeof run?.result === "string" && run.result.trim()) ||
-              "Run failed. Check the core logs for details.";
-            addMessage(sessionId, {
-              intent: "assistant",
-              speech: resultText,
-            } as AgentPayload);
-            showBanner("Action failed.", "error");
-            return;
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
-        addMessage(sessionId, {
-          intent: "assistant",
-          speech: "Still processing. Check Activity for status.",
-        } as AgentPayload);
-      };
-
-      await pollRun();
-    } catch (err) {
-      console.error(err);
-      const runtimeUrl = String(session?.runtimeUrl || "");
-      const isLoopback = runtimeUrl.includes("127.0.0.1") || runtimeUrl.toLowerCase().includes("localhost");
-      const message = err instanceof Error ? err.message : "";
-      const statusMatch = message.match(/API request failed: (\\d{3})/);
-      let friendly = "Core unreachable. Check your local core and runtime key.";
-      if (statusMatch?.[1]) {
-        const status = statusMatch[1];
-        if (status === "401" || status === "403") {
-          friendly = "Invalid runtime key. Open Settings → Configure Session.";
-        } else {
-          friendly = `Core returned an error (${status}). Restart the core and try again.`;
-        }
-      } else if (isLoopback) {
-        friendly = "Core unreachable. On iPhone, 127.0.0.1/localhost won't work — use your Mac Mini IP in Settings.";
-      }
       addMessage(sessionId, {
         intent: "assistant",
-        speech: friendly,
+        speech: responseText,
       } as AgentPayload);
-      showBanner("Core unreachable.", "error");
+    } catch (err) {
+      console.error(err);
+      setFailedMessageIndex(nextUserMessageIndex);
     } finally {
       setIsLoading(false);
     }
@@ -245,7 +176,7 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     }
   };
 
-  const renderMessage = ({ item }: { item: AgentPayload }) => {
+  const renderMessage = ({ item, index }: { item: AgentPayload; index: number }) => {
     const isUser = item.intent === "user";
 
     if (item.messageType === "approval" && item.approval) {
@@ -360,6 +291,19 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
             {item.speech}
           </Text>
         </View>
+        {failedMessageIndex === index ? (
+          <Text
+            style={{
+              marginTop: 6,
+              marginRight: 6,
+              fontSize: 12,
+              color: "#9CA3AF",
+              textAlign: "right",
+            }}
+          >
+            Could not reach agent
+          </Text>
+        ) : null}
       </View>
     );
   };
@@ -427,6 +371,36 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
           renderItem={renderMessage}
           ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
           contentContainerStyle={{ paddingTop: SPACING.sm, paddingBottom: 96, backgroundColor: "#FFFFFF" }}
+          ListFooterComponent={
+            isLoading ? (
+              <View style={{ paddingHorizontal: SPACING.md, paddingVertical: 8 }}>
+                <View
+                  style={{
+                    alignSelf: "flex-start",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    backgroundColor: "#F3F4F6",
+                    borderRadius: 20,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                  }}
+                >
+                  {[0, 1, 2].map((dot) => (
+                    <View
+                      key={dot}
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: "#9CA3AF",
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={{ paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm }}>
               <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Start a conversation.</Text>

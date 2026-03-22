@@ -124,13 +124,13 @@ export const InputBar: React.FC<InputBarProps> = ({
     <View style={styles.container}>
       <View style={styles.composer}>
         <TouchableOpacity onPress={pickImage} style={styles.iconButton}>
-          <Ionicons name="image-outline" size={20} color={theme.colors.text} />
+          <Ionicons name="attach" size={20} color="#7A7A7A" />
         </TouchableOpacity>
 
         <TextInput
           style={styles.input}
           placeholder={placeholder || "Message"}
-          placeholderTextColor={theme.colors.textSecondary}
+          placeholderTextColor="#9A9A9A"
           value={text}
           onChangeText={setText}
           multiline
@@ -144,21 +144,21 @@ export const InputBar: React.FC<InputBarProps> = ({
             disabled={!text.trim() || isLoading}
           >
             {isLoading ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <ActivityIndicator size="small" color="#7A7A7A" />
             ) : (
-              <Ionicons name="arrow-up" size={18} color="#fff" />
+              <Ionicons name="arrow-up" size={18} color="#7A7A7A" />
             )}
           </TouchableOpacity>
         ) : (
           <TouchableOpacity 
             onPressIn={startRecording} 
             onPressOut={stopRecording}
-            style={[styles.iconButton, isRecording && { backgroundColor: theme.colors.error + '15' }]}
+            style={styles.iconButton}
           >
             <Ionicons 
               name={isRecording ? "mic" : "mic-outline"} 
               size={20} 
-              color={isRecording ? theme.colors.error : theme.colors.text} 
+              color={isRecording ? theme.colors.error : "#7A7A7A"} 
             />
           </TouchableOpacity>
         )}
@@ -169,20 +169,18 @@ export const InputBar: React.FC<InputBarProps> = ({
 
 const useStyles = (theme: any, insets: any) => StyleSheet.create({
   container: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: insets.bottom > 0 ? insets.bottom : 12,
-    backgroundColor: theme.colors.background,
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: (insets.bottom > 0 ? insets.bottom : 12) + 2,
+    backgroundColor: "#FFFFFF",
     borderTopWidth: 0,
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: '#F0F0F0',
     borderRadius: 24,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
@@ -192,7 +190,7 @@ const useStyles = (theme: any, insets: any) => StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.cardHover,
+    backgroundColor: 'transparent',
   },
   input: {
     flex: 1,
@@ -208,7 +206,7 @@ const useStyles = (theme: any, insets: any) => StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: theme.colors.accent,
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -102,28 +102,64 @@ export function useMobileOverviewData() {
   const { session } = useSessionState();
   const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);
 
+  const safeAgentsQuery = async () => {
+    try {
+      return normalizeAgents(await mobileApi.getAgentSnapshot(session!));
+    } catch {
+      return [] as AgentSummary[];
+    }
+  };
+
+  const safeRunsQuery = async () => {
+    try {
+      return normalizeRuns(await mobileApi.getRuns(session!));
+    } catch {
+      return [] as RunSummary[];
+    }
+  };
+
+  const safeApprovalsQuery = async () => {
+    try {
+      return normalizeApprovals(await mobileApi.getApprovals(session!));
+    } catch {
+      return [] as ApprovalSummary[];
+    }
+  };
+
+  const safeArtifactsQuery = async () => {
+    try {
+      return normalizeArtifacts(await mobileApi.getArtifacts(session!));
+    } catch {
+      return [] as ArtifactSummary[];
+    }
+  };
+
   const agentsQuery = useQuery({
     queryKey: ["mobile", "agents", session?.runtimeUrl, session?.workspaceId],
     enabled,
-    queryFn: async () => normalizeAgents(await mobileApi.getAgentSnapshot(session!)),
+    retry: false,
+    queryFn: safeAgentsQuery,
   });
 
   const runsQuery = useQuery({
     queryKey: ["mobile", "runs", session?.runtimeUrl, session?.workspaceId],
     enabled,
-    queryFn: async () => normalizeRuns(await mobileApi.getRuns(session!)),
+    retry: false,
+    queryFn: safeRunsQuery,
   });
 
   const approvalsQuery = useQuery({
     queryKey: ["mobile", "approvals", session?.runtimeUrl, session?.workspaceId],
     enabled,
-    queryFn: async () => normalizeApprovals(await mobileApi.getApprovals(session!)),
+    retry: false,
+    queryFn: safeApprovalsQuery,
   });
 
   const artifactsQuery = useQuery({
     queryKey: ["mobile", "artifacts", session?.runtimeUrl, session?.workspaceId],
     enabled,
-    queryFn: async () => normalizeArtifacts(await mobileApi.getArtifacts(session!)),
+    retry: false,
+    queryFn: safeArtifactsQuery,
   });
 
   return {

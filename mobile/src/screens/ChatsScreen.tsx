@@ -60,7 +60,25 @@ export default function ChatsScreen() {
         }}
       >
         <Text style={{ fontSize: 32, fontFamily: "Fraunces_700Bold", color: "#111827" }}>Chats</Text>
-        <HeaderSearchButton />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <HeaderSearchButton />
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => router.push("/chats/settings")}
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              borderWidth: 1,
+              borderColor: "#E5E7EB",
+              backgroundColor: "#FFFFFF",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Ionicons name="settings-outline" size={18} color="#111827" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList

@@ -153,10 +153,10 @@ export function CoreControlCenter() {
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
         title="Dashboard"
-        subtitle="Your AI agents, running workflows, and installed solutions — all in one place."
+        subtitle="Your assistant, automations, and recent activity in one place."
         meta={
           <>
-            <span>{solutions.length} active solution{solutions.length === 1 ? '' : 's'}</span>
+            <span>{workflows.length} automation{workflows.length === 1 ? '' : 's'}</span>
             <span>{skills.length} active skill{skills.length === 1 ? '' : 's'}</span>
             {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">Connected</span> : null}
           </>
@@ -165,9 +165,9 @@ export function CoreControlCenter() {
 
       <MetricStrip
         items={[
-          { label: 'Active solutions', value: String(solutions.length) },
-          { label: 'Active skills', value: String(skills.length) },
           { label: 'Automations', value: String(workflows.length) },
+          { label: 'Active skills', value: String(skills.length) },
+          { label: 'Solutions', value: String(solutions.length) },
           { label: 'Unresolved alerts', value: String(summary.alerts) },
         ]}
       />
@@ -187,7 +187,7 @@ export function CoreControlCenter() {
         </section>
       ) : error ? (
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 8, placeItems: 'center' }}>
-          <div className="orion-panel-title">Control center is unavailable</div>
+          <div className="orion-panel-title">Dashboard is unavailable</div>
           <div className="orion-panel-copy">{error}</div>
         </section>
       ) : (
@@ -228,60 +228,6 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
-                <div className="orion-panel-title">Active solutions</div>
-                <div className="orion-panel-copy">
-                  Installed vertical packages running on top of the core platform.
-                </div>
-              </div>
-            </div>
-            {solutions.length === 0 ? (
-              <div className="orion-empty">
-                <div className="orion-empty-title">Add your first solution to get started</div>
-                <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
-                  <Link href="/setup" className="btn-primary">
-                    Open Setup
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
-                {solutions.map((solution) => (
-                  <Link
-                    key={solution.id}
-                    href={solution.primary_route || solution.route_base || '/'}
-                    className="orion-panel orion-surface-lift"
-                    style={{ display: 'grid', gap: 10, textDecoration: 'none', color: 'inherit' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                      <div style={{ display: 'grid', gap: 4 }}>
-                        <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
-                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Installed solution package'}</div>
-                      </div>
-                      <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
-                        {solution.enabled ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      <span className="orion-chip"><Boxes size={12} /> {solution.status?.spaces_monitored || 0} spaces</span>
-                      <span className="orion-chip" data-status-tone={Number(solution.status?.unresolved_alerts || 0) > 0 ? 'red' : 'grey'}>
-                        <Bell size={12} /> {solution.status?.unresolved_alerts || 0} alerts
-                      </span>
-                    </div>
-                    <div className="orion-panel-copy" style={{ margin: 0 }}>
-                      {solution.status?.summary || 'No live summary available.'}
-                    </div>
-                    <div className="orion-panel-copy" style={{ margin: 0 }}>
-                      Last scan {formatRelativeTime(solution.status?.last_scan_at || null)}
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
                 <div className="orion-panel-title">Active skills</div>
                 <div className="orion-panel-copy">Reusable capabilities currently enabled in this deployment.</div>
               </div>
@@ -303,6 +249,61 @@ export function CoreControlCenter() {
                     </div>
                     <span className="orion-chip" data-status-tone="green">Active</span>
                   </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="orion-panel">
+            <div className="orion-panel-header">
+              <div>
+                <div className="orion-panel-title">Solutions</div>
+                <div className="orion-panel-copy">
+                  Optional packaged experiences built on top of the core platform.
+                </div>
+              </div>
+              <Link href="/solutions" className="btn-secondary">
+                View solutions
+              </Link>
+            </div>
+            {solutions.length === 0 ? (
+              <div className="orion-empty">
+                <div className="orion-empty-title">No solutions installed</div>
+                <div className="orion-panel-copy" style={{ margin: 0 }}>
+                  Start with the assistant and automations. Add packaged solutions only when they simplify a specific workflow.
+                </div>
+              </div>
+            ) : (
+              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+                {solutions.map((solution) => (
+                  <Link
+                    key={solution.id}
+                    href={solution.primary_route || solution.route_base || '/solutions'}
+                    className="orion-panel orion-surface-lift"
+                    style={{ display: 'grid', gap: 10, textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
+                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Packaged workflow experience'}</div>
+                      </div>
+                      <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
+                        {solution.enabled ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <span className="orion-chip"><Boxes size={12} /> {solution.status?.spaces_monitored || 0} monitors</span>
+                      <span className="orion-chip" data-status-tone={Number(solution.status?.unresolved_alerts || 0) > 0 ? 'red' : 'grey'}>
+                        <Bell size={12} /> {solution.status?.unresolved_alerts || 0} alerts
+                      </span>
+                    </div>
+                    <div className="orion-panel-copy" style={{ margin: 0 }}>
+                      {solution.status?.summary || 'No live summary available.'}
+                    </div>
+                    <div className="orion-panel-copy" style={{ margin: 0 }}>
+                      Updated {formatRelativeTime(solution.status?.last_scan_at || null)}
+                    </div>
+                  </Link>
                 ))}
               </div>
             )}

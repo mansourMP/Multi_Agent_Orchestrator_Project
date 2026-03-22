@@ -31,7 +31,7 @@ function formatSimpleTopError(message: string): string {
     return 'Setup is incomplete. Finish setup before running tasks.';
   }
   if (normalized.includes('failed to load live workspace snapshot')) {
-    return 'Live workspace status is temporarily unavailable.';
+    return 'Live platform status is temporarily unavailable.';
   }
   return text;
 }
@@ -60,13 +60,13 @@ export function WorkbenchShell({
     cursor: 'pointer',
     boxShadow: active ? '0 8px 18px color-mix(in srgb, var(--primary-base) 18%, transparent 82%)' : 'none',
   });
-  const pageTitle = experienceMode === 'simple' ? 'Chat' : 'Workspace';
+  const pageTitle = experienceMode === 'simple' ? 'Assistant' : 'Assistant Console';
   const pageSubtitle =
     experienceMode === 'simple'
       ? 'The main conversation surface for getting work done with one assistant.'
       : singleAgentMode
-        ? 'Operator view for inspecting runs, approvals, and the single assistant when you need tighter control.'
-        : 'Operator view for routing work, inspecting runs, and stepping in when you need manual control.';
+        ? 'Advanced view for inspecting runs, approvals, and the assistant when you need tighter control.'
+        : 'Advanced view for routing work, inspecting runs, and stepping in when you need manual control.';
   const showPageHeader = experienceMode === 'advanced';
   const simpleTopError = topError && experienceMode === 'simple' ? formatSimpleTopError(topError) : topError;
 
@@ -113,7 +113,7 @@ export function WorkbenchShell({
                     marginBottom: 3,
                   }}
                 >
-                  Operator workspace
+                  Advanced controls
                 </div>
                 <h1 className="orion-page-title">{pageTitle}</h1>
                 <p className="orion-page-subtitle">{pageSubtitle}</p>
@@ -133,7 +133,7 @@ export function WorkbenchShell({
                 fontWeight: 700,
               }}
             >
-              Advanced control
+              Admin surface
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>

@@ -69,27 +69,29 @@ function toneClass(tone: ShellStatusPill['tone']): string {
 
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
-  const isChatRoute = pathname === '/';
+  const isAssistantHomeRoute = pathname === '/workspace';
+  const isSolutionRoute = pathname.startsWith('/solutions/');
+  const showCommandBar = !isSolutionRoute;
   const meta = useMemo(() => resolveShellRouteMeta(pathname), [pathname]);
   const { status } = usePlatformShell();
   const { theme, setTheme } = useTheme();
   const statusPills = useMemo(() => buildStatusPills(pathname, status), [pathname, status]);
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--topbar-height', isChatRoute ? '56px' : '68px');
+    document.documentElement.style.setProperty('--topbar-height', isAssistantHomeRoute ? '56px' : '68px');
     return () => {
       document.documentElement.style.setProperty('--topbar-height', '68px');
     };
-  }, [isChatRoute]);
+  }, [isAssistantHomeRoute]);
 
-  if (isChatRoute) {
+  if (isAssistantHomeRoute) {
     return (
       <header className="orion-shellbar is-chat-home">
         <div className="orion-shellbar-section orion-shellbar-section-left">
           <div className="orion-shellbar-page">
             <div className="orion-shellbar-page-row">
-              <div className="orion-shellbar-title">Chat</div>
-              <span className="orion-shellbar-slot">Describe the outcome you want</span>
+              <div className="orion-shellbar-title">Assistant</div>
+              <span className="orion-shellbar-slot">Tell Empyralist what you want done</span>
             </div>
           </div>
         </div>
@@ -163,20 +165,22 @@ export default function PlatformTopBar() {
         </div>
       </div>
 
-      <div className="orion-shellbar-section orion-shellbar-section-center">
-        <button
-          type="button"
-          className="orion-shellbar-command"
-          onClick={() => window.dispatchEvent(new Event(EMPYRALIS_COMMAND_PALETTE_OPEN_EVENT))}
-        >
-          <Search size={15} />
-          <span>Search commands, pages, and operations</span>
-          <span className="orion-shellbar-command-kbd">
-            <Command size={11} />
-            K
-          </span>
-        </button>
-      </div>
+      {showCommandBar ? (
+        <div className="orion-shellbar-section orion-shellbar-section-center">
+          <button
+            type="button"
+            className="orion-shellbar-command"
+            onClick={() => window.dispatchEvent(new Event(EMPYRALIS_COMMAND_PALETTE_OPEN_EVENT))}
+          >
+            <Search size={15} />
+            <span>Search pages, automations, and files</span>
+            <span className="orion-shellbar-command-kbd">
+              <Command size={11} />
+              K
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       <div className="orion-shellbar-section orion-shellbar-section-right">
         {statusPills.length > 0 ? (

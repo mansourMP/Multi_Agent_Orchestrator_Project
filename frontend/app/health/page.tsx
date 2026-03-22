@@ -955,10 +955,10 @@ export default function HealthPage() {
       <OsPageHeader
         icon={<Activity size={18} />}
         title="Health"
-        subtitle="Control Center section for diagnostics, runtime checks, and recovery."
+        subtitle="Diagnostics, runtime checks, and recovery for the platform."
         meta={
           <>
-            <span>Control Center</span>
+            <span>Admin</span>
             <span>Last checked: {formatDisplayDate(lastCheckedAt, 'never')}</span>
           </>
         }

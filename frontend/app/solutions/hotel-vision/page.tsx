@@ -116,11 +116,11 @@ export default function HotelVisionDashboardPage() {
       <OsPageHeader
         icon={<Building2 size={18} />}
         title="Hotel Vision"
-        subtitle={`${summary.spaceCount} spaces monitored · ${summary.alertCount} alerts · Scanned ${formatRelativeTime(summary.lastScanAt)}`}
+        subtitle={`A packaged monitoring solution built on top of Empyralist workflows and connectors.`}
         meta={
           <>
+            <Link href="/solutions">All solutions</Link>
             <span>{summary.spaceCount} spaces</span>
-            <span>{summary.alertCount} unresolved alerts</span>
             <Link href="/solutions/hotel-vision/onboarding">Set up property</Link>
           </>
         }
@@ -155,7 +155,7 @@ export default function HotelVisionDashboardPage() {
       ) : spaces.length === 0 ? (
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 12, placeItems: 'center' }}>
           <div className="orion-panel-title">No spaces are set up yet</div>
-          <div className="orion-panel-copy">Use the guided setup to add your hotel and first monitored space without editing files.</div>
+          <div className="orion-panel-copy">Use the guided setup to add your first monitored space without editing files.</div>
           <Link href="/solutions/hotel-vision/onboarding" className="orion-btn orion-btn-primary">
             Start setup
           </Link>

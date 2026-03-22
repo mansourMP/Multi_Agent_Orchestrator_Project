@@ -399,7 +399,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
         <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
             <span style={{ fontSize: 12, color: UI.textSoft }}>
-              {'1. Check workspace access'}
+              {'1. Check platform access'}
               {' '}
               {setupSteps[0].done ? '✓' : ''}
             </span>
@@ -422,7 +422,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
           </div>
 
           <div style={{ display: 'grid', gap: 6, borderTop: `1px dashed ${UI.borderSoft}`, paddingTop: 8 }}>
-            <span style={{ fontSize: 12, color: UI.textSoft }}>Workspace access key (only if required)</span>
+            <span style={{ fontSize: 12, color: UI.textSoft }}>Platform access key (only if required)</span>
             <input
               type="password"
               value={runtimeApiKey}
@@ -642,7 +642,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
 
             <div style={{ display: 'grid', gap: 8, borderTop: `1px dashed ${UI.borderSoft}`, paddingTop: 8 }}>
               <span style={{ fontSize: 12, color: UI.textSoft }}>
-                Optional: connect workspace tools and channels
+                Optional: connect platform tools and channels
               </span>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <a

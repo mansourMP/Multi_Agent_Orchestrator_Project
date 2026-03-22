@@ -36,14 +36,14 @@ const STARTER_PROMPTS = [
 ];
 
 const QUICK_NAV_ITEMS = [
-  { label: 'Chat', path: '/' },
+  { label: 'Assistant', path: '/' },
   { label: SINGLE_AGENT_MODE ? 'Assistant' : 'Agents', path: '/agents' },
   { label: 'Connections', path: '/credentials' },
   { label: 'Setup', path: '/setup' },
-  { label: 'Control Center', path: '/control-center' },
-  { label: 'Workspace', path: '/workspace' },
-  { label: 'Runs', path: '/executions' },
-  { label: 'Outputs', path: '/artifacts' },
+  { label: 'Admin', path: '/control-center' },
+  { label: 'Chat', path: '/workspace' },
+  { label: 'Activity', path: '/executions' },
+  { label: 'Files', path: '/artifacts' },
   { label: 'Automations', path: '/workflows' },
   { label: 'Approvals', path: '/approvals' },
   { label: 'Team', path: '/team' },
@@ -62,31 +62,31 @@ function createMessage(role: AssistantRole, text: string): AssistantMessage {
 function resolvePageGuide(pathname: string): PageGuide {
   if (pathname === '/') {
     return {
-      title: 'Chat',
-      purpose: 'Talk to the assistant, describe the outcome you want, and let the platform carry the work forward.',
+      title: 'Dashboard',
+      purpose: 'Review the state of your assistant, automations, activity, and optional solutions.',
       actions: [
-        'Describe the outcome you want in the main conversation.',
-        'Send one clear task and keep the conversation moving from this page.',
-        'Use Connections or Control Center only when the chat needs tools, setup, or approvals.',
+        'Review recent activity and active automations.',
+        'Open Assistant when you want to talk to Empyralist directly.',
+        'Use Connections or Admin only when the platform needs setup or approvals.',
       ],
-      nextSteps: ['State one concrete outcome.', 'Send it to the assistant.', 'Review approvals or results only if needed.'],
-      sections: ['Chat status', 'Conversation', 'Composer', 'Quick actions', 'Session context'],
+      nextSteps: ['Check what needs attention.', 'Open Assistant for the next task.', 'Review automations if you need to edit a workflow.'],
+      sections: ['Recent activity', 'Automations', 'Solutions', 'Alerts', 'Skills'],
     };
   }
   if (SINGLE_AGENT_MODE && pathname === '/agents') {
     return {
       title: 'Assistant',
-      purpose: 'Manage the one assistant workspace, including live channels, inbox sessions, and recent execution activity.',
-      actions: ['Review live channels and inbox sessions.', 'Open Home for the main workflow.', 'Open Runs if you need execution history.'],
+      purpose: 'Manage the one assistant surface, including live channels, inbox sessions, and recent execution activity.',
+      actions: ['Review live channels and inbox sessions.', 'Open Assistant for the main workflow.', 'Open Activity if you need execution history.'],
       nextSteps: ['Check channel status.', 'Review recent work.', 'Return Home to start the next outcome.'],
       sections: ['Assistant status', 'Channels', 'Recent activity', 'Unified inbox'],
     };
   }
   if (pathname === '/workspace') {
     return {
-      title: 'Workspace',
+      title: 'Assistant Console',
       purpose: SINGLE_AGENT_MODE
-        ? 'Use the advanced operating surface when you need inspection detail and tighter control over the single assistant.'
+        ? 'Use the advanced assistant surface when you need inspection detail and tighter control over the single assistant.'
         : 'Use the advanced operating surface when you need routing, inspect detail, and tighter control over how work is delegated.',
       actions: [
         SINGLE_AGENT_MODE ? 'Work through the main assistant and inspect the active run.' : 'Route work through orchestration or switch into direct agent chat.',
@@ -142,10 +142,10 @@ function resolvePageGuide(pathname: string): PageGuide {
   if (pathname === '/team') {
     return {
       title: 'Team',
-      purpose: 'Manage people, roles, and who can access or change this workspace.',
-      actions: ['Review owners, admins, operators, and viewers.', 'Check who has access to the workspace.', 'Open account or settings when identity changes are needed.'],
-      nextSteps: ['Confirm who owns the workspace.', 'Review admin access.', 'Adjust identity or settings if needed.'],
-      sections: ['Role overview', 'Member list', 'Access notes', 'Workspace identity'],
+      purpose: 'Manage people, roles, and who can access or change this platform.',
+      actions: ['Review owners, admins, operators, and viewers.', 'Check who has access to the platform.', 'Open account or settings when identity changes are needed.'],
+      nextSteps: ['Confirm who owns the platform.', 'Review admin access.', 'Adjust identity or settings if needed.'],
+      sections: ['Role overview', 'Member list', 'Access notes', 'Platform identity'],
     };
   }
   if (pathname === '/executions') {
@@ -168,17 +168,17 @@ function resolvePageGuide(pathname: string): PageGuide {
   }
   if (pathname === '/artifacts') {
     return {
-      title: 'Outputs',
+      title: 'Files',
       purpose: 'Browse finished work, supporting evidence, and deeper traces produced by runs.',
       actions: ['Switch between deliverables, evidence, and system traces.', 'Open the related run inspect view.', 'Use outputs in follow-up work.'],
       nextSteps: ['Find the latest result.', 'Open the source run if you need more context.', 'Decide the next follow-up action.'],
-      sections: ['Output views', 'Result list', 'Preview rail', 'Filters'],
+      sections: ['File views', 'Result list', 'Preview rail', 'Filters'],
     };
   }
   if (pathname === '/credentials') {
     return {
       title: 'Connections',
-      purpose: 'Connect the tools and channels your workspace can use.',
+      purpose: 'Connect the tools and channels your platform can use.',
       actions: [
         'Link a native connector now.',
         'Review the recommended next channels like Discord and Instagram Business.',
@@ -191,16 +191,16 @@ function resolvePageGuide(pathname: string): PageGuide {
   if (pathname === '/setup') {
     return {
       title: 'Setup',
-      purpose: 'Get the assistant ready with workspace access, account mode, and optional tools.',
-      actions: ['Check workspace access.', 'Choose assistant account mode.', 'Connect tools only if needed.'],
+      purpose: 'Get the assistant ready with platform access, account mode, and optional tools.',
+      actions: ['Check platform access.', 'Choose assistant account mode.', 'Connect tools only if needed.'],
       nextSteps: ['Finish all 3 onboarding steps.', 'Return to Home.', 'Start work.'],
-      sections: ['Workspace access', 'Account mode', 'Tools'],
+      sections: ['Platform access', 'Account mode', 'Tools'],
     };
   }
   if (pathname === '/settings' || pathname === '/account') {
     return {
       title: 'Settings',
-      purpose: 'Manage workspace preferences and account details.',
+      purpose: 'Manage platform preferences and account details.',
       actions: ['Update platform preferences.', 'Review account configuration.', 'Adjust system behavior.'],
       nextSteps: ['Open relevant section.', 'Apply change.', 'Verify effect in Home.'],
       sections: ['Preferences', 'Account', 'System options'],
@@ -208,7 +208,7 @@ function resolvePageGuide(pathname: string): PageGuide {
   }
   return {
     title: 'Platform',
-    purpose: 'Navigate and operate this workspace with contextual help.',
+    purpose: 'Navigate and operate the platform with contextual help.',
     actions: ['Ask what this page is for.', 'Ask where to perform an action.', 'Ask for a step-by-step next move.'],
     nextSteps: ['Tell me your goal.', 'I will map the best page and actions.'],
     sections: ['Page context', 'Suggested actions'],
@@ -231,29 +231,29 @@ function locationHint(question: string): string | null {
     return 'Open Automations to create or edit reusable systems.';
   }
   if (q.includes('run') || q.includes('history')) {
-    return 'Open Runs to inspect execution history and details.';
+    return 'Open Activity to inspect execution history and details.';
   }
   if (q.includes('artifact') || q.includes('file') || q.includes('output')) {
-    return 'Open Outputs to review finished work and traces from runs.';
+    return 'Open Files to review finished work and traces from runs.';
   }
   if (q.includes('agent') || q.includes('worker') || q.includes('orchestrator')) {
     return SINGLE_AGENT_MODE
-      ? 'Open Assistant to inspect inbox sessions, live channels, and the current assistant workspace.'
+      ? 'Open Assistant to inspect inbox sessions, live channels, and the current assistant.'
       : 'Open Agents to inspect workers, collaborations, and blockers.';
   }
   if (q.includes('workspace') || q.includes('routing') || q.includes('inspect')) {
     return SINGLE_AGENT_MODE
-      ? 'Open Control Center or Advanced Workspace when you need inspection detail, approvals, or tighter assistant controls.'
-      : 'Open Workspace when you need advanced routing, inspect detail, or deck controls.';
+      ? 'Open Admin or Chat when you need inspection detail, approvals, or tighter assistant controls.'
+      : 'Open Chat when you need advanced routing, inspect detail, or deck controls.';
   }
   if (q.includes('team') || q.includes('owner') || q.includes('admin') || q.includes('viewer') || q.includes('role')) {
-    return 'Open Team to manage people, roles, and workspace access.';
+    return 'Open Team to manage people, roles, and platform access.';
   }
   if (q.includes('integration') || q.includes('telegram') || q.includes('whatsapp') || q.includes('google')) {
     return 'Open Connections to manage connected tools and accounts.';
   }
   if (q.includes('setup') || q.includes('runtime') || q.includes('api key')) {
-    return 'Open Setup to finish workspace access, account mode, and optional tools.';
+    return 'Open Setup to finish platform access, account mode, and optional tools.';
   }
   return null;
 }
@@ -295,7 +295,7 @@ function buildReply(input: string, guide: PageGuide, accessMode: AssistantAccess
   }
 
   if (q.includes('not working') || q.includes('why is this not working') || q.includes('broken') || q.includes('error')) {
-    return `Quick troubleshooting:\n• Confirm Setup is complete (workspace access/account mode/tools).\n• Check Approvals for waiting decisions.\n• Open Runs → Inspect the latest failed run.\n• Verify Connections if the task uses channel actions.`;
+    return `Quick troubleshooting:\n• Confirm Setup is complete (platform access/account mode/tools).\n• Check Approvals for waiting decisions.\n• Open Activity and inspect the latest failed run.\n• Verify Connections if the task uses channel actions.`;
   }
 
   if (q.includes('button')) {

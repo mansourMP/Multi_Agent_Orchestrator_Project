@@ -228,7 +228,7 @@ export default function WorkflowsPage() {
             <OsPageHeader
                 icon={<WorkflowIcon size={16} />}
                 title="Automations"
-                subtitle="Reusable systems your agents can run."
+                subtitle="Reusable workflows your assistant can run."
                 meta={
                     workflows.length > 0 ? (
                         <>
@@ -237,7 +237,7 @@ export default function WorkflowsPage() {
                         </>
                     ) : (
                         <>
-                            <span>Use Workbench for one-off tasks</span>
+                            <span>Use Assistant for one-off tasks</span>
                         </>
                     )
                 }
@@ -303,7 +303,7 @@ export default function WorkflowsPage() {
                             <div className="orion-empty-title">{workflows.length === 0 ? 'No automations yet' : 'No automations match'}</div>
                             <div className="orion-empty-copy" style={{ marginBottom: 14 }}>
                                 {workflows.length === 0
-                                    ? 'Create one reusable system, or use Workbench when the task only needs to happen once.'
+                                    ? 'Create one reusable workflow, or use Assistant when the task only needs to happen once.'
                                     : 'Try another search or clear the current query.'}
                             </div>
                             <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>

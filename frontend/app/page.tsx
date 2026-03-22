@@ -705,7 +705,7 @@ function resolveChatNextRecommendation(args: {
   }
   if (!args.runtimeOk) {
     return {
-      chipText: 'Check workspace status',
+      chipText: 'Check platform status',
       chipTone: 'warning',
       actionLabel: 'Open Health',
       href: '/health',
@@ -730,8 +730,8 @@ function resolveChatNextRecommendation(args: {
   return {
     chipText: `${args.executionLabel} ready`,
     chipTone: 'success',
-    actionLabel: 'Open Control Center',
-    href: '/control-center',
+    actionLabel: 'Open Automations',
+    href: '/workflows',
   };
 }
 
@@ -765,8 +765,8 @@ function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | nul
     }
   }
 
-  if (status === 'error') return 'Run failed. Open inspect for details.';
-  return 'Run completed. Open inspect for the full details.';
+  if (status === 'error') return 'Run failed. Open Activity for details.';
+  return 'Run completed. Open Activity for the full details.';
 }
 
 function hasStructuredAssistantReply(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null): boolean {
@@ -1278,7 +1278,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           {
             method: 'POST',
             headers: buildHeaders(true),
-            body: JSON.stringify({ decision, note: `Resolved from ${BRAND.product} Control Center` }),
+            body: JSON.stringify({ decision, note: `Resolved from ${BRAND.product} Admin` }),
           },
         );
         if (!res.ok) {

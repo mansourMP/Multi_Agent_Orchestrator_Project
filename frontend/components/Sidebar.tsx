@@ -174,19 +174,18 @@ export default function Sidebar() {
         return [] as NavItem[];
     }, [pathname]);
 
-    const railItems = useMemo(() => {
+    const solutionRailItems = useMemo(() => {
         const items: NavItem[] = [];
         const seen = new Set<string>();
 
-        for (const item of [...workspaceItems, ...routePinnedSolutionItems, ...solutionItems]) {
-            if (item.href === '/workspace' && seen.has('/workspace')) continue;
+        for (const item of [...routePinnedSolutionItems, ...solutionItems]) {
             if (seen.has(item.href)) continue;
             seen.add(item.href);
             items.push(item);
         }
 
         return items;
-    }, [routePinnedSolutionItems, solutionItems, workspaceItems]);
+    }, [routePinnedSolutionItems, solutionItems]);
 
     useEffect(() => {
         const root = document.documentElement;
@@ -282,7 +281,7 @@ export default function Sidebar() {
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <div style={{ padding: '0 6px 10px', display: 'grid', gap: 12 }}>
                     <div className="sidebar-rail-group">
-                        {railItems.map((item) => {
+                        {workspaceItems.map((item) => {
                             const isActive = isNavItemActive(item);
                             const isChatItem = item.href === '/workspace';
                             const isSecondaryItem = item.href === '/executions' || item.href === '/credentials' || item.href === '/artifacts';
@@ -366,6 +365,45 @@ export default function Sidebar() {
                             );
                         })}
                     </div>
+
+                    {solutionRailItems.length > 0 ? (
+                        <>
+                            <div className="sidebar-rail-divider" aria-hidden />
+                            <div className="sidebar-rail-group sidebar-rail-group-apps">
+                                {solutionRailItems.map((item) => {
+                                    const isActive = isNavItemActive(item);
+                                    return (
+                                        <div
+                                            key={`solution:${item.href}:${item.label}`}
+                                            className="sidebar-rail-entry"
+                                        >
+                                            <button
+                                                onClick={() => {
+                                                    safeNavigate(item.href);
+                                                }}
+                                                className={`btn-ghost sidebar-nav-btn is-rail is-app${isActive ? ' is-active' : ''}`}
+                                                style={isActive ? {
+                                                    backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
+                                                    color: '#ffffff',
+                                                    border: 'none',
+                                                    boxShadow: 'none',
+                                                } : undefined}
+                                                title={item.label}
+                                                aria-label={item.label}
+                                            >
+                                                <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
+                                                {typeof item.badge === 'number' && item.badge > 0 ? (
+                                                    <span className="sidebar-icon-badge" aria-hidden>
+                                                        {item.badge > 99 ? '99+' : item.badge}
+                                                    </span>
+                                                ) : null}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    ) : null}
                 </div>
             </div>
 

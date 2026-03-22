@@ -65,7 +65,7 @@ export default function ControlCenterPage() {
     {
       href: '/setup',
       title: 'Setup',
-      copy: 'Finish workspace readiness, account mode, and tool access.',
+      copy: 'Finish platform setup, account mode, and tool access.',
       status: setupStatus,
       tone: status.setupReady ? 'ok' : 'warn',
       icon: SlidersHorizontal,
@@ -73,7 +73,7 @@ export default function ControlCenterPage() {
     {
       href: '/credentials',
       title: 'Connections',
-      copy: 'Manage shared tools, channels, and worker access.',
+      copy: 'Manage shared tools, channels, and platform access.',
       status: accessMode === 'full' ? 'Full access enabled' : 'Default access mode',
       tone: 'neutral',
       icon: KeyRound,
@@ -100,8 +100,8 @@ export default function ControlCenterPage() {
     <div className="orion-page-shell narrow orion-animate-in">
       <OsPageHeader
         icon={<ShieldCheck size={18} />}
-        title="Control Center"
-        subtitle="Advanced workspace controls for readiness, connections, diagnostics, and defaults."
+        title="Admin"
+        subtitle="Advanced platform controls for setup, connections, diagnostics, and defaults."
         meta={
           <>
             <span>{accessMode === 'full' ? 'Full access mode' : 'Default access mode'}</span>
@@ -117,7 +117,7 @@ export default function ControlCenterPage() {
 
       <MetricStrip
         items={[
-          { label: 'Setup', value: status.setupReady ? 'Ready' : `${status.setupProgressCount}/3`, note: status.setupReady ? 'Workspace can run' : 'Finish onboarding' },
+          { label: 'Setup', value: status.setupReady ? 'Ready' : `${status.setupProgressCount}/3`, note: status.setupReady ? 'Platform can run' : 'Finish onboarding' },
           { label: 'Runtime', value: runtimeStatus, note: workerStatus },
           { label: 'Approvals', value: status.pendingApprovals > 0 ? String(status.pendingApprovals) : '0', note: approvalStatus },
           { label: 'Access', value: accessMode === 'full' ? 'Full' : 'Default', note: accessMode === 'full' ? 'Broader platform control' : 'Safer everyday mode' },
@@ -128,10 +128,10 @@ export default function ControlCenterPage() {
       <section className="orion-panel">
         <div className="orion-panel-header">
           <div>
-            <div className="orion-panel-title">Where advanced controls live</div>
-            <div className="orion-panel-copy">
-              Home stays focused on getting work done. Control Center is where you adjust readiness, permissions, connections, and diagnostics.
-            </div>
+              <div className="orion-panel-title">Where advanced controls live</div>
+              <div className="orion-panel-copy">
+              Assistant stays focused on getting work done. Admin is where you adjust setup, permissions, connections, and diagnostics.
+              </div>
           </div>
         </div>
 
@@ -209,14 +209,14 @@ export default function ControlCenterPage() {
           <div className="orion-panel-header" style={{ marginBottom: 0 }}>
             <div>
               <div className="orion-panel-title">What belongs here</div>
-              <div className="orion-panel-copy">Use Control Center when you need to change how the workspace behaves, not when you just want to get work done.</div>
+              <div className="orion-panel-copy">Use Admin when you need to change how the platform behaves, not when you just want to get work done.</div>
             </div>
           </div>
           <div className="orion-list" style={{ marginTop: 12 }}>
             <div className="orion-panel-copy">Connect or revoke tools and channels.</div>
             <div className="orion-panel-copy">Check runtime health, workers, and diagnostics.</div>
             <div className="orion-panel-copy">Choose safer default access or broader platform control.</div>
-            <div className="orion-panel-copy">Change workspace-level defaults and provider configuration.</div>
+            <div className="orion-panel-copy">Change platform defaults and provider configuration.</div>
           </div>
         </section>
 

@@ -182,7 +182,7 @@ function sanitizeAssistantDisplayText(content: string): string {
     (text.startsWith('{') && text.endsWith('}')) ||
     (text.startsWith('[') && text.endsWith(']'))
   ) {
-    return 'Done. Open Control Center for structured details.';
+    return 'Done. Open Activity for structured details.';
   }
 
   const filtered: string[] = [];
@@ -220,7 +220,7 @@ function sanitizeAssistantDisplayText(content: string): string {
     }
 
     if (/^next move/i.test(trimmed) || /^next step/i.test(trimmed)) continue;
-    if (/^open control center for details\.?$/i.test(trimmed)) continue;
+    if (/^open (control center|admin|activity) for details\.?$/i.test(trimmed)) continue;
 
     filtered.push(line);
   }

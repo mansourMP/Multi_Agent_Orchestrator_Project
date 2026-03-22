@@ -204,7 +204,7 @@ export function GlobalCommandPalette() {
                 ref={inputRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search commands, pages, and operations..."
+                placeholder="Search pages, automations, and files..."
                 className="orion-cmd-input"
               />
             </div>

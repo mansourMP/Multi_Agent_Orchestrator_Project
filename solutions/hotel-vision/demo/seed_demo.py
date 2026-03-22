@@ -47,11 +47,11 @@ def write_svg(path: Path, title: str, subtitle: str, accent: str) -> None:
     )
 
 
-def build_history(space_id: str, base_occupancy: int, amplitude: int, business_open_hour: int, business_close_hour: int) -> list[dict]:
-    now = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
+def build_history(space_id: str, base_occupancy: int, amplitude: int, business_open_hour: int, business_close_hour: int, *, now: datetime) -> list[dict]:
+    aligned_now = now.replace(minute=0, second=0, microsecond=0)
     rows: list[dict] = []
     for offset in range(23, -1, -1):
-        point = now - timedelta(hours=offset)
+        point = aligned_now - timedelta(hours=offset)
         hour = point.hour
         in_hours = business_open_hour <= hour <= business_close_hour
         wave = math.sin((hour / 24.0) * math.pi * 2.0)
@@ -73,7 +73,7 @@ def build_history(space_id: str, base_occupancy: int, amplitude: int, business_o
     return rows
 
 
-def seed_space(space_id: str, snapshot_path: Path, occupancy_count: int, status: str, summary_lines: list[str], history_rows: list[dict], alerts_rows: list[dict]) -> None:
+def seed_space(space_id: str, snapshot_path: Path, occupancy_count: int, status: str, summary_lines: list[str], history_rows: list[dict], alerts_rows: list[dict], *, now: datetime) -> None:
     config = json.loads((TEMPLATE_ROOT / space_id / "config.json").read_text(encoding="utf-8"))
     space_root = DEMO_SPACES_ROOT / space_id
     write_json(space_root / "config.json", config)
@@ -84,7 +84,7 @@ def seed_space(space_id: str, snapshot_path: Path, occupancy_count: int, status:
           "space_id": space_id,
           "space_name": config["space_name"],
           "camera_ids": ["cam-01"],
-          "timestamp": datetime.now().astimezone().isoformat(),
+          "timestamp": now.isoformat(),
           "occupancy_count": occupancy_count,
           "status": status,
           "business_state": "open" if status != "closed" else "closed",
@@ -102,6 +102,7 @@ def seed_space(space_id: str, snapshot_path: Path, occupancy_count: int, status:
 
 
 def main() -> int:
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
     write_svg(ASSET_ROOT / "lobby.svg", "Lobby", "Guests moving through the entrance area", "#22c55e")
     write_svg(ASSET_ROOT / "breakfast.svg", "Breakfast Room", "Morning service with tables and guest traffic", "#f59e0b")
     if not POOL_SOURCE.exists():
@@ -110,9 +111,9 @@ def main() -> int:
     else:
         pool_snapshot = POOL_SOURCE
 
-    lobby_history = build_history("lobby", base_occupancy=6, amplitude=4, business_open_hour=0, business_close_hour=23)
-    breakfast_history = build_history("breakfast", base_occupancy=12, amplitude=10, business_open_hour=6, business_close_hour=10)
-    pool_history = build_history("pool", base_occupancy=8, amplitude=12, business_open_hour=7, business_close_hour=22)
+    lobby_history = build_history("lobby", base_occupancy=6, amplitude=4, business_open_hour=0, business_close_hour=23, now=now)
+    breakfast_history = build_history("breakfast", base_occupancy=12, amplitude=10, business_open_hour=6, business_close_hour=10, now=now)
+    pool_history = build_history("pool", base_occupancy=8, amplitude=12, business_open_hour=7, business_close_hour=22, now=now)
 
     seed_space(
         "lobby",
@@ -128,6 +129,7 @@ def main() -> int:
         ],
         lobby_history,
         [],
+        now=now,
     )
     seed_space(
         "breakfast",
@@ -145,7 +147,7 @@ def main() -> int:
         [
             {
                 "id": "demo-breakfast-high",
-                "ts": datetime.now().astimezone().isoformat(),
+                "ts": now.isoformat(),
                 "space_id": "breakfast",
                 "severity": "warning",
                 "code": "high_occupancy",
@@ -153,6 +155,7 @@ def main() -> int:
                 "resolved": False
             }
         ],
+        now=now,
     )
     seed_space(
         "pool",
@@ -170,7 +173,7 @@ def main() -> int:
         [
             {
                 "id": "demo-pool-after-hours",
-                "ts": (datetime.now().astimezone() - timedelta(hours=1)).isoformat(),
+                "ts": (now - timedelta(minutes=18)).isoformat(),
                 "space_id": "pool",
                 "severity": "critical",
                 "code": "after_hours_activity",
@@ -178,6 +181,7 @@ def main() -> int:
                 "resolved": False
             }
         ],
+        now=now,
     )
     return 0
 

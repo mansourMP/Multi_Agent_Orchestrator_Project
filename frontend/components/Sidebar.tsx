@@ -35,7 +35,7 @@ type NavItem = {
     badge?: number;
 };
 
-const WORKSPACE_ITEMS: NavItem[] = [
+const CORE_NAV_ITEMS: NavItem[] = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard },
     { label: 'Assistant', href: '/workspace', icon: MessageSquare },
     { label: 'Automations', href: '/workflows', icon: Workflow },
@@ -68,6 +68,7 @@ type InstalledSolution = {
 export default function Sidebar() {
     const pathname = usePathname();
     const chatSessionsRef = useRef<HTMLDivElement | null>(null);
+    const railScrollRef = useRef<HTMLDivElement | null>(null);
     const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
     const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
     const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
@@ -142,9 +143,9 @@ export default function Sidebar() {
         };
     }, []);
 
-    const workspaceItems = useMemo(
+    const coreNavItems = useMemo(
         () =>
-            WORKSPACE_ITEMS.map((item) => {
+            CORE_NAV_ITEMS.map((item) => {
                 return item.href === '/executions' && pendingApprovalsCount > 0
                     ? { ...item, badge: pendingApprovalsCount }
                     : item;
@@ -193,6 +194,10 @@ export default function Sidebar() {
         const root = document.documentElement;
         root.style.setProperty('--sidebar-width', '68px');
     }, []);
+
+    useEffect(() => {
+        railScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+    }, [pathname]);
 
     useEffect(() => {
         const loadChatSessions = () => {
@@ -284,10 +289,10 @@ export default function Sidebar() {
                 </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div ref={railScrollRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <div style={{ padding: '0 6px 10px', display: 'grid', gap: 12 }}>
                     <div className="sidebar-rail-group">
-                        {workspaceItems.map((item) => {
+                        {coreNavItems.map((item) => {
                             const isActive = isNavItemActive(item);
                             const isChatItem = item.href === '/workspace';
                             const isSecondaryItem = item.href === '/executions' || item.href === '/credentials' || item.href === '/artifacts';

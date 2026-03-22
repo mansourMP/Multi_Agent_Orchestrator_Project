@@ -1,1 +1,1 @@
-{"id": "demo-breakfast-high", "ts": "2026-03-20T22:46:39.131295+08:00", "space_id": "breakfast", "severity": "warning", "code": "high_occupancy", "message": "Breakfast room occupancy is above the configured busy threshold.", "resolved": false}
+{"id": "demo-breakfast-high", "ts": "2026-03-22T13:33:00+08:00", "space_id": "breakfast", "severity": "warning", "code": "high_occupancy", "message": "Breakfast room occupancy is above the configured busy threshold.", "resolved": false}

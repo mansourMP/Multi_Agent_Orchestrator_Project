@@ -145,9 +145,9 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
 
 const FALLBACK_ROUTE: ShellRouteMeta = {
   id: 'platform',
-  title: 'Empyralist',
+  title: 'Empyralis',
   breadcrumb: 'Platform',
-  slotLabel: 'Operate the platform',
+  slotLabel: '',
 };
 
 export function resolveShellRouteMeta(pathname: string): ShellRouteMeta {

@@ -116,7 +116,7 @@ export default function HotelVisionDashboardPage() {
       <OsPageHeader
         icon={<Building2 size={18} />}
         title="Hotel Vision"
-        subtitle={`A packaged monitoring solution built on top of Empyralist workflows and connectors.`}
+        subtitle={`A packaged monitoring solution built on top of Empyralis workflows and connectors.`}
         meta={
           <>
             <Link href="/solutions">All solutions</Link>

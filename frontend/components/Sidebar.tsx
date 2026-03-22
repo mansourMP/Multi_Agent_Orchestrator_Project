@@ -68,7 +68,6 @@ type InstalledSolution = {
 export default function Sidebar() {
     const pathname = usePathname();
     const chatSessionsRef = useRef<HTMLDivElement | null>(null);
-    const railScrollRef = useRef<HTMLDivElement | null>(null);
     const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
     const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
     const [chatSessions, setChatSessions] = useState<ChatSessionRecord[]>([]);
@@ -196,10 +195,6 @@ export default function Sidebar() {
     }, []);
 
     useEffect(() => {
-        railScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-    }, [pathname]);
-
-    useEffect(() => {
         const loadChatSessions = () => {
             try {
                 const raw = window.localStorage.getItem(CHAT_STORE_STORAGE_KEY);
@@ -289,8 +284,8 @@ export default function Sidebar() {
                 </div>
             </div>
 
-            <div ref={railScrollRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div style={{ padding: '0 6px 10px', display: 'grid', gap: 12 }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ padding: '0 6px 8px', display: 'grid', gap: 8, flexShrink: 0 }}>
                     <div className="sidebar-rail-group">
                         {coreNavItems.map((item) => {
                             const isActive = isNavItemActive(item);
@@ -377,45 +372,46 @@ export default function Sidebar() {
                         })}
                     </div>
 
-                    {solutionRailItems.length > 0 ? (
-                        <>
-                            <div className="sidebar-rail-divider" aria-hidden />
-                            <div className="sidebar-rail-group sidebar-rail-group-apps">
-                                {solutionRailItems.map((item) => {
-                                    const isActive = isNavItemActive(item);
-                                    return (
-                                        <div
-                                            key={`solution:${item.href}:${item.label}`}
-                                            className="sidebar-rail-entry"
-                                        >
-                                            <button
-                                                onClick={() => {
-                                                    safeNavigate(item.href);
-                                                }}
-                                                className={`btn-ghost sidebar-nav-btn is-rail is-app${isActive ? ' is-active' : ''}`}
-                                                style={isActive ? {
-                                                    backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
-                                                    color: '#ffffff',
-                                                    border: 'none',
-                                                    boxShadow: 'none',
-                                                } : undefined}
-                                                title={item.label}
-                                                aria-label={item.label}
-                                            >
-                                                <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
-                                                {typeof item.badge === 'number' && item.badge > 0 ? (
-                                                    <span className="sidebar-icon-badge" aria-hidden>
-                                                        {item.badge > 99 ? '99+' : item.badge}
-                                                    </span>
-                                                ) : null}
-                                            </button>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </>
-                    ) : null}
                 </div>
+
+                {solutionRailItems.length > 0 ? (
+                    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 6px 10px', display: 'grid', gap: 8 }}>
+                        <div className="sidebar-rail-divider" aria-hidden />
+                        <div className="sidebar-rail-group sidebar-rail-group-apps">
+                            {solutionRailItems.map((item) => {
+                                const isActive = isNavItemActive(item);
+                                return (
+                                    <div
+                                        key={`solution:${item.href}:${item.label}`}
+                                        className="sidebar-rail-entry"
+                                    >
+                                        <button
+                                            onClick={() => {
+                                                safeNavigate(item.href);
+                                            }}
+                                            className={`btn-ghost sidebar-nav-btn is-rail is-app${isActive ? ' is-active' : ''}`}
+                                            style={isActive ? {
+                                                backgroundColor: 'var(--sidebar-active-bg, #7c3aed)',
+                                                color: '#ffffff',
+                                                border: 'none',
+                                                boxShadow: 'none',
+                                            } : undefined}
+                                            title={item.label}
+                                            aria-label={item.label}
+                                        >
+                                            <item.icon size={17} strokeWidth={isActive ? 2.5 : 2} style={{ opacity: isActive ? 1 : 0.72, flexShrink: 0 }} />
+                                            {typeof item.badge === 'number' && item.badge > 0 ? (
+                                                <span className="sidebar-icon-badge" aria-hidden>
+                                                    {item.badge > 99 ? '99+' : item.badge}
+                                                </span>
+                                            ) : null}
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ) : <div style={{ flex: 1 }} />}
             </div>
 
             <div

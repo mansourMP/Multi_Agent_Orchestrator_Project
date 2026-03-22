@@ -44,7 +44,7 @@ export default function SolutionsPage() {
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
         title="Solutions"
-        subtitle="Packaged experiences built on top of Empyralist workflows, tools, and connectors."
+        subtitle="Packaged experiences built on top of Empyralis workflows, tools, and connectors."
         meta={
           <>
             <span>{solutions.length} installed</span>

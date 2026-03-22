@@ -186,7 +186,7 @@ export default function HotelVisionOnboardingPage() {
               <div style={{ display: 'grid', gap: 14 }}>
                 <div>
                   <div className="orion-panel-title">1. Property basics</div>
-                  <div className="orion-panel-copy">Tell Empyralist where this property is and where alerts should go.</div>
+                  <div className="orion-panel-copy">Tell Empyralis where this property is and where alerts should go.</div>
                 </div>
                 <label className="orion-field">
                   <span className="orion-field-label">Hotel name</span>

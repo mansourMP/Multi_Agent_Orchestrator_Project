@@ -67,7 +67,7 @@ function resolvePageGuide(pathname: string): PageGuide {
       purpose: 'Review the state of your assistant, automations, activity, and optional solutions.',
       actions: [
         'Review recent activity and active automations.',
-        'Open Assistant when you want to talk to Empyralist directly.',
+        'Open Assistant when you want to talk to Empyralis directly.',
         'Use Connections or Admin only when the platform needs setup or approvals.',
       ],
       nextSteps: ['Check what needs attention.', 'Open Assistant for the next task.', 'Review automations if you need to edit a workflow.'],

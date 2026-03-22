@@ -91,7 +91,6 @@ export default function PlatformTopBar() {
           <div className="orion-shellbar-page">
             <div className="orion-shellbar-page-row">
               <div className="orion-shellbar-title">Assistant</div>
-              <span className="orion-shellbar-slot">Tell Empyralist what you want done</span>
             </div>
           </div>
         </div>
@@ -160,7 +159,6 @@ export default function PlatformTopBar() {
           <div className="orion-shellbar-breadcrumb">{meta.breadcrumb}</div>
           <div className="orion-shellbar-page-row">
             <div className="orion-shellbar-title">{meta.title}</div>
-            <span className="orion-shellbar-slot">{meta.slotLabel}</span>
           </div>
         </div>
       </div>

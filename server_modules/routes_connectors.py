@@ -1,13 +1,26 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.runtime_common import require_api_key
+from server_modules.runtime_models import ProviderProfileUpsertRequest
 from server_modules import connectors_core as core
 from server_modules import connectors_actions as actions
 
 router = APIRouter()
 
-router.add_api_route("/providers/profiles", core.list_provider_profiles, methods=['GET'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/providers/profiles", core.upsert_provider_profile, methods=['POST'], dependencies=[Depends(require_api_key)])
+async def provider_profiles(request: Request, body: Optional[ProviderProfileUpsertRequest] = None):
+    if request.method.upper() == "GET":
+        return await core.list_provider_profiles(
+            workspace_id=request.query_params.get("workspace_id"),
+            provider=request.query_params.get("provider"),
+        )
+    if body is None:
+        raise HTTPException(status_code=422, detail="Provider profile payload is required.")
+    return await core.upsert_provider_profile(body)
+
+
+router.add_api_route("/providers/profiles", provider_profiles, methods=['GET', 'POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/profiles/{profile_id}/enable", core.enable_provider_profile, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/profiles/{profile_id}/disable", core.disable_provider_profile, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/profiles/{profile_id}", core.delete_provider_profile, methods=['DELETE'], dependencies=[Depends(require_api_key)])
@@ -26,7 +39,7 @@ router.add_api_route("/connectors/vault/{connector_id}/microsoft-drive", actions
 router.add_api_route("/connectors/vault/{connector_id}/google-drive", actions.browse_google_connector_drive, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/connectors/vault/{connector_id}/google-doc", actions.create_google_connector_document, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/connectors/vault/{connector_id}/google-sheet", actions.create_google_connector_spreadsheet, methods=['POST'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/channels/whatsapp/twilio/webhook", actions.whatsapp_twilio_webhook, methods=['POST'])
+router.add_api_route("/channels/whatsapp/twilio/webhook", actions.whatsapp_twilio_webhook, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/telegram/autopilot/status", actions.telegram_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/whatsapp/autopilot/status", actions.whatsapp_autopilot_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/channels/autopilot/profiles", actions.list_autopilot_profiles, methods=['GET'], dependencies=[Depends(require_api_key)])

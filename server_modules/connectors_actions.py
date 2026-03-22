@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -63,7 +64,7 @@ async def browse_google_connector_drive(
 
 async def create_google_connector_document(
     connector_id: str,
-    body: Optional[Dict[str, Any]] = None,
+    body: Optional[ConnectorDocumentCreateRequest] = None,
     workspace_id: Optional[str] = None,
 ):
     try:
@@ -74,7 +75,9 @@ async def create_google_connector_document(
     if str(secret.get("_provider") or "").strip() != "google_workspace":
         raise HTTPException(status_code=400, detail="Connector is not Google Workspace.")
 
-    payload = body if isinstance(body, dict) else {}
+    payload = {}
+    if body is not None:
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
     title = str(payload.get("title") or "").strip() or f"Empyralis Doc {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
     try:
         created = google_workspace_create_document(secret, title)
@@ -92,7 +95,7 @@ async def create_google_connector_document(
 
 async def create_google_connector_spreadsheet(
     connector_id: str,
-    body: Optional[Dict[str, Any]] = None,
+    body: Optional[ConnectorSpreadsheetCreateRequest] = None,
     workspace_id: Optional[str] = None,
 ):
     try:
@@ -103,7 +106,9 @@ async def create_google_connector_spreadsheet(
     if str(secret.get("_provider") or "").strip() != "google_workspace":
         raise HTTPException(status_code=400, detail="Connector is not Google Workspace.")
 
-    payload = body if isinstance(body, dict) else {}
+    payload = {}
+    if body is not None:
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
     title = str(payload.get("title") or "").strip() or f"Empyralis Sheet {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
     try:
         created = google_workspace_create_spreadsheet(secret, title)
@@ -160,7 +165,7 @@ async def telegram_autopilot_test_message(body: TelegramAutopilotTestRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-async def create_connector_vault(body: ConnectorUpsertRequest):
+async def create_connector_vault(body: ConnectorCreate):
     body.validate_fields()
     connector = body.connector.lower().strip()
     credentials = body.credentials

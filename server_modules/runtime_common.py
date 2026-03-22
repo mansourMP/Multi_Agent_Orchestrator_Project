@@ -178,16 +178,18 @@ async def control_plane_guard_middleware(request: Request, call_next):
         _idempotency_store(request.method, request.url.path, idempotency_key.strip(), body_hash, response.status_code, parsed)
     return replay_response
 
-def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")):
-    if not ORION_AUTH_REQUIRED:
-        return True
-    expected = str(ORION_API_KEY or "").strip()
-    if not expected:
-        raise HTTPException(status_code=503, detail="Runtime API key is not configured.")
-    provided = str(x_api_key or "").strip()
-    if not provided or not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="Invalid API key.")
-    return True
+def require_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    from server_modules.auth import get_current_user
+
+    return get_current_user(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
 
 def http_json_request(
     url: str,

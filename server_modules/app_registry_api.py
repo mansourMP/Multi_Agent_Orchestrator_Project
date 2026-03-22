@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import threading
 
+from server_modules.schemas import WorkflowCreate, WorkflowDelete, WorkflowUpdate
+
 
 APP_REGISTRY_LOCK = threading.Lock()
 LEGACY_SEEDED_APP_IDS = {"nutrition", "finance", "health", "study", "language"}
@@ -318,8 +320,9 @@ def register_app_registry_routes(app) -> None:
         return {"item": app_item}
 
     @app.post("/apps/install", dependencies=[Depends(require_api_key)])
-    async def install_app(body: Dict[str, Any]):
-        app_id = str(body.get("app_id") or "").strip()
+    async def install_app(body: WorkflowCreate):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        app_id = str(payload.get("app_id") or "").strip()
         if not app_id:
             raise HTTPException(status_code=400, detail="app_id required")
         with APP_REGISTRY_LOCK:
@@ -327,15 +330,16 @@ def register_app_registry_routes(app) -> None:
             app_item = _find_app(data, app_id)
             if not app_item:
                 raise HTTPException(status_code=404, detail="App not found")
-            _apply_install_metadata(app_item, body)
+            _apply_install_metadata(app_item, payload)
             app_item["status"] = "installed"
             app_item["installed_at"] = _utc_now_iso()
             _save_app_registry(data)
         return {"status": "ok", "app": app_item}
 
     @app.post("/apps/uninstall", dependencies=[Depends(require_api_key)])
-    async def uninstall_app(body: Dict[str, Any]):
-        app_id = str(body.get("app_id") or "").strip()
+    async def uninstall_app(body: WorkflowDelete):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        app_id = str(payload.get("app_id") or "").strip()
         if not app_id:
             raise HTTPException(status_code=400, detail="app_id required")
         with APP_REGISTRY_LOCK:
@@ -348,8 +352,9 @@ def register_app_registry_routes(app) -> None:
         return {"status": "ok", "app": app_item}
 
     @app.post("/apps/update", dependencies=[Depends(require_api_key)])
-    async def update_app(body: Dict[str, Any]):
-        app_id = str(body.get("app_id") or "").strip()
+    async def update_app(body: WorkflowUpdate):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        app_id = str(payload.get("app_id") or "").strip()
         if not app_id:
             raise HTTPException(status_code=400, detail="app_id required")
         with APP_REGISTRY_LOCK:
@@ -360,7 +365,7 @@ def register_app_registry_routes(app) -> None:
             latest = app_item.get("latest_version")
             if not latest:
                 raise HTTPException(status_code=409, detail="No update available")
-            _apply_install_metadata(app_item, body)
+            _apply_install_metadata(app_item, payload)
             app_item["version"] = latest
             app_item["updated_at"] = _utc_now_iso()
             _save_app_registry(data)

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
+from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
 
 
 def _late_server_export(name: str):
@@ -1707,11 +1708,12 @@ def register_agent_workspace_routes(app) -> None:
         }
 
     @app.post("/files/write", dependencies=[Depends(require_api_key)])
-    async def write_workspace_file(body: Dict[str, Any]):
-        path = str(body.get("path") or "").strip()
-        content = body.get("content")
-        overwrite = bool(body.get("overwrite"))
-        workspace_id = _normalize_workspace_id(body.get("workspace_id")) if body.get("workspace_id") is not None else None
+    async def write_workspace_file(body: WorkspaceFileWriteRequest):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        path = str(payload.get("path") or "").strip()
+        content = payload.get("content")
+        overwrite = bool(payload.get("overwrite"))
+        workspace_id = _normalize_workspace_id(payload.get("workspace_id")) if payload.get("workspace_id") is not None else None
         if not path:
             raise HTTPException(status_code=400, detail="path is required.")
         root = _core_workspace_root()
@@ -1746,9 +1748,10 @@ def register_agent_workspace_routes(app) -> None:
         return {"ok": True, **created}
 
     @app.post("/files/delete_request", dependencies=[Depends(require_api_key)])
-    async def delete_workspace_file_request(body: Dict[str, Any]):
-        path = str(body.get("path") or "").strip()
-        workspace_id = _normalize_workspace_id(body.get("workspace_id")) if body.get("workspace_id") is not None else None
+    async def delete_workspace_file_request(body: WorkspaceFileDeleteRequest):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        path = str(payload.get("path") or "").strip()
+        workspace_id = _normalize_workspace_id(payload.get("workspace_id")) if payload.get("workspace_id") is not None else None
         if not path:
             raise HTTPException(status_code=400, detail="path is required.")
         root = _core_workspace_root()
@@ -1783,9 +1786,10 @@ def register_agent_workspace_routes(app) -> None:
     DEVICE_ACTIONS = supported_device_actions()
 
     @app.post("/device/execute", dependencies=[Depends(require_api_key)])
-    async def execute_device_action(body: Dict[str, Any]):
-        action = str(body.get("action") or "").strip().lower()
-        workspace_id = _normalize_workspace_id(body.get("workspace_id")) if body.get("workspace_id") is not None else None
+    async def execute_device_action(body: DeviceExecuteRequest):
+        payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+        action = str(payload.get("action") or "").strip().lower()
+        workspace_id = _normalize_workspace_id(payload.get("workspace_id")) if payload.get("workspace_id") is not None else None
         if not DEVICE_ACTIONS:
             platform_name = current_platform_context().key
             raise HTTPException(status_code=400, detail=f"Device actions are not supported on {platform_name}.")

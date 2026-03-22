@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules.schemas import GenericObjectBody
 from server_modules import runs_core as runs_core
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -467,25 +468,23 @@ async def put_runtime_skills_state(body: RuntimeSkillsStateUpsertRequest):
         "automation_bundle": _runtime_skill_bundle_for_scope("automation_defaults"),
     }
 
-async def dispatch_installed_solution_api(solution_id: str, subpath: str, request: Request):
+async def dispatch_installed_solution_api(
+    solution_id: str,
+    subpath: str,
+    request: Request,
+    body: Optional[GenericObjectBody] = None,
+):
     from server_modules.health_core import _ensure_installed_solution
 
     _ensure_installed_solution(solution_id)
-    body: Dict[str, Any] = {}
-    if request.method.upper() in {"POST", "PUT", "PATCH"}:
-        try:
-            parsed = await request.json()
-            if isinstance(parsed, dict):
-                body = parsed
-        except Exception:
-            body = {}
+    payload = body.as_dict() if body is not None else {}
     try:
         payload = call_installed_solution_hook(
             solution_id,
             "handle_api_request",
             request.method,
             subpath,
-            body,
+            payload,
             dict(request.query_params),
         )
     except FileNotFoundError as exc:

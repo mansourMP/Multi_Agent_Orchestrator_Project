@@ -1,3 +1,5 @@
+import logging
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -14,6 +16,39 @@ from server_modules.runs_output import _json_safe
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _log_execution_boundary(log_queue: queue.Queue, run_id: str, phase: str, *, status: Optional[str] = None, timeout_seconds: Optional[int] = None) -> None:
+    timestamp = _utc_now_iso()
+    message = f"Execution {phase}: run_id={run_id} timestamp={timestamp}"
+    payload = {"run_id": run_id, "timestamp": timestamp}
+    if status:
+        payload["status"] = status
+        message = f"{message} status={status}"
+    if timeout_seconds is not None:
+        payload["timeout_seconds"] = timeout_seconds
+        message = f"{message} timeout_seconds={timeout_seconds}"
+    emit_log(log_queue, "info", message, event=f"execution_{phase}", data=payload)
+    LOGGER.info(message)
+
+
+def _execute_engine_with_timeout(engine: Any, run_id: str, timeout_seconds: int) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"error": None, "timed_out": False}
+
+    def _target() -> None:
+        try:
+            engine.execute(run_id)
+        except Exception as exc:
+            result["error"] = exc
+
+    worker = threading.Thread(target=_target, name=f"run-execution-{run_id}", daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+    if worker.is_alive():
+        result["timed_out"] = True
+    return result
 
 def selected_execution_target_from_context(context: Optional[Dict[str, Any]]) -> str:
     if not isinstance(context, dict):
@@ -972,6 +1007,7 @@ def run_mission(run_id):
         set_run_status(run_id, "failed")
         run["logs"].put(None)
         return
+    timeout_seconds = max(1, int(metadata.get("timeout_seconds") or ORION_RUN_TIMEOUT_SECONDS or 300))
 
     try:
         _hydrate_run_memory_context(run_id, run)
@@ -982,8 +1018,23 @@ def run_mission(run_id):
         run["memory_trace"] = trace
         emit_log(run["logs"], "warn", "Memory context read failed; continuing without memory.", event="memory_context_error")
 
+    _log_execution_boundary(run["logs"], run_id, "start", timeout_seconds=timeout_seconds)
     try:
-        engine.execute(run_id)
+        execution_result = _execute_engine_with_timeout(engine, run_id, timeout_seconds)
+        if execution_result.get("timed_out"):
+            emit_log(
+                run["logs"],
+                "error",
+                f"Run exceeded {timeout_seconds}s timeout.",
+                event="timeout",
+                data={"run_id": run_id, "timeout_seconds": timeout_seconds},
+            )
+            set_run_status(run_id, "timeout")
+            _log_execution_boundary(run["logs"], run_id, "end", status="timeout")
+            run["logs"].put(None)
+            return
+        if execution_result.get("error") is not None:
+            raise execution_result["error"]
         try:
             _persist_run_memory(run_id, run)
         except Exception as exc:
@@ -992,7 +1043,9 @@ def run_mission(run_id):
             trace["updated_at"] = _utc_now_iso()
             run["memory_trace"] = trace
             emit_log(run["logs"], "warn", "Memory write failed after run completion.", event="memory_write_error")
+        _log_execution_boundary(run["logs"], run_id, "end", status=str(run.get("status") or "completed"))
     except Exception as exc:
         emit_log(run["logs"], "error", friendly_runtime_error_message(exc), event="run_error")
         set_run_status(run_id, "failed")
+        _log_execution_boundary(run["logs"], run_id, "end", status="failed")
         run["logs"].put(None)

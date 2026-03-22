@@ -1,5 +1,5 @@
 div.react-flow__pane {
-    background: var(--canvas-background) !important;
+    background: var(--canvas--color--background) !important;
 }
 
 div.react-flow__background {
@@ -44,13 +44,14 @@ svg.react-flow__minimap-node {
 }
 
 path.react-flow__edge-path {
-    stroke: rgba(124, 58, 237, 0.75) !important;
+    stroke: var(--canvas-edge--color) !important;
     stroke-width: 2px !important;
     transition: stroke 160ms ease, stroke-width 160ms ease !important;
+    stroke-linecap: square !important;
 }
 
 g.react-flow__edge.selected path.react-flow__edge-path {
-    stroke: rgba(124, 58, 237, 0.75) !important;
+    stroke: var(--canvas-edge--color) !important;
     stroke-width: 2px !important;
 }
 
@@ -60,12 +61,18 @@ g.react-flow__edge.animated path.react-flow__edge-path {
 }
 
 div.react-flow__handle {
-    width: 12px !important;
-    height: 12px !important;
+    width: 16px !important;
+    height: 16px !important;
     border-radius: 50% !important;
     background: white !important;
-    border: 1px solid #d1d1d1 !important;
-    transition: transform 0.2s ease, background 0.2s ease, border 0.2s ease !important;
+    border: 1px solid var(--canvas-handle-border-light) !important;
+    opacity: 0 !important;
+    transition: transform 0.2s ease, background 0.2s ease, border 0.2s ease, opacity 0.2s ease !important;
+}
+
+div.react-flow__node:hover div.react-flow__handle,
+div.react-flow__node.selected div.react-flow__handle {
+    opacity: 1 !important;
 }
 
 div.react-flow__handle:hover {
@@ -76,7 +83,7 @@ div.react-flow__handle:hover {
 
 [data-theme='dark'] div.react-flow__handle {
     background: #1a1a1a !important;
-    border-color: #555 !important;
+    border-color: var(--canvas-handle-border-dark) !important;
 }
 
 div.react-flow__node {
@@ -84,28 +91,5 @@ div.react-flow__node {
 }
 
 .react-flow__node.selected .canvas-node {
-    border: 1.5px solid #7c3aed !important;
-    box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.15), 0 4px 12px rgba(0, 0, 0, 0.12) !important;
-}
-
-.react-flow__node.running .canvas-node::after {
-    content: '';
-    position: absolute;
-    inset: -3px;
-    border-radius: 10px;
-    z-index: -1;
-    background: conic-gradient(
-        from var(--node-gradient-angle, 0deg),
-        #7c3aed,
-        #7c3aed 20%,
-        rgba(124, 58, 237, 0.2) 35%,
-        #7c3aed 90%
-    );
-    animation: border-rotate 1.5s linear infinite;
-}
-
-@keyframes border-rotate {
-    to {
-        --node-gradient-angle: 360deg;
-    }
+    box-shadow: 0 0 0 calc(6px * var(--canvas-zoom-compensation-factor, 1)) var(--canvas--color--selected-transparent) !important;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useState, type ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { Handle, Position } from '@xyflow/react';
 
 type StandardCanvasNodeProps = {
@@ -11,8 +11,10 @@ type StandardCanvasNodeProps = {
     icon: ReactNode;
     selected?: boolean;
     badge?: string | null;
+    status?: string | null;
     showTargetHandle?: boolean;
     showSourceHandle?: boolean;
+    variant?: 'default' | 'trigger';
 };
 
 function StandardCanvasNodeComponent({
@@ -23,146 +25,40 @@ function StandardCanvasNodeComponent({
     icon,
     selected,
     badge = null,
+    status = null,
     showTargetHandle = true,
     showSourceHandle = true,
+    variant = 'default',
 }: StandardCanvasNodeProps) {
-    const [isHovered, setIsHovered] = useState(false);
-    const isActive = Boolean(selected);
+    const normalizedStatus = String(status || '').trim().toLowerCase();
+    const statusClass = ['running', 'waiting', 'error', 'success'].includes(normalizedStatus)
+        ? normalizedStatus
+        : '';
 
     return (
         <div
-            className="canvas-node"
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
+            className={`canvas-node ${variant === 'trigger' ? 'trigger' : 'configurable'} ${selected ? 'selected' : ''} ${statusClass}`.trim()}
+            data-node-kind={kindLabel}
+            data-node-badge={badge || undefined}
+            data-node-status={normalizedStatus || undefined}
             style={{
-                position: 'relative',
-                background: 'white',
-                borderRadius: 12,
-                border: isActive ? '1.5px solid #7c3aed' : '1.5px solid var(--canvas-node-border-color)',
-                boxShadow: isActive
-                    ? '0 0 0 6px var(--canvas-selected-glow), 0 4px 12px rgba(0,0,0,0.12)'
-                    : isHovered
-                        ? '0 4px 12px rgba(0,0,0,0.12)'
-                        : '0 1px 3px rgba(0,0,0,0.08)',
-                width: 244,
-                overflow: 'visible',
-                transition: 'box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease',
-                transform: isHovered ? 'translateY(-1px)' : 'none',
-                animation: 'workflowNodeEnter 220ms ease-out both',
+                ['--canvas-node-accent' as string]: accentColor,
             }}
         >
             {showTargetHandle ? (
                 <Handle
                     type="target"
                     id="top"
-                    position={Position.Top}
-                    style={{ top: -6 }}
+                    position={Position.Left}
+                    style={{ left: -4 }}
                 />
             ) : null}
 
-            <div
-                style={{
-                    position: 'absolute',
-                    inset: 0,
-                    borderRadius: 16,
-                    borderLeft: `4px solid ${accentColor}`,
-                    pointerEvents: 'none',
-                }}
-            />
-
-            <div style={{ padding: '16px 18px', display: 'grid', gap: 14 }}>
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                        <div
-                            style={{
-                                width: 44,
-                                height: 44,
-                                borderRadius: 14,
-                                background: `${accentColor}16`,
-                                border: `1px solid ${accentColor}28`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: accentColor,
-                                boxShadow: isActive || isHovered ? `0 8px 18px ${accentColor}18` : 'none',
-                                flexShrink: 0,
-                            }}
-                        >
-                            {icon}
-                        </div>
-                        <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                            <div
-                                style={{
-                                    fontSize: '10px',
-                                    fontWeight: 700,
-                                    color: 'var(--text-tertiary)',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.1em',
-                                }}
-                            >
-                                {kindLabel}
-                            </div>
-                            <div
-                                style={{
-                                    fontSize: '14px',
-                                    fontWeight: 750,
-                                    letterSpacing: '-0.02em',
-                                    color: 'var(--text-primary)',
-                                    lineHeight: 1.2,
-                                }}
-                            >
-                                {title}
-                            </div>
-                        </div>
-                    </div>
-                    {badge ? (
-                        <div
-                            style={{
-                                minHeight: 22,
-                                padding: '0 8px',
-                                borderRadius: 999,
-                                border: `1px solid ${accentColor}2e`,
-                                background: `${accentColor}12`,
-                                color: accentColor,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: '10px',
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                                flexShrink: 0,
-                            }}
-                        >
-                            {badge}
-                        </div>
-                    ) : null}
-                </div>
-
-                <div
-                    style={{
-                        minHeight: 34,
-                        padding: '10px 12px',
-                        borderRadius: 12,
-                        background: 'color-mix(in srgb, var(--bg-app) 55%, var(--bg-surface) 45%)',
-                        border: '1px solid rgba(15, 23, 42, 0.05)',
-                        fontSize: '11px',
-                        color: 'var(--text-secondary)',
-                        lineHeight: 1.45,
-                        display: 'flex',
-                        alignItems: 'center',
-                    }}
-                    title={subtitle}
-                >
-                    <span
-                        style={{
-                            display: '-webkit-box',
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden',
-                        }}
-                    >
-                        {subtitle}
-                    </span>
+            <div className="icon">{icon}</div>
+            <div className="description">
+                <div className="label">{title}</div>
+                <div className="subtitle" title={subtitle}>
+                    {subtitle}
                 </div>
             </div>
 
@@ -170,20 +66,156 @@ function StandardCanvasNodeComponent({
                 <Handle
                     type="source"
                     id="bottom"
-                    position={Position.Bottom}
-                    style={{ bottom: -6 }}
+                    position={Position.Right}
+                    style={{ right: -4 }}
                 />
             ) : null}
 
             <style jsx>{`
-                @keyframes workflowNodeEnter {
+                .canvas-node {
+                    --canvas-node--border-width: 1.5px;
+                    --trigger-node--radius: 36px;
+                    position: relative;
+                    height: 80px;
+                    width: 220px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-start;
+                    background: var(--canvas-node--color--background, white);
+                    background-clip: padding-box;
+                    border: var(--canvas-node--border-width) solid
+                        var(--canvas-node--border-color, var(--canvas-node-border-color));
+                    border-radius: 8px;
+                    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+                    transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
+                    padding: 0 12px;
+                    gap: 12px;
+                    overflow: visible;
+                }
+
+                .canvas-node:hover {
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+                }
+
+                .canvas-node.trigger {
+                    border-radius: var(--trigger-node--radius) 8px 8px var(--trigger-node--radius);
+                }
+
+                .canvas-node.configurable .description {
+                    position: relative;
+                    margin: 0;
+                    width: auto;
+                    min-width: 0;
+                    flex-grow: 1;
+                    flex-shrink: 1;
+                    overflow: hidden;
+                }
+
+                .canvas-node.selected {
+                    box-shadow: 0 0 0 calc(6px * var(--canvas-zoom-compensation-factor, 1))
+                            var(--canvas--color--selected-transparent),
+                        0 1px 3px rgba(0, 0, 0, 0.08);
+                }
+
+                .canvas-node.success {
+                    --canvas-node--border-width: 2px;
+                    --canvas-node--border-color: var(--success-base);
+                }
+
+                .canvas-node.error {
+                    --canvas-node--border-color: var(--error-base);
+                }
+
+                .canvas-node.running,
+                .canvas-node.waiting {
+                    border-color: transparent;
+                }
+
+                .canvas-node.running::after,
+                .canvas-node.waiting::after {
+                    content: '';
+                    position: absolute;
+                    inset: -3px;
+                    border-radius: inherit;
+                    z-index: -1;
+                    background: conic-gradient(
+                        from var(--node--gradient-angle),
+                        rgba(255, 109, 90, 1),
+                        rgba(255, 109, 90, 1) 20%,
+                        rgba(255, 109, 90, 0.2) 35%,
+                        rgba(255, 109, 90, 0.2) 65%,
+                        rgba(255, 109, 90, 1) 90%,
+                        rgba(255, 109, 90, 1)
+                    );
+                }
+
+                .canvas-node.running::after {
+                    animation: border-rotate 1.5s linear infinite;
+                }
+
+                .canvas-node.waiting::after {
+                    animation: border-rotate 4.5s linear infinite;
+                }
+
+                .icon {
+                    width: 40px;
+                    height: 40px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: var(--canvas-node-accent);
+                    flex-shrink: 0;
+                }
+
+                .description {
+                    top: 100%;
+                    width: 100%;
+                    min-width: 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    pointer-events: none;
+                }
+
+                .label {
+                    font-size: 16px;
+                    text-align: left;
+                    text-overflow: ellipsis;
+                    display: -webkit-box;
+                    -webkit-box-orient: vertical;
+                    -webkit-line-clamp: 2;
+                    overflow: hidden;
+                    overflow-wrap: anywhere;
+                    font-weight: 500;
+                    line-height: 1.2;
+                    color: var(--text-primary);
+                }
+
+                .subtitle {
+                    width: 100%;
+                    text-align: left;
+                    color: var(--text-secondary);
+                    font-size: 13px;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    line-height: 1.2;
+                    font-weight: 400;
+                }
+
+                @property --node--gradient-angle {
+                    syntax: '<angle>';
+                    initial-value: 0deg;
+                    inherits: false;
+                }
+
+                @keyframes border-rotate {
                     from {
-                        opacity: 0;
-                        transform: translateY(12px) scale(0.97);
+                        --node--gradient-angle: 0deg;
                     }
                     to {
-                        opacity: 1;
-                        transform: translateY(0) scale(1);
+                        --node--gradient-angle: 360deg;
                     }
                 }
             `}</style>

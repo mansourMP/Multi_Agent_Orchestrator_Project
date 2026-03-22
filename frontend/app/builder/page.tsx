@@ -15,11 +15,12 @@ import {
   type Connection,
   type Edge,
   type EdgeChange,
+  type EdgeTypes,
   type Node,
   type NodeChange,
   type NodeTypes,
 } from '@xyflow/react';
-import { BrainCircuit, CheckCircle2, Code2, ExternalLink, FileUp, Globe, LayoutTemplate, LoaderCircle, Play, Plus, Rocket, Send, Shuffle, Sparkles, Zap } from 'lucide-react';
+import { BrainCircuit, CheckCircle2, Code2, FileUp, Globe, LayoutTemplate, LoaderCircle, Play, Plus, Rocket, Send, Shuffle, Sparkles, Zap } from 'lucide-react';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import AgentNode from '@/components/nodes/AgentNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -27,7 +28,9 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
-import { createWorkflow, fetchWorkflows, getWorkflow, publishWorkflow, runWorkflow, updateWorkflow } from '@/lib/api';
+import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
+import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
+import { createWorkflow, getWorkflow, publishWorkflow, runWorkflow, updateWorkflow } from '@/lib/api';
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
 type TriggerKind = 'schedule' | 'webhook' | 'manual';
@@ -67,6 +70,7 @@ type CanvasNodeSearchState = {
   flowX: number;
   flowY: number;
   query: string;
+  insertEdgeId?: string;
 };
 type BuilderView = 'editor' | 'executions' | 'evaluations';
 type BuilderWorkflowRecord = {
@@ -84,6 +88,9 @@ type BuilderWorkflowRecord = {
 const CANVAS_NODE_X = 260;
 const CANVAS_NODE_TOP = 64;
 const CANVAS_NODE_GAP = 176;
+const GRID_SIZE = 16;
+const DEFAULT_NODE_SIZE = 96;
+const NODE_HORIZONTAL_GAP = 250;
 
 const CANVAS_NODE_TYPES: NodeTypes = {
   trigger: TriggerNode,
@@ -94,6 +101,10 @@ const CANVAS_NODE_TYPES: NodeTypes = {
   transform: TransformNode,
   code: CodeNode,
 };
+
+const CANVAS_EDGE_TYPES = {
+  smoothstep: SmoothActionEdge,
+} satisfies EdgeTypes;
 
 const CANVAS_NODE_LIBRARY: Array<{
   type: CanvasNodeType;
@@ -108,13 +119,6 @@ const CANVAS_NODE_LIBRARY: Array<{
   { type: 'condition', label: 'Condition', accent: '#f59e0b', icon: <Shuffle size={14} /> },
   { type: 'transform', label: 'Transform', accent: '#3b82f6', icon: <Shuffle size={14} /> },
   { type: 'code', label: 'Code', accent: '#1f2937', icon: <Code2 size={14} /> },
-];
-
-const STARTER_PROMPTS = [
-  'Monitor my shop entrance and alert me on Telegram',
-  'Summarize support emails every morning',
-  'Follow up with new leads automatically',
-  'Watch a webhook and update a spreadsheet',
 ];
 
 function compactText(value: string, max = 80): string {
@@ -135,6 +139,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function makeNodeId(type: CanvasNodeType): string {
   return `${type}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function snapToGrid(value: number): number {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE;
+}
+
+function getCenteredStartPosition(host: HTMLDivElement | null): { x: number; y: number } {
+  if (!host) return { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP };
+  const width = host.clientWidth || 0;
+  const height = host.clientHeight || 0;
+  return {
+    x: snapToGrid(Math.max(CANVAS_NODE_X, width / 2 - DEFAULT_NODE_SIZE / 2)),
+    y: snapToGrid(Math.max(CANVAS_NODE_TOP, height / 2 - DEFAULT_NODE_SIZE / 2)),
+  };
 }
 
 function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
@@ -202,7 +220,7 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
       type: 'smoothstep',
       animated: false,
       style: {
-        stroke: 'rgba(124, 58, 237, 0.75)',
+        stroke: 'var(--canvas-edge--color)',
         strokeWidth: 2,
         strokeLinecap: 'square' as const,
       },
@@ -210,6 +228,7 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
         type: MarkerType.ArrowClosed,
         color: '#7c3aed',
       },
+      interactionWidth: 40,
     });
   }
   return parsed;
@@ -292,7 +311,7 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
     type: 'smoothstep',
     animated: false,
     style: {
-      stroke: 'rgba(124, 58, 237, 0.75)',
+      stroke: 'var(--canvas-edge--color)',
       strokeWidth: 2,
       strokeLinecap: 'square' as const,
     },
@@ -300,80 +319,8 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
       type: MarkerType.ArrowClosed,
       color: '#7c3aed',
     },
+    interactionWidth: 40,
   }));
-}
-
-function nodeTypeLabel(type?: string | null): string {
-  switch (String(type || '').trim().toLowerCase()) {
-    case 'trigger':
-      return 'Trigger';
-    case 'agent':
-      return 'Agent';
-    case 'action':
-      return 'Action';
-    case 'http_request':
-      return 'HTTP Request';
-    case 'condition':
-      return 'Condition';
-    case 'transform':
-      return 'Transform';
-    case 'code':
-      return 'Code';
-    default:
-      return 'Step';
-  }
-}
-
-function inspectorRows(node: CanvasWorkflowNode | null): Array<{ label: string; value: string }> {
-  if (!node) return [];
-  switch (node.type) {
-    case 'trigger': {
-      const data = node.data as TriggerCanvasData;
-      return [
-        { label: 'Type', value: data.triggerType },
-        { label: 'Label', value: data.label },
-      ];
-    }
-    case 'agent': {
-      const data = node.data as AgentCanvasData;
-      return [
-        { label: 'Role', value: data.role },
-        { label: 'Model', value: data.modelId },
-        { label: 'Duty', value: data.duty },
-      ];
-    }
-    case 'action': {
-      const data = node.data as ActionCanvasData;
-      return [
-        { label: 'Action', value: data.actionType.replace(/_/g, ' ') },
-        { label: 'Label', value: data.label },
-      ];
-    }
-    case 'http_request': {
-      const data = node.data as HttpRequestCanvasData;
-      return [
-        { label: 'Method', value: data.method },
-        { label: 'URL', value: data.url },
-      ];
-    }
-    case 'condition': {
-      const data = node.data as ConditionCanvasData;
-      return [{ label: 'Condition', value: data.condition }];
-    }
-    case 'transform': {
-      const data = node.data as TransformCanvasData;
-      return [{ label: 'Mapping', value: data.mapping }];
-    }
-    case 'code': {
-      const data = node.data as CodeCanvasData;
-      return [
-        { label: 'Summary', value: data.summary },
-        { label: 'Code', value: compactText(data.code, 120) },
-      ];
-    }
-    default:
-      return [];
-  }
 }
 
 function buildWorkflowName(goal: string): string {
@@ -428,17 +375,10 @@ export default function BuilderPage() {
   const [runState, setRunState] = useState<'idle' | 'testing' | 'publishing'>('idle');
   const [savedWorkflowId, setSavedWorkflowId] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [workflowList, setWorkflowList] = useState<BuilderWorkflowRecord[]>([]);
-  const [loadingWorkflows, setLoadingWorkflows] = useState(false);
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [nodeSearch, setNodeSearch] = useState<CanvasNodeSearchState | null>(null);
   const [currentView, setCurrentView] = useState<BuilderView>('editor');
-
-  const selectedNode = useMemo(
-    () => nodes.find((node) => node.id === selectedNodeId) || nodes[0] || null,
-    [nodes, selectedNodeId],
-  );
 
   const renderedEdges = useMemo(
     () =>
@@ -448,7 +388,7 @@ export default function BuilderPage() {
         selected: selectedEdgeId === edge.id,
         animated: false,
         style: {
-          stroke: 'rgba(124, 58, 237, 0.75)',
+          stroke: 'var(--canvas-edge--color)',
           strokeWidth: 2,
           strokeLinecap: 'square' as const,
         },
@@ -456,15 +396,45 @@ export default function BuilderPage() {
           type: MarkerType.ArrowClosed,
           color: '#7c3aed',
         },
+        interactionWidth: 40,
+        data: {
+          onAdd: (edgeId: string, point: { x: number; y: number }) => {
+            const hostRect = canvasHostRef.current?.getBoundingClientRect();
+            const currentEdge = edges.find((item) => item.id === edgeId);
+            if (!hostRect || !currentEdge) return;
+            const flowX = snapToGrid(((nodes.find((node) => node.id === currentEdge.source)?.position.x || CANVAS_NODE_X) + (nodes.find((node) => node.id === currentEdge.target)?.position.x || CANVAS_NODE_X)) / 2);
+            const flowY = snapToGrid(((nodes.find((node) => node.id === currentEdge.source)?.position.y || CANVAS_NODE_TOP) + (nodes.find((node) => node.id === currentEdge.target)?.position.y || CANVAS_NODE_TOP)) / 2);
+            setSelectedNodeId(null);
+            setSelectedEdgeId(edgeId);
+            setNodeSearch({
+              screenX: Math.max(12, Math.min(point.x, hostRect.width - 240)),
+              screenY: Math.max(12, Math.min(point.y, hostRect.height - 220)),
+              flowX,
+              flowY,
+              query: '',
+              insertEdgeId: edgeId,
+            });
+          },
+          onDelete: (edgeId: string) => {
+            setEdges((current) => current.filter((item) => item.id !== edgeId));
+            setSelectedEdgeId(null);
+            setNodeSearch(null);
+            setSaveState('idle');
+            setSaveMessage(null);
+          },
+        } satisfies SmoothActionEdgeData,
       })),
-    [edges, selectedEdgeId],
+    [edges, nodes, selectedEdgeId],
   );
 
   const filteredNodeLibrary = useMemo(() => {
     const query = String(nodeSearch?.query || '').trim().toLowerCase();
-    if (!query) return CANVAS_NODE_LIBRARY;
-    return CANVAS_NODE_LIBRARY.filter((item) => item.label.toLowerCase().includes(query));
-  }, [nodeSearch?.query]);
+    const library = nodeSearch?.insertEdgeId
+      ? CANVAS_NODE_LIBRARY.filter((item) => item.type !== 'trigger')
+      : CANVAS_NODE_LIBRARY;
+    if (!query) return library;
+    return library.filter((item) => item.label.toLowerCase().includes(query));
+  }, [nodeSearch?.insertEdgeId, nodeSearch?.query]);
 
   const loadWorkflowIntoBuilder = useCallback(async (id: string) => {
     const workflow = (await getWorkflow(id)) as BuilderWorkflowRecord;
@@ -482,25 +452,6 @@ export default function BuilderPage() {
     setPromptInput(nextGoal);
     setSaveState('saved');
     setSaveMessage('Workflow loaded.');
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      setLoadingWorkflows(true);
-      try {
-        const items = (await fetchWorkflows('default')) as BuilderWorkflowRecord[];
-        if (!cancelled) setWorkflowList(Array.isArray(items) ? items.slice(0, 6) : []);
-      } catch {
-        if (!cancelled) setWorkflowList([]);
-      } finally {
-        if (!cancelled) setLoadingWorkflows(false);
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -539,19 +490,82 @@ export default function BuilderPage() {
     setWorkflowDescription('');
   };
 
+  const openNodeSearch = useCallback(
+    (options?: { clientX?: number; clientY?: number; flowX?: number; flowY?: number; insertEdgeId?: string }) => {
+      const hostRect = canvasHostRef.current?.getBoundingClientRect();
+      if (!hostRect) return;
+      const centered = getCenteredStartPosition(canvasHostRef.current);
+      setNodeSearch({
+        screenX:
+          typeof options?.clientX === 'number'
+            ? Math.max(12, Math.min(options.clientX - hostRect.left, hostRect.width - 240))
+            : Math.max(12, hostRect.width / 2 - 120),
+        screenY:
+          typeof options?.clientY === 'number'
+            ? Math.max(12, Math.min(options.clientY - hostRect.top, hostRect.height - 220))
+            : Math.max(12, hostRect.height / 2 - 110),
+        flowX: snapToGrid(options?.flowX ?? centered.x),
+        flowY: snapToGrid(options?.flowY ?? centered.y),
+        query: '',
+        insertEdgeId: options?.insertEdgeId,
+      });
+    },
+    [],
+  );
+
   const addCanvasNode = (type: CanvasNodeType) => {
-    const position = nodeSearch ? { x: nodeSearch.flowX, y: nodeSearch.flowY } : undefined;
+    const position =
+      nodeSearch?.insertEdgeId
+        ? { x: snapToGrid(nodeSearch.flowX), y: snapToGrid(nodeSearch.flowY) }
+        : undefined;
+    const insertEdgeId = nodeSearch?.insertEdgeId;
+    const edgeToSplit = insertEdgeId ? edges.find((edge) => edge.id === insertEdgeId) || null : null;
     setNodes((current) => {
-      const maxY = current.length > 0 ? Math.max(...current.map((node) => Number(node.position.y) || CANVAS_NODE_TOP)) : CANVAS_NODE_TOP - CANVAS_NODE_GAP;
+      if (type === 'trigger') {
+        const existingTrigger = current.find((node) => node.type === 'trigger');
+        if (existingTrigger) {
+          setSelectedNodeId(existingTrigger.id);
+          setSelectedEdgeId(null);
+          return current;
+        }
+      }
+      const defaultPosition = current.length === 0
+        ? getCenteredStartPosition(canvasHostRef.current)
+        : (() => {
+            const lastNode = current[current.length - 1] || null;
+            return {
+              x: snapToGrid((Number(lastNode?.position.x) || CANVAS_NODE_X) + NODE_HORIZONTAL_GAP),
+              y: snapToGrid(Number(lastNode?.position.y) || CANVAS_NODE_TOP),
+            };
+          })();
       const nextNode: CanvasWorkflowNode = {
         id: makeNodeId(type),
         type,
-        position: position || { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
+        position: position || defaultPosition,
         data: defaultNodeData(type),
       };
       const nextNodes = [...current, nextNode];
       setSelectedNodeId(nextNode.id);
       setSelectedEdgeId(null);
+      if (edgeToSplit) {
+        setEdges((currentEdges) => [
+          ...currentEdges.filter((edge) => edge.id !== edgeToSplit.id),
+          {
+            id: `edge-${edgeToSplit.source}-${nextNode.id}-${Date.now()}`,
+            source: edgeToSplit.source,
+            target: nextNode.id,
+            sourceHandle: edgeToSplit.sourceHandle,
+            targetHandle: 'top',
+          },
+          {
+            id: `edge-${nextNode.id}-${edgeToSplit.target}-${Date.now() + 1}`,
+            source: nextNode.id,
+            target: edgeToSplit.target,
+            sourceHandle: 'bottom',
+            targetHandle: edgeToSplit.targetHandle,
+          },
+        ]);
+      }
       return nextNodes;
     });
     setNodeSearch(null);
@@ -628,24 +642,29 @@ export default function BuilderPage() {
     }
   };
 
-  const updateSelectedNodeData = (patch: Partial<CanvasNodeData>) => {
-    if (!selectedNode) return;
+  const handleNodesChange = (changes: NodeChange<CanvasWorkflowNode>[]) => {
     setNodes((current) =>
-      current.map((node) =>
-        node.id === selectedNode.id
-          ? {
-              ...node,
-              data: { ...node.data, ...patch } as CanvasNodeData,
-            }
-          : node,
+      applyNodeChanges(
+        changes.map((change) => {
+          if (
+            change.type === 'position' &&
+            change.position &&
+            Number.isFinite(change.position.x) &&
+            Number.isFinite(change.position.y)
+          ) {
+            return {
+              ...change,
+              position: {
+                x: snapToGrid(change.position.x),
+                y: snapToGrid(change.position.y),
+              },
+            };
+          }
+          return change;
+        }),
+        current,
       ),
     );
-    setSaveState('idle');
-    setSaveMessage(null);
-  };
-
-  const handleNodesChange = (changes: NodeChange<CanvasWorkflowNode>[]) => {
-    setNodes((current) => applyNodeChanges(changes, current));
     setSaveState('idle');
     setSaveMessage(null);
   };
@@ -665,7 +684,7 @@ export default function BuilderPage() {
           type: 'smoothstep',
           animated: false,
           style: {
-            stroke: 'rgba(124, 58, 237, 0.75)',
+            stroke: 'var(--canvas-edge--color)',
             strokeWidth: 2,
             strokeLinecap: 'square' as const,
           },
@@ -673,6 +692,7 @@ export default function BuilderPage() {
             type: MarkerType.ArrowClosed,
             color: '#7c3aed',
           },
+          interactionWidth: 40,
         },
         current,
       ),
@@ -684,19 +704,18 @@ export default function BuilderPage() {
     setSaveMessage(null);
   };
 
-  const handlePaneClick = (event: { clientX: number; clientY: number }) => {
+  const handlePaneClick = (event: { detail?: number; clientX: number; clientY: number }) => {
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
-    const hostRect = canvasHostRef.current?.getBoundingClientRect();
+    setNodeSearch(null);
+    if ((event.detail || 1) < 2) return;
     const instance = flowRef.current;
-    if (!hostRect || !instance) return;
-    const flowPoint = instance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    setNodeSearch({
-      screenX: Math.max(12, event.clientX - hostRect.left),
-      screenY: Math.max(12, event.clientY - hostRect.top),
-      flowX: flowPoint.x,
-      flowY: flowPoint.y,
-      query: '',
+    const flowPoint = instance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    openNodeSearch({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      flowX: flowPoint?.x,
+      flowY: flowPoint?.y,
     });
   };
 
@@ -732,116 +751,115 @@ export default function BuilderPage() {
   }, [selectedEdgeId, selectedNodeId]);
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div className="orion-page-shell orion-animate-in is-builder-page">
       <div className="orion-builder-shell">
-        <section className="orion-builder-canvas-panel">
-          <div className="orion-builder-toolbar">
-            <div>
-              <div className="orion-builder-eyebrow">Workflow builder</div>
-              <h1 className="orion-builder-title">{draftGoal ? compactText(draftGoal, 72) : 'Build workflows visually'}</h1>
-              <p className="orion-builder-copy">
-                Start with AI or build from a blank canvas. Save the result into Automations when it is ready.
-              </p>
-            </div>
-            <div className="orion-builder-toolbar-actions">
-              <button type="button" className="btn-secondary" onClick={handleReset}>
-                <Plus size={14} />
-                New workflow
-              </button>
-              <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
-                <LayoutTemplate size={14} />
-                Template
-              </button>
-              <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
-                <FileUp size={14} />
-                Import
-              </button>
-              <button type="button" className="btn-secondary" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
-                {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
-                Test run
-              </button>
-              <button type="button" className="btn-ghost" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
-                {runState === 'publishing' ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
-                Publish
-              </button>
-              <button type="button" className="btn-primary" onClick={handleSaveDraft} disabled={nodes.length === 0 || saveState === 'saving' || runState !== 'idle'}>
-                {saveState === 'saving' ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
-                {saveState === 'saved' ? 'Saved' : savedWorkflowId ? 'Save changes' : 'Save draft'}
-              </button>
-            </div>
+        <div className="orion-builder-toolbar">
+          <div className="orion-builder-toolbar-title">
+            {workflowName.trim() || (draftGoal ? compactText(draftGoal, 56) : 'Untitled workflow')}
           </div>
-
-          <div className="orion-builder-toolbar-meta">
-            <span className="orion-builder-meta-chip">{nodes.length || 0} steps</span>
-            <span className="orion-builder-meta-chip">{draftGoal ? 'Draft preview' : 'Blank canvas'}</span>
-            {savedWorkflowId ? <span className="orion-builder-meta-chip">Saved draft</span> : null}
-            {saveState === 'saved' && saveMessage ? (
-              <span className="orion-builder-meta-chip is-success">
-                <CheckCircle2 size={13} />
-                {saveMessage}
-              </span>
-            ) : null}
-            {saveState === 'error' && saveMessage ? <span className="orion-builder-meta-chip is-danger">{saveMessage}</span> : null}
-          </div>
-
-          <div className="orion-builder-view-tabs" role="tablist" aria-label="Builder views">
-            <button type="button" className={`orion-builder-view-tab ${currentView === 'editor' ? 'is-active' : ''}`} onClick={() => setCurrentView('editor')}>
-              Editor
+          <div className="orion-builder-toolbar-actions">
+            <button type="button" className="btn-secondary" onClick={handleReset}>
+              <Plus size={14} />
+              New workflow
             </button>
-            <button type="button" className={`orion-builder-view-tab ${currentView === 'executions' ? 'is-active' : ''}`} onClick={() => setCurrentView('executions')}>
-              Executions
+            <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
+              <LayoutTemplate size={14} />
+              Template
             </button>
-            <button type="button" className={`orion-builder-view-tab ${currentView === 'evaluations' ? 'is-active' : ''}`} onClick={() => setCurrentView('evaluations')}>
-              Evaluations
+            <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
+              <FileUp size={14} />
+              Import
+            </button>
+            <button type="button" className="btn-secondary" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
+              {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
+              Test run
+            </button>
+            <button type="button" className="btn-ghost" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
+              {runState === 'publishing' ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
+              Publish
+            </button>
+            <button type="button" className="btn-primary" onClick={handleSaveDraft} disabled={nodes.length === 0 || saveState === 'saving' || runState !== 'idle'}>
+              {saveState === 'saving' ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
+              {saveState === 'saved' ? 'Saved' : savedWorkflowId ? 'Save changes' : 'Save draft'}
             </button>
           </div>
+        </div>
 
-          {currentView === 'editor' ? (
-            <>
-              <div className="orion-builder-palette">
-                {CANVAS_NODE_LIBRARY.map((item) => (
-                  <button
-                    key={item.type}
-                    type="button"
-                    className="orion-builder-palette-btn"
-                    onClick={() => addCanvasNode(item.type)}
-                    style={{ ['--builder-accent' as string]: item.accent }}
-                  >
-                    <span className="orion-builder-palette-icon">{item.icon}</span>
-                    {item.label}
-                  </button>
-                ))}
+        <div className="orion-builder-main">
+          <section className="orion-builder-canvas-panel">
+            <div ref={canvasHostRef} className="orion-builder-canvas-frame">
+              <div className="orion-builder-canvas-topbar">
+                <div className="orion-builder-canvas-topbar-group is-status">
+                  <div className="orion-builder-toolbar-meta">
+                    <span className="orion-builder-meta-chip">{nodes.length || 0} steps</span>
+                    {savedWorkflowId ? <span className="orion-builder-meta-chip">Saved draft</span> : null}
+                    {saveState === 'saved' && saveMessage ? (
+                      <span className="orion-builder-meta-chip is-success">
+                        <CheckCircle2 size={13} />
+                        {saveMessage}
+                      </span>
+                    ) : null}
+                    {saveState === 'error' && saveMessage ? <span className="orion-builder-meta-chip is-danger">{saveMessage}</span> : null}
+                  </div>
+                </div>
+                <div className="orion-builder-canvas-topbar-group is-tabs">
+                  <div className="orion-builder-view-tabs" role="tablist" aria-label="Builder views">
+                    <button type="button" className={`orion-builder-view-tab ${currentView === 'editor' ? 'is-active' : ''}`} onClick={() => setCurrentView('editor')}>
+                      Editor
+                    </button>
+                    <button type="button" className={`orion-builder-view-tab ${currentView === 'executions' ? 'is-active' : ''}`} onClick={() => setCurrentView('executions')}>
+                      Executions
+                    </button>
+                    <button type="button" className={`orion-builder-view-tab ${currentView === 'evaluations' ? 'is-active' : ''}`} onClick={() => setCurrentView('evaluations')}>
+                      Evaluations
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              <div ref={canvasHostRef} className="orion-builder-canvas-frame">
+              {currentView === 'editor' ? (
+                <>
                 {nodes.length === 0 ? (
-                  <div className="orion-builder-empty">
-                    <div className="orion-builder-empty-copy">
-                      <h2>Start with AI or build from scratch</h2>
-                      <p>Describe the workflow in the right drawer, or start from a blank graph and refine it visually.</p>
-                    </div>
-                    <div className="orion-builder-empty-actions">
-                      <button type="button" className="orion-builder-empty-card" onClick={() => addCanvasNode('trigger')}>
-                        <Plus size={22} />
-                        <span>Add first step</span>
-                        <small>Manual canvas</small>
-                      </button>
-                      <span className="orion-builder-empty-or">or</span>
-                      <button type="button" className="orion-builder-empty-card is-accent" onClick={handleBuild} disabled={!promptInput.trim()}>
-                        <Sparkles size={22} />
-                        <span>Build with AI</span>
-                        <small>Draft from prompt</small>
-                      </button>
-                    </div>
+                  <div
+                    className="orion-builder-empty"
+                    onClick={() => {
+                      setSelectedNodeId(null);
+                      setSelectedEdgeId(null);
+                      setNodeSearch(null);
+                    }}
+                    onDoubleClick={(event) => {
+                      openNodeSearch({ clientX: event.clientX, clientY: event.clientY });
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="orion-builder-empty-card"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedNodeId(null);
+                        setSelectedEdgeId(null);
+                        setNodeSearch(null);
+                      }}
+                      onDoubleClick={(event) => {
+                        event.stopPropagation();
+                        openNodeSearch({ clientX: event.clientX, clientY: event.clientY });
+                      }}
+                      aria-label="Add first step"
+                    >
+                      <Plus size={40} />
+                    </button>
+                    <div className="orion-builder-empty-label">Add first step</div>
                   </div>
                 ) : (
                   <ReactFlow
+                    style={{ width: '100%', height: '100%' }}
                     onInit={(instance) => {
                       flowRef.current = instance;
                     }}
                     nodes={nodes}
                     edges={renderedEdges}
                     nodeTypes={CANVAS_NODE_TYPES}
+                    edgeTypes={CANVAS_EDGE_TYPES}
                     fitView
                     fitViewOptions={{ padding: 0.35 }}
                     nodesConnectable
@@ -852,11 +870,7 @@ export default function BuilderPage() {
                     onConnect={handleConnect}
                     onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
                     onPaneClick={(event) => {
-                      handlePaneClick({ clientX: event.clientX, clientY: event.clientY });
-                    }}
-                    onPaneContextMenu={(event) => {
-                      event.preventDefault();
-                      handlePaneClick({ clientX: event.clientX, clientY: event.clientY });
+                      handlePaneClick({ detail: event.detail, clientX: event.clientX, clientY: event.clientY });
                     }}
                     onEdgeClick={(_, edge) => {
                       setSelectedNodeId(null);
@@ -874,10 +888,11 @@ export default function BuilderPage() {
                     panOnDrag
                     zoomOnScroll
                     zoomOnPinch
+                    connectionLineComponent={SmoothConnectionLine}
                     proOptions={{ hideAttribution: true }}
                   >
-                    <Background color="var(--canvas-dot-color)" gap={16} size={1.5} variant={BackgroundVariant.Dots} />
-                    <Controls showInteractive={false} />
+                    <Background color="var(--canvas--dot--color)" gap={16} size={1.5} variant={BackgroundVariant.Dots} />
+                    <Controls position="bottom-left" showInteractive={false} showFitView />
                   </ReactFlow>
                 )}
                 {nodeSearch ? (
@@ -909,267 +924,53 @@ export default function BuilderPage() {
                     </div>
                   </div>
                 ) : null}
-              </div>
-            </>
-          ) : (
-            <div className="orion-builder-empty is-panel">
-              <div className="orion-builder-empty-copy">
-                <h2>{currentView === 'executions' ? 'Execution timeline' : 'Evaluation results'}</h2>
-                <p>
-                  {currentView === 'executions'
-                    ? 'Run a test or publish this workflow, then track live activity here.'
-                    : 'Evaluation summaries can appear here after Builder supports step-level checks.'}
-                </p>
-              </div>
-              <div className="orion-builder-empty-actions">
-                <Link href="/executions" className="btn-secondary">Open Activity</Link>
-                <button type="button" className="btn-primary" onClick={() => setCurrentView('editor')}>Back to Editor</button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <aside className="orion-builder-drawer">
-          <div className="orion-builder-drawer-header">
-            <div className="orion-builder-drawer-eyebrow">Builder AI</div>
-            <div className="orion-builder-drawer-title">Describe the workflow</div>
-            <div className="orion-builder-drawer-copy">
-              Tell Empyralis what to automate. This shapes the draft canvas without touching your main assistant chat.
-            </div>
-          </div>
-
-          <div className="orion-builder-drawer-body">
-            <textarea
-              className="orion-builder-textarea"
-              value={promptInput}
-              onChange={(event) => setPromptInput(event.target.value)}
-              placeholder="Monitor my shop entrance and alert me on Telegram"
-              rows={6}
-            />
-            <button type="button" className="btn-primary orion-builder-submit" onClick={handleBuild} disabled={!promptInput.trim()}>
-              Build workflow
-            </button>
-            <label className="orion-builder-field">
-              <span className="orion-builder-field-label">Workflow name</span>
-              <input className="orion-builder-field-input" value={workflowName} onChange={(event) => setWorkflowName(event.target.value)} />
-            </label>
-            <label className="orion-builder-field">
-              <span className="orion-builder-field-label">Description</span>
-              <textarea
-                className="orion-builder-field-input is-textarea"
-                value={workflowDescription}
-                onChange={(event) => setWorkflowDescription(event.target.value)}
-                rows={3}
-              />
-            </label>
-            <div className="orion-builder-starters">
-              {STARTER_PROMPTS.map((item) => (
-                <button key={item} type="button" className="btn-secondary orion-builder-starter" onClick={() => setPromptInput(item)}>
-                  {item}
-                </button>
-              ))}
-            </div>
-
-            <div className="orion-builder-inspector">
-              <div className="orion-builder-inspector-title">Continue existing</div>
-              {loadingWorkflows ? (
-                <div className="orion-builder-inspector-empty">Loading workflows…</div>
-              ) : workflowList.length > 0 ? (
-                <div className="orion-builder-existing-list">
-                  {workflowList.map((workflow) => (
-                    <button
-                      key={workflow.id}
-                      type="button"
-                      className={`orion-builder-existing-item ${savedWorkflowId === workflow.id ? 'is-active' : ''}`}
-                      onClick={() => void loadWorkflowIntoBuilder(workflow.id)}
-                    >
-                      <strong>{workflow.name || 'Untitled workflow'}</strong>
-                      <span>{compactText(workflow.description || 'Open this workflow in Builder.', 80)}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="orion-builder-inspector-empty">No saved workflows yet.</div>
-              )}
-            </div>
-
-            <div className="orion-builder-inspector">
-              <div className="orion-builder-inspector-title">Selected step</div>
-              {selectedNode ? (
-                <>
-                  <div className="orion-builder-inspector-head">
-                    <span className="orion-builder-step-type">{nodeTypeLabel(selectedNode.type)}</span>
-                    <span className="orion-builder-step-id">{selectedNode.id}</span>
-                  </div>
-                  <div className="orion-builder-selected-label">
-                    {String((selectedNode.data as { label?: string }).label || nodeTypeLabel(selectedNode.type))}
-                  </div>
-                  <div className="orion-builder-inspector-grid">
-                    {inspectorRows(selectedNode).map((row) => (
-                      <div key={`${selectedNode.id}:${row.label}`} className="orion-builder-inspector-item">
-                        <div className="orion-builder-inspector-label">{row.label}</div>
-                        <div className="orion-builder-inspector-value">{row.value}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="orion-builder-inspector-form">
-                    <label className="orion-builder-field">
-                      <span className="orion-builder-field-label">Label</span>
-                      <input
-                        className="orion-builder-field-input"
-                        value={String((selectedNode.data as { label?: string }).label || '')}
-                        onChange={(event) => updateSelectedNodeData({ label: event.target.value })}
-                      />
-                    </label>
-                    {selectedNode.type === 'trigger' ? (
-                      <label className="orion-builder-field">
-                        <span className="orion-builder-field-label">Trigger type</span>
-                        <select
-                          className="orion-builder-field-input"
-                          value={(selectedNode.data as TriggerCanvasData).triggerType}
-                          onChange={(event) => updateSelectedNodeData({ triggerType: event.target.value as TriggerKind })}
-                        >
-                          <option value="manual">Manual</option>
-                          <option value="schedule">Schedule</option>
-                          <option value="webhook">Webhook</option>
-                        </select>
-                      </label>
-                    ) : null}
-                    {selectedNode.type === 'agent' ? (
-                      <>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">Model</span>
-                          <input
-                            className="orion-builder-field-input"
-                            value={(selectedNode.data as AgentCanvasData).modelId}
-                            onChange={(event) => updateSelectedNodeData({ modelId: event.target.value })}
-                          />
-                        </label>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">Duty</span>
-                          <textarea
-                            className="orion-builder-field-input is-textarea"
-                            value={(selectedNode.data as AgentCanvasData).duty}
-                            onChange={(event) => updateSelectedNodeData({ duty: event.target.value })}
-                            rows={3}
-                          />
-                        </label>
-                      </>
-                    ) : null}
-                    {selectedNode.type === 'action' ? (
-                      <label className="orion-builder-field">
-                        <span className="orion-builder-field-label">Action type</span>
-                        <select
-                          className="orion-builder-field-input"
-                          value={(selectedNode.data as ActionCanvasData).actionType}
-                          onChange={(event) => updateSelectedNodeData({ actionType: event.target.value as ActionKind })}
-                        >
-                          <option value="send_telegram">Telegram</option>
-                          <option value="send_email">Email</option>
-                          <option value="write_file">Write file</option>
-                          <option value="send_whatsapp">WhatsApp</option>
-                          <option value="send_wechat">WeChat</option>
-                        </select>
-                      </label>
-                    ) : null}
-                    {selectedNode.type === 'http_request' ? (
-                      <>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">Method</span>
-                          <select
-                            className="orion-builder-field-input"
-                            value={(selectedNode.data as HttpRequestCanvasData).method}
-                            onChange={(event) => updateSelectedNodeData({ method: event.target.value })}
-                          >
-                            <option value="GET">GET</option>
-                            <option value="POST">POST</option>
-                            <option value="PUT">PUT</option>
-                            <option value="PATCH">PATCH</option>
-                          </select>
-                        </label>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">URL</span>
-                          <input
-                            className="orion-builder-field-input"
-                            value={(selectedNode.data as HttpRequestCanvasData).url}
-                            onChange={(event) => updateSelectedNodeData({ url: event.target.value })}
-                          />
-                        </label>
-                      </>
-                    ) : null}
-                    {selectedNode.type === 'condition' ? (
-                      <label className="orion-builder-field">
-                        <span className="orion-builder-field-label">Condition</span>
-                        <textarea
-                          className="orion-builder-field-input is-textarea"
-                          value={(selectedNode.data as ConditionCanvasData).condition}
-                          onChange={(event) => updateSelectedNodeData({ condition: event.target.value })}
-                          rows={3}
-                        />
-                      </label>
-                    ) : null}
-                    {selectedNode.type === 'transform' ? (
-                      <label className="orion-builder-field">
-                        <span className="orion-builder-field-label">Mapping</span>
-                        <textarea
-                          className="orion-builder-field-input is-textarea"
-                          value={(selectedNode.data as TransformCanvasData).mapping}
-                          onChange={(event) => updateSelectedNodeData({ mapping: event.target.value })}
-                          rows={3}
-                        />
-                      </label>
-                    ) : null}
-                    {selectedNode.type === 'code' ? (
-                      <>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">Summary</span>
-                          <input
-                            className="orion-builder-field-input"
-                            value={(selectedNode.data as CodeCanvasData).summary}
-                            onChange={(event) => updateSelectedNodeData({ summary: event.target.value })}
-                          />
-                        </label>
-                        <label className="orion-builder-field">
-                          <span className="orion-builder-field-label">Code</span>
-                          <textarea
-                            className="orion-builder-field-input is-textarea code"
-                            value={(selectedNode.data as CodeCanvasData).code}
-                            onChange={(event) => updateSelectedNodeData({ code: event.target.value })}
-                            rows={5}
-                          />
-                        </label>
-                      </>
-                    ) : null}
-                  </div>
                 </>
               ) : (
-                <div className="orion-builder-inspector-empty">
-                  Build a workflow or select a step in the canvas to inspect it here.
+                <div className="orion-builder-empty is-panel">
+                  <div className="orion-builder-empty-copy">
+                    <h2>{currentView === 'executions' ? 'Execution timeline' : 'Evaluation results'}</h2>
+                    <p>
+                      {currentView === 'executions'
+                        ? 'Run a test or publish this workflow, then track live activity here.'
+                        : 'Evaluation summaries can appear here after Builder supports step-level checks.'}
+                    </p>
+                  </div>
+                  <div className="orion-builder-empty-actions">
+                    <Link href="/executions" className="btn-secondary">Open Activity</Link>
+                    <button type="button" className="btn-primary" onClick={() => setCurrentView('editor')}>Back to Editor</button>
+                  </div>
                 </div>
               )}
             </div>
+          </section>
 
-            <div className="orion-builder-drawer-actions">
-              {savedWorkflowId ? (
-                <Link href={`/workflows/${savedWorkflowId}`} className="btn-primary">
-                  <ExternalLink size={14} />
-                  Open editor
-                </Link>
-              ) : null}
-              {savedWorkflowId ? (
-                <Link href="/executions" className="btn-ghost">
-                  Activity
-                </Link>
-              ) : null}
-              <Link href="/workflows" className="btn-ghost">
-                Open Automations
-              </Link>
-              <Link href="/workspace" className="btn-ghost">
-                Assistant
-              </Link>
+          <aside className="orion-builder-drawer">
+            <div className="orion-builder-drawer-header">
+              <div className="orion-builder-drawer-eyebrow">Builder AI</div>
+              <div className="orion-builder-drawer-title">Describe the workflow</div>
+              <div className="orion-builder-drawer-copy">
+                Tell Empyralis what to automate. This shapes the draft canvas without touching your main assistant chat.
+              </div>
             </div>
-          </div>
-        </aside>
+
+            <div className="orion-builder-drawer-body is-flat">
+              <label className="orion-builder-field-label" htmlFor="builder-prompt">
+                Prompt
+              </label>
+              <textarea
+                id="builder-prompt"
+                className="orion-builder-textarea"
+                value={promptInput}
+                onChange={(event) => setPromptInput(event.target.value)}
+                placeholder="Monitor my shop entrance and alert me on Telegram"
+                rows={6}
+              />
+              <button type="button" className="btn-primary orion-builder-submit" onClick={handleBuild} disabled={!promptInput.trim()}>
+                Build workflow
+              </button>
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   );

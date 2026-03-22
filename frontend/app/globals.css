@@ -2,10 +2,17 @@
 @import '../components/reactflow-override.css';
 
 :root {
-  --canvas-dot-color: #e0e0e0;
-  --canvas-background: #fcfcfc;
-  --canvas-node-border-color: #e5e7eb;
-  --canvas-selected-glow: rgba(124, 58, 237, 0.2);
+  --canvas--dot--color: #828282;
+  --canvas--color--background: #fcfcfc;
+  --canvas-node--border-color: #e5e7eb;
+  --canvas--color--selected-transparent: hsla(220, 47%, 30%, 0.1);
+  --canvas-edge--color: oklch(0.84 0 0);
+  --canvas-handle-border-light: oklch(0.68 0 0);
+  --canvas-handle-border-dark: oklch(0.5 0 0);
+  --canvas-dot-color: var(--canvas--dot--color);
+  --canvas-background: var(--canvas--color--background);
+  --canvas-node-border-color: var(--canvas-node--border-color);
+  --canvas-selected-glow: var(--canvas--color--selected-transparent);
   /* SPACING */
   --space-1: 4px;
   --space-2: 8px;
@@ -156,8 +163,13 @@
 }
 
 [data-theme='dark'] {
-  --canvas-dot-color: #333333;
-  --canvas-background: #0a0a0a;
+  --canvas--dot--color: #4d4d4d;
+  --canvas--color--background: #0a0a0a;
+  --canvas--color--selected-transparent: hsla(220, 1%, 100%, 0.25);
+  --canvas-edge--color: oklch(0.42 0 0);
+  --canvas-dot-color: var(--canvas--dot--color);
+  --canvas-background: var(--canvas--color--background);
+  --canvas-selected-glow: var(--canvas--color--selected-transparent);
 }
 
 [data-theme='light'] {
@@ -312,6 +324,8 @@
 html,
 body {
   height: 100%;
+  margin: 0;
+  overflow: hidden;
   background: var(--bg-app);
   color: var(--text-primary);
   font-family: var(--font-sans);
@@ -1301,6 +1315,16 @@ input:focus-visible {
   transform: none !important;
 }
 
+.orion-page-shell.is-builder-page {
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - var(--topbar-height));
+  max-height: calc(100dvh - var(--topbar-height));
+  overflow: hidden;
+  padding: 12px 20px 16px;
+  gap: 0;
+}
+
 .orion-workspace-studio-layout {
   display: grid;
   grid-template-columns: minmax(320px, 0.72fr) minmax(360px, 1fr);
@@ -1310,10 +1334,20 @@ input:focus-visible {
 }
 
 .orion-builder-shell {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 18px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.orion-builder-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  gap: 16px;
 }
 
 .orion-builder-canvas-panel,
@@ -1325,67 +1359,153 @@ input:focus-visible {
 }
 
 .orion-builder-canvas-panel {
-  min-height: calc(100vh - var(--topbar-height) - 56px);
-  display: grid;
-  grid-template-rows: auto minmax(520px, 1fr);
+  flex: 1;
+  min-width: 0;
+  height: 100%;
   overflow: hidden;
 }
 
 .orion-builder-toolbar {
   display: flex;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
+  align-items: center;
+  min-height: 48px;
+  height: 48px;
+  padding: 0 2px;
+  border-bottom: none;
+  flex-shrink: 0;
+}
+
+.orion-builder-toolbar-title {
+  min-width: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orion-builder-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.orion-builder-canvas-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--primary-soft) 18%, transparent 82%) 0%, transparent 28%),
+    var(--bg-app);
+  position: relative;
+}
+
+.orion-builder-canvas-frame > .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.orion-builder-canvas-topbar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 6;
+  display: flex;
   align-items: flex-start;
-  padding: 18px 18px 16px;
-  border-bottom: 1px solid var(--border-default);
+  justify-content: space-between;
+  gap: 14px;
+  pointer-events: none;
+}
+
+.orion-builder-canvas-topbar-group {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  pointer-events: auto;
+}
+
+.orion-builder-canvas-topbar-group.is-status {
+  max-width: min(60%, 760px);
+  padding: 0;
+}
+
+.orion-builder-canvas-topbar-group.is-tabs {
+  flex-shrink: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .orion-builder-toolbar-meta {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
-  padding: 0 18px 14px;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .orion-builder-view-tabs {
   display: flex;
-  gap: 8px;
+  gap: 18px;
   align-items: center;
-  padding: 12px 18px 0;
 }
 
 .orion-builder-view-tab {
   min-height: 34px;
-  padding: 0 12px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 88%, white 12%);
+  padding: 0 0 8px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .orion-builder-view-tab.is-active {
-  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
-  background: color-mix(in srgb, var(--primary-soft) 28%, var(--bg-element) 72%);
+  border-bottom-color: var(--primary-base);
   color: var(--primary-base);
 }
 
 .orion-builder-palette {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  align-items: center;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-panel) 92%, white 8%);
+  box-shadow: var(--shadow-soft);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.orion-builder-palette::-webkit-scrollbar {
+  display: none;
+}
+
+.orion-builder-palette.is-floating {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 6;
 }
 
 .orion-builder-palette-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
+  min-height: 32px;
+  white-space: nowrap;
   padding: 0 12px;
   border-radius: var(--radius-full);
   border: 1px solid color-mix(in srgb, var(--builder-accent) 24%, var(--border-default) 76%);
@@ -1482,93 +1602,41 @@ input:focus-visible {
   color: var(--text-secondary);
 }
 
-.orion-builder-toolbar-actions,
-.orion-builder-drawer-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.orion-builder-canvas-frame {
-  min-height: 520px;
-  background:
-    radial-gradient(circle at top, color-mix(in srgb, var(--primary-soft) 18%, transparent 82%) 0%, transparent 28%),
-    var(--bg-app);
-  position: relative;
-}
-
 .orion-builder-empty {
   height: 100%;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 32px;
-  gap: 20px;
+  gap: 8px;
 }
 
 .orion-builder-empty.is-panel {
-  min-height: 520px;
-}
-
-.orion-builder-empty-copy {
-  display: grid;
-  gap: 8px;
-  text-align: center;
-  max-width: 460px;
-}
-
-.orion-builder-empty-copy h2 {
-  font-size: clamp(1.5rem, 2vw, 2rem);
-  letter-spacing: -0.04em;
-}
-
-.orion-builder-empty-copy p {
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  color: var(--text-secondary);
-}
-
-.orion-builder-empty-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  justify-content: center;
+  min-height: 0;
+  height: 100%;
 }
 
 .orion-builder-empty-card {
-  width: 124px;
-  height: 124px;
-  border-radius: var(--radius-lg);
-  border: 1px dashed var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 76%, white 24%);
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
+  width: 100px;
+  height: 100px;
+  min-width: 100px;
+  min-height: 100px;
+  padding: 0;
+  border-radius: 8px;
+  border: 2px dashed var(--text-tertiary);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
   cursor: pointer;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  text-align: center;
   transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
-}
-
-.orion-builder-empty-card small {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-}
-
-.orion-builder-empty-card.is-accent {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--primary-base) 28%, var(--border-default) 72%);
-  color: var(--primary-base);
-  background: color-mix(in srgb, var(--primary-soft) 36%, var(--bg-element) 64%);
 }
 
 .orion-builder-empty-card:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--primary-base) 24%, var(--border-default) 76%);
+  border-color: var(--primary-base);
 }
 
 .orion-builder-empty-card:disabled {
@@ -1576,18 +1644,24 @@ input:focus-visible {
   cursor: default;
 }
 
-.orion-builder-empty-or {
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
-  font-weight: 600;
+.orion-builder-empty-label {
+  width: max-content;
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 .orion-builder-drawer {
-  padding: 18px;
-  display: grid;
-  align-content: start;
-  gap: 16px;
-  min-height: calc(100vh - var(--topbar-height) - 56px);
+  width: 320px;
+  flex-shrink: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .orion-builder-drawer-header,
@@ -1596,12 +1670,63 @@ input:focus-visible {
   gap: 12px;
 }
 
+.orion-builder-drawer-header {
+  flex-shrink: 0;
+}
+
+.orion-builder-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  align-content: start;
+  gap: 12px;
+}
+
+.orion-builder-drawer-section,
+.orion-builder-inspector {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-element) 86%, white 14%);
+}
+
+.orion-builder-drawer-section.is-primary {
+  border-color: color-mix(in srgb, var(--primary-base) 20%, var(--border-subtle) 80%);
+  background: color-mix(in srgb, var(--primary-soft) 16%, var(--bg-element) 84%);
+}
+
+.orion-builder-section-head {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-builder-section-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-builder-section-copy {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-builder-drawer-body.is-flat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .orion-builder-textarea {
   width: 100%;
   min-height: 140px;
-  border-radius: var(--radius-md);
+  border-radius: 12px;
   border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+  background: var(--bg-panel);
   color: var(--text-primary);
   font: inherit;
   line-height: 1.55;
@@ -1628,12 +1753,6 @@ input:focus-visible {
 .orion-builder-starter {
   justify-content: flex-start;
   text-align: left;
-}
-
-.orion-builder-inspector {
-  display: grid;
-  gap: 12px;
-  padding-top: 4px;
 }
 
 .orion-builder-inspector-title {
@@ -1704,7 +1823,7 @@ input:focus-visible {
 .orion-builder-inspector-form {
   display: grid;
   gap: 10px;
-  padding-top: 6px;
+  padding-top: 2px;
 }
 
 .orion-builder-inspector-item {
@@ -1764,29 +1883,33 @@ input:focus-visible {
   line-height: 1.5;
 }
 
+.orion-builder-drawer-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
 .orion-builder-meta-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 12px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 86%, white 14%);
+  gap: 4px;
+  min-height: auto;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--text-secondary);
   font-size: var(--text-xs);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .orion-builder-meta-chip.is-success {
-  border-color: color-mix(in srgb, var(--green-500) 28%, var(--border-default) 72%);
-  background: color-mix(in srgb, var(--green-50) 72%, white 28%);
   color: var(--green-700);
 }
 
 .orion-builder-meta-chip.is-danger {
-  border-color: color-mix(in srgb, var(--danger-500) 28%, var(--border-default) 72%);
-  background: color-mix(in srgb, var(--danger-50) 72%, white 28%);
   color: var(--danger-700);
 }
 

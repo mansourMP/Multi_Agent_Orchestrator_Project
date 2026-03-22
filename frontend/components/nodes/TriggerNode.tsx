@@ -22,6 +22,7 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
             selected={selected}
             badge={triggerType.toUpperCase()}
             showTargetHandle={false}
+            variant="trigger"
         />
     );
 };

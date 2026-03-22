@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Loader2, Play, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
-import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
+import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type EdgeTypes, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
@@ -21,6 +21,8 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
+import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
+import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 
 const ORION_API_URL =
     process.env.NEXT_PUBLIC_ORION_API_URL || 'http://127.0.0.1:8001';
@@ -236,6 +238,10 @@ const CANVAS_NODE_TYPES: NodeTypes = {
     code: CodeNode,
 };
 
+const CANVAS_EDGE_TYPES = {
+    smoothstep: SmoothActionEdge,
+} satisfies EdgeTypes;
+
 const CANVAS_NODE_LIBRARY: Array<{
     type: CanvasNodeType;
     label: string;
@@ -431,7 +437,7 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
             type: 'smoothstep',
             animated: false,
             style: {
-                stroke: 'rgba(124, 58, 237, 0.75)',
+                stroke: 'var(--canvas-edge--color)',
                 strokeWidth: 2,
                 strokeLinecap: 'square' as const,
             },
@@ -439,6 +445,7 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
                 type: MarkerType.ArrowClosed,
                 color: '#7c3aed',
             },
+            interactionWidth: 40,
         });
     }
     return parsed;
@@ -579,6 +586,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         flowX: number;
         flowY: number;
         query: string;
+        insertEdgeId?: string;
     } | null>(null);
 
     const [runStatus, setRunStatus] = useState<RunStatus>('idle');
@@ -987,7 +995,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             animated: false,
             selected: selectedEdgeId === edge.id,
             style: {
-                stroke: 'rgba(124, 58, 237, 0.75)',
+                stroke: 'var(--canvas-edge--color)',
                 strokeWidth: 2,
                 strokeLinecap: 'square' as const,
             },
@@ -995,8 +1003,35 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 type: MarkerType.ArrowClosed,
                 color: '#7c3aed',
             },
+            interactionWidth: 40,
+            data: {
+                onAdd: (edgeId: string, point: { x: number; y: number }) => {
+                    const hostRect = canvasHostRef.current?.getBoundingClientRect();
+                    const currentEdge = canvasEdges.find((item) => item.id === edgeId);
+                    if (!hostRect || !currentEdge) return;
+                    const sourceNode = canvasNodes.find((node) => node.id === currentEdge.source);
+                    const targetNode = canvasNodes.find((node) => node.id === currentEdge.target);
+                    const flowX = ((sourceNode?.position.x || CANVAS_NODE_X) + (targetNode?.position.x || CANVAS_NODE_X)) / 2;
+                    const flowY = ((sourceNode?.position.y || CANVAS_NODE_TOP) + (targetNode?.position.y || CANVAS_NODE_TOP)) / 2;
+                    setSelectedNodeId(null);
+                    setSelectedEdgeId(edgeId);
+                    setCanvasNodeSearch({
+                        screenX: Math.max(12, Math.min(point.x, hostRect.width - 240)),
+                        screenY: Math.max(12, Math.min(point.y, hostRect.height - 220)),
+                        flowX,
+                        flowY,
+                        query: '',
+                        insertEdgeId: edgeId,
+                    });
+                },
+                onDelete: (edgeId: string) => {
+                    setCanvasEdges((prev) => prev.filter((item) => item.id !== edgeId));
+                    setSelectedEdgeId(null);
+                    setCanvasNodeSearch(null);
+                },
+            } satisfies SmoothActionEdgeData,
         })),
-        [canvasEdges, selectedEdgeId],
+        [canvasEdges, canvasNodes, selectedEdgeId],
     );
 
     const handleCanvasInit = useCallback((instance: ReactFlowInstance<CanvasWorkflowNode, Edge>) => {
@@ -1005,23 +1040,53 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     }, []);
 
     const addCanvasNode = useCallback((type: CanvasNodeType, position?: { x: number; y: number }) => {
+        const insertEdgeId = canvasNodeSearch?.insertEdgeId;
+        const edgeToSplit = insertEdgeId ? canvasEdges.find((edge) => edge.id === insertEdgeId) || null : null;
         setCanvasNodes((prev) => {
+            if (type === 'trigger') {
+                const existingTrigger = prev.find((node) => node.type === 'trigger');
+                if (existingTrigger) {
+                    setSelectedNodeId(existingTrigger.id);
+                    setSelectedEdgeId(null);
+                    return prev;
+                }
+            }
             const maxY = prev.length > 0 ? Math.max(...prev.map((node) => Number(node.position.y) || CANVAS_NODE_TOP)) : (CANVAS_NODE_TOP - CANVAS_NODE_GAP);
+            const nextNodeId = makeNodeId(type);
             const nextNodes = [
                 ...prev,
                 {
-                    id: makeNodeId(type),
+                    id: nextNodeId,
                     type,
                     position: position || { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
                     data: defaultNodeData(type),
                 },
             ];
-            setSelectedNodeId(nextNodes[nextNodes.length - 1]?.id || null);
+            setSelectedNodeId(nextNodeId);
             setSelectedEdgeId(null);
+            if (edgeToSplit) {
+                setCanvasEdges((currentEdges) => [
+                    ...currentEdges.filter((edge) => edge.id !== edgeToSplit.id),
+                    {
+                        id: `edge-${edgeToSplit.source}-${nextNodeId}-${Date.now()}`,
+                        source: edgeToSplit.source,
+                        target: nextNodeId,
+                        sourceHandle: edgeToSplit.sourceHandle,
+                        targetHandle: 'top',
+                    },
+                    {
+                        id: `edge-${nextNodeId}-${edgeToSplit.target}-${Date.now() + 1}`,
+                        source: nextNodeId,
+                        target: edgeToSplit.target,
+                        sourceHandle: 'bottom',
+                        targetHandle: edgeToSplit.targetHandle,
+                    },
+                ]);
+            }
             return nextNodes;
         });
         setCanvasNodeSearch(null);
-    }, []);
+    }, [canvasEdges, canvasNodeSearch?.insertEdgeId]);
 
     const updateSelectedNode = useCallback((updater: (node: CanvasWorkflowNode) => CanvasWorkflowNode) => {
         if (!selectedNodeId) return;
@@ -1043,7 +1108,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             type: 'smoothstep',
             animated: false,
             style: {
-                stroke: 'rgba(124, 58, 237, 0.75)',
+                stroke: 'var(--canvas-edge--color)',
                 strokeWidth: 2,
                 strokeLinecap: 'square' as const,
             },
@@ -1051,6 +1116,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 type: MarkerType.ArrowClosed,
                 color: '#7c3aed',
             },
+            interactionWidth: 40,
         }, prev));
         setSelectedNodeId(null);
         setSelectedEdgeId(null);
@@ -1075,9 +1141,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     const filteredCanvasNodeLibrary = useMemo(() => {
         const query = String(canvasNodeSearch?.query || '').trim().toLowerCase();
-        if (!query) return CANVAS_NODE_LIBRARY;
-        return CANVAS_NODE_LIBRARY.filter((item) => item.label.toLowerCase().includes(query));
-    }, [canvasNodeSearch?.query]);
+        const library = canvasNodeSearch?.insertEdgeId
+            ? CANVAS_NODE_LIBRARY.filter((item) => item.type !== 'trigger')
+            : CANVAS_NODE_LIBRARY;
+        if (!query) return library;
+        return library.filter((item) => item.label.toLowerCase().includes(query));
+    }, [canvasNodeSearch?.insertEdgeId, canvasNodeSearch?.query]);
 
     useEffect(() => {
         if (!canvasNodeSearch) return;
@@ -1760,6 +1829,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 nodes={canvasNodes}
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
+                                edgeTypes={CANVAS_EDGE_TYPES}
                                 fitView
                                 fitViewOptions={{ padding: 0.38 }}
                                 onInit={handleCanvasInit}
@@ -1785,6 +1855,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 panOnDrag
                                 zoomOnScroll
                                 zoomOnPinch
+                                connectionLineComponent={SmoothConnectionLine}
                                 snapToGrid
                                 snapGrid={[20, 20]}
                                 nodesConnectable
@@ -1792,19 +1863,28 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 edgesFocusable
                                 proOptions={{ hideAttribution: true }}
                                 defaultEdgeOptions={{
-                                    type: 'rope',
-                                    animated: runStatus === 'running',
+                                    type: 'smoothstep',
+                                    animated: false,
                                     selectable: true,
-                                    style: { stroke: '#7c3aed', strokeWidth: 2.8, opacity: 0.9 },
+                                    interactionWidth: 40,
+                                    style: {
+                                        stroke: 'var(--canvas-edge--color)',
+                                        strokeWidth: 2,
+                                        strokeLinecap: 'square',
+                                    },
+                                    markerEnd: {
+                                        type: MarkerType.ArrowClosed,
+                                        color: '#7c3aed',
+                                    },
                                 }}
                             >
                                 <Background
                                     variant={BackgroundVariant.Dots}
                                     gap={16}
                                     size={1.5}
-                                    color="var(--canvas-dot-color)"
+                                    color="var(--canvas--dot--color)"
                                 />
-                                <Controls position="bottom-right" showInteractive={false} showFitView />
+                                <Controls position="bottom-left" showInteractive={false} showFitView />
                             </ReactFlow>
                             {canvasNodeSearch ? (
                                 <div

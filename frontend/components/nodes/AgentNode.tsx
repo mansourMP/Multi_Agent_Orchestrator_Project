@@ -28,6 +28,7 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
             icon={<BrainCircuit size={21} strokeWidth={1.85} />}
             selected={selected}
             badge={status}
+            status={String(data.status || '').trim().toLowerCase()}
         />
     );
 };

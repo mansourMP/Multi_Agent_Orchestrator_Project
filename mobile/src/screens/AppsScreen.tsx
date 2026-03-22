@@ -131,7 +131,7 @@ export default function AppsScreen() {
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      style={{ flex: 1, backgroundColor: "#FFFFFF" }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 12, paddingBottom: 40 }}
     >
       <View

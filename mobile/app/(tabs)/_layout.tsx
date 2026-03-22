@@ -26,21 +26,37 @@ export default function TabsLayout() {
         sceneStyle: {
           backgroundColor: theme.colors.background,
         },
-        tabBarIcon: ({ color, size }) => {
-          const iconMap: Record<string, keyof typeof Ionicons.glyphMap> = {
-            chats: "chatbubble-ellipses",
-            apps: "grid",
-            spaces: "folder",
-            today: "sunny-outline",
+        tabBarIcon: ({ color, size, focused }) => {
+          const iconMap: Record<
+            string,
+            { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }
+          > = {
+            chats: {
+              active: "chatbubble-ellipses",
+              inactive: "chatbubble-ellipses-outline",
+            },
+            "apps/index": {
+              active: "grid",
+              inactive: "grid-outline",
+            },
+            "today/index": {
+              active: "sunny",
+              inactive: "sunny-outline",
+            },
+            "spaces/index": {
+              active: "folder",
+              inactive: "folder-outline",
+            },
           };
-          return <Ionicons name={iconMap[route.name] || "ellipse"} size={size} color={color} />;
+          const icon = iconMap[route.name];
+          return <Ionicons name={icon ? (focused ? icon.active : icon.inactive) : "ellipse-outline"} size={size} color={color} />;
         },
       })}
     >
       <Tabs.Screen name="chats" options={{ title: "Chats" }} />
-      <Tabs.Screen name="apps" options={{ title: "Apps" }} />
-      <Tabs.Screen name="spaces" options={{ title: "Spaces" }} />
-      <Tabs.Screen name="today" options={{ title: "Today" }} />
+      <Tabs.Screen name="apps/index" options={{ title: "Apps" }} />
+      <Tabs.Screen name="today/index" options={{ title: "Today" }} />
+      <Tabs.Screen name="spaces/index" options={{ title: "Spaces" }} />
     </Tabs>
   );
 }

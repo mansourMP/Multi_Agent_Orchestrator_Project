@@ -83,9 +83,8 @@ export default function AppStoreScreen() {
   const [installedIds, setInstalledIds] = React.useState<Set<string>>(new Set());
   const [error, setError] = React.useState<string | null>(null);
   const [offlineMode, setOfflineMode] = React.useState(false);
-  const [previewMode, setPreviewMode] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
-  const [tab, setTab] = React.useState<"apps" | "learning" | "health" | "search">("apps");
+  const [tab, setTab] = React.useState<"featured" | "installed" | "discover">("featured");
   const [query, setQuery] = React.useState("");
 
   const refresh = React.useCallback(async () => {
@@ -104,7 +103,6 @@ export default function AppStoreScreen() {
       setUpdates([]);
       setInstalledIds(fallbackInstalled);
       setOfflineMode(true);
-      setPreviewMode(true);
       setLoading(false);
       return;
     }
@@ -113,7 +111,6 @@ export default function AppStoreScreen() {
     setUpdates([]);
     setInstalledIds(new Set());
     setOfflineMode(!hasCore);
-    setPreviewMode(false);
 
     try {
       const [storeRes, updatesRes, installedRes] = await Promise.all([
@@ -131,10 +128,8 @@ export default function AppStoreScreen() {
 
       if (!hasPlatform) {
         setStore(fallbackStore);
-        setPreviewMode(true);
       } else {
         setStore(nextStore);
-        setPreviewMode(false);
       }
       setUpdates(nextUpdates);
       setInstalledIds(nextInstalledIds);
@@ -154,7 +149,7 @@ export default function AppStoreScreen() {
           setError(hasPlatform ? `Platform registry returned an error (${status}).` : `Core returned an error (${status}). Restart the core and try again.`);
         }
       } else if (isLoopback) {
-        setError(hasPlatform ? "Platform registry unreachable. Do not use localhost on iPhone." : "Core unreachable. On iPhone, 127.0.0.1/localhost won't work — use your Mac Mini IP in Settings.");
+        setError(hasPlatform ? "Platform registry unreachable. Check your connection settings." : "Core unreachable. Check your connection settings.");
       } else {
         setError(hasPlatform ? "Platform registry unreachable. Check Settings and try again." : "Core unreachable. Check Settings and try again.");
       }
@@ -162,7 +157,6 @@ export default function AppStoreScreen() {
       setUpdates([]);
       setInstalledIds(fallbackInstalled);
       setOfflineMode(!hasCore);
-      setPreviewMode(true);
     } finally {
       setLoading(false);
     }
@@ -190,20 +184,16 @@ export default function AppStoreScreen() {
   const baseList = storeApps.slice(0, 8);
 
   const filteredList = React.useMemo(() => {
-    if (tab === "search") {
-      const q = query.trim().toLowerCase();
-      if (!q) return baseList;
-      return storeApps.filter((a) => a.name.toLowerCase().includes(q) || (a.description || "").toLowerCase().includes(q));
-    }
-    if (tab === "learning") return storeApps.filter((a) => (a.category || "").toLowerCase().includes("learning"));
-    if (tab === "health") return storeApps.filter((a) => (a.category || "").toLowerCase().includes("health"));
-    return storeApps;
-  }, [baseList, query, storeApps, tab]);
+    let list = tab === "featured" ? baseList : tab === "installed" ? storeApps.filter((app) => installedIds.has(app.id)) : storeApps;
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((a) => a.name.toLowerCase().includes(q) || (a.description || "").toLowerCase().includes(q));
+  }, [baseList, installedIds, query, storeApps, tab]);
 
   const handleAppAction = React.useCallback(
     async (app: AppRecord, installed: boolean, needsUpdate: boolean) => {
       if ((needsUpdate || !installed) && !canInstallOrUpdate(app)) {
-        showBanner("Preview apps are browse-only. Connect a platform registry to install.", "neutral");
+        showBanner("Connect a platform registry to install this app.", "neutral");
         router.push(`/apps/${app.id}`);
         return;
       }
@@ -294,23 +284,7 @@ export default function AppStoreScreen() {
           {/* Header inside the sheet (like an App Store surface) */}
           <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10 }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <Text style={{ fontSize: 26, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>Apps</Text>
-                {previewMode ? (
-                  <View
-                    style={{
-                      height: 24,
-                      paddingHorizontal: 10,
-                      borderRadius: 999,
-                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Text style={{ fontSize: 11, fontWeight: "800", color: theme.colors.textSecondary }}>Preview</Text>
-                  </View>
-                ) : null}
-              </View>
+              <Text style={{ fontSize: 26, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>Apps</Text>
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() => showBanner("Installable mini apps. Updates are enforced before opening.", "neutral")}
@@ -330,11 +304,27 @@ export default function AppStoreScreen() {
             {banner ? (
               <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: 8 }}>{banner.message}</Text>
             ) : null}
-            {previewMode ? (
-              <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginTop: banner ? 6 : 8 }}>
-                Preview catalog only. Real app availability comes from your platform registry.
-              </Text>
-            ) : null}
+            <View
+              style={{
+                marginTop: 12,
+                height: 42,
+                borderRadius: 14,
+                backgroundColor: theme.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
+                paddingHorizontal: 12,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Ionicons name="search" size={16} color={theme.colors.textSecondary} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search apps"
+                placeholderTextColor={theme.colors.textSecondary}
+                style={{ flex: 1, color: theme.colors.text, fontSize: 14 }}
+              />
+            </View>
           </View>
 
           {/* Content */}
@@ -384,33 +374,8 @@ export default function AppStoreScreen() {
               </View>
             ) : null}
 
-            {!loading && tab === "search" ? (
-              <View style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    height: 40,
-                    borderRadius: 14,
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
-                    paddingHorizontal: 12,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                >
-                  <Ionicons name="search" size={16} color={theme.colors.textSecondary} />
-                  <TextInput
-                    value={query}
-                    onChangeText={setQuery}
-                    placeholder="Search apps"
-                    placeholderTextColor={theme.colors.textSecondary}
-                    style={{ flex: 1, color: theme.colors.text, fontSize: 14 }}
-                  />
-                </View>
-              </View>
-            ) : null}
-
             {/* Featured */}
-            {!loading && featuredApp ? (
+            {!loading && featuredApp && tab === "featured" ? (
               <View style={{ marginBottom: 16 }}>
                 <TouchableOpacity
                   activeOpacity={0.92}
@@ -471,7 +436,7 @@ export default function AppStoreScreen() {
                         const installed = installedIds.has(featuredApp.id);
                         const label =
                           !canInstallOrUpdate(featuredApp) && !installed
-                            ? "Preview"
+                            ? "View"
                             : needsUpdate
                               ? "Update"
                               : installed
@@ -513,9 +478,7 @@ export default function AppStoreScreen() {
                 </View>
 
                 {filteredList.length === 0 ? (
-                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary, paddingVertical: 14 }}>
-                    {previewMode ? "No preview apps found." : "No apps published by your platform registry yet."}
-                  </Text>
+                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary, paddingVertical: 14 }}>No apps found.</Text>
                 ) : (
                   <View style={{ gap: 12 }}>
                     {filteredList.slice(0, 5).map((app, idx) => {
@@ -524,7 +487,7 @@ export default function AppStoreScreen() {
                       const installed = installedIds.has(app.id);
                       const actionLabel =
                         !canInstallOrUpdate(app) && !installed
-                          ? "Preview"
+                          ? "View"
                           : needsUpdate
                             ? "Update"
                             : installed
@@ -586,10 +549,9 @@ export default function AppStoreScreen() {
             }}
           >
             {[
-              { key: "apps", label: "Apps", icon: "grid" },
-              { key: "learning", label: "Learning", icon: "book" },
-              { key: "health", label: "Health", icon: "heart" },
-              { key: "search", label: "Search", icon: "search" },
+              { key: "featured", label: "Featured", icon: "star-outline" },
+              { key: "installed", label: "My Apps", icon: "grid-outline" },
+              { key: "discover", label: "Discover", icon: "compass-outline" },
             ].map((item) => {
               const selected = tab === (item.key as any);
               const color = selected ? theme.colors.text : theme.colors.textSecondary;

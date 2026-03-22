@@ -100,7 +100,7 @@ function normalizeArtifacts(payload: any): ArtifactSummary[] {
 
 export function useMobileOverviewData() {
   const { session } = useSessionState();
-  const enabled = Boolean(session);
+  const enabled = Boolean(session?.runtimeUrl && session?.runtimeKey);
 
   const agentsQuery = useQuery({
     queryKey: ["mobile", "agents", session?.runtimeUrl, session?.workspaceId],

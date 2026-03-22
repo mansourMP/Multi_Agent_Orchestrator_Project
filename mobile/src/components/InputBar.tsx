@@ -18,9 +18,17 @@ interface InputBarProps {
   onPlusPress?: () => void;
   isLoading?: boolean;
   prefilledPrompt?: string;
+  placeholder?: string;
 }
 
-export const InputBar: React.FC<InputBarProps> = ({ onSend, onMediaUpload, onPlusPress, isLoading, prefilledPrompt }) => {
+export const InputBar: React.FC<InputBarProps> = ({
+  onSend,
+  onMediaUpload,
+  onPlusPress,
+  isLoading,
+  prefilledPrompt,
+  placeholder,
+}) => {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const styles = useStyles(theme, insets);
@@ -121,7 +129,7 @@ export const InputBar: React.FC<InputBarProps> = ({ onSend, onMediaUpload, onPlu
 
         <TextInput
           style={styles.input}
-          placeholder="Message Assistant…"
+          placeholder={placeholder || "Message"}
           placeholderTextColor={theme.colors.textSecondary}
           value={text}
           onChangeText={setText}

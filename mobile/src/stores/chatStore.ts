@@ -1,10 +1,16 @@
 import { create } from 'zustand';
 import { nanoid } from 'nanoid/non-secure';
 import { AgentPayload } from '../components/Renderer';
+import type { AgentThread } from '../lib/agents';
 
 export type ChatSession = {
   id: string;
   title: string;
+  agentId: string;
+  agentName: string;
+  runtimeRole?: string;
+  avatarColor: string;
+  icon: string;
   createdAt: number;
   updatedAt: number;
   messages: AgentPayload[];
@@ -13,7 +19,8 @@ export type ChatSession = {
 type ChatState = {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  createSession: () => string;
+  createSession: (agent: AgentThread) => string;
+  ensureSessionForAgent: (agent: AgentThread) => string;
   setActiveSession: (id: string) => void;
   addMessage: (id: string, message: AgentPayload) => void;
   setSessionTitle: (id: string, title: string) => void;
@@ -24,12 +31,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   clearAllSessions: () => set({ sessions: [], activeSessionId: null }),
-  createSession: () => {
+  createSession: (agent) => {
     const id = nanoid();
     const now = Date.now();
     const session: ChatSession = {
       id,
-      title: 'New Chat',
+      title: agent.label,
+      agentId: agent.id,
+      agentName: agent.label,
+      runtimeRole: agent.runtimeRole,
+      avatarColor: agent.avatarColor,
+      icon: agent.icon,
       createdAt: now,
       updatedAt: now,
       messages: [],
@@ -39,6 +51,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeSessionId: id,
     }));
     return id;
+  },
+  ensureSessionForAgent: (agent) => {
+    const existing = get().sessions.find((session) => session.agentId === agent.id);
+    if (existing) {
+      set({ activeSessionId: existing.id });
+      return existing.id;
+    }
+    return get().createSession(agent);
   },
   setActiveSession: (id) => set({ activeSessionId: id }),
   addMessage: (id, message) => {
@@ -62,7 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!trimmed) return;
     set((state) => ({
       sessions: state.sessions.map((session) =>
-        session.id === id ? { ...session, title: trimmed, updatedAt: Date.now() } : session
+        session.id === id ? { ...session, title: trimmed, agentName: trimmed, updatedAt: Date.now() } : session
       ),
     }));
   },

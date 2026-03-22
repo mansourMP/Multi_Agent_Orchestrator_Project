@@ -1,7 +1,9 @@
 import React from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { HeaderSearchButton } from "@/src/components/HeaderSearchButton";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
 import { mobileApi } from "@/src/lib/api";
@@ -83,6 +85,7 @@ function AppGrid({
 export default function AppsScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { session } = useSessionState();
   const [installed, setInstalled] = React.useState<AppRecord[]>([]);
   const [loadedOnce, setLoadedOnce] = React.useState(false);
@@ -127,7 +130,10 @@ export default function AppsScreen() {
   const showEmpty = installed.length === 0;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }} contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 12, paddingBottom: 40 }}
+    >
       <View
         style={{
           flexDirection: "row",
@@ -137,10 +143,17 @@ export default function AppsScreen() {
         }}
       >
         <Text style={{ fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>Apps</Text>
-        <TouchableOpacity onPress={() => router.push("/apps/store")}>
-          <Text style={{ fontSize: 16, color: theme.colors.accent, fontWeight: "800" }}>Get more</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <TouchableOpacity onPress={() => router.push("/apps/store")}>
+            <Text style={{ fontSize: 16, color: theme.colors.accent, fontWeight: "800" }}>Get more</Text>
+          </TouchableOpacity>
+          <HeaderSearchButton />
+        </View>
       </View>
+
+      <Text style={{ marginBottom: 16, fontSize: 14, color: theme.colors.textSecondary, lineHeight: 22 }}>
+        Installed apps you can open now.
+      </Text>
 
       {!isConnected ? (
         <View

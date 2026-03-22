@@ -1,15 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   TouchableOpacity,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { CoreStatusBar } from "@/src/components/CoreStatusBar";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import { TransientBanner } from "@/src/components/TransientBanner";
 import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
@@ -17,6 +19,8 @@ import { useChatStore } from "@/src/stores/chatStore";
 import { useAppContextStore } from "@/src/stores/appContextStore";
 import { useSessionState } from "@/src/lib/session-context";
 import { mobileApi } from "@/src/lib/api";
+import { buildAgentDirectory, getAgentById } from "@/src/lib/agents";
+import { useMobileOverviewData } from "@/src/lib/mobile-data";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 
@@ -30,103 +34,50 @@ type ApprovalCard = {
 
 const SPACING = { sm: 8, md: 16, lg: 24 };
 
-const baseActions = [
-  {
-    label: "Create File",
-    prompt: "Create a new file named meeting_notes.txt with a short outline.",
-  },
-  {
-    label: "Summarize File",
-    prompt: "Summarize the file meeting_notes.txt into bullet points.",
-  },
-  {
-    label: "Run Device Action",
-    prompt: "Lock my Mac screen.",
-  },
-];
-
-const appActions: Record<string, { label: string; prompt: string }[]> = {
-  nutrition: [
-    { label: "Log Meal", prompt: "Log today's meal notes in nutrition_log.txt." },
-    { label: "Summarize Week", prompt: "Summarize nutrition_log.txt for the last 7 days." },
-    { label: "Device Action", prompt: "Lock my Mac screen." },
-  ],
-  finance: [
-    { label: "Add Expense", prompt: "Add a new expense entry to finance_log.txt." },
-    { label: "Summarize Month", prompt: "Summarize finance_log.txt for this month." },
-    { label: "Device Action", prompt: "Lock my Mac screen." },
-  ],
-  study: [
-    { label: "Start Notes", prompt: "Create a study_notes.txt file with key topics." },
-    { label: "Summarize Notes", prompt: "Summarize study_notes.txt into bullet points." },
-    { label: "Device Action", prompt: "Lock my Mac screen." },
-  ],
-  health: [
-    { label: "Log Check-in", prompt: "Log a health check-in in health_log.txt." },
-    { label: "Summarize Week", prompt: "Summarize health_log.txt for the last 7 days." },
-    { label: "Device Action", prompt: "Lock my Mac screen." },
-  ],
-  language: [
-    { label: "Start Lesson", prompt: "Create language_notes.txt with today's lesson outline." },
-    { label: "Practice Speaking", prompt: "Create a speaking_drills.txt with 5 practice prompts." },
-    { label: "Review Notes", prompt: "Summarize language_notes.txt into key phrases." },
-  ],
-};
-
 type ChatScreenProps = {
-  showHeader?: boolean;
-  showAppChip?: boolean;
+  agentId: string;
 };
 
-export default function ChatScreen({ showHeader = true, showAppChip = true }: ChatScreenProps) {
+export default function ChatScreen({ agentId }: ChatScreenProps) {
   const theme = useTheme();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { session } = useSessionState();
-  const { sessions, activeSessionId, createSession, addMessage, setSessionTitle } = useChatStore();
-  const { activeApp, clearActiveApp } = useAppContextStore();
+  const { agents } = useMobileOverviewData();
+  const { sessions, ensureSessionForAgent, addMessage, setActiveSession } = useChatStore();
+  const { activeApp } = useAppContextStore();
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const { banner, showBanner } = useTransientBanner();
   const initializedSessions = useRef<Set<string>>(new Set());
-  const lastAppId = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      createSession();
-    }
-  }, [activeSessionId, createSession]);
-
-  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const directory = useMemo(() => buildAgentDirectory(agents), [agents]);
+  const activeAgent = useMemo(
+    () => getAgentById(agentId, agents) || directory[0],
+    [agentId, agents, directory],
+  );
+  const activeSession = sessions.find((item) => item.agentId === agentId);
   const messages = activeSession?.messages || [];
-  const hasUserMessages = messages.some((message) => message.intent === "user");
-  const showQuickActions = !hasUserMessages;
-  const quickActions = activeApp ? appActions[activeApp.id] || baseActions : baseActions;
 
   useEffect(() => {
-    if (!activeSessionId) return;
-    if (initializedSessions.current.has(activeSessionId)) return;
+    if (!activeAgent) return;
+    const sessionId = ensureSessionForAgent(activeAgent);
+    setActiveSession(sessionId);
+  }, [activeAgent, ensureSessionForAgent, setActiveSession]);
+
+  useEffect(() => {
+    if (!activeSession?.id || !activeAgent) return;
+    if (initializedSessions.current.has(activeSession.id)) return;
     if (!activeSession || activeSession.messages.length > 0) return;
-    initializedSessions.current.add(activeSessionId);
-    addMessage(activeSessionId, {
+    initializedSessions.current.add(activeSession.id);
+    addMessage(activeSession.id, {
       intent: "assistant",
-      speech: "System ready. Ask me to create files, summarize documents, or run device actions.",
+      speech: activeAgent.intro,
     } as AgentPayload);
-  }, [activeSessionId, activeSession, addMessage]);
-
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const currentId = activeApp?.id || null;
-    if (lastAppId.current === currentId) return;
-    lastAppId.current = currentId;
-    if (currentId && activeApp?.name) {
-      addMessage(activeSessionId, {
-        intent: "assistant",
-        speech: `App mode: ${activeApp.name}. Actions are scoped to this app.`,
-      } as AgentPayload);
-    }
-  }, [activeApp, activeSessionId, addMessage]);
+  }, [activeAgent, activeSession, addMessage]);
 
   const handleMediaUpload = () => {
-    const sessionId = activeSessionId || createSession();
+    if (!activeAgent) return;
+    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
     addMessage(sessionId, {
       intent: "assistant",
       speech: "Media uploads are disabled in V1. Use text input for now.",
@@ -134,25 +85,23 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
   };
 
   const handlePlusPress = () => {
-    const sessionId = activeSessionId || createSession();
+    if (!activeAgent) return;
+    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
     addMessage(sessionId, {
       intent: "assistant",
-      speech: "Shortcuts live below. Tap a suggestion to run it.",
+      speech: "Type what you want to do and I’ll handle it from here.",
     } as AgentPayload);
   };
 
   const sendMessage = async (textOverride?: string) => {
+    if (!activeAgent) return;
     const finalInput = (textOverride || input).trim();
     if (!finalInput) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const sessionId = activeSessionId || createSession();
+    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
     const userMessage: AgentPayload = { intent: "user", speech: finalInput };
     addMessage(sessionId, userMessage);
-    if (!activeSession?.title || activeSession.title === "New Chat") {
-      setSessionTitle(sessionId, finalInput);
-    }
-
     setInput("");
     setIsLoading(true);
 
@@ -168,7 +117,7 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
 
     let runId: string | null = null;
     try {
-      const created = await mobileApi.createRun(session, finalInput, undefined, {
+      const created = await mobileApi.createRun(session, finalInput, activeSession?.runtimeRole || activeAgent.runtimeRole, {
         appId: activeApp?.id,
       });
       runId = created.run_id || null;
@@ -279,14 +228,16 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
     }
     try {
       await mobileApi.resolveApproval(session, card.runId, card.approvalId, decision);
-      addMessage(activeSessionId || createSession(), {
+      if (!activeAgent) return;
+      addMessage(activeSession?.id || ensureSessionForAgent(activeAgent), {
         intent: "assistant",
         speech: decision === "approved" ? "Approval sent. Executing now." : "Action canceled.",
       } as AgentPayload);
       showBanner(decision === "approved" ? "Approval sent." : "Action canceled.", "success");
     } catch (err) {
       console.warn("Approval resolution failed", err);
-      addMessage(activeSessionId || createSession(), {
+      if (!activeAgent) return;
+      addMessage(activeSession?.id || ensureSessionForAgent(activeAgent), {
         intent: "assistant",
         speech: "Approval failed. Check core connection.",
       } as AgentPayload);
@@ -414,53 +365,57 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
       {banner ? <TransientBanner message={banner.message} tone={banner.tone} /> : null}
-      {showHeader ? (
-        <>
-          <View
-            style={{
-              paddingHorizontal: SPACING.md,
-              paddingTop: SPACING.sm,
-              paddingBottom: SPACING.sm,
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <Text style={{ fontSize: 18, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-              Assistant
+      <View
+        style={{
+          paddingTop: insets.top + 6,
+          paddingHorizontal: SPACING.md,
+          paddingBottom: SPACING.sm,
+          backgroundColor: "#FFFFFF",
+          borderBottomWidth: 1,
+          borderBottomColor: "#E5E7EB",
+          flexDirection: "row",
+          alignItems: "center",
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: "center",
+            justifyContent: "center",
+            marginRight: 10,
+          }}
+        >
+          <Ionicons name="chevron-back" size={24} color="#111827" />
+        </TouchableOpacity>
+        <View
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            backgroundColor: activeSession?.avatarColor || activeAgent?.avatarColor || theme.colors.accent,
+            alignItems: "center",
+            justifyContent: "center",
+            marginRight: 12,
+          }}
+        >
+          <Ionicons name={(activeSession?.icon || activeAgent?.icon || "sparkles") as any} size={18} color="#FFFFFF" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 18, fontFamily: "Fraunces_700Bold", color: "#111827" }}>
+            {activeSession?.agentName || activeAgent?.label || "Chat"}
+          </Text>
+          {activeAgent?.subtitle ? (
+            <Text style={{ marginTop: 2, fontSize: 12, color: "#6B7280" }} numberOfLines={1}>
+              {activeAgent.subtitle}
             </Text>
-            <CoreStatusBar variant="pill" />
-          </View>
-          {showAppChip && activeApp ? (
-            <View style={{ paddingHorizontal: SPACING.md, paddingBottom: SPACING.sm }}>
-              <View
-                style={{
-                  alignSelf: "flex-start",
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  backgroundColor: theme.colors.surface,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <Text style={{ fontSize: 11, color: theme.colors.textSecondary }}>App</Text>
-                <Text style={{ fontSize: 12, color: theme.colors.text, fontFamily: "DMSans_700Bold" }}>
-                  {activeApp.name}
-                </Text>
-                <TouchableOpacity onPress={clearActiveApp}>
-                  <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>×</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
           ) : null}
-        </>
-      ) : null}
+        </View>
+      </View>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1 }}
@@ -471,7 +426,7 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
           keyExtractor={(_, i) => i.toString()}
           renderItem={renderMessage}
           ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-          contentContainerStyle={{ paddingTop: SPACING.sm, paddingBottom: 96 }}
+          contentContainerStyle={{ paddingTop: SPACING.sm, paddingBottom: 96, backgroundColor: "#FFFFFF" }}
           ListEmptyComponent={
             <View style={{ paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm }}>
               <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Start a conversation.</Text>
@@ -480,36 +435,13 @@ export default function ChatScreen({ showHeader = true, showAppChip = true }: Ch
         />
 
         <View style={{ paddingBottom: 0 }}>
-          {showQuickActions ? (
-            <View style={{ paddingHorizontal: SPACING.md, paddingBottom: SPACING.sm }}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.sm }}>
-                {quickActions.map((action) => (
-                  <TouchableOpacity
-                    key={action.label}
-                    style={{
-                      paddingHorizontal: 12,
-                      height: 30,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: theme.colors.border,
-                      backgroundColor: theme.colors.surface,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                    onPress={() => sendMessage(action.prompt)}
-                  >
-                    <Text style={{ fontSize: 12, color: theme.colors.text }}>{action.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
           <InputBar
             onSend={(text) => sendMessage(text)}
             onMediaUpload={handleMediaUpload}
             onPlusPress={handlePlusPress}
             isLoading={isLoading}
             prefilledPrompt={input}
+            placeholder={`Message ${activeSession?.agentName || activeAgent?.label || "agent"}`}
           />
         </View>
       </KeyboardAvoidingView>

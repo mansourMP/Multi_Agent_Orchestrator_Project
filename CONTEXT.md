@@ -1,206 +1,340 @@
-```md
-# Empyralist Handoff Packet
+# Empyralist Context Handoff
 
-## 1. Goal
-- Build **Empyralist** as a general-purpose AI agent platform with:
-  - **web chat as the primary surface**
-  - **real agent behavior in web chat**
-  - **Telegram as a simpler channel surface**
-  - **persistent automations/workflows**
-  - **solution surfaces** like Hotel Vision
-- Near-term business goal: migrate clients from **n8n** into Empyralist.
-- Product direction: **OpenClaw-like native agent capability**, but with a much simpler, more premium UX.
+## Product vision
+- Empyralist should be an **AI operations platform for end-to-end business execution**.
+- It should not feel like n8n, a developer automation toy, or a “summarize this” utility product.
+- The target product shape is:
+  - **one calm operator-facing platform**
+  - **general business work execution**
+  - **outcome-first UX**
+  - **workflow/canvas as a secondary power surface**
+- Best mental model:
+  - users define an outcome
+  - connect systems
+  - deploy a reusable workflow/playbook
+  - run work
+  - monitor runs
+  - inspect assets/evidence
+  - approve when needed
 
-## 2. Current Project State
-- Monorepo root: `/Users/mansur/Multi_Agent_Orchestrator_Project`
-- Frontend: Next.js app in `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend`
-- Backend/runtime: FastAPI app in `/Users/mansur/Multi_Agent_Orchestrator_Project/server.py`
-- Backend modules: `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules`
-- Local worker/runtime: `/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_local_worker*.py`
-- Desktop shell: `/Users/mansur/Multi_Agent_Orchestrator_Project/desktop`
-- Brand is **Empyralis**; internal compatibility name **Orion** remains in code where needed.
+## UX / product direction
+- Product references repeatedly used in this thread:
+  - OpenAI Platform
+  - Apple-like calm minimalism
+  - Linear / Notion style clarity
+- The intended tone:
+  - clean
+  - spacious
+  - soft
+  - premium
+  - non-developer-friendly
+- Strong recurring decision:
+  - **reduce technical noise**
+  - **reduce harsh lines**
+  - **reduce sharp boxes**
+  - **make every button obvious**
 
-## 3. What Has Already Been Done
+## Core IA / navigation
+- Current intended sidebar language:
+  - `Home`
+  - `Chat`
+  - `Builder`
+  - `Workflows`
+  - `Runs`
+  - `Integrations`
+  - `Usage`
+  - `Assets`
+  - bottom: `Settings`, `Profile`
+- Terminology standardization completed:
+  - `Automations` → `Workflows`
+  - `Activity` → `Runs`
+  - `Connections` → `Integrations`
+  - `Files` → `Assets`
+- Internal route names may still use older ids in a few places for compatibility, but user-facing copy should follow the new nouns.
 
-### Product / UX
-- Web chat no longer redirects users into `/setup`.
-- Web chat onboarding was simplified; chat empty state is now the primary “start here” surface.
-- Sidebar brand is non-clickable.
-- Sidebar is back to **icons only** with this order:
-  1. Dashboard
-  2. Chat
-  3. Automations
-  4. Activity
-  5. Files
-  6. Connections
-  7. Hotel Vision
-  8. Settings
-  9. Account
+## Current routing / page model
+- ` / ` = Chat surface, kept unchanged as primary conversational surface
+- `/home` = clean Home page
+- `/builder` = Builder landing page / hub
+- `/builder/new` = new workflow canvas
+- `/builder/[id]` = existing workflow editor
+- `/workflows` = reusable workflow library
+- `/executions` = Runs page
+- `/credentials` = Integrations page
+- `/artifacts` = Assets page
+- `/usage` = Usage page
 
-### Web chat behavior
-- **Important:** web chat intent bridge was removed.
-- Web chat should now always call the real runtime agent path.
-- Remaining fix applied: web chat now clears outcome-pack metadata so it does not accidentally hit deterministic pack behavior.
+## Builder model
+- Important product conclusion from this thread:
+  - Builder should not immediately dump the user into the graph editor.
+  - OpenAI-style structure is better:
+    - Builder hub first
+    - actual editor second
+- Implemented direction:
+  - `/builder` is a Builder hub
+  - canvas is on `/builder/new` and `/builder/[id]`
+- Builder/editor UX direction:
+  - prompt-first
+  - generated workflow second
+  - manual editing third
+- Builder canvas remains one of the stronger surfaces in the product.
 
-### Telegram behavior
-- Telegram keeps a shortcut/intention bridge in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py`
-- That is acceptable by product decision.
+## Shell / design system state
+- The shell was heavily redesigned toward a calmer OpenAI-like platform feel.
+- Current shell decisions:
+  - unified topbar + sidebar visual system
+  - soft neutral shell background
+  - large rounded white content board on standard pages
+  - softer borders and lower-contrast lines
+  - softer navigation selection
+  - collapse toggle placed **inside the left panel**
+  - open-state toggle aligned to the **right side** of the panel
+  - sidebar selection should read as **rounded-square**, not circular/pill-like
+- Repeated user preference:
+  - minimalistic
+  - creamy / soft opacity vibe
+  - less sharpness
+  - stronger visual calm
 
-### Workflows / Canvas
-- Workflow editor upgraded from linear chain to a **true graph canvas** in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/workflows/[id]/WorkflowEditorInnerPro.tsx`
-- Added manual edge creation.
-- Added edge deletion by selection + Backspace and right-click.
-- Added node search popup on empty-canvas click.
-- Added new node types/components:
-  - HTTP Request
-  - If / Condition
-  - Transform
-  - Code
-- New node files:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/nodes/StandardCanvasNode.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/nodes/HttpRequestNode.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/nodes/ConditionNode.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/nodes/TransformNode.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/nodes/CodeNode.tsx`
+## Major frontend changes already implemented
 
-### Hotel Vision / MCP
-- MCP support added in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/mcp_server.py`
-- Current MCP tools:
-  - `list_spaces`
-  - `get_space_status`
-  - `get_recent_alerts`
-  - `ask_space`
-- Hotel Vision onboarding route exists:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/solutions/hotel-vision/onboarding/page.tsx`
-- Backend onboarding endpoints live in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/solutions/hotel-vision/solution.py`
+### Shell and layout
+- `frontend/app/globals.css`
+  - broad redesign of tokens and shell appearance
+  - softer borders, unified shell background, calmer cards
+  - reusable overview sections for page composition
+  - shared classes added for home/runs/integrations/assets internals
+- `frontend/components/Sidebar.tsx`
+  - redesigned navigation
+  - collapse behavior
+  - in-panel toggle
+- `frontend/components/orion/PlatformTopBar.tsx`
+  - simplified top bar
+  - removed earlier wrong top-shell clutter for Builder routes
 
-### Runtime / agent tooling
-- Current local execution tools are defined in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_policy.py`
-- Builder/local file APIs exist in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_workspace_api.py`
-- Local worker syntax blockers were previously fixed in:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_local_worker_execution.py`
+### Home
+- `frontend/app/home/page.tsx`
+  - no longer just three flat equal cards
+  - now has:
+    - primary “start work” overview
+    - side section for recent workflow continuation
+    - recent workflows section with stronger hierarchy
 
-## 4. Important Decisions Made and Why
-- **Web chat = always real agent**
-  - No keyword interception, no scripted setup state machine, no pre-written reply injection.
-  - Reason: the main product surface must feel like a real assistant, not a hidden form engine.
-- **Telegram may keep shortcuts**
-  - Reason: Telegram is a lightweight delivery channel and can tolerate channel-specific shortcuts.
-- **Single visible assistant**
-  - Multi-agent orchestration can exist internally, but the user should feel they are talking to one operator.
-- **Operator/admin surfaces remain secondary**
-  - `/setup`, `/health`, `/executions`, advanced workflow controls stay in the product but should not dominate first-run UX.
-- **Workflow canvas must become graph-native**
-  - Reason: n8n migration and serious automation authoring are impossible with a forced linear chain.
-- **Telegram-first for non-technical alert onboarding**
-  - Reason: it is materially simpler than WhatsApp/Twilio.
+### Runs
+- `frontend/app/executions/page.tsx`
+  - upgraded into a more serious operations page
+  - top section now emphasizes current run pressure / execution state
+  - metric strip is secondary to the main operational summary
+  - filters and queue remain below
 
-## 5. Constraints, Preferences, and Rules
-- Do **not** reintroduce web-chat intent interception.
-- Do **not** force redirect users from chat into setup.
-- Do **not** expose too much operator/runtime language on user-facing surfaces.
-- Keep the shell layout unless there is an explicit reason to change it.
-- Keep Hotel Vision as a solution surface, not the entire product identity.
-- Prefer minimal, behavior-preserving changes.
-- Do not revert unrelated changes; assume repo may be dirty.
-- If debugging UI state, restarting the local stack may still be necessary.
+### Integrations
+- `frontend/app/credentials/page.tsx`
+  - reframed around business system access
+  - overview added
+  - directory and AI providers separated more clearly
+  - partial refactor away from inline styling started
 
-## 6. Files, Folders, URLs, Tools, Commands
+### Assets
+- `frontend/app/artifacts/page.tsx`
+  - reframed as evidence/output layer
+  - overview added
+  - deliverables/evidence/system focus improved
+  - partial refactor away from inline styling started
 
-### Main code locations
-- Frontend home/chat shell:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/page.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/page.api.ts`
-- Sidebar:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/Sidebar.tsx`
-- Global styles:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/globals.css`
-- Workflow library:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/workflows/page.tsx`
-- Workflow editor:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/workflows/[id]/WorkflowEditorInnerPro.tsx`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/workflows/[id]/WorkflowEditorInnerLite.tsx`
-- Workflow API client:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/lib/api.ts`
-- Telegram connector/shortcut logic:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py`
-- Connector catalog:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/server.py`
-- MCP server:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/mcp_server.py`
+## Remaining frontend work
+- Biggest remaining UX/design debt is **inside large detail surfaces**, not the shell.
+- Highest-value remaining visual work:
+  1. normalize the connected-system detail pane in `frontend/app/credentials/page.tsx`
+  2. normalize the add-connection modal in `frontend/app/credentials/page.tsx`
+  3. continue extracting shared classes from large inline-styled surfaces
+- The shell itself is close enough now. Do not spend more cycles on shell chrome unless a specific issue appears.
 
-### Relevant URLs
-- Frontend dev: `http://127.0.0.1:3000`
-- Runtime/API: `http://127.0.0.1:8001`
-- Backend workflow API: `http://127.0.0.1:4000`
-- Workflow library: `/workflows`
-- Workflow editor: `/workflows/[id]`
-- Hotel Vision: `/solutions/hotel-vision`
-- Telegram onboarding: `/credentials?connector=telegram_bot&onboarding=1`
+## Runtime / model architecture
 
-### Useful commands
-- Frontend typecheck:
+### High-level decision
+- LiteLLM was introduced, but **not as a replacement for the existing provider/profile system**.
+- Chosen architecture:
+  - LiteLLM is infrastructure behind the existing runtime/profile/vault model
+  - existing provider/profile resolution remains top-level authority
+  - BYOK should come from the existing encrypted credential vault / provider profiles, not a new raw per-request secret flow
+
+### Implemented backend pieces
+- Added unified router:
+  - `server_modules/model_router.py`
+- Added backend Builder generation route:
+  - `server_modules/routes_builder.py`
+- Registered backend route in:
+  - `server.py`
+- Moved OpenAI / Anthropic / Gemini generation behind the unified router through provider/profile paths
+- Vertex is handled through a compatibility fallback because current credential shape does not map cleanly to native LiteLLM Vertex usage
+
+### Builder generation move
+- Direct frontend OpenAI Builder call was removed
+- Builder generation now goes through backend
+- Frontend proxy route:
+  - `frontend/app/api/builder/generate/route.ts`
+- Backend route returns parsed workflow JSON, not just a raw JSON string
+
+### Alias catalog / model selection
+- Added normalized model alias catalog endpoint:
+  - backend alias discovery available through `/providers/model-aliases`
+- Frontend now uses alias-friendly model surfaces
+- `AiAccountsPanel.tsx` free-text model input was replaced with a grouped provider-aware alias selector
+
+## BYOK / provider profile model
+- The platform now leans on:
+  - saved provider credentials
+  - provider profiles
+  - runtime profile ordering / fallback
+- User-facing runtime profile management was added in:
+  - `frontend/components/orion/connections/AiAccountsPanel.tsx`
+- Implemented:
+  - default runtime profile actions
+  - visible fallback order
+  - grouped runtime profile display
+  - clearer provider/profile control surface
+
+## Execution profile propagation
+- Runtime profile selection was threaded across the app.
+
+### Builder
+- Builder can choose a runtime profile
+- Builder saves runtime profile metadata into workflow metadata
+- Builder generation and Evaluate use that profile
+
+### Workflow editor / workflow execution
+- Workflow editor persists runtime profile metadata
+- Workflow launches now use the same explicit runtime profile execution contract as Builder
+
+### Runs visibility
+- Runs now expose and display:
+  - active profile id
+  - active profile label
+  - active provider
+  - active model
+- Run context is seeded immediately at run creation so the UI doesn’t need to wait for later runtime logs
+
+## Immediate run UX improvements
+- Added runtime run seed handling:
+  - `frontend/lib/runtimeRunSeed.ts`
+- Builder, workflow editor, workflow studio, and chat now:
+  - seed immediate run metadata
+  - can show `Open live run`
+  - keep run context visible before history refresh catches up
+
+## Copy / terminology consistency
+- Large copy cleanup has already been done across:
+  - assistant surfaces
+  - workbench surfaces
+  - setup
+  - control center
+  - team
+  - workflows
+  - runs
+  - integrations
+  - assets
+- The platform should continue using:
+  - workflows
+  - runs
+  - integrations
+  - assets
+- Avoid reintroducing the old nouns in user-facing copy unless required for legacy commands or internal ids.
+
+## Tests and validation status
+- Repeatedly validated during this thread:
   - `cd /Users/mansur/Multi_Agent_Orchestrator_Project/frontend && ./node_modules/.bin/tsc --noEmit`
-- Frontend lint:
-  - `cd /Users/mansur/Multi_Agent_Orchestrator_Project/frontend && ./node_modules/.bin/eslint <files>`
-- Python compile check:
-  - `python3 -m py_compile <file>`
-- Local stack scripts:
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/start_empyralis_local_stack.sh`
-  - `/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/stop_empyralis_local_stack.sh`
+  - `cd /Users/mansur/Multi_Agent_Orchestrator_Project && source venv/bin/activate && python -m unittest discover -s server_modules/tests -p 'test_*.py'`
+- Backend test count recently observed:
+  - 14 tests passing
+- Known warnings:
+  - FastAPI `on_event` deprecation warnings
+  - Python `asyncio.iscoroutinefunction` deprecation warning through FastAPI internals
+- These warnings are not current blockers.
 
-## 7. Open Problems / Blockers
-- Need to confirm that **web chat** no longer surfaces deterministic pack/scripted behavior after the latest metadata-clearing fix.
-- `run_autopilot` global command path still references `derivedSetupReady`; that may be acceptable for UI-triggered setup gating, but it is separate from normal chat sends.
-- Workflow graph editor is now graph-capable, but semantics are still shallow:
-  - no true branch outputs for `If`
-  - no execution semantics for new node types yet
-  - no expression/data-mapping layer yet
-- n8n migration is still blocked on:
-  - importer
-  - richer tool surface
-  - more integrations
-- UX still has some operator/admin leakage in various surfaces.
+## Important product conclusions from this thread
+- The platform should be built as:
+  - an **AI execution platform**
+  - not a narrow automation product
+  - not a developer workflow tool
+- Best wedge recommendation discussed:
+  - operations teams first
+  - especially revenue ops / customer ops / executive ops
+- Product objects that matter most:
+  - outcomes
+  - workflows/playbooks
+  - runs
+  - agents
+  - integrations
+  - approvals
+  - assets/evidence
+- Trust is built through:
+  - explicit runtime profile visibility
+  - visible run state
+  - visible execution context
+  - visible outputs/evidence
 
-## 8. Exact Next Steps
-1. **Verify web chat behavior end-to-end**
-   - Send normal chat prompts from `/workspace`
-   - Confirm no pre-written camera/setup replies appear from the frontend path
-   - If scripted replies still appear, trace backend runtime path next
-2. **Polish graph canvas**
-   - Add true `If` branch outputs (`true` / `false`)
-   - Add richer inspector panels for new node types
-   - Add edge labels or branch labels if needed
-3. **Add generic HTTP/Webhook execution layer**
-   - Highest leverage for n8n migration
-4. **Design n8n importer MVP**
-   - Start with linear/simple graphs
-   - Output warnings for unsupported nodes
-5. **Keep user mode clean**
-   - Reduce technical language on primary surfaces
-   - Keep advanced/operator surfaces secondary
+## What should not be undone
+- Do not revert the Builder split into hub + editor.
+- Do not reintroduce harsh, admin-like shell styling.
+- Do not move back toward developer-heavy wording.
+- Do not replace runtime profile selection with implicit hidden defaults only.
+- Do not make Builder the only first-class surface; Chat, Home, Runs, Integrations, and Assets all matter.
 
-## 9. Things to Avoid Repeating
-- Do not re-add:
-  - web chat keyword intent bridge
-  - scripted web chat setup replies
-  - forced setup redirects from chat
-  - full-screen onboarding takeover at `/`
-  - sidebar text labels under icons
-- Do not assume the workflow canvas is visible from the library page itself; it opens only after selecting a workflow.
-- Do not treat Telegram shortcut logic as proof that web chat is behaving the same way.
+## Current highest-value next steps
+1. **Finish refactoring `frontend/app/credentials/page.tsx`**
+   - connected-system detail pane
+   - add-connection modal
+   - reduce inline styling further
+2. **Finish refactoring `frontend/app/artifacts/page.tsx`**
+   - continue extracting repeated card/action layout into shared classes
+3. **Then do a final micro-polish pass**
+   - spacing
+   - density
+   - radius consistency
+   - copy consistency on remaining corners
 
-## 10. Working Style
-- Be direct and compact.
-- Prefer code truth over assumptions.
-- Validate with `tsc`, `eslint`, and targeted compile checks after each focused change.
-- Keep changes scoped; do not widen work without reason.
-- If a user-facing behavior seems “impossible,” verify the actual send path and metadata first.
-- Optimize for product clarity: one assistant, one next step, minimal exposed machinery.
-```
+## Current project posture
+- The platform is in a much better place than at the start of this thread.
+- The remaining problems are now mostly:
+  - detail-level frontend consistency
+  - density / local panel polish
+  - not fundamental product direction
+
+## Useful files to know
+
+### Frontend
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/globals.css`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/Sidebar.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/orion/PlatformTopBar.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/home/page.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/executions/page.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/credentials/page.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/artifacts/page.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/builder/page.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/builder/BuilderCanvasPage.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/app/workflows/[id]/WorkflowEditorInnerPro.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/components/orion/connections/AiAccountsPanel.tsx`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/lib/api.ts`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/lib/runStartCopy.ts`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/lib/runtimeRunSeed.ts`
+
+### Backend
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/model_router.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/routes_builder.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/provider_profiles.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_execution.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_output.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_model_router.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_routes_builder.py`
+- `/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_credential_resolution.py`
+
+## Short directive for the next chat
+- Continue from the current design/product direction.
+- Do **not** reopen the platform vision debate unless a major contradiction appears.
+- Focus next on:
+  - finishing `Integrations` detail panes and modal cleanup
+  - then final polish on `Assets`
+  - then micro-polish across standard pages

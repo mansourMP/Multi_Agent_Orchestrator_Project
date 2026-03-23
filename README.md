@@ -4,6 +4,9 @@
 ![Status](https://img.shields.io/badge/Status-70%25%20Complete-blue)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
+
+
+
 ## Empyralis Current Quickstart
 
 For the currently maintained Empyralis Autopilot flow (simple user mode), use:

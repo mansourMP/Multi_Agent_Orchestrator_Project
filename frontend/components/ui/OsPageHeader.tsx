@@ -12,7 +12,7 @@ export function OsPageHeader({ icon, title, subtitle, meta, actions }: OsPageHea
   return (
     <header className="orion-page-header">
       <div className="orion-page-title-wrap">
-        <div className="orion-page-icon">{icon}</div>
+        {icon ? <div className="orion-page-icon">{icon}</div> : null}
         <div>
           <h1 className="orion-page-title">{title}</h1>
           {subtitle ? <p className="orion-page-subtitle">{subtitle}</p> : null}

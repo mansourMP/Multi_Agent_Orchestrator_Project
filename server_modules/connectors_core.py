@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules.model_router import list_model_aliases
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -335,6 +336,10 @@ async def get_provider_models(
         return {"provider": provider_id, "models": models}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def get_model_alias_catalog():
+    return {"models": list_model_aliases()}
 
 async def list_credentials_vault(workspace_id: Optional[str] = None):
     return {"items": list_vault_credentials(workspace_id)}

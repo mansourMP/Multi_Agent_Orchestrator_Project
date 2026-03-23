@@ -430,42 +430,27 @@ def call_openai_responses(system_prompt: str, user_input: str) -> Dict[str, Any]
             " / OPENAI_API_KEY)."
         )
 
-    headers = {
-        "Authorization": f"Bearer {openai_key}",
-        "Content-Type": "application/json",
-    }
-    if OPENAI_ORG_ID:
-        headers["OpenAI-Organization"] = OPENAI_ORG_ID
-    if OPENAI_PROJECT_ID:
-        headers["OpenAI-Project"] = OPENAI_PROJECT_ID
-
-    payload = {
-        "model": CODEX_MODEL,
-        "instructions": system_prompt,
-        "input": user_input,
-    }
-
-    body = json.dumps(payload).encode("utf-8")
-    req = urlrequest.Request(OPENAI_RESPONSES_URL, data=body, headers=headers, method="POST")
-    context = ssl.create_default_context(cafile=certifi.where())
-
-    def _open():
-        if ORION_ALLOW_SYSTEM_PROXY:
-            return urlrequest.urlopen(req, timeout=60, context=context)
-        opener = urlrequest.build_opener(
-            urlrequest.ProxyHandler({}),
-            urlrequest.HTTPSHandler(context=context),
-        )
-        return opener.open(req, timeout=60)
-
     try:
-        with _open() as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw)
-    except urlerror.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
-        detail = raw or str(exc)
-        raise RuntimeError(f"OpenAI responses error ({exc.code}): {detail}") from exc
+        from server_modules.model_router import call_model_sync
+
+        result = call_model_sync(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            model=CODEX_MODEL,
+            provider="openai",
+            credentials={
+                "access_token": openai_key,
+                "org_id": OPENAI_ORG_ID,
+                "project_id": OPENAI_PROJECT_ID,
+            },
+        )
+        return {
+            "output_text": result.get("content") or "",
+            "model": result.get("model") or CODEX_MODEL,
+            "usage": result.get("usage") or {},
+        }
     except Exception as exc:
         raise RuntimeError(f"OpenAI responses call failed: {exc}") from exc
 

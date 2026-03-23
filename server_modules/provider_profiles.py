@@ -360,23 +360,18 @@ class OpenAIAdapter(ProviderAdapter):
         return sorted(set(models))
 
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
-        payload = {
-            "model": model,
-            "instructions": system_prompt,
-            "input": user_input,
-        }
-        res = http_json_request(
-            OPENAI_RESPONSES_URL,
-            method="POST",
-            headers=self._headers(credentials),
-            payload=payload,
-            timeout=60,
+        from server_modules.model_router import call_model_sync
+
+        result = call_model_sync(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            model=model,
+            provider=self.provider_id,
+            credentials=credentials,
         )
-        body = res.get("json")
-        if not isinstance(body, dict):
-            raise RuntimeError("OpenAI returned invalid response.")
-        _init()
-        return _server.extract_openai_text(body)
+        return str(result.get("content") or "").strip()
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -408,33 +403,19 @@ class AnthropicAdapter(ProviderAdapter):
         return sorted(set(out))
 
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
-        payload = {
-            "model": model,
-            "max_tokens": 1024,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_input}],
-        }
-        res = http_json_request(
-            "https://api.anthropic.com/v1/messages",
-            method="POST",
-            headers=self._headers(credentials),
-            payload=payload,
-            timeout=60,
+        from server_modules.model_router import call_model_sync
+
+        result = call_model_sync(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            model=model,
+            provider=self.provider_id,
+            credentials=credentials,
+            max_tokens=1024,
         )
-        body = res.get("json")
-        if not isinstance(body, dict):
-            raise RuntimeError("Anthropic returned invalid response.")
-        content = body.get("content")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text")
-                    if isinstance(text, str) and text.strip():
-                        parts.append(text.strip())
-            if parts:
-                return "\n".join(parts)
-        raise RuntimeError("Anthropic response did not include text content.")
+        return str(result.get("content") or "").strip()
 
 
 class ClaudeCodeCLIAdapter(ProviderAdapter):
@@ -498,38 +479,18 @@ class GeminiAdapter(ProviderAdapter):
         return sorted(set(out))
 
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
-        key = self._api_key(credentials)
-        payload = {
-            "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_input}]}],
-        }
-        res = http_json_request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(model)}:generateContent?key={quote_plus(key)}",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-            payload=payload,
-            timeout=60,
+        from server_modules.model_router import call_model_sync
+
+        result = call_model_sync(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            model=model,
+            provider=self.provider_id,
+            credentials=credentials,
         )
-        body = res.get("json")
-        if not isinstance(body, dict):
-            raise RuntimeError("Gemini returned invalid response.")
-        candidates = body.get("candidates")
-        texts = []
-        if isinstance(candidates, list):
-            for cand in candidates:
-                if not isinstance(cand, dict):
-                    continue
-                content = cand.get("content", {})
-                if not isinstance(content, dict):
-                    continue
-                for part in content.get("parts", []) if isinstance(content.get("parts"), list) else []:
-                    if isinstance(part, dict):
-                        text = part.get("text")
-                        if isinstance(text, str) and text.strip():
-                            texts.append(text.strip())
-        if texts:
-            return "\n".join(texts)
-        raise RuntimeError("Gemini response did not include text content.")
+        return str(result.get("content") or "").strip()
 
 
 class VertexAdapter(ProviderAdapter):
@@ -853,6 +814,21 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             )
             seen_labels.add("env-openai")
 
+    if canonical_provider == "anthropic":
+        env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        if env_key and "env-anthropic" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {
+                        "api_key": env_key,
+                    },
+                    "profile_id": None,
+                    "label": "env-anthropic",
+                }
+            )
+            seen_labels.add("env-anthropic")
+
     if canonical_provider == "anthropic" and claude_code_cli_available() and "local-claude-cli" not in seen_labels:
         candidates.append(
             {
@@ -863,5 +839,20 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
             }
         )
         seen_labels.add("local-claude-cli")
+
+    if canonical_provider == "gemini":
+        env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+        if env_key and "env-gemini" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {
+                        "api_key": env_key,
+                    },
+                    "profile_id": None,
+                    "label": "env-gemini",
+                }
+            )
+            seen_labels.add("env-gemini")
 
     return candidates

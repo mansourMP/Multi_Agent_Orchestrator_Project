@@ -35,8 +35,8 @@ function SmoothActionEdgeComponent({
                 path={path}
                 interactionWidth={28}
                 style={{
-                    stroke: 'rgba(128, 128, 120, 0.42)',
-                    strokeWidth: 2,
+                    stroke: 'rgba(138, 138, 132, 0.32)',
+                    strokeWidth: 1.75,
                     strokeLinecap: 'round',
                 }}
             />

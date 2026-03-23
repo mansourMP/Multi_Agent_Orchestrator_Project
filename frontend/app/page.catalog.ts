@@ -53,6 +53,14 @@ export type ProviderOption = {
   defaultAuthMode?: string;
   authModes?: { id: string; label: string; secretRequired?: boolean }[];
 };
+export type ModelAliasOption = {
+  alias: string;
+  provider: ProviderId;
+  model: string;
+  resolvedModel: string;
+  isGlobalDefault: boolean;
+  isProviderDefault: boolean;
+};
 export type ConnectorOption = {
   id: ConnectorId;
   label: string;
@@ -883,7 +891,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'anthropic',
     label: 'Anthropic',
-    defaultModel: 'claude-3-5-sonnet-20241022',
+    defaultModel: 'claude-sonnet',
     auth: ['api_key', 'local_cli'],
     defaultAuthMode: 'api_key',
     authModes: [
@@ -894,7 +902,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'gemini',
     label: 'Google Gemini',
-    defaultModel: 'gemini-2.0-flash',
+    defaultModel: 'gemini-flash',
     auth: ['api_key'],
     defaultAuthMode: 'api_key',
     authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
@@ -902,7 +910,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'vertex',
     label: 'Google Vertex AI',
-    defaultModel: 'gemini-2.0-flash-001',
+    defaultModel: 'vertex-gemini-flash',
     auth: ['access_token', 'project_id', 'location'],
     defaultAuthMode: 'access_token',
     authModes: [{ id: 'access_token', label: 'Access Token', secretRequired: true }],
@@ -911,11 +919,78 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
   openai: ['gpt-4.1', 'gpt-4o-mini'],
-  anthropic: ['claude-3-5-sonnet-20241022'],
+  anthropic: ['claude-sonnet', 'claude-haiku'],
   claude_code_cli: ['sonnet', 'opus'],
-  gemini: ['gemini-2.0-flash'],
-  vertex: ['gemini-2.0-flash-001'],
+  gemini: ['gemini-flash', 'gemini-pro'],
+  vertex: ['vertex-gemini-flash'],
 };
+
+export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
+  {
+    alias: 'gpt-4.1',
+    provider: 'openai',
+    model: 'gpt-4.1',
+    resolvedModel: 'gpt-4.1',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'gpt-4o',
+    provider: 'openai',
+    model: 'gpt-4o',
+    resolvedModel: 'gpt-4o',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gpt-4o-mini',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    resolvedModel: 'gpt-4o-mini',
+    isGlobalDefault: true,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'claude-sonnet',
+    provider: 'anthropic',
+    model: 'anthropic/claude-3-5-sonnet-20241022',
+    resolvedModel: 'anthropic/claude-3-5-sonnet-20241022',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'claude-haiku',
+    provider: 'anthropic',
+    model: 'anthropic/claude-3-haiku-20240307',
+    resolvedModel: 'anthropic/claude-3-haiku-20240307',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gemini-flash',
+    provider: 'gemini',
+    model: 'gemini/gemini-2.0-flash',
+    resolvedModel: 'gemini/gemini-2.0-flash',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'gemini-pro',
+    provider: 'gemini',
+    model: 'gemini/gemini-1.5-pro',
+    resolvedModel: 'gemini/gemini-1.5-pro',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'vertex-gemini-flash',
+    provider: 'vertex',
+    model: 'vertex_ai/gemini-2.0-flash-001',
+    resolvedModel: 'vertex_ai/gemini-2.0-flash-001',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+];
 
 export const DEFAULT_PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: 'My OpenAI Key',
@@ -928,6 +1003,65 @@ export const DEFAULT_PROVIDER_LABELS: Record<ProviderId, string> = {
 export function normalizeProviderId(value: unknown): ProviderId {
   if (value === 'claude_code_cli') return 'anthropic';
   return isProviderId(String(value || '').trim()) ? (value as ProviderId) : 'openai';
+}
+
+function normalizeModelToken(value: string): string {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return trimmed.includes('/') ? trimmed.split('/').pop() || trimmed : trimmed;
+}
+
+function aliasesForProvider(provider: ProviderId, aliases: ModelAliasOption[]): ModelAliasOption[] {
+  const normalized = normalizeProviderId(provider);
+  return aliases
+    .filter((item) => normalizeProviderId(item.provider) === normalized)
+    .sort((left, right) => {
+      if (left.isProviderDefault !== right.isProviderDefault) return left.isProviderDefault ? -1 : 1;
+      if (left.isGlobalDefault !== right.isGlobalDefault) return left.isGlobalDefault ? -1 : 1;
+      return left.alias.localeCompare(right.alias);
+    });
+}
+
+export function resolveModelAlias(
+  provider: ProviderId,
+  model: string,
+  aliases: ModelAliasOption[] = DEFAULT_MODEL_ALIAS_OPTIONS,
+): string | null {
+  const normalizedModel = normalizeModelToken(model);
+  if (!normalizedModel) return null;
+  const match = aliasesForProvider(provider, aliases).find((item) => {
+    return [item.alias, item.model, item.resolvedModel]
+      .map((value) => normalizeModelToken(value))
+      .includes(normalizedModel);
+  });
+  return match?.alias ?? null;
+}
+
+export function mapModelOptionsToAliases(
+  provider: ProviderId,
+  rawModels: string[],
+  aliases: ModelAliasOption[] = DEFAULT_MODEL_ALIAS_OPTIONS,
+): string[] {
+  const providerAliases = aliasesForProvider(provider, aliases);
+  if (rawModels.length === 0) {
+    return providerAliases.map((item) => item.alias);
+  }
+
+  const normalizedRaw = new Set(rawModels.map((item) => normalizeModelToken(item)).filter(Boolean));
+  const matchedAliases = providerAliases
+    .filter((item) =>
+      [item.alias, item.model, item.resolvedModel]
+        .map((value) => normalizeModelToken(value))
+        .some((value) => normalizedRaw.has(value)),
+    );
+  const representedRaw = new Set(
+    matchedAliases
+      .flatMap((item) => [item.alias, item.model, item.resolvedModel])
+      .map((item) => normalizeModelToken(item))
+      .filter(Boolean),
+  );
+  const unmatchedRaw = rawModels.filter((item) => !representedRaw.has(normalizeModelToken(item)));
+  return Array.from(new Set([...matchedAliases.map((item) => item.alias), ...unmatchedRaw]));
 }
 
 export function getProviderAuthModes(option: ProviderOption | null | undefined): { id: string; label: string; secretRequired?: boolean }[] {

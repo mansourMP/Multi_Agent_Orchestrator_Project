@@ -36,19 +36,14 @@ const STARTER_PROMPTS = [
 ];
 
 const QUICK_NAV_ITEMS = [
-  { label: 'Dashboard', path: '/' },
-  { label: SINGLE_AGENT_MODE ? 'Assistant' : 'Agents', path: '/agents' },
-  { label: 'Solutions', path: '/solutions' },
-  { label: 'Connections', path: '/credentials' },
-  { label: 'Setup', path: '/setup' },
-  { label: 'Admin', path: '/control-center' },
-  { label: 'Assistant Chat', path: '/workspace' },
+  { label: 'Home', path: '/home' },
+  { label: 'Chat', path: '/' },
   { label: 'Builder', path: '/builder' },
-  { label: 'Activity', path: '/executions' },
-  { label: 'Files', path: '/artifacts' },
-  { label: 'Automations', path: '/workflows' },
-  { label: 'Approvals', path: '/approvals' },
-  { label: 'Team', path: '/team' },
+  { label: 'Workflows', path: '/workflows' },
+  { label: 'Runs', path: '/executions' },
+  { label: 'Integrations', path: '/credentials' },
+  { label: 'Assets', path: '/artifacts' },
+  { label: 'Usage', path: '/usage' },
   { label: 'Settings', path: '/settings' },
 ];
 
@@ -62,56 +57,52 @@ function createMessage(role: AssistantRole, text: string): AssistantMessage {
 }
 
 function resolvePageGuide(pathname: string): PageGuide {
+  if (pathname === '/home') {
+    return {
+      title: 'Home',
+      purpose: 'Review your workspace and jump into the next workflow or run.',
+      actions: [
+        'Review recent workflows.',
+        'Start a new workflow.',
+        'Jump into runs or integrations from quick actions.',
+      ],
+      nextSteps: ['Start from Home.', 'Open Builder when you need a new workflow.', 'Review recent workflows below.'],
+      sections: ['Quick actions', 'Recent workflows'],
+    };
+  }
   if (pathname === '/') {
     return {
-      title: 'Dashboard',
-      purpose: 'Review the state of your assistant, automations, activity, and optional solutions.',
-      actions: [
-        'Review recent activity and active automations.',
-        'Open Assistant when you want to talk to Empyralis directly.',
-        'Use Connections or Admin only when the platform needs setup or approvals.',
-      ],
-      nextSteps: ['Check what needs attention.', 'Open Assistant for the next task.', 'Review automations if you need to edit a workflow.'],
-      sections: ['Recent activity', 'Automations', 'Solutions', 'Alerts', 'Skills'],
-    };
-  }
-  if (SINGLE_AGENT_MODE && pathname === '/agents') {
-    return {
-      title: 'Assistant',
-      purpose: 'Manage the one assistant surface, including live channels, inbox sessions, and recent execution activity.',
-      actions: ['Review live channels and inbox sessions.', 'Open Assistant for the main workflow.', 'Open Activity if you need execution history.'],
-      nextSteps: ['Check channel status.', 'Review recent work.', 'Return Home to start the next outcome.'],
-      sections: ['Assistant status', 'Channels', 'Recent activity', 'Unified inbox'],
-    };
-  }
-  if (pathname === '/workspace') {
-    return {
-      title: 'Assistant Console',
-      purpose: SINGLE_AGENT_MODE
-        ? 'Use the advanced assistant surface when you need inspection detail and tighter control over the single assistant.'
-        : 'Use the advanced operating surface when you need routing, inspect detail, and tighter control over how work is delegated.',
-      actions: [
-        SINGLE_AGENT_MODE ? 'Work through the main assistant and inspect the active run.' : 'Route work through orchestration or switch into direct agent chat.',
-        'Inspect the current run, approvals, and recent execution detail.',
-        'Open the control deck when you need pack, preset, or inspection changes.',
-      ],
-      nextSteps: SINGLE_AGENT_MODE
-        ? ['Check the active run.', 'Review approvals.', 'Apply the next control with intent.']
-        : ['Choose the work mode.', 'Check the active lane or run.', 'Apply the next control with intent.'],
-      sections: ['Conversation', 'Activity rail', 'Control deck', 'Run snapshot', 'Approvals'],
+      title: 'Chat',
+      purpose: 'Talk to the assistant directly and work through live requests.',
+      actions: ['Start a conversation.', 'Ask for help with workflows or runs.', 'Use Home when you need a clearer starting point.'],
+      nextSteps: ['State the goal clearly.', 'Ask for the next action.', 'Jump to Builder or Runs if needed.'],
+      sections: ['Conversation', 'Context', 'Suggested actions'],
     };
   }
   if (pathname === '/builder') {
     return {
-      title: 'Builder',
+      title: 'Agent Builder',
+      purpose: 'Browse drafts and templates before entering the workflow editor.',
+      actions: [
+        'Create a new workflow.',
+        'Open an existing draft.',
+        'Start from a template when you need a faster starting point.',
+      ],
+      nextSteps: ['Choose Create or open a draft.', 'Enter the editor only when you are ready to build.', 'Return here to manage drafts.'],
+      sections: ['Create hero', 'Drafts', 'Templates'],
+    };
+  }
+  if (pathname.startsWith('/builder/')) {
+    return {
+      title: 'Workflow Editor',
       purpose: 'Design a workflow visually and use AI guidance without cluttering the main assistant chat.',
       actions: [
         'Describe the workflow you want to build.',
-        'Start from a blank canvas, template, or import path.',
-        'Review the graph and selected step details before saving.',
+        'Shape the graph on the canvas.',
+        'Evaluate and publish when the workflow is ready.',
       ],
-      nextSteps: ['Define the workflow goal.', 'Shape the graph.', 'Save into Automations when ready.'],
-      sections: ['Canvas', 'Builder AI', 'Selected step', 'Templates/import'],
+      nextSteps: ['Define the workflow goal.', 'Shape the graph.', 'Save or publish when ready.'],
+      sections: ['Canvas', 'Builder AI', 'Node palette', 'Toolbar'],
     };
   }
   if (pathname.startsWith('/workflows/')) {
@@ -129,7 +120,7 @@ function resolvePageGuide(pathname: string): PageGuide {
   }
   if (pathname === '/workflows') {
     return {
-      title: 'Automations',
+      title: 'Workflows',
       purpose: 'Manage reusable systems and open editors.',
       actions: ['Create a new automation.', 'Search and duplicate automations.', 'Open an automation to edit or run.'],
       nextSteps: ['Create or open automation.', 'Verify status.', 'Run from editor.'],
@@ -183,7 +174,7 @@ function resolvePageGuide(pathname: string): PageGuide {
   }
   if (pathname === '/artifacts') {
     return {
-      title: 'Files',
+      title: 'Assets',
       purpose: 'Browse finished work, supporting evidence, and deeper traces produced by runs.',
       actions: ['Switch between deliverables, evidence, and system traces.', 'Open the related run inspect view.', 'Use outputs in follow-up work.'],
       nextSteps: ['Find the latest result.', 'Open the source run if you need more context.', 'Decide the next follow-up action.'],
@@ -192,7 +183,7 @@ function resolvePageGuide(pathname: string): PageGuide {
   }
   if (pathname === '/credentials') {
     return {
-      title: 'Connections',
+      title: 'Integrations',
       purpose: 'Connect the tools and channels your platform can use.',
       actions: [
         'Link a native connector now.',
@@ -275,14 +266,14 @@ function locationHint(question: string): string | null {
 
 function normalizePathForNav(pathname: string): string {
   if (pathname === '/control-center') return '/control-center';
-  if (pathname === '/workspace') return '/workspace';
-  if (pathname === '/builder') return '/builder';
+  if (pathname === '/builder' || pathname.startsWith('/builder/')) return '/builder';
   if (pathname.startsWith('/workflows/')) return '/workflows';
   if (pathname === '/executions' || pathname.startsWith('/runs/')) return '/executions';
   if (pathname === '/account') return '/settings';
   if (pathname.startsWith('/team')) return '/team';
+  if (pathname === '/usage') return '/usage';
   if (QUICK_NAV_ITEMS.some((item) => item.path === pathname)) return pathname;
-  return '/';
+  return '/home';
 }
 
 function buildReply(input: string, guide: PageGuide, accessMode: AssistantAccessMode): string {

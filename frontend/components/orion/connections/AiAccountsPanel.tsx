@@ -92,7 +92,7 @@ const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   secret: '',
   projectId: '',
   location: 'us-central1',
-  model: 'sonnet',
+  model: 'claude-sonnet',
   enableRuntime: true,
 };
 
@@ -140,7 +140,7 @@ function providerAuthModeLabel(provider: ProviderId, authMode: string | undefine
 
 function defaultProviderModel(provider: ProviderId, authMode: string, options: ProviderOption[]): string {
   if (provider === 'anthropic' && authMode === 'local_cli') {
-    return DEFAULT_PROVIDER_MODELS.claude_code_cli[0] || 'sonnet';
+    return providerOptionFor('anthropic', options).defaultModel || DEFAULT_PROVIDER_MODELS.anthropic[0] || 'claude-sonnet';
   }
   const fallback = providerOptionFor(provider, options).defaultModel;
   return fallback || DEFAULT_PROVIDER_MODELS[provider]?.[0] || '';

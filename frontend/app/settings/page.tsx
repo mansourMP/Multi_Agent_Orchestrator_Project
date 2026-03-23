@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { KeyRound, LogOut, Settings, UserRound } from 'lucide-react';
+import { KeyRound, LogOut } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-import { MetricStrip } from '@/components/ui/MetricStrip';
 import { ORION_API_URL } from '../page.api';
 import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
 
@@ -19,6 +18,7 @@ type ConnectorRow = {
 
 type AccountProfile = {
   displayName: string;
+  email?: string;
   roleLabel: string;
 };
 
@@ -35,6 +35,7 @@ function loadStoredProfile(): AccountProfile {
     const saved = JSON.parse(raw) as Partial<AccountProfile>;
     return {
       displayName: typeof saved.displayName === 'string' && saved.displayName.trim() ? saved.displayName.trim() : DEFAULT_PROFILE.displayName,
+      email: typeof saved.email === 'string' && saved.email.trim() ? saved.email.trim() : '',
       roleLabel: typeof saved.roleLabel === 'string' && saved.roleLabel.trim() ? saved.roleLabel.trim() : DEFAULT_PROFILE.roleLabel,
     };
   } catch {
@@ -66,12 +67,15 @@ export default function SettingsPage() {
   const [signingOut, setSigningOut] = useState(false);
   const runtimeKey = useMemo(() => readRuntimeApiKeyFromStorage(''), []);
   const profile = useMemo(() => loadStoredProfile(), []);
+  const [displayName, setDisplayName] = useState(profile.displayName);
+  const [email, setEmail] = useState(profile.email || '');
+  const [saveNotice, setSaveNotice] = useState('');
 
   const loadConnectors = useCallback(async () => {
     if (!runtimeKey) {
       setConnectors([]);
       setLoading(false);
-      setError('This app is not connected on this device yet. Open Connections to reconnect it.');
+      setError('This app is not connected on this device yet. Open Integrations to reconnect it.');
       return;
     }
 
@@ -107,14 +111,6 @@ export default function SettingsPage() {
     void loadConnectors();
   }, [loadConnectors]);
 
-  const accountEmail = useMemo(() => {
-    for (const connector of connectors) {
-      const value = connectorIdentity(connector.metadata);
-      if (value.includes('@')) return value;
-    }
-    return 'No email available';
-  }, [connectors]);
-
   const connectedCount = connectors.filter((item) => item.metadata.paused !== true).length;
 
   const handleSignOut = useCallback(() => {
@@ -128,56 +124,85 @@ export default function SettingsPage() {
     }
   }, [router]);
 
+  const handleSaveProfile = useCallback(() => {
+    const nextProfile: AccountProfile = {
+      displayName: displayName.trim() || DEFAULT_PROFILE.displayName,
+      email: email.trim(),
+      roleLabel: profile.roleLabel,
+    };
+    window.localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(nextProfile));
+    setSaveNotice('Saved');
+    window.setTimeout(() => setSaveNotice(''), 1600);
+  }, [displayName, email, profile.roleLabel]);
+
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
+    <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
-        icon={<Settings size={18} />}
+        icon={null}
         title="Settings"
-        subtitle="Account details, connected tools, and sign out."
+        subtitle="Manage your workspace and account."
         meta={
           <>
             <span>{connectedCount} connected</span>
             <span>{profile.roleLabel}</span>
           </>
         }
-        actions={
-          <button className="orion-btn orion-btn-ghost" onClick={handleSignOut} disabled={signingOut}>
-            <LogOut size={14} />
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>
-        }
-      />
-
-      <MetricStrip
-        items={[
-          { label: 'Connections', value: String(connectedCount) },
-          { label: 'Account', value: profile.displayName },
-          { label: 'Email', value: accountEmail },
-        ]}
-        minWidth={180}
       />
 
       <section className="orion-panel">
         <div className="orion-panel-header">
           <div>
+            <div className="orion-panel-title">Account</div>
+            <div className="orion-panel-copy">Workspace owner details stored on this device.</div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gap: 16 }}>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span className="orion-panel-copy" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Name</span>
+            <input className="orion-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </label>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span className="orion-panel-copy" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Email</span>
+            <input
+              className="orion-input"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="No email available"
+            />
+          </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }}>
+            {saveNotice ? <span className="orion-panel-copy">{saveNotice}</span> : null}
+            <button type="button" className="btn-primary" onClick={handleSaveProfile}>
+              Save
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="orion-panel">
+        <div className="orion-panel-header">
+          <div>
             <div className="orion-panel-title">Connected tools</div>
-            <div className="orion-panel-copy">The accounts currently available to your assistant and automations.</div>
+            <div className="orion-panel-copy">The accounts currently available to your agents and workflows.</div>
           </div>
         </div>
 
         {loading ? (
           <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">Loading connectors…</div>
+            <div className="orion-empty-title">Loading connected tools…</div>
           </div>
         ) : error ? (
-          <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">Could not load connected tools</div>
+          <div className="orion-empty" style={{ minHeight: 160, alignItems: 'center' }}>
+            <div className="orion-empty-title">Couldn't load connected tools</div>
             <div className="orion-empty-copy">{error}</div>
+            <button type="button" className="btn-secondary" onClick={() => void loadConnectors()}>
+              Retry
+            </button>
           </div>
         ) : connectors.length === 0 ? (
           <div className="orion-empty" style={{ minHeight: 160 }}>
             <div className="orion-empty-title">No connected tools yet</div>
-            <div className="orion-empty-copy">Open Connections to add Google Workspace, Telegram, or another account.</div>
+            <div className="orion-empty-copy">Open Integrations to add Google Workspace, Telegram, or another account.</div>
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
@@ -197,7 +222,7 @@ export default function SettingsPage() {
                   </div>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <span className="orion-chip">{connector.connector.replace(/_/g, ' ')}</span>
-                    <span className="orion-chip">{status}</span>
+                    <span className="orion-chip" data-status-tone={status === 'Connected' ? 'green' : 'grey'}>{status}</span>
                   </div>
                 </div>
               );
@@ -206,30 +231,18 @@ export default function SettingsPage() {
         )}
       </section>
 
-      <section className="orion-panel">
+      <section className="orion-panel" style={{ borderColor: 'var(--status-red)', background: 'var(--status-red-bg)' }}>
         <div className="orion-panel-header">
           <div>
-            <div className="orion-panel-title">Account info</div>
-            <div className="orion-panel-copy">Basic profile details stored on this device.</div>
+            <div className="orion-panel-title">Danger zone</div>
+            <div className="orion-panel-copy">Sign out from this device and clear local workspace settings.</div>
           </div>
         </div>
-
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div className="orion-list-row">
-            <div className="orion-list-row-main">
-              <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <UserRound size={14} />
-                Name
-              </div>
-              <div className="orion-list-row-subtitle">{profile.displayName}</div>
-            </div>
-          </div>
-          <div className="orion-list-row">
-            <div className="orion-list-row-main">
-              <div className="orion-list-row-title">Email</div>
-              <div className="orion-list-row-subtitle">{accountEmail}</div>
-            </div>
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <button className="btn-secondary" onClick={handleSignOut} disabled={signingOut}>
+            <LogOut size={14} />
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </div>
       </section>
     </div>

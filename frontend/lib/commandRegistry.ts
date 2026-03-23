@@ -43,11 +43,11 @@ export type PlatformCommand = {
 const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.home',
-    title: 'Go to Dashboard',
-    description: 'Open the main platform overview.',
+    title: 'Go to Home',
+    description: 'Open the workspace overview and recent workflows.',
     group: 'Navigate',
-    keywords: ['dashboard', 'home', 'overview'],
-    action: { type: 'navigate', href: '/' },
+    keywords: ['home', 'overview', 'recent', 'workspace'],
+    action: { type: 'navigate', href: '/home' },
   },
   {
     id: 'nav.agents',
@@ -82,12 +82,12 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'navigate', href: '/control-center' },
   },
   {
-    id: 'nav.workspace',
-    title: 'Go to Assistant',
-    description: SINGLE_AGENT_MODE ? 'Open the assistant conversation.' : 'Open the assistant conversation.',
+    id: 'nav.chat',
+    title: 'Go to Chat',
+    description: 'Open the assistant conversation.',
     group: 'Navigate',
-    keywords: SINGLE_AGENT_MODE ? ['chat', 'assistant', 'conversation'] : ['chat', 'assistant', 'conversation'],
-    action: { type: 'navigate', href: '/workspace' },
+    keywords: ['chat', 'assistant', 'conversation'],
+    action: { type: 'navigate', href: '/' },
   },
   {
     id: 'nav.builder',

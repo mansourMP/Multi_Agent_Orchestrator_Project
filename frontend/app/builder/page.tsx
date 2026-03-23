@@ -1,990 +1,200 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import {
-  ReactFlow,
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-  type Connection,
-  type Edge,
-  type EdgeChange,
-  type EdgeTypes,
-  type Node,
-  type NodeChange,
-  type NodeTypes,
-} from '@xyflow/react';
-import {
-  Bot,
-  BrainCircuit,
-  Code2,
-  Database,
-  Globe,
-  Hand,
-  LoaderCircle,
-  MousePointer2,
-  Play,
-  Plus,
-  Redo2,
-  Rocket,
-  Send,
-  Shuffle,
-  Undo2,
-  Zap,
-} from 'lucide-react';
-import TriggerNode from '@/components/nodes/TriggerNode';
-import AgentNode from '@/components/nodes/AgentNode';
-import ActionNode from '@/components/nodes/ActionNode';
-import HttpRequestNode from '@/components/nodes/HttpRequestNode';
-import ConditionNode from '@/components/nodes/ConditionNode';
-import TransformNode from '@/components/nodes/TransformNode';
-import CodeNode from '@/components/nodes/CodeNode';
-import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
-import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-import { createWorkflow, getWorkflow, publishWorkflow, runWorkflow, updateWorkflow } from '@/lib/api';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { Bot, Plus } from 'lucide-react';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { fetchWorkflows } from '@/lib/api';
 
-type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
-type TriggerKind = 'schedule' | 'webhook' | 'manual';
-type ActionKind = 'send_wechat' | 'send_telegram' | 'send_whatsapp' | 'send_email' | 'write_file';
-
-type TriggerCanvasData = { label: string; triggerType: TriggerKind };
-type AgentCanvasData = {
-  label: string;
-  modelId: string;
-  prompt: string;
-  tools: string[];
-  provider: string;
-  role: string;
-  duty: string;
-  status: string;
-  description: string;
-};
-type ActionCanvasData = { label: string; actionType: ActionKind };
-type HttpRequestCanvasData = { label: string; method: string; url: string };
-type ConditionCanvasData = { label: string; condition: string };
-type TransformCanvasData = { label: string; mapping: string };
-type CodeCanvasData = { label: string; summary: string; code: string };
-type CanvasNodeData =
-  | TriggerCanvasData
-  | AgentCanvasData
-  | ActionCanvasData
-  | HttpRequestCanvasData
-  | ConditionCanvasData
-  | TransformCanvasData
-  | CodeCanvasData;
-
-type CanvasWorkflowNode = Node<CanvasNodeData>;
-type CanvasWorkflowEdge = Edge;
-type CanvasNodeSearchState = {
-  screenX: number;
-  screenY: number;
-  flowX: number;
-  flowY: number;
-  query: string;
-  insertEdgeId?: string;
-};
-type BuilderWorkflowRecord = {
+type WorkflowRecord = {
   id: string;
   name?: string;
   description?: string;
-  status?: string;
-  definition?: {
-    nodes?: unknown;
-    edges?: unknown;
-    meta?: Record<string, unknown>;
-  };
+  updatedAt?: string;
+  updated_at?: string;
 };
 
-const CANVAS_NODE_X = 260;
-const CANVAS_NODE_TOP = 64;
-const CANVAS_NODE_GAP = 176;
-const GRID_SIZE = 16;
-const DEFAULT_NODE_SIZE = 96;
-const NODE_HORIZONTAL_GAP = 250;
-const CANVAS_EDGE_COLOR = 'rgba(128, 128, 120, 0.42)';
+type BuilderTab = 'drafts' | 'templates';
 
-const CANVAS_NODE_TYPES: NodeTypes = {
-  trigger: TriggerNode,
-  agent: AgentNode,
-  action: ActionNode,
-  http_request: HttpRequestNode,
-  condition: ConditionNode,
-  transform: TransformNode,
-  code: CodeNode,
-};
-
-const CANVAS_EDGE_TYPES = {
-  smoothstep: SmoothActionEdge,
-} satisfies EdgeTypes;
-
-const CANVAS_NODE_LIBRARY: Array<{
-  type: CanvasNodeType;
-  label: string;
-  accent: string;
-  icon: ReactNode;
-}> = [
-  { type: 'trigger', label: 'Start', accent: '#d7f0ea', icon: <Play size={14} /> },
-  { type: 'agent', label: 'Agent', accent: '#dce9ff', icon: <Bot size={14} /> },
-  { type: 'action', label: 'Note', accent: '#ece8ff', icon: <Send size={14} /> },
-  { type: 'http_request', label: 'Tool', accent: '#f7ebc6', icon: <Globe size={14} /> },
-  { type: 'condition', label: 'If / else', accent: '#f7ebc6', icon: <Shuffle size={14} /> },
-  { type: 'transform', label: 'Transform', accent: '#ece1ff', icon: <Shuffle size={14} /> },
-  { type: 'code', label: 'Code', accent: '#ececec', icon: <Code2 size={14} /> },
+const BUILDER_TEMPLATES = [
+  {
+    id: 'support',
+    title: 'Support triage',
+    description: 'Route incoming requests, classify urgency, and hand off follow-up tasks.',
+  },
+  {
+    id: 'content',
+    title: 'Content pipeline',
+    description: 'Generate briefs, draft assets, and send outputs to the right channel.',
+  },
+  {
+    id: 'ops',
+    title: 'Operations handoff',
+    description: 'Collect updates, summarize blockers, and notify the next owner automatically.',
+  },
 ];
 
-const CANVAS_NODE_GROUPS: Array<{
-  label: string;
-  items: CanvasNodeType[];
-}> = [
-  { label: 'Core', items: ['agent', 'trigger', 'action'] },
-  { label: 'Tools', items: ['http_request'] },
-  { label: 'Logic', items: ['condition', 'code'] },
-  { label: 'Data', items: ['transform'] },
-];
-
-type GraphSnapshot = {
-  nodes: CanvasWorkflowNode[];
-  edges: CanvasWorkflowEdge[];
-};
-
-function cloneGraph(nodes: CanvasWorkflowNode[], edges: CanvasWorkflowEdge[]): GraphSnapshot {
-  return JSON.parse(JSON.stringify({ nodes, edges })) as GraphSnapshot;
+function compactText(value?: string, maxLength = 72) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'No description provided';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function compactText(value: string, max = 80): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (!normalized) return '';
-  if (normalized.length <= max) return normalized;
-  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+function formatDate(value?: string) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString();
 }
 
-function extractUrl(value: string): string | null {
-  const match = value.match(/https?:\/\/\S+/i);
-  return match ? match[0] : null;
-}
+export default function BuilderLandingPage() {
+  const [activeTab, setActiveTab] = useState<BuilderTab>('drafts');
+  const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
+  useEffect(() => {
+    let alive = true;
 
-function makeNodeId(type: CanvasNodeType): string {
-  return `${type}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function snapToGrid(value: number): number {
-  return Math.round(value / GRID_SIZE) * GRID_SIZE;
-}
-
-function getCenteredStartPosition(host: HTMLDivElement | null): { x: number; y: number } {
-  if (!host) return { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP };
-  const width = host.clientWidth || 0;
-  const height = host.clientHeight || 0;
-  return {
-    x: snapToGrid(Math.max(CANVAS_NODE_X, width / 2 - DEFAULT_NODE_SIZE / 2)),
-    y: snapToGrid(Math.max(CANVAS_NODE_TOP, height / 2 - DEFAULT_NODE_SIZE / 2)),
-  };
-}
-
-function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
-  if (type === 'trigger') return { label: 'Start Trigger', triggerType: 'manual' };
-  if (type === 'http_request') return { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' };
-  if (type === 'condition') return { label: 'Condition', condition: 'value > 10' };
-  if (type === 'transform') return { label: 'Transform', mapping: 'Map fields to output payload' };
-  if (type === 'code') return { label: 'Code', summary: 'Run custom logic', code: 'return input;' };
-  if (type === 'action') return { label: 'Send Telegram', actionType: 'send_telegram' };
-  return {
-    label: 'AI Agent',
-    modelId: 'gpt-4.1',
-    prompt: 'Describe the task for this agent.',
-    tools: [],
-    provider: 'openai',
-    role: 'Worker',
-    duty: 'Complete the assigned task clearly and reliably.',
-    status: 'ready',
-    description: 'Autonomous reasoning',
-  };
-}
-
-function normalizeCanvasNodeData(type: CanvasNodeType, raw: Partial<CanvasNodeData>): CanvasNodeData {
-  return { ...defaultNodeData(type), ...raw } as CanvasNodeData;
-}
-
-function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
-  if (!Array.isArray(rawNodes)) return [];
-  const parsed: CanvasWorkflowNode[] = [];
-  for (const item of rawNodes) {
-    if (!isRecord(item)) continue;
-    const type = String(item.type || '').trim().toLowerCase();
-    if (!['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(type)) continue;
-    const position = isRecord(item.position) ? item.position : {};
-    const x = Number(position.x);
-    const y = Number(position.y);
-    parsed.push({
-      id: String(item.id || makeNodeId(type as CanvasNodeType)).trim() || makeNodeId(type as CanvasNodeType),
-      type: type as CanvasNodeType,
-      position: {
-        x: Number.isFinite(x) ? x : CANVAS_NODE_X,
-        y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + parsed.length * CANVAS_NODE_GAP,
-      },
-      data: normalizeCanvasNodeData(type as CanvasNodeType, (isRecord(item.data) ? item.data : {}) as Partial<CanvasNodeData>),
-    });
-  }
-  return parsed;
-}
-
-function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
-  if (!Array.isArray(rawEdges)) return [];
-  const nodeIds = new Set(nodes.map((node) => String(node.id)));
-  const parsed: CanvasWorkflowEdge[] = [];
-  for (const item of rawEdges) {
-    if (!isRecord(item)) continue;
-    const source = String(item.source || '').trim();
-    const target = String(item.target || '').trim();
-    if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) continue;
-    parsed.push({
-      id: String(item.id || `edge-${source}-${target}-${parsed.length + 1}`),
-      source,
-      target,
-      sourceHandle: typeof item.sourceHandle === 'string' ? item.sourceHandle : undefined,
-      targetHandle: typeof item.targetHandle === 'string' ? item.targetHandle : undefined,
-      type: 'smoothstep',
-      animated: false,
-      style: {
-        stroke: CANVAS_EDGE_COLOR,
-        strokeWidth: 2,
-        strokeLinecap: 'round' as const,
-      },
-      interactionWidth: 40,
-    });
-  }
-  return parsed;
-}
-
-function draftNodeData(type: CanvasNodeType, goal: string, index: number): Partial<CanvasNodeData> {
-  const text = goal.trim();
-  const lowered = text.toLowerCase();
-  if (type === 'trigger') {
-    if (/(daily|every morning|every day|each day|weekly|every week|schedule)/.test(lowered)) {
-      return { label: 'Scheduled start', triggerType: 'schedule' };
-    }
-    if (/(webhook|api|endpoint)/.test(lowered)) {
-      return { label: 'Webhook start', triggerType: 'webhook' };
-    }
-    return { label: text ? 'User request' : 'Start here', triggerType: 'manual' };
-  }
-  if (type === 'condition') {
-    return {
-      label: 'Check conditions',
-      condition: /if|when|unless/.test(lowered) ? compactText(text, 56) : 'Continue only when the required condition is true',
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const data = await fetchWorkflows();
+        const items = Array.isArray(data)
+          ? data
+          : Array.isArray((data as { items?: WorkflowRecord[] } | null | undefined)?.items)
+            ? (data as { items: WorkflowRecord[] }).items
+            : [];
+        if (!alive) return;
+        setWorkflows(items);
+      } catch (loadError) {
+        if (!alive) return;
+        setWorkflows([]);
+        setError(loadError instanceof Error ? loadError.message : 'Failed to load workflows.');
+      } finally {
+        if (alive) setLoading(false);
+      }
     };
-  }
-  if (type === 'http_request') {
-    return {
-      label: 'Call external API',
-      method: /post /.test(lowered) ? 'POST' : 'GET',
-      url: extractUrl(text) || 'https://api.example.com',
+
+    void load();
+    return () => {
+      alive = false;
     };
-  }
-  if (type === 'transform') {
-    if (/summari/.test(lowered)) return { label: 'Summarize content', mapping: compactText(text, 60) };
-    return { label: 'Prepare output', mapping: text ? compactText(text, 60) : 'Map fields to the final output' };
-  }
-  if (type === 'agent') {
-    return {
-      label: /monitor|watch|alert/.test(lowered) ? 'Monitor with AI' : 'Plan with AI',
-      prompt: text || 'Describe the work for this agent.',
-      duty: text ? compactText(text, 88) : 'Complete the assigned task clearly and reliably.',
-      description: text ? compactText(text, 64) : 'Autonomous reasoning',
-    };
-  }
-  if (type === 'code') {
-    return { label: 'Custom logic', summary: text ? compactText(text, 56) : 'Run custom logic', code: 'return input;' };
-  }
-  if (type === 'action') {
-    if (/telegram/.test(lowered)) return { label: 'Send Telegram alert', actionType: 'send_telegram' };
-    if (/email|inbox/.test(lowered)) return { label: 'Send email update', actionType: 'send_email' };
-    if (/file|save|document/.test(lowered)) return { label: 'Save file', actionType: 'write_file' };
-    return { label: index > 0 && text ? 'Deliver result' : 'Send Telegram', actionType: 'send_telegram' };
-  }
-  return defaultNodeData(type);
-}
-
-function buildDraftNodes(goal: string): CanvasWorkflowNode[] {
-  const text = goal.trim().toLowerCase();
-  const types: CanvasNodeType[] = ['trigger'];
-  if (/(if|when|only if|unless)/.test(text)) types.push('condition');
-  if (/(summari|extract|format|clean|transform|rewrite)/.test(text)) types.push('transform');
-  if (/(http|api|webhook|url|endpoint)/.test(text)) types.push('http_request');
-  types.push('agent');
-  if (/(code|script|javascript|python)/.test(text)) types.push('code');
-  types.push('action');
-
-  return types.map((type, index) => ({
-    id: `${type}-${index + 1}`,
-    type,
-    position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP + index * CANVAS_NODE_GAP },
-    data: normalizeCanvasNodeData(type, draftNodeData(type, goal, index)),
-  }));
-}
-
-function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
-  return nodes.slice(0, -1).map((node, index) => ({
-    id: `edge-${node.id}-${nodes[index + 1]!.id}`,
-    source: node.id,
-    target: nodes[index + 1]!.id,
-    sourceHandle: 'bottom',
-    targetHandle: 'top',
-    type: 'smoothstep',
-    animated: false,
-    style: {
-      stroke: CANVAS_EDGE_COLOR,
-      strokeWidth: 2,
-      strokeLinecap: 'round' as const,
-    },
-    interactionWidth: 40,
-  }));
-}
-
-function buildWorkflowName(goal: string): string {
-  const clean = compactText(goal.replace(/[.?!]+$/g, ''), 56);
-  if (!clean) return 'New workflow';
-  return clean
-    .split(/\s+/)
-    .slice(0, 6)
-    .join(' ');
-}
-
-function buildWorkflowDescription(goal: string): string {
-  return compactText(goal, 160) || 'Workflow created from Builder.';
-}
-
-function buildWorkflowDefinition(nodes: CanvasWorkflowNode[], edges: CanvasWorkflowEdge[], goal: string) {
-  return {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      position: node.position,
-      data: node.data,
-    })),
-    edges: edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-    })),
-    meta: {
-      mode: 'visual_builder',
-      origin: 'builder',
-      draft_goal: goal,
-    },
-  };
-}
-
-export default function BuilderPage() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const flowRef = useRef<{ screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number } } | null>(null);
-  const canvasHostRef = useRef<HTMLDivElement | null>(null);
-  const nodeSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const [promptInput, setPromptInput] = useState('');
-  const [draftGoal, setDraftGoal] = useState('');
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [nodes, setNodes] = useState<CanvasWorkflowNode[]>([]);
-  const [edges, setEdges] = useState<CanvasWorkflowEdge[]>([]);
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [runState, setRunState] = useState<'idle' | 'testing' | 'publishing'>('idle');
-  const [savedWorkflowId, setSavedWorkflowId] = useState<string | null>(null);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [workflowName, setWorkflowName] = useState('');
-  const [workflowDescription, setWorkflowDescription] = useState('');
-  const [nodeSearch, setNodeSearch] = useState<CanvasNodeSearchState | null>(null);
-  const [interactionMode, setInteractionMode] = useState<'pan' | 'select'>('select');
-  const [historyStack, setHistoryStack] = useState<GraphSnapshot[]>([]);
-  const [futureStack, setFutureStack] = useState<GraphSnapshot[]>([]);
-
-  const pushHistory = useCallback(() => {
-    setHistoryStack((current) => [...current.slice(-19), cloneGraph(nodes, edges)]);
-    setFutureStack([]);
-  }, [edges, nodes]);
-
-  const renderedEdges = useMemo(
-    () =>
-      edges.map((edge) => ({
-        ...edge,
-        type: 'smoothstep' as const,
-        selected: selectedEdgeId === edge.id,
-        animated: false,
-        style: {
-          stroke: CANVAS_EDGE_COLOR,
-          strokeWidth: 2,
-          strokeLinecap: 'round' as const,
-        },
-        interactionWidth: 40,
-        data: {
-          onAdd: (edgeId: string, point: { x: number; y: number }) => {
-            const hostRect = canvasHostRef.current?.getBoundingClientRect();
-            const currentEdge = edges.find((item) => item.id === edgeId);
-            if (!hostRect || !currentEdge) return;
-            const flowX = snapToGrid(((nodes.find((node) => node.id === currentEdge.source)?.position.x || CANVAS_NODE_X) + (nodes.find((node) => node.id === currentEdge.target)?.position.x || CANVAS_NODE_X)) / 2);
-            const flowY = snapToGrid(((nodes.find((node) => node.id === currentEdge.source)?.position.y || CANVAS_NODE_TOP) + (nodes.find((node) => node.id === currentEdge.target)?.position.y || CANVAS_NODE_TOP)) / 2);
-            setSelectedNodeId(null);
-            setSelectedEdgeId(edgeId);
-            setNodeSearch({
-              screenX: Math.max(12, Math.min(point.x, hostRect.width - 240)),
-              screenY: Math.max(12, Math.min(point.y, hostRect.height - 220)),
-              flowX,
-              flowY,
-              query: '',
-              insertEdgeId: edgeId,
-            });
-          },
-          onDelete: (edgeId: string) => {
-            pushHistory();
-            setEdges((current) => current.filter((item) => item.id !== edgeId));
-            setSelectedEdgeId(null);
-            setNodeSearch(null);
-            setSaveState('idle');
-            setSaveMessage(null);
-          },
-        } satisfies SmoothActionEdgeData,
-      })),
-    [edges, nodes, pushHistory, selectedEdgeId],
-  );
-
-  const filteredNodeLibrary = useMemo(() => {
-    const query = String(nodeSearch?.query || '').trim().toLowerCase();
-    const library = nodeSearch?.insertEdgeId
-      ? CANVAS_NODE_LIBRARY.filter((item) => item.type !== 'trigger')
-      : CANVAS_NODE_LIBRARY;
-    if (!query) return library;
-    return library.filter((item) => item.label.toLowerCase().includes(query));
-  }, [nodeSearch?.insertEdgeId, nodeSearch?.query]);
-
-  const groupedNodeLibrary = useMemo(
-    () =>
-      CANVAS_NODE_GROUPS.map((group) => ({
-        ...group,
-        items: group.items
-          .map((type) => filteredNodeLibrary.find((item) => item.type === type) || null)
-          .filter((item): item is (typeof CANVAS_NODE_LIBRARY)[number] => item !== null),
-      })).filter((group) => group.items.length > 0),
-    [filteredNodeLibrary],
-  );
-
-  const loadWorkflowIntoBuilder = useCallback(async (id: string) => {
-    const workflow = (await getWorkflow(id)) as BuilderWorkflowRecord;
-    const nextNodes = parseCanvasNodes(workflow?.definition?.nodes);
-    const safeNodes = nextNodes.length > 0 ? nextNodes : buildDraftNodes(workflow?.definition?.meta?.draft_goal ? String(workflow.definition.meta.draft_goal) : workflow?.description || workflow?.name || '');
-    setNodes(safeNodes);
-    setEdges(parseCanvasEdges(workflow?.definition?.edges, safeNodes));
-    setSelectedNodeId(safeNodes[0]?.id || null);
-    setSelectedEdgeId(null);
-    setSavedWorkflowId(id);
-    setWorkflowName(String(workflow?.name || ''));
-    setWorkflowDescription(String(workflow?.description || ''));
-    const nextGoal = String(workflow?.definition?.meta?.draft_goal || workflow?.description || workflow?.name || '').trim();
-    setDraftGoal(nextGoal);
-    setPromptInput(nextGoal);
-    setSaveState('saved');
-    setSaveMessage('Workflow loaded.');
   }, []);
 
-  useEffect(() => {
-    const workflowId = searchParams.get('workflow');
-    if (!workflowId) return;
-    void loadWorkflowIntoBuilder(workflowId);
-  }, [loadWorkflowIntoBuilder, searchParams]);
-
-  const handleBuild = () => {
-    const next = promptInput.trim();
-    if (!next) return;
-    pushHistory();
-    const nextNodes = buildDraftNodes(next);
-    setDraftGoal(next);
-    setNodes(nextNodes);
-    setEdges(buildDraftEdges(nextNodes));
-    setSelectedNodeId(nextNodes[0]?.id || null);
-    setSavedWorkflowId(null);
-    setSaveState('idle');
-    setSaveMessage(null);
-    setRunState('idle');
-    setWorkflowName(buildWorkflowName(next));
-    setWorkflowDescription(buildWorkflowDescription(next));
-  };
-
-  const handleReset = () => {
-    if (nodes.length || edges.length) pushHistory();
-    setPromptInput('');
-    setDraftGoal('');
-    setNodes([]);
-    setEdges([]);
-    setSelectedNodeId(null);
-    setSavedWorkflowId(null);
-    setSaveState('idle');
-    setSaveMessage(null);
-    setRunState('idle');
-    setWorkflowName('');
-    setWorkflowDescription('');
-  };
-
-  const openNodeSearch = useCallback(
-    (options?: { clientX?: number; clientY?: number; flowX?: number; flowY?: number; insertEdgeId?: string }) => {
-      const hostRect = canvasHostRef.current?.getBoundingClientRect();
-      if (!hostRect) return;
-      const centered = getCenteredStartPosition(canvasHostRef.current);
-      setNodeSearch({
-        screenX:
-          typeof options?.clientX === 'number'
-            ? Math.max(12, Math.min(options.clientX - hostRect.left, hostRect.width - 240))
-            : Math.max(12, hostRect.width / 2 - 120),
-        screenY:
-          typeof options?.clientY === 'number'
-            ? Math.max(12, Math.min(options.clientY - hostRect.top, hostRect.height - 220))
-            : Math.max(12, hostRect.height / 2 - 110),
-        flowX: snapToGrid(options?.flowX ?? centered.x),
-        flowY: snapToGrid(options?.flowY ?? centered.y),
-        query: '',
-        insertEdgeId: options?.insertEdgeId,
-      });
-    },
-    [],
+  const draftWorkflows = useMemo(
+    () =>
+      [...workflows]
+        .sort((left, right) => {
+          const leftTs = new Date(left.updatedAt || left.updated_at || 0).getTime();
+          const rightTs = new Date(right.updatedAt || right.updated_at || 0).getTime();
+          return rightTs - leftTs;
+        })
+        .slice(0, 8),
+    [workflows],
   );
 
-  const addCanvasNode = (type: CanvasNodeType) => {
-    pushHistory();
-    const position =
-      nodeSearch?.insertEdgeId
-        ? { x: snapToGrid(nodeSearch.flowX), y: snapToGrid(nodeSearch.flowY) }
-        : undefined;
-    const insertEdgeId = nodeSearch?.insertEdgeId;
-    const edgeToSplit = insertEdgeId ? edges.find((edge) => edge.id === insertEdgeId) || null : null;
-    setNodes((current) => {
-      if (type === 'trigger') {
-        const existingTrigger = current.find((node) => node.type === 'trigger');
-        if (existingTrigger) {
-          setSelectedNodeId(existingTrigger.id);
-          setSelectedEdgeId(null);
-          return current;
-        }
-      }
-      const defaultPosition = current.length === 0
-        ? getCenteredStartPosition(canvasHostRef.current)
-        : (() => {
-            const lastNode = current[current.length - 1] || null;
-            return {
-              x: snapToGrid((Number(lastNode?.position.x) || CANVAS_NODE_X) + NODE_HORIZONTAL_GAP),
-              y: snapToGrid(Number(lastNode?.position.y) || CANVAS_NODE_TOP),
-            };
-          })();
-      const nextNode: CanvasWorkflowNode = {
-        id: makeNodeId(type),
-        type,
-        position: position || defaultPosition,
-        data: defaultNodeData(type),
-      };
-      const nextNodes = [...current, nextNode];
-      setSelectedNodeId(nextNode.id);
-      setSelectedEdgeId(null);
-      if (edgeToSplit) {
-        setEdges((currentEdges) => [
-          ...currentEdges.filter((edge) => edge.id !== edgeToSplit.id),
-          {
-            id: `edge-${edgeToSplit.source}-${nextNode.id}-${Date.now()}`,
-            source: edgeToSplit.source,
-            target: nextNode.id,
-            sourceHandle: edgeToSplit.sourceHandle,
-            targetHandle: 'top',
-          },
-          {
-            id: `edge-${nextNode.id}-${edgeToSplit.target}-${Date.now() + 1}`,
-            source: nextNode.id,
-            target: edgeToSplit.target,
-            sourceHandle: 'bottom',
-            targetHandle: edgeToSplit.targetHandle,
-          },
-        ]);
-      }
-      return nextNodes;
-    });
-    setNodeSearch(null);
-    setSaveState('idle');
-    setSaveMessage(null);
-  };
-
-  const persistCurrentWorkflow = async (): Promise<string | null> => {
-    if (nodes.length === 0 || !draftGoal.trim()) return null;
-    const definition = buildWorkflowDefinition(nodes, edges, draftGoal);
-    if (savedWorkflowId) {
-      await updateWorkflow(savedWorkflowId, definition);
-      return savedWorkflowId;
-    }
-    const created = await createWorkflow(
-      workflowName.trim() || buildWorkflowName(draftGoal),
-      workflowDescription.trim() || buildWorkflowDescription(draftGoal),
-      'default',
-      definition,
-    );
-    return typeof created?.id === 'string' ? created.id : null;
-  };
-
-  const handleSaveDraft = async () => {
-    if (nodes.length === 0 || !draftGoal.trim() || saveState === 'saving') return;
-    setSaveState('saving');
-    setSaveMessage(null);
-    try {
-      const workflowId = await persistCurrentWorkflow();
-      setSavedWorkflowId(workflowId);
-      setSaveState('saved');
-      setSaveMessage(workflowId ? (savedWorkflowId ? 'Changes saved.' : 'Draft saved to Automations.') : 'Draft saved.');
-    } catch (error) {
-      setSaveState('error');
-      setSaveMessage(error instanceof Error ? error.message : 'Unable to save the workflow draft.');
-    }
-  };
-
-  const handlePublish = async () => {
-    if (runState !== 'idle') return;
-    setRunState('publishing');
-    setSaveMessage(null);
-    try {
-      const workflowId = await persistCurrentWorkflow();
-      if (!workflowId) throw new Error('Save the workflow before publishing.');
-      setSavedWorkflowId(workflowId);
-      await publishWorkflow(workflowId);
-      setSaveState('saved');
-      setSaveMessage('Workflow published.');
-    } catch (error) {
-      setSaveState('error');
-      setSaveMessage(error instanceof Error ? error.message : 'Unable to publish the workflow.');
-    } finally {
-      setRunState('idle');
-    }
-  };
-
-  const handleTest = async () => {
-    if (runState !== 'idle') return;
-    setRunState('testing');
-    setSaveMessage(null);
-    try {
-      const workflowId = await persistCurrentWorkflow();
-      if (!workflowId) throw new Error('Save the workflow before testing.');
-      setSavedWorkflowId(workflowId);
-      await runWorkflow(workflowId);
-      setSaveState('saved');
-      setSaveMessage('Test run started. Open Activity for live progress.');
-    } catch (error) {
-      setSaveState('error');
-      setSaveMessage(error instanceof Error ? error.message : 'Unable to start a test run.');
-    } finally {
-      setRunState('idle');
-    }
-  };
-
-  const handleNodesChange = (changes: NodeChange<CanvasWorkflowNode>[]) => {
-    if (changes.length > 0) pushHistory();
-    setNodes((current) =>
-      applyNodeChanges(
-        changes.map((change) => {
-          if (
-            change.type === 'position' &&
-            change.position &&
-            Number.isFinite(change.position.x) &&
-            Number.isFinite(change.position.y)
-          ) {
-            return {
-              ...change,
-              position: {
-                x: snapToGrid(change.position.x),
-                y: snapToGrid(change.position.y),
-              },
-            };
-          }
-          return change;
-        }),
-        current,
-      ),
-    );
-    setSaveState('idle');
-    setSaveMessage(null);
-  };
-
-  const handleEdgesChange = (changes: EdgeChange<CanvasWorkflowEdge>[]) => {
-    if (changes.length > 0) pushHistory();
-    setEdges((current) => applyEdgeChanges(changes, current));
-    setSaveState('idle');
-    setSaveMessage(null);
-  };
-
-  const handleConnect = (connection: Connection) => {
-    pushHistory();
-    setEdges((current) =>
-      addEdge(
-        {
-          ...connection,
-          id: `edge-${connection.source || 'source'}-${connection.target || 'target'}-${Date.now()}`,
-          type: 'smoothstep',
-          animated: false,
-          style: {
-            stroke: CANVAS_EDGE_COLOR,
-            strokeWidth: 2,
-            strokeLinecap: 'round' as const,
-          },
-          interactionWidth: 40,
-        },
-        current,
-      ),
-    );
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setNodeSearch(null);
-    setSaveState('idle');
-    setSaveMessage(null);
-  };
-
-  const handleUndo = useCallback(() => {
-    if (historyStack.length === 0) return;
-    const previous = historyStack[historyStack.length - 1];
-    if (!previous) return;
-    setFutureStack((current) => [cloneGraph(nodes, edges), ...current]);
-    setHistoryStack((current) => current.slice(0, -1));
-    setNodes(previous.nodes);
-    setEdges(previous.edges);
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setNodeSearch(null);
-  }, [edges, historyStack, nodes]);
-
-  const handleRedo = useCallback(() => {
-    if (futureStack.length === 0) return;
-    const next = futureStack[0];
-    if (!next) return;
-    setHistoryStack((current) => [...current, cloneGraph(nodes, edges)]);
-    setFutureStack((current) => current.slice(1));
-    setNodes(next.nodes);
-    setEdges(next.edges);
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setNodeSearch(null);
-  }, [edges, futureStack, nodes]);
-
-  const handlePaneClick = (event: { detail?: number; clientX: number; clientY: number }) => {
-    setSelectedNodeId(null);
-    setSelectedEdgeId(null);
-    setNodeSearch(null);
-    if ((event.detail || 1) < 2) return;
-    const instance = flowRef.current;
-    const flowPoint = instance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    openNodeSearch({
-      clientX: event.clientX,
-      clientY: event.clientY,
-      flowX: flowPoint?.x,
-      flowY: flowPoint?.y,
-    });
-  };
-
-  useEffect(() => {
-    if (!nodeSearch) return;
-    const timeout = window.setTimeout(() => nodeSearchInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(timeout);
-  }, [nodeSearch]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Backspace') return;
-      const tagName = (document.activeElement?.tagName || '').toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
-      if (selectedEdgeId) {
-        event.preventDefault();
-        pushHistory();
-        setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
-        setSelectedEdgeId(null);
-        setSaveState('idle');
-        setSaveMessage(null);
-        return;
-      }
-      if (!selectedNodeId) return;
-      event.preventDefault();
-      pushHistory();
-      setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
-      setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
-      setSelectedNodeId(null);
-      setSaveState('idle');
-      setSaveMessage(null);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pushHistory, selectedEdgeId, selectedNodeId]);
-
   return (
-    <div className="orion-page-shell orion-animate-in is-builder-page">
-      <div className="orion-builder-shell">
-        <div className="orion-builder-toolbar is-agent-builder">
-          <div className="orion-builder-toolbar-title-row">
-            <button type="button" className="orion-builder-toolbar-back" onClick={() => router.push('/workflows')} aria-label="Back to workflows">
-              ‹
-            </button>
-            <div className="orion-builder-toolbar-title">
-              {workflowName.trim() || (draftGoal ? compactText(draftGoal, 56) : 'New agent')}
-            </div>
-            <span className="orion-builder-draft-badge">Draft</span>
-          </div>
-          <div className="orion-builder-toolbar-actions">
-            <button type="button" className="btn-ghost" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
-              {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
-              Evaluate
-            </button>
-            <button type="button" className="btn-primary" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
-              {runState === 'publishing' ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
-              Publish
-            </button>
-          </div>
+    <div className="orion-page-shell orion-animate-in">
+      <OsPageHeader
+        icon={<Bot size={16} />}
+        title="Agent Builder"
+        subtitle="Create and manage agent systems."
+      />
+
+      <section className="orion-panel orion-builder-hub-hero">
+        <div className="orion-builder-hub-hero-copy">
+          <h2>Create an agent system</h2>
+          <p>Design a reusable system that can coordinate tools, reasoning, approvals, and follow-up work.</p>
+          <Link href="/builder/new" className="btn-primary">
+            <Plus size={14} />
+            Create
+          </Link>
+        </div>
+      </section>
+
+      <section className="orion-panel">
+        <div className="orion-builder-hub-tabs" role="tablist" aria-label="Builder library tabs">
+          <button
+            type="button"
+            className={`orion-builder-hub-tab${activeTab === 'drafts' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('drafts')}
+          >
+            Drafts
+          </button>
+          <button
+            type="button"
+            className={`orion-builder-hub-tab${activeTab === 'templates' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('templates')}
+          >
+            Templates
+          </button>
         </div>
 
-        <div className="orion-builder-main is-agent-builder">
-          <aside className="orion-builder-library">
-            {groupedNodeLibrary.map((group) => (
-              <div key={group.label} className="orion-builder-library-group">
-                <div className="orion-builder-library-title">{group.label}</div>
-                <div className="orion-builder-library-list">
-                  {group.items.map((item) => (
-                    <button key={item.type} type="button" className="orion-builder-library-item" onClick={() => addCanvasNode(item.type)}>
-                      <span className="orion-builder-library-icon" style={{ ['--builder-accent' as string]: item.accent }}>
-                        {item.icon}
-                      </span>
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
+        {activeTab === 'drafts' ? (
+          loading ? (
+            <div className="orion-empty" style={{ minHeight: 220 }}>
+              <div className="orion-empty-title">Loading workflows…</div>
+            </div>
+          ) : error ? (
+            <div className="orion-empty" style={{ minHeight: 220 }}>
+              <div className="orion-empty-title">Couldn't load this section.</div>
+              <div className="orion-empty-copy">{error}</div>
+            </div>
+          ) : draftWorkflows.length === 0 ? (
+            <div className="orion-empty" style={{ minHeight: 220 }}>
+              <div className="orion-empty-title">No drafts yet</div>
+              <div className="orion-empty-copy">Create your first workflow to start shaping your agent system.</div>
+              <Link href="/builder/new" className="btn-primary">
+                <Plus size={14} />
+                Create
+              </Link>
+            </div>
+          ) : (
+            <div className="orion-builder-hub-grid">
+              {draftWorkflows.map((workflow) => (
+                <Link
+                  key={workflow.id}
+                  href={`/builder/${workflow.id}`}
+                  className="orion-stat-card orion-control-card orion-builder-hub-card"
+                >
+                  <div className="orion-builder-hub-card-icon">
+                    <Bot size={16} />
+                  </div>
+                  <div className="orion-builder-hub-card-title">{workflow.name || 'Untitled workflow'}</div>
+                  <div className="orion-builder-hub-card-copy">{compactText(workflow.description)}</div>
+                  <div className="orion-builder-hub-card-meta">
+                    <span>{formatDate(workflow.updatedAt || workflow.updated_at)}</span>
+                    <span>You</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="orion-builder-hub-grid">
+            {BUILDER_TEMPLATES.map((template) => (
+              <Link
+                key={template.id}
+                href="/builder/new"
+                className="orion-stat-card orion-control-card orion-builder-hub-card"
+              >
+                <div className="orion-builder-hub-card-icon">
+                  <Bot size={16} />
                 </div>
-              </div>
+                <div className="orion-builder-hub-card-title">{template.title}</div>
+                <div className="orion-builder-hub-card-copy">{template.description}</div>
+                <div className="orion-builder-hub-card-meta">
+                  <span>Template</span>
+                  <span>Start here</span>
+                </div>
+              </Link>
             ))}
-          </aside>
-
-          <section className="orion-builder-canvas-panel is-agent-builder">
-            <div ref={canvasHostRef} className="orion-builder-canvas-frame">
-              {saveMessage ? <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>{saveMessage}</div> : null}
-
-              {nodes.length === 0 ? (
-                <div className="orion-builder-empty-state">
-                  <div className="orion-builder-empty-title">Create a workflow</div>
-                  <div className="orion-builder-empty-copy">
-                    Build an agent workflow with custom logic and tools.
-                  </div>
-                  <button
-                    type="button"
-                    className="orion-builder-create-button"
-                    onClick={(event) => openNodeSearch({ clientX: event.clientX, clientY: event.clientY })}
-                  >
-                    <Plus size={18} />
-                    Create
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <ReactFlow
-                    style={{ width: '100%', height: '100%' }}
-                    onInit={(instance) => {
-                      flowRef.current = instance;
-                    }}
-                    nodes={nodes}
-                    edges={renderedEdges}
-                    nodeTypes={CANVAS_NODE_TYPES}
-                    edgeTypes={CANVAS_EDGE_TYPES}
-                    fitView
-                    fitViewOptions={{ padding: 0.35 }}
-                    nodesConnectable
-                    nodesDraggable
-                    elementsSelectable={interactionMode === 'select'}
-                    onNodesChange={handleNodesChange}
-                    onEdgesChange={handleEdgesChange}
-                    onConnect={handleConnect}
-                    onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
-                    onPaneClick={(event) => {
-                      handlePaneClick({ detail: event.detail, clientX: event.clientX, clientY: event.clientY });
-                    }}
-                    onEdgeClick={(_, edge) => {
-                      setSelectedNodeId(null);
-                      setSelectedEdgeId(edge.id);
-                      setNodeSearch(null);
-                    }}
-                    onEdgeContextMenu={(event, edge) => {
-                      event.preventDefault();
-                      pushHistory();
-                      setEdges((current) => current.filter((item) => item.id !== edge.id));
-                      setSelectedEdgeId(null);
-                      setNodeSearch(null);
-                      setSaveState('idle');
-                      setSaveMessage(null);
-                    }}
-                    panOnDrag={interactionMode === 'pan'}
-                    zoomOnScroll
-                    zoomOnPinch
-                    connectionLineComponent={SmoothConnectionLine}
-                    proOptions={{ hideAttribution: true }}
-                  />
-                </>
-              )}
-
-              <div className="orion-builder-bottom-toolbar">
-                <button
-                  type="button"
-                  className={`orion-builder-bottom-tool ${interactionMode === 'pan' ? 'is-active' : ''}`}
-                  onClick={() => setInteractionMode('pan')}
-                  aria-label="Hand tool"
-                >
-                  <Hand size={16} />
-                </button>
-                <button
-                  type="button"
-                  className={`orion-builder-bottom-tool ${interactionMode === 'select' ? 'is-active' : ''}`}
-                  onClick={() => setInteractionMode('select')}
-                  aria-label="Pointer tool"
-                >
-                  <MousePointer2 size={16} />
-                </button>
-                <button type="button" className="orion-builder-bottom-tool" onClick={handleUndo} disabled={historyStack.length === 0} aria-label="Undo">
-                  <Undo2 size={16} />
-                </button>
-                <button type="button" className="orion-builder-bottom-tool" onClick={handleRedo} disabled={futureStack.length === 0} aria-label="Redo">
-                  <Redo2 size={16} />
-                </button>
-              </div>
-
-              {nodeSearch ? (
-                <div
-                  className="orion-builder-node-search"
-                  style={{ left: nodeSearch.screenX, top: nodeSearch.screenY }}
-                >
-                  <input
-                    ref={nodeSearchInputRef}
-                    className="orion-builder-node-search-input"
-                    value={nodeSearch.query}
-                    onChange={(event) => setNodeSearch((current) => (current ? { ...current, query: event.target.value } : current))}
-                    placeholder="Search nodes..."
-                  />
-                  <div className="orion-builder-node-search-list">
-                    {filteredNodeLibrary.map((item) => (
-                      <button
-                        key={item.type}
-                        type="button"
-                        className="orion-builder-node-search-item"
-                        onClick={() => addCanvasNode(item.type)}
-                      >
-                        <span className="orion-builder-palette-icon" style={{ ['--builder-accent' as string]: item.accent }}>
-                          {item.icon}
-                        </span>
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </section>
-        </div>
-      </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

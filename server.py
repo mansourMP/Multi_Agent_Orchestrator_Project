@@ -73,6 +73,7 @@ configure_runtime_events(
 
 from server_modules.routes_agents import router as agents_router
 from server_modules.routes_auth import router as auth_router
+from server_modules.routes_builder import router as builder_router
 from server_modules.routes_connectors import router as connectors_router
 from server_modules.routes_health import router as health_router
 from server_modules.routes_runs import router as runs_router
@@ -112,6 +113,7 @@ app.include_router(runs_router)
 app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(connectors_router)
+app.include_router(builder_router)
 
 @app.on_event("startup")
 async def initialize_runtime_services_on_startup():

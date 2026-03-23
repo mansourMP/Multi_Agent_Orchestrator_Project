@@ -146,8 +146,8 @@ export default function WorkflowsPage() {
         <div className="orion-page-shell orion-animate-in">
             <OsPageHeader
                 icon={<WorkflowIcon size={16} />}
-                title="Automations"
-                subtitle="Open, test, and manage the systems your assistant can run."
+                title="Workflows"
+                subtitle="Build and manage reusable agent systems."
                 meta={
                     workflows.length > 0 ? (
                         <>
@@ -155,27 +155,20 @@ export default function WorkflowsPage() {
                             <span>{statusSummary.active} active</span>
                         </>
                     ) : (
-                        <>
-                            <span>Use Assistant for one-off tasks</span>
-                        </>
+                        <span>Reusable automations for your team</span>
                     )
                 }
                 actions={
-                    <>
-                        <Link href="/workspace" className="btn-secondary">
-                            Open Assistant
-                        </Link>
-                        <Link href="/builder" className="btn-primary">
-                            <Plus size={14} />
-                            New Automation
-                        </Link>
-                    </>
+                    <Link href="/builder/new" className="btn-primary">
+                        <Plus size={14} />
+                        New Workflow
+                    </Link>
                 }
             />
 
             <MetricStrip
                 items={[
-                    { label: 'Automations', value: String(statusSummary.total) },
+                    { label: 'Total', value: String(statusSummary.total) },
                     { label: 'Active', value: String(statusSummary.active) },
                     { label: 'Draft', value: String(statusSummary.draft) },
                     { label: 'Needs attention', value: String(statusSummary.needsAttention) },
@@ -183,23 +176,26 @@ export default function WorkflowsPage() {
             />
 
             {loading ? (
-                <section className="orion-panel muted" style={{ minHeight: 240, display: 'grid', placeItems: 'center' }}>
-                    <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading automations...</div>
+                <section className="orion-panel muted orion-loading-panel">
+                    <div className="orion-loading-copy">Loading workflows...</div>
                 </section>
             ) : (
                 <>
                     {loadError ? (
-                        <section className="orion-empty" style={{ marginBottom: 12 }}>
-                            <div className="orion-empty-title">Could not load automations</div>
+                        <section className="orion-empty">
+                            <div className="orion-empty-title">Couldn't load this section.</div>
                             <div className="orion-empty-copy">{loadError}</div>
+                            <button type="button" className="btn-secondary" onClick={() => void loadWorkflows()}>
+                                Retry
+                            </button>
                         </section>
                     ) : null}
                     {workflows.length > 0 ? (
                         <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
                             <div className="orion-panel-header" style={{ marginBottom: 0 }}>
                                 <div>
-                                    <div className="orion-panel-title">Find an automation</div>
-                                    <div className="orion-panel-copy">Search the library and jump back into editing.</div>
+                                    <div className="orion-panel-title">Search workflows</div>
+                                    <div className="orion-panel-copy">Find a workflow by name or description.</div>
                                 </div>
                             </div>
                             <div className="orion-toolbar">
@@ -209,13 +205,13 @@ export default function WorkflowsPage() {
                                         type="text"
                                         value={query}
                                         onChange={(e) => setQuery(e.target.value)}
-                                        placeholder="Search automations..."
+                                        placeholder="Search workflows..."
                                         className="input"
-                                        style={{ paddingLeft: 36, height: 42, borderRadius: 11 }}
+                                        style={{ paddingLeft: 36 }}
                                     />
                                 </div>
-                                <div style={{ color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 600 }}>
-                                    {filtered.length} of {workflows.length} automations
+                                <div className="orion-toolbar-summary">
+                                    {filtered.length} of {workflows.length} workflows
                                 </div>
                             </div>
                         </section>
@@ -223,76 +219,51 @@ export default function WorkflowsPage() {
 
                     {filtered.length === 0 ? (
                         <section className="orion-empty">
-                            <div className="orion-empty-title">{workflows.length === 0 ? 'No automations yet' : 'No automations match'}</div>
-                            <div className="orion-empty-copy" style={{ marginBottom: 14 }}>
+                            <div className="orion-empty-title">{workflows.length === 0 ? 'No workflows yet' : 'No workflows match'}</div>
+                            <div className="orion-empty-copy orion-empty-copy-spaced">
                                 {workflows.length === 0
-                                    ? 'Create one reusable workflow, or use Assistant when the task only needs to happen once.'
+                                    ? 'Create your first workflow to start automating repeatable work.'
                                     : 'Try another search or clear the current query.'}
                             </div>
-                            <div style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
+                            <div className="orion-inline-actions">
                                 {workflows.length === 0 ? (
-                                    <Link href="/workspace" className="btn-primary">
-                                        Open Assistant
-                                    </Link>
-                                ) : null}
-                                {workflows.length === 0 ? (
-                                    <Link href="/builder" className="btn-secondary">Create Automation</Link>
+                                    <Link href="/builder/new" className="btn-primary">New Workflow</Link>
                                 ) : null}
                             </div>
                         </section>
                     ) : (
-                        <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
-                            <div
-                                className="orion-panel-header"
-                                style={{
-                                    marginBottom: 0,
-                                    padding: '16px 18px 12px',
-                                    borderBottom: '1px solid var(--border-subtle)',
-                                }}
-                            >
+                        <section className="orion-panel orion-panel-shell">
+                            <div className="orion-panel-header orion-panel-shell-header">
                                 <div>
-                                    <div className="orion-panel-title">Automation library</div>
+                                    <div className="orion-panel-title">Workflow library</div>
                                     <div className="orion-panel-copy">Reusable systems you can open, test, and activate.</div>
                                 </div>
                             </div>
-                            <section className="orion-list" style={{ padding: '0 12px 10px' }}>
+                            <section className="orion-list orion-panel-shell-body">
                             {filtered.map((wf) => {
                         const status = getStatusDisplay(wf.status);
                         return (
                             <article
                                 key={wf.id}
                                 className="orion-list-row"
-                                onClick={() => router.push(`/workflows/${wf.id}`)}
+                                onClick={() => router.push(`/builder/${wf.id}`)}
                                 role="button"
                                 tabIndex={0}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
-                                        router.push(`/workflows/${wf.id}`);
+                                        router.push(`/builder/${wf.id}`);
                                     }
                                 }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
-                                    <div
-                                        style={{
-                                            width: 30,
-                                            height: 30,
-                                            borderRadius: 999,
-                                            background: 'var(--primary-soft)',
-                                            display: 'grid',
-                                            placeItems: 'center',
-                                            color: 'var(--primary-base)',
-                                            fontWeight: 700,
-                                            fontSize: 11,
-                                            flexShrink: 0,
-                                        }}
-                                    >
+                                <div className="orion-item-leading">
+                                    <div className="orion-item-avatar is-accent">
                                         {wf.name?.slice(0, 2).toUpperCase() || 'WF'}
                                     </div>
-                                    <div className="orion-list-row-main" style={{ gap: 6 }}>
-                                        <div className="orion-list-row-title">{wf.name || 'Untitled Automation'}</div>
+                                    <div className="orion-list-row-main">
+                                        <div className="orion-list-row-title">{wf.name || 'Untitled Workflow'}</div>
                                         <div className="orion-list-row-subtitle">{wf.description || 'No description provided'}</div>
-                                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-tertiary)' }}>
-                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                        <div className="orion-item-meta">
+                                            <span className="orion-item-meta-entry">
                                                 <Clock size={11} />
                                                 Updated {formatDate(wf.updatedAt)}
                                             </span>
@@ -301,7 +272,7 @@ export default function WorkflowsPage() {
                                     </div>
                                 </div>
 
-                                <div className="orion-toolbar-group" onClick={(event) => event.stopPropagation()}>
+                                <div className="orion-list-row-end" onClick={(event) => event.stopPropagation()}>
                                     <button
                                         type="button"
                                         className="orion-icon-btn"
@@ -318,22 +289,10 @@ export default function WorkflowsPage() {
                                     >
                                         <Copy size={14} />
                                     </button>
-                                    <span
-                                        style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 6,
-                                            fontSize: 12,
-                                            color: 'var(--text-secondary)',
-                                            minWidth: 62,
-                                            justifyContent: 'flex-end',
-                                        }}
-                                    >
+                                    <span className="orion-status-inline">
                                         <span
+                                            className="orion-status-inline-dot"
                                             style={{
-                                                width: 7,
-                                                height: 7,
-                                                borderRadius: 999,
                                                 background: status.color,
                                                 boxShadow: `0 0 0 3px ${status.ring}`,
                                             }}
@@ -355,7 +314,7 @@ export default function WorkflowsPage() {
                     <div className="orion-modal-overlay" onClick={() => setDeleteTarget(null)}>
                         <div className="orion-modal" onClick={(e) => e.stopPropagation()} style={{ width: 420, maxWidth: '100%' }}>
                         <header className="orion-panel-header" style={{ marginBottom: 0 }}>
-                            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Delete Automation</h2>
+                            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Delete Workflow</h2>
                             <button
                                 type="button"
                                 className="orion-icon-btn"

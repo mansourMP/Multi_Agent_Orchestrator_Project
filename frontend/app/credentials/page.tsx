@@ -5,7 +5,6 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  AlertTriangle,
   ArrowUpRight,
   ChevronLeft,
   FolderOpen,
@@ -31,6 +30,7 @@ import {
 import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
 const ORION_API_URL = API_BASE;
 const WORKSPACE_ID = 'default';
@@ -373,7 +373,7 @@ function normalizeConnectionsError(message?: string | null): string {
     lowered.includes('aborted') ||
     lowered.includes('timed out')
   ) {
-    return 'Runtime is offline. Start Empyralis services to load connection state and suite actions.';
+    return 'Couldn’t reach the local runtime. Start Empyralist services to load system access and integration status.';
   }
   return normalized;
 }
@@ -1203,6 +1203,26 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
   return (
     <div className="orion-page-shell orion-animate-in">
+      <OsPageHeader
+        icon={null}
+        title="Integrations"
+        subtitle="Connect business systems, channels, and AI providers."
+        meta={
+          summary.total > 0 ? (
+            <>
+              <span>{summary.active} connected</span>
+              <span>{directoryCounts.available} available</span>
+            </>
+          ) : undefined
+        }
+        actions={
+          <button className="btn-secondary" onClick={() => void loadConnectors()}>
+            <RefreshCw size={14} />
+            Refresh
+          </button>
+        }
+      />
+
       <section className="orion-panel muted" style={{ display: 'grid', gap: 10, padding: '10px 14px' }}>
         <div
           style={{
@@ -1213,21 +1233,21 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             flexWrap: 'wrap',
           }}
         >
-          <div style={{ display: 'grid', gap: 2 }}>
-            <div className="orion-panel-title">Connections</div>
-            <div className="orion-panel-copy">
-              Connect the tools your assistant and automations should use.
+            <div style={{ display: 'grid', gap: 2 }}>
+              <div className="orion-panel-title">System access</div>
+              <div className="orion-panel-copy">
+                Choose which systems agents can read from, write to, and operate.
+              </div>
             </div>
-          </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             {summary.total > 0 ? <span className="orion-chip">{summary.active} active</span> : null}
-            <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void loadConnectors()}>
+            <button className="btn-secondary" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void loadConnectors()}>
               <RefreshCw size={13} />
               Refresh
             </button>
-            <button className="orion-btn orion-btn-primary" style={{ minHeight: 34, paddingInline: 12 }} onClick={openGenericCreateModal}>
+            <button className="btn-primary" style={{ minHeight: 34, paddingInline: 12 }} onClick={openGenericCreateModal}>
               <Plus size={13} />
-              Add connection
+              Add system
             </button>
           </div>
         </div>
@@ -1254,7 +1274,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
         {filteredDirectoryItems.length === 0 ? (
           <section className="orion-empty" style={{ minHeight: 220 }}>
-            <div className="orion-empty-title">No connectors match</div>
+            <div className="orion-empty-title">No integrations match</div>
             <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
               Try another filter or switch back to all connectors.
             </div>
@@ -1418,16 +1438,16 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   }}
                 >
                   <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Availability
+                    Access model
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                     {focusedCatalogEntry.status === 'provider_next' && focusedConnectorId
-                      ? 'You can connect this here today. Deeper app-specific actions can be added later without changing the core flow.'
+                      ? 'You can connect this here today. Deeper app-specific actions can be added later without changing the overall platform model.'
                       : focusedCatalogEntry.status === 'provider_next'
-                        ? 'Show this as available next. Add it natively only when usage proves it is important.'
+                        ? 'Keep this as a near-term integration. Add it natively only when real usage proves it matters.'
                         : focusedCatalogEntry.status === 'custom_build'
                           ? 'This needs a custom connection flow with its own setup and approval rules.'
-                          : 'This connection is ready here now. You can add it, test it, pause it, and remove it from this page.'}
+                          : 'This integration is ready now. You can connect it, test access, pause it, and remove it from this page.'}
                   </div>
                 </div>
 
@@ -1579,12 +1599,12 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       <AiAccountsPanel apiUrl={ORION_API_URL} workspaceId={WORKSPACE_ID} runtimeApiKey={runtimeApiKey} />
 
       {pageError && connectors.length > 0 ? (
-        <section className="orion-panel" style={{ borderColor: 'var(--warning-border)', background: 'var(--warning-bg)', color: 'var(--warning-fg)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
-            <AlertTriangle size={16} />
-            Action needs attention
-          </div>
-          <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.5 }}>{pageError}</div>
+        <section className="orion-empty" style={{ minHeight: 120, gap: 10 }}>
+          <div className="orion-empty-title">Couldn't load this section.</div>
+          <div className="orion-empty-copy" style={{ marginTop: 0 }}>{pageError}</div>
+          <button type="button" className="btn-secondary" onClick={() => void loadConnectors()}>
+            Retry
+          </button>
         </section>
       ) : null}
 
@@ -1594,46 +1614,45 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         </section>
       ) : pageError && connectors.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">Connections are not available yet</div>
+          <div className="orion-empty-title">Couldn't load this section.</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>{pageError}</div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button className="orion-btn orion-btn-primary" onClick={() => void loadConnectors()}>
+            <button className="btn-secondary" onClick={() => void loadConnectors()}>
               <RefreshCw size={14} />
               Retry
             </button>
-            <Link href="/workspace" className="orion-btn orion-btn-ghost">Open Assistant</Link>
           </div>
         </section>
       ) : connectors.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">Connect the first live tool</div>
+          <div className="orion-empty-title">No integrations yet</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-            Start with one real account, test it once, then go back to the assistant.
+            Connect business systems to give agents real access to the tools they need.
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 10 }}>
-            <button className="orion-btn orion-btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
+            <button className="btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
               <Plus size={14} />
               Connect Google Workspace
             </button>
-            <button className="orion-btn orion-btn-ghost" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
+            <button className="btn-secondary" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
               <Plus size={14} />
               Connect Telegram
             </button>
-            <button className="orion-btn orion-btn-ghost" onClick={openGenericCreateModal}>
+            <button className="btn-secondary" onClick={openGenericCreateModal}>
               <Plus size={14} />
-              Browse all connectors
+              Browse all integrations
             </button>
           </div>
           <div className="orion-empty-copy" style={{ maxWidth: 560, margin: '0 auto' }}>
-            Recommended starting point: Google Workspace for files and calendar, or Telegram if you want alerts and chat first.
+            Recommended starting point: Google Workspace for documents and calendar, or Telegram if you want alerts and chat first.
           </div>
         </section>
       ) : selectedConnectorRow ? (
         <section className="orion-panel" style={{ display: 'grid', gap: 12 }}>
           <div className="orion-panel-header" style={{ marginBottom: 0 }}>
             <div>
-              <div className="orion-panel-title">Selected connection</div>
-              <div className="orion-panel-copy">Test it, pause it, or update how your automations use it.</div>
+              <div className="orion-panel-title">Connected system</div>
+              <div className="orion-panel-copy">Test access, pause it, or update how agents should use it.</div>
             </div>
           </div>
           <section className="orion-list">

@@ -31,6 +31,7 @@ router.add_api_route("/providers", core.list_providers, methods=['GET'], depende
 router.add_api_route("/providers/anthropic/local-cli/status", core.get_anthropic_local_cli_status, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/anthropic/local-cli/login", core.start_anthropic_local_cli_login, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/test", core.test_provider_credentials, methods=['POST'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/providers/model-aliases", core.get_model_alias_catalog, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/{provider}/models", core.get_provider_models, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/credentials/vault", core.list_credentials_vault, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/connectors", core.list_connectors, methods=['GET'], dependencies=[Depends(require_api_key)])

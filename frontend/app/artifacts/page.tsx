@@ -509,8 +509,8 @@ export default function ArtifactsPage() {
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<FileStack size={18} />}
-        title="Files"
-        subtitle="Open finished work, supporting proof, and saved outputs from recent activity."
+        title="Assets"
+        subtitle="Outputs, files, and evidence from your agent runs."
         meta={
           <>
             <span>{filteredItems.length} visible</span>
@@ -535,8 +535,8 @@ export default function ArtifactsPage() {
           }}
         >
           <div style={{ display: 'grid', gap: 2 }}>
-            <div className="orion-panel-title">Browse files</div>
-            <div className="orion-panel-copy">Filter finished work, proof, and support files by type, handler, or channel.</div>
+            <div className="orion-panel-title">Browse assets</div>
+            <div className="orion-panel-copy">Filter outputs, proof, and support files by type, handler, or channel.</div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <span className="orion-chip">{filteredItems.length} shown</span>
@@ -574,7 +574,7 @@ export default function ArtifactsPage() {
                 className="input"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search files, tasks, or channels"
+                placeholder="Search assets, tasks, or channels"
                 style={{ paddingLeft: 36, height: 42, borderRadius: 11 }}
               />
             </div>
@@ -622,49 +622,39 @@ export default function ArtifactsPage() {
 
       {loading ? (
         <section className="orion-panel muted" style={{ minHeight: 180, display: 'grid', gap: 10, placeItems: 'center', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Loading files</div>
+          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Loading assets</div>
           <div style={{ maxWidth: 420, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.55 }}>
-            Reading finished work, proof, and support files from recent activity.
+            Reading outputs, proof, and support files from recent runs.
           </div>
         </section>
       ) : error ? (
-        <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 12, placeItems: 'center', textAlign: 'center', padding: '24px 20px' }}>
-          <div
-            style={{
-              width: 42,
-              height: 42,
-              borderRadius: 14,
-              display: 'grid',
-              placeItems: 'center',
-              background: 'var(--warning-bg)',
-              color: 'var(--warning-fg)',
-              border: '1px solid var(--warning-border)',
-            }}
-          >
-            <AlertTriangle size={18} />
+        <section className="orion-empty" style={{ minHeight: 220, display: 'grid', gap: 12, placeItems: 'center', textAlign: 'center', padding: '24px 20px' }}>
+          <AlertTriangle size={24} style={{ color: 'var(--text-tertiary)' }} />
+          <div className="orion-empty-title">No assets yet</div>
+          <div style={{ maxWidth: 480, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 }}>
+            Assets created by your agents will appear here.
           </div>
-          <div style={{ color: 'var(--text-primary)', fontWeight: 800 }}>Files are not available yet</div>
-          <div style={{ maxWidth: 480, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 }}>{error}</div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button className="orion-btn orion-btn-primary" onClick={() => void loadArtifacts()}>
+            <button className="btn-secondary" onClick={() => void loadArtifacts()}>
               Retry
             </button>
-            <Link href="/workspace" className="orion-btn orion-btn-ghost">Open Assistant</Link>
           </div>
         </section>
       ) : filteredItems.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">No files found</div>
+          <div className="orion-empty-title">No assets yet</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
             {viewMode === 'deliverables'
-              ? 'Run something new or loosen the filters to surface more finished work.'
+              ? 'Assets created by your agents will appear here.'
               : viewMode === 'evidence'
                 ? 'Capture screenshots or browser proof, or widen the filters to show more evidence.'
                 : viewMode === 'system'
                   ? 'No support files match this view yet. Try another filter or switch back to deliverables.'
                   : 'Change the filters or run something new.'}
           </div>
-          <Link href="/workspace" className="orion-btn orion-btn-primary">Open Assistant</Link>
+          <button type="button" className="btn-secondary" onClick={() => void loadArtifacts()}>
+            Retry
+          </button>
         </section>
       ) : (
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr' }}>

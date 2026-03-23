@@ -18,6 +18,7 @@ import {
   type LocalWorkerStatus,
   type LocalExecutionDraft,
   type LogEntry,
+  type ModelAliasOption,
   type PackResult,
   type ProviderId,
   type ProviderOption,
@@ -58,6 +59,8 @@ export interface PageState {
   setModel: (v: string | ((prev: string) => string)) => void;
   providerOptions: ProviderOption[];
   setProviderOptions: (v: ProviderOption[] | ((prev: ProviderOption[]) => ProviderOption[])) => void;
+  modelAliases: ModelAliasOption[];
+  setModelAliases: (v: ModelAliasOption[] | ((prev: ModelAliasOption[]) => ModelAliasOption[])) => void;
   modelOptions: string[];
   setModelOptions: (v: string[] | ((prev: string[]) => string[])) => void;
   modelsLoading: boolean;
@@ -208,6 +211,7 @@ Wed 3:00 PM`);
   const [providerAuthMode, setProviderAuthMode] = useState(DEFAULT_PROVIDER_OPTIONS[0].defaultAuthMode || DEFAULT_PROVIDER_OPTIONS[0].auth[0] || 'api_key');
   const [model, setModel] = useState('gpt-4.1');
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
+  const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>(DEFAULT_PROVIDER_MODELS.openai);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('managed');
@@ -293,6 +297,7 @@ Wed 3:00 PM`);
     providerAuthMode, setProviderAuthMode,
     model, setModel,
     providerOptions, setProviderOptions,
+    modelAliases, setModelAliases,
     modelOptions, setModelOptions,
     modelsLoading, setModelsLoading,
     connectionMode, setConnectionMode,

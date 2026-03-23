@@ -74,33 +74,33 @@ function StandardCanvasNodeComponent({
             <style jsx>{`
                 .canvas-node {
                     position: relative;
-                    min-width: 130px;
-                    max-width: 180px;
-                    min-height: 52px;
+                    min-width: 118px;
+                    max-width: 160px;
+                    min-height: 48px;
                     display: flex;
-                    align-items: flex-start;
+                    align-items: center;
                     justify-content: flex-start;
-                    gap: 12px;
-                    padding: 10px 12px;
+                    gap: 9px;
+                    padding: 8px 9px;
                     border: 1px solid rgba(15, 23, 42, 0.08);
-                    border-radius: 16px;
+                    border-radius: 14px;
                     background: #ffffff;
-                    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+                    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.03);
                     transition: box-shadow 160ms ease, border-color 160ms ease;
                     overflow: visible;
                 }
 
                 .canvas-node:hover {
-                    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+                    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.045);
                 }
 
                 .canvas-node.trigger {
-                    border-radius: 16px;
+                    border-radius: 14px;
                 }
 
                 .canvas-node.selected {
                     border-color: rgba(15, 23, 42, 0.14);
-                    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.75), 0 10px 24px rgba(15, 23, 42, 0.08);
+                    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.75), 0 6px 16px rgba(15, 23, 42, 0.045);
                 }
 
                 .canvas-node.success {
@@ -117,10 +117,10 @@ function StandardCanvasNodeComponent({
                 }
 
                 .icon-shell {
-                    width: 36px;
-                    height: 36px;
-                    border-radius: 10px;
-                    background: color-mix(in srgb, var(--canvas-node-accent) 14%, white 86%);
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 8px;
+                    background: color-mix(in srgb, var(--canvas-node-accent) 16%, white 84%);
                     display: inline-flex;
                     align-items: center;
                     justify-content: center;
@@ -128,8 +128,8 @@ function StandardCanvasNodeComponent({
                 }
 
                 .icon {
-                    width: 24px;
-                    height: 24px;
+                    width: 16px;
+                    height: 16px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
@@ -138,39 +138,37 @@ function StandardCanvasNodeComponent({
 
                 .description {
                     min-width: 0;
-                    min-width: 0;
                     display: flex;
                     flex-direction: column;
-                    gap: 3px;
-                    padding-top: 2px;
+                    gap: 0;
                     flex: 1;
                 }
 
                 .label {
-                    font-size: 14px;
+                    font-size: 13px;
                     text-align: left;
                     text-overflow: ellipsis;
                     white-space: nowrap;
                     overflow: hidden;
                     font-weight: 600;
-                    line-height: 1.2;
+                    line-height: 1.15;
                     color: #171717;
                 }
 
                 .subtitle {
                     text-align: left;
                     color: #8a8a84;
-                    font-size: 12px;
+                    font-size: 11px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
-                    line-height: 1.2;
+                    line-height: 1.15;
                     font-weight: 400;
                 }
 
                 .canvas-node :global(.react-flow__handle) {
-                    width: 10px;
-                    height: 10px;
+                    width: 9px;
+                    height: 9px;
                     border-radius: 999px;
                     border: 1px solid rgba(120, 120, 114, 0.32);
                     background: #ffffff;

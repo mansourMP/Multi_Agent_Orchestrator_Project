@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
-  AlertTriangle,
   Download,
   Eye,
   RefreshCw,
@@ -226,6 +225,7 @@ export default function ExecutionsPage() {
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [runtimeRunMeta, setRuntimeRunMeta] = useState<Record<string, RuntimeRunMeta>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [agentFilter, setAgentFilter] = useState('all');
@@ -252,6 +252,7 @@ export default function ExecutionsPage() {
   async function loadExecutions() {
     try {
       setLoading(true);
+      setLoadError('');
       const runtimeKey = readRuntimeApiKeyFromStorage('');
       const runtimeHeaders = new Headers();
       if (runtimeKey) runtimeHeaders.set('X-API-Key', runtimeKey);
@@ -338,6 +339,7 @@ export default function ExecutionsPage() {
       console.error(error);
       setExecutions([]);
       setRuntimeRunMeta({});
+      setLoadError(error instanceof Error ? error.message : 'Failed to load runs.');
     } finally {
       setLoading(false);
     }
@@ -416,25 +418,12 @@ export default function ExecutionsPage() {
         if (status === 'running') acc.running += 1;
         if (status === 'failed' || status === 'error') acc.failed += 1;
         if (status === 'completed' || status === 'success') acc.completed += 1;
+        if (isRecentExecution(execution)) acc.recent += 1;
         return acc;
       },
-      { total: 0, running: 0, failed: 0, completed: 0 },
+      { total: 0, running: 0, failed: 0, completed: 0, recent: 0 },
     );
   }, [executions]);
-
-  const recentRunCount = useMemo(
-    () => executions.filter((execution) => isRecentExecution(execution)).length,
-    [executions],
-  );
-
-  const orchestratorRunCount = useMemo(
-    () =>
-      executions.filter(
-        (execution) =>
-          String(execution.workflow?.definition?.meta?.operator?.agentRole || '').trim() === 'orchestrator',
-      ).length,
-    [executions],
-  );
 
   const tokenSummary = useMemo(() => {
     if (!selectedExecution) return 0;
@@ -479,12 +468,19 @@ export default function ExecutionsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const clearFilters = () => {
+    setQuery('');
+    setStatusFilter('all');
+    setAgentFilter('all');
+    setChannelFilter('all');
+  };
+
   return (
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<Activity size={18} />}
-        title="Activity"
-        subtitle="See what your assistant started, finished, or needs attention."
+        title="Runs"
+        subtitle="Monitor live execution, completed work, and anything that needs your attention."
         meta={
           <>
             <span>{filteredExecutions.length} visible</span>
@@ -505,42 +501,34 @@ export default function ExecutionsPage() {
           { label: 'Total', value: String(runSummary.total) },
           { label: 'In progress', value: String(runSummary.running) },
           { label: 'Completed', value: String(runSummary.completed) },
-          { label: 'Needs attention', value: String(runSummary.failed) },
-          { label: 'Recent 24h', value: String(recentRunCount) },
-          { label: 'Coordinated', value: String(orchestratorRunCount) },
+          { label: 'Needs review', value: String(runSummary.failed) },
+          { label: 'Recent 24h', value: String(runSummary.recent) },
         ]}
       />
 
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Find activity</div>
-            <div className="orion-panel-copy">Search by task, status, handler, or channel.</div>
+            <div className="orion-panel-title">Operations view</div>
+            <div className="orion-panel-copy">Search by goal or run ID, then narrow by status, handler, or channel.</div>
           </div>
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gap: 10,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            alignItems: 'end',
-          }}
-        >
-          <div className="orion-toolbar-input-wrap" style={{ gridColumn: '1 / -1', minWidth: 0 }}>
+        <div className="orion-toolbar-grid">
+          <div className="orion-toolbar-input-wrap orion-toolbar-grid-search">
             <Search size={14} className="icon" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="input"
-              placeholder="Search by task name, run ID, or summary"
-              style={{ height: 42, borderRadius: 11, paddingLeft: 36 }}
+              placeholder="Search by goal, workflow name, or run ID..."
+              style={{ paddingLeft: 36 }}
             />
           </div>
           <select
             className="input"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            style={{ height: 42, minWidth: 0, width: '100%', borderRadius: 11 }}
+            style={{ minWidth: 0, width: '100%' }}
           >
             <option value="all">All statuses</option>
             <option value="success">Success</option>
@@ -554,7 +542,7 @@ export default function ExecutionsPage() {
             className="input"
             value={agentFilter}
             onChange={(event) => setAgentFilter(event.target.value)}
-            style={{ height: 42, minWidth: 0, width: '100%', borderRadius: 11 }}
+            style={{ minWidth: 0, width: '100%' }}
           >
             <option value="all">All handlers</option>
             {AGENT_ROLE_OPTIONS.map((item) => (
@@ -568,7 +556,7 @@ export default function ExecutionsPage() {
             className="input"
             value={channelFilter}
             onChange={(event) => setChannelFilter(event.target.value)}
-            style={{ height: 42, minWidth: 0, width: '100%', borderRadius: 11 }}
+            style={{ minWidth: 0, width: '100%' }}
           >
             <option value="all">All channels</option>
             {channelOptions.map((channel) => (
@@ -578,36 +566,56 @@ export default function ExecutionsPage() {
             ))}
           </select>
         </div>
-        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-          {filteredExecutions.length} of {executions.length} activity items
+        <div className="orion-toolbar">
+          <div className="orion-toolbar-summary">
+            {filteredExecutions.length} of {executions.length} runs
+          </div>
+          {(query || statusFilter !== 'all' || agentFilter !== 'all' || channelFilter !== 'all') ? (
+            <button type="button" className="btn-secondary" onClick={clearFilters}>
+              Clear filters
+            </button>
+          ) : null}
         </div>
       </section>
 
       {loading ? (
-        <section className="orion-panel muted" style={{ minHeight: 140, display: 'grid', placeItems: 'center' }}>
-          <div style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>Loading activity...</div>
+        <section className="orion-panel muted orion-loading-panel">
+          <div className="orion-loading-copy">Loading runs...</div>
+        </section>
+      ) : loadError ? (
+        <section className="orion-empty">
+          <div className="orion-empty-title">Couldn't load this section.</div>
+          <div className="orion-empty-copy">{loadError}</div>
+          <button type="button" className="btn-secondary" onClick={() => void loadExecutions()}>
+            Retry
+          </button>
         </section>
       ) : filteredExecutions.length === 0 ? (
-        <section className="orion-panel" style={{ padding: '18px 20px', display: 'grid', gap: 6, justifyItems: 'start' }}>
-          <div className="orion-empty-title" style={{ marginBottom: 0 }}>No activity found</div>
-          <div className="orion-empty-copy">Recent assistant work will appear here.</div>
-          <Link href="/workspace" className="orion-btn orion-btn-primary" style={{ minHeight: 34, paddingInline: 12 }}>
-            Open Assistant
-          </Link>
+        <section className="orion-empty">
+          <div className="orion-empty-title">{executions.length === 0 ? 'No runs yet' : 'No runs match these filters'}</div>
+          <div className="orion-empty-copy orion-empty-copy-spaced">
+            {executions.length === 0
+              ? 'Run a workflow to see execution history, approvals, and outcomes here.'
+              : 'Try another search or clear the current filters to see more activity.'}
+          </div>
+          <div className="orion-inline-actions">
+            {executions.length === 0 ? (
+              <Link href="/" className="btn-secondary">
+                Open Chat
+              </Link>
+            ) : (
+              <button type="button" className="btn-secondary" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
+          </div>
         </section>
       ) : (
-        <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
-          <div
-            className="orion-panel-header"
-            style={{
-              marginBottom: 0,
-              padding: '16px 18px 12px',
-              borderBottom: '1px solid var(--border-subtle)',
-            }}
-          >
+        <section className="orion-panel orion-panel-shell">
+          <div className="orion-panel-header orion-panel-shell-header">
             <div>
-              <div className="orion-panel-title">Recent activity</div>
-              <div className="orion-panel-copy">Open an item to review results, steps, and any follow-up needed.</div>
+              <div className="orion-panel-title">Execution queue</div>
+              <div className="orion-panel-copy">Open any run to review results, inspect the full timeline, and decide the next action.</div>
             </div>
           </div>
           {filteredExecutions.map((execution) => {
@@ -622,7 +630,7 @@ export default function ExecutionsPage() {
             const delegationNextAction = String(runMeta?.delegation_next_action || '').trim();
             const isOrchestrator = String(execution.workflow?.definition?.meta?.operator?.agentRole || '').trim() === 'orchestrator';
             const isRecent = isRecentExecution(execution);
-            const routeLabel = execution.triggeredBy || 'Manual';
+            const routeLabel = execution.triggeredBy || 'Direct';
             const runChips = [
               isOrchestrator ? 'Coordinated' : null,
               isRecent ? 'Recent' : null,
@@ -632,37 +640,21 @@ export default function ExecutionsPage() {
             return (
               <article
                 key={execution.id}
-                className="orion-list-row"
-                style={{
-                  padding: '14px 16px',
-                  alignItems: 'start',
-                  gap: 14,
-                  flexWrap: 'wrap',
-                }}
+                className="orion-list-row orion-run-row"
               >
                 <button
-                  className="orion-btn orion-btn-ghost"
+                  className="orion-btn orion-btn-ghost orion-run-row-trigger"
                   onClick={() => void openExecutionDetail(execution.id)}
-                  style={{
-                    minWidth: 0,
-                    flex: '1 1 460px',
-                    justifyContent: 'flex-start',
-                    minHeight: 44,
-                    padding: '0 2px',
-                    border: 'none',
-                    background: 'transparent',
-                    boxShadow: 'none',
-                  }}
                 >
-                  <div style={{ minWidth: 0, textAlign: 'left', display: 'grid', gap: 6 }}>
+                  <div className="orion-run-row-body">
                     <div>
-                      <div className="orion-list-row-title" style={{ fontSize: 14 }}>{workflowName}</div>
-                      <div className="orion-list-row-subtitle" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                      <div className="orion-list-row-title">{workflowName}</div>
+                      <div className="orion-list-row-subtitle orion-run-id">
                         {execution.id}
                       </div>
                     </div>
                     {runChips.length > 0 ? (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      <div className="orion-run-chip-row">
                         {runChips.map((chip) => (
                           <span
                             key={`${execution.id}:${chip}`}
@@ -680,45 +672,38 @@ export default function ExecutionsPage() {
                         ))}
                       </div>
                     ) : null}
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-tertiary)' }}>
-                      <span>Handled by {executionAgentRoleLabel(execution)}</span>
+                    <div className="orion-run-meta">
+                      <span>Owner {executionAgentRoleLabel(execution)}</span>
                       {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
                       {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>
                     {!parentRunId && delegationNextAction ? (
-                      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                      <div className="orion-run-note">
                         Next step: {titleCaseWords(delegationNextAction)}
                       </div>
                     ) : null}
                     {!parentRunId && retryableFailedChildren > 0 ? (
-                      <div style={{ fontSize: 11.5, color: 'var(--warning-fg)' }}>
+                      <div className="orion-run-note">
                         {retryableFailedChildren} linked task{retryableFailedChildren === 1 ? '' : 's'} need another try
                       </div>
                     ) : null}
                     {!parentRunId && readyForMerge ? (
-                      <div style={{ fontSize: 11.5, color: 'var(--success-fg)' }}>
+                      <div className="orion-run-note">
                         Ready to wrap up
                       </div>
                     ) : null}
                   </div>
                 </button>
 
-                <div style={{ display: 'grid', gap: 10, justifyItems: 'end', flex: '0 1 360px', minWidth: 280 }}>
-                  <div style={{ display: 'grid', gap: 8, width: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div className="orion-run-side">
+                  <div className="orion-run-side-top">
+                    <div className="orion-run-status-wrap">
                       <span
+                        className="orion-run-status"
                         style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          minHeight: 24,
-                          padding: '0 9px',
-                          borderRadius: 999,
-                          fontSize: 11,
                           color: status.color,
                           border: status.border,
                           background: status.bg,
-                          fontWeight: 700,
                         }}
                       >
                         <span
@@ -732,37 +717,35 @@ export default function ExecutionsPage() {
                         {status.label}
                       </span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, width: '100%' }}>
-                      <div style={{ display: 'grid', gap: 3, justifyItems: 'end' }}>
-                        <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Started</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>{toDateLabel(execution.createdAt)}</div>
+                    <div className="orion-run-stat-grid">
+                      <div className="orion-run-stat">
+                        <div className="orion-run-stat-label">Started</div>
+                        <div className="orion-run-stat-value">{toDateLabel(execution.createdAt)}</div>
                       </div>
-                      <div style={{ display: 'grid', gap: 3, justifyItems: 'end' }}>
-                        <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Duration</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>{toDurationLabel(execution.durationMs)}</div>
+                      <div className="orion-run-stat">
+                        <div className="orion-run-stat-label">Duration</div>
+                        <div className="orion-run-stat-value">{toDurationLabel(execution.durationMs)}</div>
                       </div>
-                      <div style={{ display: 'grid', gap: 3, justifyItems: 'end' }}>
-                        <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Route</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>{routeLabel}</div>
+                      <div className="orion-run-stat">
+                        <div className="orion-run-stat-label">Route</div>
+                        <div className="orion-run-stat-value">{routeLabel}</div>
                       </div>
                     </div>
                   </div>
 
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <div className="orion-run-actions">
                     {execution.source === 'runtime' ? null : (
                       <button
-                        className="orion-btn orion-btn-ghost"
+                        className="orion-btn orion-btn-ghost orion-run-action-btn"
                         onClick={() => void openExecutionDetail(execution.id)}
-                        style={{ minHeight: 30, padding: '0 10px', fontSize: 11 }}
                       >
                         <Eye size={12} />
-                        Open details
+                        Details
                       </button>
                     )}
                     <Link
-                      className="orion-btn orion-btn-ghost"
+                      className="orion-btn orion-btn-ghost orion-run-action-btn"
                       href={`/runs/${encodeURIComponent(execution.id)}/inspect?focus=timeline`}
-                      style={{ minHeight: 30, padding: '0 10px', fontSize: 11 }}
                     >
                       Full timeline
                     </Link>
@@ -779,9 +762,9 @@ export default function ExecutionsPage() {
           <section className="orion-modal" onClick={(event) => event.stopPropagation()}>
             <header className="orion-panel-header" style={{ marginBottom: 0 }}>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 800 }}>Activity detail</h2>
+                <h2 style={{ fontSize: 17, fontWeight: 800 }}>Run detail</h2>
                 <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                  {selectedExecution.workflow?.name || 'Untitled Automation'}
+                  {selectedExecution.workflow?.name || 'Untitled Workflow'}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
                   Handled by {executionAgentRoleLabel(selectedExecution)}
@@ -896,25 +879,6 @@ export default function ExecutionsPage() {
               </>
             )}
           </section>
-        </div>
-      )}
-
-      {!loading && executions.length > 0 && filteredExecutions.length === 0 && (
-        <div
-          style={{
-            width: 'fit-content',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            color: 'var(--warning-fg)',
-            background: 'var(--warning-bg)',
-            borderLeft: '2px solid var(--warning-border)',
-            padding: '8px 10px',
-            fontSize: 12,
-          }}
-        >
-          <AlertTriangle size={12} />
-          Filters are hiding all activity
         </div>
       )}
     </div>

@@ -50,7 +50,7 @@ function AnimatedMetricValue({ value }: { value: ReactNode }) {
   return <>{displayValue}</>;
 }
 
-export function MetricStrip({ items, minWidth = 150 }: MetricStripProps) {
+export function MetricStrip({ items, minWidth = 180 }: MetricStripProps) {
   return (
     <section
       className="orion-metric-strip orion-stagger-grid"

@@ -3,6 +3,7 @@
 import { useCallback, MutableRefObject } from 'react';
 import {
   DEFAULT_CONNECTOR_LABELS,
+  DEFAULT_MODEL_ALIAS_OPTIONS,
   DEFAULT_CONNECTOR_OPTIONS,
   DEFAULT_PROVIDER_MODELS,
   DEFAULT_PROVIDER_OPTIONS,
@@ -12,11 +13,14 @@ import {
   getProviderAuthModes,
   isConnectorId,
   isProviderId,
+  mapModelOptionsToAliases,
   normalizeProviderId,
   parseJson,
+  resolveModelAlias,
   type DoctorCheck,
   type LocalWorkerStatus,
   type LogLevel,
+  type ModelAliasOption,
   type ProviderId,
   type ProviderOption,
   type RuntimeMetrics,
@@ -132,6 +136,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
     setWorkersLoading,
     setLocalWorkerStatus,
     setProviderOptions,
+    modelAliases,
+    setModelAliases,
     connectionMode,
     setModelOptions,
     setModel,
@@ -387,8 +393,53 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
     }
   }, [buildHeaders, setWorkersLoading, setLocalWorkerStatus]);
 
+  const refreshModelAliasCatalog = useCallback(async (): Promise<ModelAliasOption[]> => {
+    try {
+      const res = await fetch(`${ORION_API_URL}/providers/model-aliases`, { headers: buildHeaders(false) });
+      if (!res.ok) {
+        throw new Error('Failed to load model aliases.');
+      }
+      const payload = await res.json();
+      const items = Array.isArray(payload?.models) ? payload.models : [];
+      const mapped = items
+        .map((item: unknown) => {
+          const value = item as {
+            alias?: unknown;
+            provider?: unknown;
+            model?: unknown;
+            resolved_model?: unknown;
+            is_global_default?: unknown;
+            is_provider_default?: unknown;
+          };
+          const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
+          const providerId = normalizeProviderId(rawProvider);
+          const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
+          const modelId = typeof value.model === 'string' ? value.model.trim() : '';
+          const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
+          if (!rawProvider || !alias || !modelId || !resolvedModel || !isProviderId(providerId)) return null;
+          return {
+            alias,
+            provider: providerId,
+            model: modelId,
+            resolvedModel,
+            isGlobalDefault: Boolean(value.is_global_default),
+            isProviderDefault: Boolean(value.is_provider_default),
+          } satisfies ModelAliasOption;
+        })
+        .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+      if (mapped.length > 0) {
+        setModelAliases(mapped);
+        return mapped;
+      }
+    } catch {
+      // Keep fallback aliases when the catalog endpoint is unavailable.
+    }
+    return modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS;
+  }, [buildHeaders, modelAliases, setModelAliases]);
+
   const refreshProviderCatalog = useCallback(async () => {
     try {
+      const aliases = await refreshModelAliasCatalog();
       const res = await fetch(`${ORION_API_URL}/providers`, { headers: buildHeaders(false) });
       if (!res.ok) return;
       const payload = await res.json();
@@ -412,10 +463,13 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
           return {
             id,
             label: typeof i.label === 'string' && i.label.trim() ? i.label.trim() : fallback?.label ?? id,
-            defaultModel:
-              typeof i.default_model === 'string' && i.default_model.trim()
-                ? i.default_model.trim()
-                : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0],
+            defaultModel: (() => {
+              const rawDefaultModel =
+                typeof i.default_model === 'string' && i.default_model.trim()
+                  ? i.default_model.trim()
+                  : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0];
+              return resolveModelAlias(id, rawDefaultModel, aliases) ?? rawDefaultModel;
+            })(),
             auth: Array.isArray(i.auth) ? i.auth.filter((v) => typeof v === 'string') as string[] : fallback?.auth ?? ['api_key'],
             defaultAuthMode:
               typeof i.default_auth_mode === 'string' && i.default_auth_mode.trim()
@@ -431,19 +485,28 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
     } catch {
       // Keep defaults when catalog cannot be fetched.
     }
-  }, [buildHeaders, setProviderOptions]);
+  }, [buildHeaders, refreshModelAliasCatalog, setProviderOptions]);
 
   const refreshProviderModels = useCallback(
     async (providerId: ProviderId, credentialForProvider?: string) => {
+      const aliases = modelAliases.length > 0 ? modelAliases : await refreshModelAliasCatalog();
       const fallbackOption =
         providerOptions.find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS[0];
-      const fallbackModels = DEFAULT_PROVIDER_MODELS[providerId] || [fallbackOption.defaultModel];
+      const fallbackModels = mapModelOptionsToAliases(
+        providerId,
+        DEFAULT_PROVIDER_MODELS[providerId] || [fallbackOption.defaultModel],
+        aliases,
+      );
+      const resolveSelectedModel = (current: string, options: string[]) => {
+        const normalizedCurrent = resolveModelAlias(providerId, current, aliases) ?? current;
+        return options.includes(normalizedCurrent) ? normalizedCurrent : options[0];
+      };
 
       if (connectionMode === 'byok' && !credentialForProvider) {
         setModelOptions(fallbackModels);
-        setModel((prev) => (fallbackModels.includes(prev) ? prev : fallbackModels[0]));
+        setModel((prev) => resolveSelectedModel(prev, fallbackModels));
         return;
       }
 
@@ -458,7 +521,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
         });
         if (!res.ok) {
           setModelOptions(fallbackModels);
-          setModel((prev) => (fallbackModels.includes(prev) ? prev : fallbackModels[0]));
+          setModel((prev) => resolveSelectedModel(prev, fallbackModels));
           return;
         }
         const payload = await res.json();
@@ -466,17 +529,20 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
         const models = rawModels
           .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
           .slice(0, 120);
-        const nextModels = models.length > 0 ? models : fallbackModels;
+        const nextModels =
+          models.length > 0
+            ? mapModelOptionsToAliases(providerId, models, aliases)
+            : fallbackModels;
         setModelOptions(nextModels);
-        setModel((prev) => (nextModels.includes(prev) ? prev : nextModels[0]));
+        setModel((prev) => resolveSelectedModel(prev, nextModels));
       } catch {
         setModelOptions(fallbackModels);
-        setModel((prev) => (fallbackModels.includes(prev) ? prev : fallbackModels[0]));
+        setModel((prev) => resolveSelectedModel(prev, fallbackModels));
       } finally {
         setModelsLoading(false);
       }
     },
-    [buildHeaders, connectionMode, providerOptions, setModelsLoading, setModelOptions, setModel],
+    [buildHeaders, connectionMode, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
 
   const buildScheduledRunRequest = useCallback(() => {
@@ -1306,7 +1372,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
       const id = typeof payload?.id === 'string' ? payload.id : '';
       if (id) setCredentialId(id);
       if (providerId === 'anthropic' && selectedAuthMode === 'local_cli') {
-        setModel('sonnet');
+        setModel('claude-sonnet');
       }
       setOpenaiKeyInput('');
       await refreshCredentials();

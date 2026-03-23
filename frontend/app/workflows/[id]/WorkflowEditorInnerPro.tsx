@@ -8,9 +8,14 @@ import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
     AGENT_ROLE_OPTIONS,
+    DEFAULT_MODEL_ALIAS_OPTIONS,
     DEFAULT_AGENT_ROLE_ID,
     isAgentRoleId,
+    mapModelOptionsToAliases,
+    normalizeProviderId,
+    resolveModelAlias,
     type AgentRoleId,
+    type ModelAliasOption,
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
@@ -605,6 +610,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     const [providers, setProviders] = useState<ProviderInfo[]>([]);
     const [credentials, setCredentials] = useState<VaultCredentialItem[]>([]);
+    const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
     const [models, setModels] = useState<string[]>([]);
     const [providersLoading, setProvidersLoading] = useState(false);
     const [credentialsLoading, setCredentialsLoading] = useState(false);
@@ -645,11 +651,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             ? providers
             : [
                 { id: 'openai', label: 'OpenAI', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gpt-4.1' },
-                { id: 'anthropic', label: 'Anthropic', auth: ['api_key', 'local_cli'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }, { id: 'local_cli', label: 'Claude Subscription', secret_required: false }], default_auth_mode: 'api_key', default_model: 'claude-3-5-sonnet-20241022' },
-                { id: 'gemini', label: 'Google Gemini', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gemini-2.0-flash' },
-                { id: 'vertex', label: 'Google Vertex AI', auth: ['access_token', 'project_id', 'location'], auth_modes: [{ id: 'access_token', label: 'Access Token', secret_required: true }], default_auth_mode: 'access_token', default_model: 'gemini-2.0-flash-001' },
+                { id: 'anthropic', label: 'Anthropic', auth: ['api_key', 'local_cli'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }, { id: 'local_cli', label: 'Claude Subscription', secret_required: false }], default_auth_mode: 'api_key', default_model: 'claude-sonnet' },
+                { id: 'gemini', label: 'Google Gemini', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gemini-flash' },
+                { id: 'vertex', label: 'Google Vertex AI', auth: ['access_token', 'project_id', 'location'], auth_modes: [{ id: 'access_token', label: 'Access Token', secret_required: true }], default_auth_mode: 'access_token', default_model: 'vertex-gemini-flash' },
             ];
     }, [providers]);
+
+    const effectiveModelAliases = useMemo(
+        () => (modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS),
+        [modelAliases],
+    );
 
     const selectedProvider = useMemo(() => {
         return providerOptions.find((item) => normalizeProvider(item.id) === connection.provider) || providerOptions[0];
@@ -789,13 +800,67 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }
             const payload = await res.json();
             const items = Array.isArray(payload?.providers) ? payload.providers : [];
-            setProviders(items);
+            const mapped = items.map((item: unknown) => {
+                if (!item || typeof item !== 'object') return item;
+                const providerInfo = item as ProviderInfo;
+                const providerId = normalizeProvider(typeof providerInfo.id === 'string' ? providerInfo.id : 'openai');
+                const rawDefaultModel = typeof providerInfo.default_model === 'string' ? providerInfo.default_model : '';
+                return {
+                    ...providerInfo,
+                    default_model: resolveModelAlias(providerId, rawDefaultModel, effectiveModelAliases) || rawDefaultModel,
+                } satisfies ProviderInfo;
+            });
+            setProviders(mapped);
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Providers', message: getErrorMessage(error, 'Unable to load providers.') });
         } finally {
             setProvidersLoading(false);
         }
-    }, [buildHeaders, addToast]);
+    }, [buildHeaders, addToast, effectiveModelAliases]);
+
+    const fetchModelAliases = useCallback(async (): Promise<ModelAliasOption[]> => {
+        try {
+            const res = await fetch(`${ORION_API_URL}/providers/model-aliases`, { headers: buildHeaders(false) });
+            if (!res.ok) {
+                throw new Error('Failed to load model aliases.');
+            }
+            const payload = await res.json();
+            const items = Array.isArray(payload?.models) ? payload.models : [];
+            const mapped = items
+                .map((item: unknown) => {
+                    const value = item as {
+                        alias?: unknown;
+                        provider?: unknown;
+                        model?: unknown;
+                        resolved_model?: unknown;
+                        is_global_default?: unknown;
+                        is_provider_default?: unknown;
+                    };
+                    const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
+                    const providerId = normalizeProviderId(rawProvider);
+                    const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
+                    const model = typeof value.model === 'string' ? value.model.trim() : '';
+                    const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
+                    if (!rawProvider || !alias || !model || !resolvedModel) return null;
+                    return {
+                        alias,
+                        provider: providerId,
+                        model,
+                        resolvedModel,
+                        isGlobalDefault: Boolean(value.is_global_default),
+                        isProviderDefault: Boolean(value.is_provider_default),
+                    } satisfies ModelAliasOption;
+                })
+                .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+            if (mapped.length > 0) {
+                setModelAliases(mapped);
+                return mapped;
+            }
+        } catch {
+            // Keep built-in aliases when the catalog cannot be loaded.
+        }
+        return effectiveModelAliases;
+    }, [buildHeaders, effectiveModelAliases]);
 
     const fetchCredentials = useCallback(async () => {
         setCredentialsLoading(true);
@@ -842,6 +907,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const fetchModels = useCallback(async (provider: ProviderId, credentialId?: string, suppressToast?: boolean) => {
         setModelsLoading(true);
         try {
+            const aliases = await fetchModelAliases();
             const params = new URLSearchParams();
             if (credentialId) params.set('credential_id', credentialId);
             if (workspaceId) params.set('workspace_id', workspaceId);
@@ -853,11 +919,19 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }
             const payload = await res.json();
             const providerModels = Array.isArray(payload?.models) ? payload.models : [];
-            setModels(providerModels);
-            if (providerModels.length > 0) {
+            const normalizedModels = mapModelOptionsToAliases(
+                provider,
+                providerModels.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0),
+                aliases,
+            );
+            setModels(normalizedModels);
+            if (normalizedModels.length > 0) {
                 setOperator((prev) => {
-                    if (prev.modelId && providerModels.includes(prev.modelId)) return prev;
-                    return { ...prev, modelId: providerModels[0] };
+                    const resolvedCurrent = resolveModelAlias(provider, prev.modelId, aliases) || prev.modelId;
+                    if (resolvedCurrent && normalizedModels.includes(resolvedCurrent)) {
+                        return { ...prev, modelId: resolvedCurrent };
+                    }
+                    return { ...prev, modelId: normalizedModels[0] };
                 });
             }
         } catch (error: unknown) {
@@ -868,7 +942,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setModelsLoading(false);
         }
-    }, [buildHeaders, addToast, workspaceId]);
+    }, [buildHeaders, addToast, fetchModelAliases, workspaceId]);
 
     const loadWorkflow = useCallback(async () => {
         if (!workflowId) {
@@ -884,9 +958,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setWorkspaceId(wfWorkspaceId || 'default');
             const operatorStored = wf?.definition?.meta?.operator as Record<string, unknown> | undefined;
             const connectionStored = operatorStored?.connection as Record<string, unknown> | undefined;
+            const resolvedProvider = normalizeProvider(
+                typeof connectionStored?.provider === 'string' ? connectionStored.provider : DEFAULT_CONNECTION.provider,
+            );
+            const storedModelId = typeof operatorStored?.modelId === 'string' ? operatorStored.modelId : DEFAULT_OPERATOR.modelId;
 
             setOperator({
-                modelId: typeof operatorStored?.modelId === 'string' ? operatorStored.modelId : DEFAULT_OPERATOR.modelId,
+                modelId: resolveModelAlias(resolvedProvider, storedModelId, effectiveModelAliases) || storedModelId,
                 agentRole: isAgentRoleId(operatorStored?.agentRole) ? operatorStored.agentRole : DEFAULT_OPERATOR.agentRole,
                 duty: typeof operatorStored?.duty === 'string' ? operatorStored.duty : DEFAULT_OPERATOR.duty,
                 systemPrompt: typeof operatorStored?.systemPrompt === 'string' ? operatorStored.systemPrompt : DEFAULT_OPERATOR.systemPrompt,
@@ -894,7 +972,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             });
 
             setConnection({
-                provider: normalizeProvider(typeof connectionStored?.provider === 'string' ? connectionStored.provider : DEFAULT_CONNECTION.provider),
+                provider: resolvedProvider,
                 mode: connectionStored?.mode === 'managed' ? 'managed' : 'byok',
                 credentialId: typeof connectionStored?.credentialId === 'string' ? connectionStored.credentialId : '',
             });
@@ -909,9 +987,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsLoading(false);
         }
-    }, [workflowId, addToast]);
+    }, [workflowId, addToast, effectiveModelAliases]);
 
     useEffect(() => {
+        void fetchModelAliases();
         loadWorkflow();
         fetchProviders();
         fetchCredentials();
@@ -919,7 +998,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         return () => {
             if (streamRef.current) streamRef.current.close();
         };
-    }, [loadWorkflow, fetchProviders, fetchCredentials, fetchConnectedChannels]);
+    }, [fetchConnectedChannels, fetchCredentials, fetchModelAliases, fetchProviders, loadWorkflow]);
 
     useEffect(() => {
         if (connection.mode === 'managed') {
@@ -1299,9 +1378,20 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }
             const payload = await res.json();
             const preview = Array.isArray(payload?.models_preview) ? payload.models_preview : [];
-            setModels(preview);
-            if (preview.length > 0) {
-                setOperator((prev) => ({ ...prev, modelId: preview.includes(prev.modelId) ? prev.modelId : preview[0] }));
+            const normalizedPreview = mapModelOptionsToAliases(
+                connection.provider,
+                preview.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0),
+                effectiveModelAliases,
+            );
+            setModels(normalizedPreview);
+            if (normalizedPreview.length > 0) {
+                setOperator((prev) => {
+                    const resolvedCurrent = resolveModelAlias(connection.provider, prev.modelId, effectiveModelAliases) || prev.modelId;
+                    return {
+                        ...prev,
+                        modelId: normalizedPreview.includes(resolvedCurrent) ? resolvedCurrent : normalizedPreview[0],
+                    };
+                });
             }
             addToast({ type: 'success', title: 'Connected', message: payload?.message || 'Credential is valid.' });
         } catch (error: unknown) {
@@ -1309,7 +1399,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setCredentialBusy(false);
         }
-    }, [connection.mode, connection.credentialId, buildHeaders, addToast, withWorkspaceQuery]);
+    }, [connection.mode, connection.credentialId, connection.provider, buildHeaders, addToast, effectiveModelAliases, withWorkspaceQuery]);
 
     const deleteCredential = useCallback(async (credentialId: string) => {
         try {

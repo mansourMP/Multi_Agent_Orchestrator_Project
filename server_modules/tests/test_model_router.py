@@ -1,0 +1,135 @@
+import unittest
+from unittest.mock import patch
+
+from server_modules import model_router
+
+
+class _FakeMessage:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _FakeChoice:
+    def __init__(self, content: str):
+        self.message = _FakeMessage(content)
+
+
+class _FakeUsage:
+    def __init__(self, prompt_tokens: int, completion_tokens: int):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = prompt_tokens + completion_tokens
+
+
+class _FakeResponse:
+    def __init__(self, content: str, prompt_tokens: int = 3, completion_tokens: int = 5):
+        self.choices = [_FakeChoice(content)]
+        self.usage = _FakeUsage(prompt_tokens, completion_tokens)
+
+
+class ModelRouterTests(unittest.TestCase):
+    def test_resolve_model_aliases(self):
+        self.assertEqual(model_router.resolve_model("claude-sonnet"), "anthropic/claude-3-5-sonnet-20241022")
+        self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-2.0-flash")
+        self.assertEqual(model_router.resolve_model("gpt-4o-mini"), "gpt-4o-mini")
+        self.assertEqual(model_router.resolve_model("vertex-gemini-flash"), "vertex_ai/gemini-2.0-flash-001")
+        self.assertEqual(model_router.resolve_model("gemini-2.0-flash-001", provider="vertex"), "vertex_ai/gemini-2.0-flash-001")
+
+    def test_normalize_messages_filters_invalid_shapes(self):
+        messages = model_router.normalize_messages(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "invalid-role", "content": 12},
+                "skip-me",
+                {"content": None},
+            ]
+        )
+        self.assertEqual(
+            messages,
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "12"},
+                {"role": "user", "content": ""},
+            ],
+        )
+
+    def test_list_model_aliases_exposes_defaults_and_providers(self):
+        models = model_router.list_model_aliases()
+        by_alias = {item["alias"]: item for item in models}
+
+        self.assertIn("gpt-4o-mini", by_alias)
+        self.assertIn("claude-sonnet", by_alias)
+        self.assertIn("gemini-flash", by_alias)
+        self.assertIn("vertex-gemini-flash", by_alias)
+
+        self.assertEqual(by_alias["gpt-4o-mini"]["provider"], "openai")
+        self.assertEqual(by_alias["claude-sonnet"]["provider"], "anthropic")
+        self.assertEqual(by_alias["gemini-flash"]["provider"], "gemini")
+        self.assertEqual(by_alias["vertex-gemini-flash"]["provider"], "vertex")
+
+        self.assertTrue(by_alias["gpt-4o-mini"]["is_global_default"])
+        self.assertTrue(by_alias["claude-sonnet"]["is_provider_default"])
+        self.assertTrue(by_alias["vertex-gemini-flash"]["is_provider_default"])
+        self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
+
+    @patch("server_modules.model_router.completion")
+    def test_call_model_sync_returns_normalized_shape(self, completion_mock):
+        completion_mock.return_value = _FakeResponse("hello")
+
+        result = model_router.call_model_sync(
+            messages=[{"role": "user", "content": "Say hello"}],
+            model="gpt-4o-mini",
+            provider="openai",
+            credentials={"api_key": "test-key"},
+            max_tokens=100,
+            temperature=0.2,
+        )
+
+        self.assertEqual(result["content"], "hello")
+        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["model"], "gpt-4o-mini")
+        self.assertEqual(
+            result["usage"],
+            {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+        )
+        _, kwargs = completion_mock.call_args
+        self.assertEqual(kwargs["model"], "gpt-4o-mini")
+        self.assertEqual(kwargs["api_key"], "test-key")
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "Say hello"}])
+
+    @patch("server_modules.model_router.resolve_provider_adapter")
+    def test_vertex_current_credential_shape_uses_compatibility_fallback(self, resolve_provider_adapter_mock):
+        class _FakeAdapter:
+            def generate(self, system_prompt, user_input, model, credentials):
+                self.last_call = {
+                    "system_prompt": system_prompt,
+                    "user_input": user_input,
+                    "model": model,
+                    "credentials": credentials,
+                }
+                return "vertex-ok"
+
+        adapter = _FakeAdapter()
+        resolve_provider_adapter_mock.return_value = ("vertex", "vertex", adapter)
+
+        result = model_router.call_model_sync(
+            messages=[
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"},
+            ],
+            model="gemini-2.0-flash-001",
+            provider="vertex",
+            credentials={"access_token": "token", "project_id": "proj", "location": "us-central1"},
+        )
+
+        self.assertEqual(result["content"], "vertex-ok")
+        self.assertEqual(result["provider"], "vertex")
+        self.assertEqual(result["model"], "vertex_ai/gemini-2.0-flash-001")
+        self.assertEqual(result["usage"]["total_tokens"], 0)
+        self.assertEqual(adapter.last_call["system_prompt"], "system prompt")
+        self.assertEqual(adapter.last_call["user_input"], "user prompt")
+        self.assertEqual(adapter.last_call["model"], "gemini-2.0-flash-001")
+
+
+if __name__ == "__main__":
+    unittest.main()

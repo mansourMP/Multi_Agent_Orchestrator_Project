@@ -107,7 +107,7 @@ export async function fetchRecentRuns(limit: number = 5, workspaceId: string = '
   const params = new URLSearchParams();
   params.set('limit', String(Math.max(1, limit)));
   params.set('workspace_id', workspaceId);
-  const body = await readJson<{ items?: RecentRunItem[] }>(`${ORION_API_URL}/history/runs?${params.toString()}`, 'Failed to load recent activity.');
+  const body = await readJson<{ items?: RecentRunItem[] }>(`${ORION_API_URL}/history/runs?${params.toString()}`, 'Failed to load recent runs.');
   return Array.isArray(body.items) ? body.items : [];
 }
 

@@ -572,9 +572,9 @@ export default function SetupPage() {
       id: 'connections',
       label: 'Step 3',
       title: 'Connect one live tool or channel',
-      copy: 'Use Connections for Google, Microsoft 365, Telegram, WhatsApp, and the rest. That page is already the dedicated place to link tools.',
+      copy: 'Use Integrations for Google, Microsoft 365, Telegram, WhatsApp, and the rest. That page is already the dedicated place to link tools.',
       state: hasConnectedTools ? 'Connected' : 'Optional',
-      actionLabel: 'Open Connections',
+      actionLabel: 'Open Integrations',
       href: '/credentials',
       emphasized: !hasConnectedTools && setupReady,
     },
@@ -608,12 +608,12 @@ export default function SetupPage() {
           </div>
           <div>
             <h1 className="orion-page-title">Setup</h1>
-            <p className="orion-page-subtitle">Launch the assistant with workspace access, one AI account, optional connections, and a clear first task.</p>
+            <p className="orion-page-subtitle">Launch the assistant with workspace access, one AI account, optional integrations, and a clear first task.</p>
           </div>
         </div>
         <div className="orion-page-actions">
           <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 36 }}>
-            Open Connections
+            Open Integrations
           </Link>
           <Link className="orion-btn orion-btn-ghost" href="/" style={{ minHeight: 36 }}>
             Open Home
@@ -632,7 +632,7 @@ export default function SetupPage() {
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
             <div className="orion-panel-title">Launch Assistant</div>
-            <div className="orion-panel-copy">Use Setup for readiness and AI access. Use Connections for channels and tools. Then go back to Home and start the first task.</div>
+            <div className="orion-panel-copy">Use Setup for readiness and AI access. Use Integrations for channels and tools. Then go back to Home and start the first task.</div>
           </div>
         </div>
         <div
@@ -783,7 +783,7 @@ export default function SetupPage() {
               Check workspace
             </button>
             <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 34, fontSize: 12, background: UI.shell }}>
-              Open Connections
+              Open Integrations
             </Link>
           </div>
         ) : (
@@ -801,7 +801,7 @@ export default function SetupPage() {
             }}
           >
             <CheckCircle2 size={14} color={UI.successFg} />
-            Setup is complete. Connections stays available for channels and tools, and you can start work from Home.
+            Setup is complete. Integrations stays available for channels and tools, and you can start work from Home.
           </div>
         )}
 

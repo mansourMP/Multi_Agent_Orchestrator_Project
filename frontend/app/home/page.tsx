@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { GitBranch, KeyRound, PlayCircle } from 'lucide-react';
+import { ArrowRight, GitBranch, KeyRound, PlayCircle } from 'lucide-react';
 import { fetchWorkflows } from '@/lib/api';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
@@ -12,6 +12,9 @@ type WorkflowRecord = {
   description?: string;
   updatedAt?: string;
   updated_at?: string;
+  definition?: {
+    meta?: Record<string, unknown>;
+  };
 };
 
 function formatDate(value?: string) {
@@ -26,6 +29,15 @@ function compactText(value?: string, maxLength = 60) {
   if (!normalized) return 'No description provided';
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function runtimeProfileLabel(workflow: WorkflowRecord): string {
+  const meta = workflow.definition?.meta;
+  if (!meta || typeof meta !== 'object') return '';
+  const label = String(meta.runtime_profile_label || '').trim();
+  if (label) return label;
+  const profileId = String(meta.runtime_profile_id || '').trim();
+  return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
 }
 
 export default function HomePage() {
@@ -73,6 +85,9 @@ export default function HomePage() {
       .slice(0, 5);
   }, [workflows]);
 
+  const featuredWorkflow = recentWorkflows[0] || null;
+  const supportingWorkflows = recentWorkflows.slice(1, 3);
+
   return (
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
@@ -81,36 +96,85 @@ export default function HomePage() {
         subtitle="What would you like to do today?"
       />
 
-      <section className="orion-grid-3">
-        <Link href="/builder/new" className="orion-stat-card orion-control-card" style={{ textDecoration: 'none' }}>
-          <div className="orion-stat-label orion-item-meta-entry">
-            <GitBranch size={14} />
-            Create agent system
+      <section className="orion-panel orion-home-overview">
+        <div className="orion-home-overview-main">
+          <div className="orion-home-overview-kicker">Start work</div>
+          <div className="orion-home-overview-title">Build a workflow, launch a run, or connect a system.</div>
+          <div className="orion-home-overview-copy">
+            Keep the first decision simple. Create a reusable workflow, inspect active runs, or add the integrations your team needs before execution.
           </div>
-          <div className="orion-stat-note">Open Builder and design a reusable system that can run work end to end.</div>
-        </Link>
-        <Link href="/executions" className="orion-stat-card orion-control-card" style={{ textDecoration: 'none' }}>
-          <div className="orion-stat-label orion-item-meta-entry">
-            <PlayCircle size={14} />
-            View Runs
+          <div className="orion-home-overview-actions">
+            <Link href="/builder/new" className="btn-primary">
+              <GitBranch size={14} />
+              Create workflow
+            </Link>
+            <Link href="/executions" className="btn-secondary">
+              <PlayCircle size={14} />
+              View Runs
+            </Link>
+            <Link href="/credentials" className="btn-secondary">
+              <KeyRound size={14} />
+              Add Integration
+            </Link>
           </div>
-          <div className="orion-stat-note">See what is running, what finished, and what needs your review.</div>
-        </Link>
-        <Link href="/credentials" className="orion-stat-card orion-control-card" style={{ textDecoration: 'none' }}>
-          <div className="orion-stat-label orion-item-meta-entry">
-            <KeyRound size={14} />
-            Add Integration
+        </div>
+
+        <aside className="orion-home-overview-side">
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Continue from recent</div>
+            {loading ? (
+              <div className="orion-home-side-empty">Loading workflows…</div>
+            ) : error ? (
+              <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
+            ) : featuredWorkflow ? (
+              <Link href={`/builder/${featuredWorkflow.id}`} className="orion-home-featured-link">
+                <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
+                <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
+                <div className="orion-home-featured-meta">
+                  {runtimeProfileLabel(featuredWorkflow) ? <span>{runtimeProfileLabel(featuredWorkflow)}</span> : null}
+                  <span>Updated {formatDate(featuredWorkflow.updatedAt || featuredWorkflow.updated_at)}</span>
+                </div>
+              </Link>
+            ) : (
+              <div className="orion-home-side-empty">No workflows yet.</div>
+            )}
           </div>
-          <div className="orion-stat-note">Connect the systems your agents need to access, update, and operate.</div>
-        </Link>
+
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Library snapshot</div>
+            <div className="orion-home-side-stats">
+              <div>
+                <div className="orion-home-side-value">{workflows.length}</div>
+                <div className="orion-home-side-note">Saved workflows</div>
+              </div>
+              <div>
+                <div className="orion-home-side-value">{recentWorkflows.length}</div>
+                <div className="orion-home-side-note">Recent items</div>
+              </div>
+            </div>
+            {supportingWorkflows.length > 0 ? (
+              <div className="orion-home-mini-list">
+                {supportingWorkflows.map((workflow) => (
+                  <Link key={workflow.id} href={`/builder/${workflow.id}`} className="orion-home-mini-link">
+                    <span>{workflow.name || 'Untitled Workflow'}</span>
+                    <ArrowRight size={13} />
+                  </Link>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </aside>
       </section>
 
-      <section className="orion-panel">
+      <section className="orion-panel orion-home-list-panel">
         <div className="orion-panel-header">
           <div>
             <div className="orion-panel-title">Recent workflows</div>
             <div className="orion-panel-copy">Recent playbooks you can open, refine, and run again.</div>
           </div>
+          <Link href="/workflows" className="orion-control-link">
+            Open Workflows
+          </Link>
         </div>
 
         {loading ? (
@@ -145,8 +209,9 @@ export default function HomePage() {
                     <div className="orion-list-row-subtitle">{compactText(workflow.description)}</div>
                   </div>
                 </div>
-                <div className="orion-toolbar-summary">
-                  Updated {formatDate(workflow.updatedAt || workflow.updated_at)}
+                <div className="orion-home-list-meta">
+                  {runtimeProfileLabel(workflow) ? <span>Runtime {runtimeProfileLabel(workflow)}</span> : null}
+                  <span>Updated {formatDate(workflow.updatedAt || workflow.updated_at)}</span>
                 </div>
               </Link>
             ))}

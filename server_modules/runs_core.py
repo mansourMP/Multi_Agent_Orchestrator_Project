@@ -524,6 +524,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         context=preview_context,
         defer_local_enqueue=needs_local_approval,
     )
+    created_run = runs.get(run_id) if isinstance(runs.get(run_id), dict) else {}
     status = "starting"
     if needs_local_approval:
         approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="approval_required")
@@ -546,6 +547,10 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "run_id": run_id,
         "engine": engine,
         "status": status,
+        "active_profile_id": created_run.get("active_profile_id"),
+        "active_profile_label": created_run.get("active_profile_label"),
+        "active_profile_provider": created_run.get("active_provider"),
+        "active_profile_model": created_run.get("active_model"),
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
         "parent_run_id": metadata.get("parent_run_id"),

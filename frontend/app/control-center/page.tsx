@@ -72,7 +72,7 @@ export default function ControlCenterPage() {
     },
     {
       href: '/credentials',
-      title: 'Connections',
+      title: 'Integrations',
       copy: 'Manage shared tools, channels, and platform access.',
       status: accessMode === 'full' ? 'Full access enabled' : 'Default access mode',
       tone: 'neutral',
@@ -101,7 +101,7 @@ export default function ControlCenterPage() {
       <OsPageHeader
         icon={<ShieldCheck size={18} />}
         title="Admin"
-        subtitle="Advanced platform controls for setup, connections, diagnostics, and defaults."
+        subtitle="Advanced platform controls for setup, integrations, diagnostics, and defaults."
         meta={
           <>
             <span>{accessMode === 'full' ? 'Full access mode' : 'Default access mode'}</span>
@@ -130,7 +130,7 @@ export default function ControlCenterPage() {
           <div>
               <div className="orion-panel-title">Where advanced controls live</div>
               <div className="orion-panel-copy">
-              Assistant stays focused on getting work done. Admin is where you adjust setup, permissions, connections, and diagnostics.
+              Assistant stays focused on getting work done. Admin is where you adjust setup, permissions, integrations, and diagnostics.
               </div>
           </div>
         </div>

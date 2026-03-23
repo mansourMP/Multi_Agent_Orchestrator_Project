@@ -108,22 +108,22 @@ function resolvePageGuide(pathname: string): PageGuide {
   if (pathname.startsWith('/workflows/')) {
     return {
       title: 'Automation Editor',
-      purpose: 'Design and run reusable automations.',
+      purpose: 'Design and run reusable workflows.',
       actions: [
         'Edit flow logic and operator goal.',
-        'Run and inspect live activity.',
+        'Run and inspect live runs.',
         'Save and re-run as a reusable system.',
       ],
       nextSteps: ['Review mode.', 'Update goal.', 'Run and validate output.'],
-      sections: ['Workflow canvas', 'Operator settings', 'Live activity', 'Run controls'],
+      sections: ['Workflow canvas', 'Operator settings', 'Live runs', 'Run controls'],
     };
   }
   if (pathname === '/workflows') {
     return {
       title: 'Workflows',
       purpose: 'Manage reusable systems and open editors.',
-      actions: ['Create a new automation.', 'Search and duplicate automations.', 'Open an automation to edit or run.'],
-      nextSteps: ['Create or open automation.', 'Verify status.', 'Run from editor.'],
+      actions: ['Create a new workflow.', 'Search and duplicate workflows.', 'Open a workflow to edit or run.'],
+      nextSteps: ['Create or open workflow.', 'Verify status.', 'Run from editor.'],
       sections: ['Metrics strip', 'Automation list', 'Create modal'],
     };
   }
@@ -139,8 +139,8 @@ function resolvePageGuide(pathname: string): PageGuide {
   if (pathname === '/agents') {
     return {
       title: 'Agents',
-      purpose: 'Inspect workers, live collaborations, and current workload when automation needs more visibility.',
-      actions: ['Open a worker view.', 'Check active work and blockers.', 'Review runs, files, and channels when needed.'],
+      purpose: 'Inspect workers, live collaborations, and current workload when a workflow needs more visibility.',
+      actions: ['Open a worker view.', 'Check active work and blockers.', 'Review runs, assets, and channels when needed.'],
       nextSteps: ['Pick a worker.', 'Check current work.', 'Resolve blockers or approvals.'],
       sections: ['Collaboration view', 'Worker directory', 'Worker workspace tabs', 'Inspect drawer'],
     };
@@ -234,13 +234,13 @@ function locationHint(question: string): string | null {
     return 'Open Approvals to resolve waiting decisions.';
   }
   if (q.includes('automation') || q.includes('workflow')) {
-    return 'Open Automations to create or edit reusable systems.';
+    return 'Open Workflows to create or edit reusable systems.';
   }
   if (q.includes('run') || q.includes('history')) {
-    return 'Open Activity to inspect execution history and details.';
+    return 'Open Runs to inspect execution history and details.';
   }
   if (q.includes('artifact') || q.includes('file') || q.includes('output')) {
-    return 'Open Files to review finished work and traces from runs.';
+    return 'Open Assets to review finished work and traces from runs.';
   }
   if (q.includes('agent') || q.includes('worker') || q.includes('orchestrator')) {
     return SINGLE_AGENT_MODE
@@ -256,7 +256,7 @@ function locationHint(question: string): string | null {
     return 'Open Team to manage people, roles, and platform access.';
   }
   if (q.includes('integration') || q.includes('telegram') || q.includes('whatsapp') || q.includes('google')) {
-    return 'Open Connections to manage connected tools and accounts.';
+    return 'Open Integrations to manage connected tools and accounts.';
   }
   if (q.includes('setup') || q.includes('runtime') || q.includes('api key')) {
     return 'Open Setup to finish platform access, account mode, and optional tools.';
@@ -302,7 +302,7 @@ function buildReply(input: string, guide: PageGuide, accessMode: AssistantAccess
   }
 
   if (q.includes('not working') || q.includes('why is this not working') || q.includes('broken') || q.includes('error')) {
-    return `Quick troubleshooting:\n• Confirm Setup is complete (platform access/account mode/tools).\n• Check Approvals for waiting decisions.\n• Open Activity and inspect the latest failed run.\n• Verify Connections if the task uses channel actions.`;
+    return `Quick troubleshooting:\n• Confirm Setup is complete (platform access/account mode/tools).\n• Check Approvals for waiting decisions.\n• Open Runs and inspect the latest failed run.\n• Verify Integrations if the task uses channel actions.`;
   }
 
   if (q.includes('button')) {

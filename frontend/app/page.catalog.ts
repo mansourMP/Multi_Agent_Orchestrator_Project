@@ -1099,7 +1099,7 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         id: 'google_workspace',
         label: 'Google Workspace',
         note: 'Gmail + Calendar actions',
-        detail: 'Best for inbox triage, scheduling, and workspace automation.',
+        detail: 'Best for inbox triage, scheduling, and workflow execution.',
         status: 'native_now',
         connector: 'google_workspace',
       },

@@ -4,6 +4,7 @@ import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, type 
 import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
+import { RUN_COMPLETED_STATUS_COPY } from '@/lib/runStartCopy';
 import type { ChatMessageRecord } from './chatSchema';
 
 export type ChatIdentityItem = {
@@ -182,7 +183,7 @@ function sanitizeAssistantDisplayText(content: string): string {
     (text.startsWith('{') && text.endsWith('}')) ||
     (text.startsWith('[') && text.endsWith(']'))
   ) {
-    return 'Done. Open Activity for structured details.';
+    return `${RUN_COMPLETED_STATUS_COPY} Open Runs for structured details.`;
   }
 
   const filtered: string[] = [];
@@ -220,7 +221,7 @@ function sanitizeAssistantDisplayText(content: string): string {
     }
 
     if (/^next move/i.test(trimmed) || /^next step/i.test(trimmed)) continue;
-    if (/^open (control center|admin|activity) for details\.?$/i.test(trimmed)) continue;
+    if (/^open (control center|admin|runs) for details\.?$/i.test(trimmed)) continue;
 
     filtered.push(line);
   }

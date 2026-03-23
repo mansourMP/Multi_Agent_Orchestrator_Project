@@ -40,7 +40,9 @@ import { resolveActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
 import { getLocalExecutionCapabilityTitle, inferLocalExecutionCapabilityFromCommand } from '@/lib/localExecutionCapabilities';
+import { buildRunStartedMessage, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
 export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
@@ -86,7 +88,7 @@ export function humanizeError(message: string): string {
     return `Authorization failed. Check ${BRAND.company} runtime key and AI provider key.`;
   }
   if (lower.includes('failed to fetch') || lower.includes('network')) {
-    return `Runtime is offline. Start ${BRAND.company} services to see live activity.`;
+    return `Runtime is offline. Start ${BRAND.company} services to see live runs.`;
   }
   return message;
 }
@@ -1876,7 +1878,28 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
       }
 
       state.setRunId(nextRunId);
-      appendLog('Autopilot started.');
+      upsertSeededRuntimeRun({
+        run_id: nextRunId,
+        status: 'running',
+        workflow_name: selectedPack.label,
+        user_goal: effectiveGoal.trim(),
+        created_at: new Date().toISOString(),
+        agent_role: effectiveAgentRole,
+        triggered_by: 'Direct',
+        active_profile_id: typeof runPayload?.active_profile_id === 'string' ? runPayload.active_profile_id : null,
+        active_profile_label: typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
+        active_profile_provider:
+          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : state.provider,
+        active_profile_model:
+          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : state.model,
+      });
+      appendLog(
+        buildRunStartedMessage(
+          typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
+          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : state.provider,
+          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : state.model,
+        ),
+      );
       void fetchLocalWorkerStatus(true);
       void fetchRuntimeMetrics();
       state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
@@ -1927,7 +1950,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
         appendLog(String(event.data), 'info', 'stream_raw');
       });
 
-      source.addEventListener('pause', () => { state.setStatus('waiting'); appendLog('Approval required.', 'warn'); });
+      source.addEventListener('pause', () => { state.setStatus('waiting'); appendLog(RUN_WAITING_STATUS_COPY, 'warn'); });
       source.onerror = () => {
         source.close(); streamRef.current = null;
         appendLog('Stream disconnected. Syncing...', 'warn');

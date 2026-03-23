@@ -18,6 +18,7 @@ import { usePageActions } from './page.actions';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { EMPYRALIS_NEW_CHAT_EVENT } from '@/components/orion/PlatformTopBar';
 import { ChatSurface, type ChatIdentityAction, type ChatIdentityItem, type ChatIdentitySection } from '@/components/orion/chat/ChatSurface';
+import { RUN_COMPLETED_STATUS_COPY, RUN_FAILED_STATUS_COPY } from '@/lib/runStartCopy';
 import {
   CHAT_SESSION_SELECT_EVENT,
   CHAT_STORE_STORAGE_KEY,
@@ -85,7 +86,7 @@ type AssistantProfileMeta = {
 const ASSISTANT_PROFILE_LIBRARY: AssistantProfileMeta[] = [
   { id: 'support', label: 'Support', subtitle: 'Customer replies, inbox triage, and follow-up', backendRole: 'support' },
   { id: 'research', label: 'Research', subtitle: 'Briefs, analysis, memory, and synthesis', backendRole: 'research' },
-  { id: 'builder', label: 'Builder', subtitle: 'Product, coding, design, and automations', backendRole: 'builder' },
+  { id: 'builder', label: 'Builder', subtitle: 'Product, coding, design, and workflows', backendRole: 'builder' },
   { id: 'crypto-analyst', label: 'Crypto Analyst', subtitle: 'Market research, watchlists, and risk review', backendRole: 'research' },
   { id: 'private-assistant', label: 'Personal', subtitle: 'Planning, study, reminders, and daily organization', backendRole: 'private-assistant' },
   { id: 'custom', label: 'General', subtitle: 'Flexible general assistant for mixed work', backendRole: 'orchestrator' },
@@ -697,7 +698,7 @@ function resolveChatNextRecommendation(args: {
       };
     }
     return {
-      chipText: 'Finish setup to run automations',
+      chipText: 'Finish setup to run workflows',
       chipTone: 'warning',
       actionLabel: 'Open Setup',
       href: '/setup',
@@ -723,14 +724,14 @@ function resolveChatNextRecommendation(args: {
     return {
       chipText: 'No tools connected — add one',
       chipTone: 'warning',
-      actionLabel: 'Open Connections',
+      actionLabel: 'Open Integrations',
       href: '/credentials',
     };
   }
   return {
     chipText: `${args.executionLabel} ready`,
     chipTone: 'success',
-    actionLabel: 'Open Automations',
+    actionLabel: 'Open Workflows',
     href: '/workflows',
   };
 }
@@ -765,8 +766,8 @@ function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | nul
     }
   }
 
-  if (status === 'error') return 'Run failed. Open Activity for details.';
-  return 'Run completed. Open Activity for the full details.';
+  if (status === 'error') return `${RUN_FAILED_STATUS_COPY} Open Runs for details.`;
+  return `${RUN_COMPLETED_STATUS_COPY} Open Runs for details.`;
 }
 
 function hasStructuredAssistantReply(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null): boolean {
@@ -1603,11 +1604,11 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         ],
       },
       {
-        title: 'Recent activity',
+        title: 'Recent runs',
         note: 'This shows the latest result and where it went.',
         items: [
           { label: 'Delivery path', value: executionLabel },
-          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No activity yet' },
+          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No runs yet' },
           { label: 'Latest result', value: latestRun?.result_summary || 'Nothing has run yet' },
           { label: 'Latest provider', value: latestRun?.usage_provider || providerLabel },
         ],
@@ -1640,8 +1641,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const primaryAction = createAction(sessionNextRecommendation.actionLabel, sessionNextRecommendation.href, 'primary');
 
       const secondaryActions = [
-        createAction('Open Connections', '/credentials'),
-        createAction('Open Automations', '/workflows'),
+        createAction('Open Integrations', '/credentials'),
+        createAction('Open Workflows', '/workflows'),
         createAction('Open Approvals', '/approvals'),
       ].filter((item) => item.label !== primaryAction.label);
 
@@ -1797,8 +1798,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (command === '/help') {
       setTopError(
         singleAgentMode
-          ? 'Commands: /run <goal>, /run, /setup, /assistant, /automations, /runs, /approvals, /integrations, /health.'
-          : 'Commands: /run <goal>, /run, /setup, /agents, /automations, /runs, /approvals, /integrations, /health.',
+          ? 'Commands: /run <goal>, /run, /setup, /assistant, /workflows, /runs, /approvals, /integrations, /health.'
+          : 'Commands: /run <goal>, /run, /setup, /agents, /workflows, /runs, /approvals, /integrations, /health.',
       );
       return;
     }

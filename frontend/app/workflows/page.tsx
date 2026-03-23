@@ -18,6 +18,9 @@ type WorkflowRecord = {
     nodeCount?: number;
     lastRun?: string;
     updatedAt: string;
+    definition?: {
+        meta?: Record<string, unknown>;
+    };
 };
 
 function formatApiError(error: unknown, fallback: string): string {
@@ -123,6 +126,15 @@ export default function WorkflowsPage() {
         return d.toLocaleDateString();
     };
 
+    const runtimeProfileLabel = (workflow: WorkflowRecord) => {
+        const meta = workflow.definition?.meta;
+        if (!meta || typeof meta !== 'object') return '';
+        const label = String(meta.runtime_profile_label || '').trim();
+        if (label) return label;
+        const profileId = String(meta.runtime_profile_id || '').trim();
+        return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
+    };
+
     const handleDelete = (event: React.MouseEvent, wf: WorkflowRecord) => {
         event.stopPropagation();
         setDeleteTarget(wf);
@@ -155,7 +167,7 @@ export default function WorkflowsPage() {
                             <span>{statusSummary.active} active</span>
                         </>
                     ) : (
-                        <span>Reusable automations for your team</span>
+                        <span>Reusable workflows for your team</span>
                     )
                 }
                 actions={
@@ -268,6 +280,7 @@ export default function WorkflowsPage() {
                                                 Updated {formatDate(wf.updatedAt)}
                                             </span>
                                             <span>Last run {formatDate(wf.lastRun)}</span>
+                                            {runtimeProfileLabel(wf) ? <span>Runtime {runtimeProfileLabel(wf)}</span> : null}
                                         </div>
                                     </div>
                                 </div>

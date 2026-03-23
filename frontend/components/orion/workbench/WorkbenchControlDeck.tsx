@@ -1297,7 +1297,7 @@ export function WorkbenchControlDeck({
                   <div style={{ fontSize: 11.5, color: microsoftConnector ? UI.textMuted : UI.warningFg, lineHeight: 1.45 }}>
                     {microsoftConnector
                       ? 'Pick a file or folder and insert its onedrive:/ path directly into the main document or spreadsheet input.'
-                      : 'Connect Microsoft 365 in Connections first if you want to browse OneDrive instead of typing paths manually.'}
+                      : 'Connect Microsoft 365 in Integrations first if you want to browse OneDrive instead of typing paths manually.'}
                   </div>
 
                   {driveBrowser.open && microsoftConnector ? (

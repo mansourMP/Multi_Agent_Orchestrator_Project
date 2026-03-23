@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Background, BackgroundVariant, ReactFlow, type Edge, type EdgeTypes, type Node, type NodeTypes } from '@xyflow/react';
 import { Boxes, Loader2, MessageSquare, PlayCircle, Sparkles } from 'lucide-react';
 import { fetchWorkflows, getWorkflow, publishWorkflow, runWorkflow } from '@/lib/api';
+import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -20,6 +21,9 @@ type WorkflowRecord = {
   description?: string;
   status?: string;
   updatedAt?: string;
+  definition?: {
+    meta?: Record<string, unknown>;
+  };
 };
 
 type WorkflowShape = {
@@ -30,6 +34,7 @@ type WorkflowShape = {
   definition?: {
     nodes?: unknown[];
     edges?: unknown[];
+    meta?: Record<string, unknown>;
   };
 };
 
@@ -278,6 +283,24 @@ function compactGoal(value: string, max = 72): string {
   return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+function workflowRuntimeProfileLabel(workflow: WorkflowShape | null): string {
+  const meta = workflow?.definition?.meta;
+  if (!meta || typeof meta !== 'object') return '';
+  const label = String(meta.runtime_profile_label || '').trim();
+  if (label) return label;
+  const profileId = String(meta.runtime_profile_id || '').trim();
+  return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
+}
+
+function workflowRuntimeProfileSummary(workflow: { definition?: { meta?: Record<string, unknown> } } | null | undefined): string {
+  const meta = workflow?.definition?.meta;
+  if (!meta || typeof meta !== 'object') return '';
+  const label = String(meta.runtime_profile_label || '').trim();
+  if (label) return label;
+  const profileId = String(meta.runtime_profile_id || '').trim();
+  return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
+}
+
 function extractUrl(value: string): string | null {
   const match = value.match(/https?:\/\/\S+/i);
   return match ? match[0] : null;
@@ -490,6 +513,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState<'test' | 'activate' | null>(null);
   const [actionNote, setActionNote] = useState<string | null>(null);
+  const [actionRunId, setActionRunId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -551,6 +575,10 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
   const selectedStatus = String(selectedWorkflow?.status || selectedWorkflowRecord?.status || 'draft').toLowerCase();
   const isSelectedWorkflowActive = selectedStatus === 'published';
   const currentPrompt = compactGoal(goal, 160);
+  const selectedRuntimeProfileLabel = useMemo(
+    () => workflowRuntimeProfileLabel(selectedWorkflow),
+    [selectedWorkflow],
+  );
 
   const setWorkflowStatus = (workflowId: string, status: string) => {
     setWorkflows((current) =>
@@ -564,9 +592,12 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
     try {
       setActionBusy('test');
       setActionNote(null);
-      await runWorkflow(selectedWorkflowId);
-      setActionNote('Test started. Open Activity to watch the run.');
+      setActionRunId(null);
+      const payload = await runWorkflow(selectedWorkflowId) as { run_id?: string } | null;
+      setActionRunId(typeof payload?.run_id === 'string' ? payload.run_id : null);
+      setActionNote(RUN_STARTED_STATUS_COPY);
     } catch (error) {
+      setActionRunId(null);
       setActionNote(error instanceof Error ? error.message : 'Failed to start test run.');
     } finally {
       setActionBusy(null);
@@ -582,7 +613,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
       setWorkflowStatus(selectedWorkflowId, 'published');
       setActionNote('Automation is now active.');
     } catch (error) {
-      setActionNote(error instanceof Error ? error.message : 'Failed to activate automation.');
+      setActionNote(error instanceof Error ? error.message : 'Failed to activate workflow.');
     } finally {
       setActionBusy(null);
     }
@@ -638,22 +669,22 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
             <div className="orion-workspace-studio-eyebrow">Live workflow</div>
             <h2 className="orion-workspace-studio-title">
               {graph.mode === 'existing'
-                ? (selectedWorkflow?.name || selectedWorkflowRecord?.name || 'Selected automation')
+                ? (selectedWorkflow?.name || selectedWorkflowRecord?.name || 'Selected workflow')
                 : graph.mode === 'prompt'
                   ? 'Building from your current request'
                   : 'Build visually while you chat'}
             </h2>
             <p className="orion-workspace-studio-copy">
               {graph.mode === 'existing'
-                ? 'The assistant stays on the left. This panel shows the actual workflow canvas for the automation you are reviewing.'
+                ? 'The assistant stays on the left. This panel shows the actual workflow canvas for the workflow you are reviewing.'
                 : graph.mode === 'prompt'
-                  ? 'As you type on the left, this draft shifts into a visible automation shape you can test and activate.'
+                  ? 'As you type on the left, this draft shifts into a visible workflow shape you can test and activate.'
                   : 'The assistant handles the conversation on the left. This panel shows the workflow shape that will be built and activated.'}
             </p>
           </div>
           <div className="orion-workspace-studio-header-actions">
             <Link href="/workflows" className="btn-secondary orion-workspace-studio-link">
-              Open Automations
+              Open Workflows
             </Link>
             {selectedWorkflowId ? (
               <Link href={`/workflows/${selectedWorkflowId}`} className="btn-ghost orion-workspace-studio-link">
@@ -671,12 +702,12 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
                 {detailLoading
                   ? 'Loading workflow canvas'
                   : graph.mode === 'existing'
-                    ? 'Showing selected automation'
+                    ? 'Showing selected workflow'
                     : graph.mode === 'prompt'
                       ? 'Live draft from current request'
                     : goal.trim()
                       ? 'Drafting from your prompt'
-                      : 'Ready for a new automation'}
+                      : 'Ready for a new workflow'}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -689,6 +720,11 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
               <div className="orion-workspace-studio-chip">
                 {graph.nodes.length} step{graph.nodes.length === 1 ? '' : 's'}
               </div>
+              {selectedRuntimeProfileLabel ? (
+                <div className="orion-workspace-studio-chip">
+                  Runtime {selectedRuntimeProfileLabel}
+                </div>
+              ) : null}
               <div className={`orion-workspace-studio-chip${setupReady ? ' is-success' : ''}`}>
                 {setupReady ? 'Tools connected' : 'Connect tools later'}
               </div>
@@ -700,7 +736,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
               <div className="orion-workspace-studio-prompt-text">{currentPrompt}</div>
               {selectedWorkflowRecord ? (
                 <div className="orion-workspace-studio-prompt-note">
-                  Saved automations stay below. The canvas above is prioritizing what you are asking for now.
+                  Saved workflows stay below. The canvas above is prioritizing what you are asking for now.
                 </div>
               ) : null}
             </div>
@@ -708,7 +744,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
           <div className="orion-workspace-studio-actions">
             <div className="orion-workspace-studio-actions-copy">
               <div className="orion-workspace-studio-actions-title">
-                {graph.mode === 'existing' ? 'Selected automation' : 'Current draft'}
+                {graph.mode === 'existing' ? 'Selected workflow' : 'Current draft'}
               </div>
               <div className="orion-workspace-studio-actions-note">
                 {graph.mode === 'existing'
@@ -716,8 +752,9 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
                     ? 'This workflow is active. Test it again or open the full editor for deeper changes.'
                     : 'Test this workflow once, then activate it when the shape looks right.'
                   : graph.mode === 'prompt'
-                    ? 'Keep describing the work on the left. When the draft looks right, open Automations to save and refine it.'
-                    : 'Ask for work on the left, then open Automations when you want the full editor.'}
+                    ? 'Keep describing the work on the left. When the draft looks right, open Workflows to save and refine it.'
+                    : 'Ask for work on the left, then open Workflows when you want the full editor.'}
+                {selectedRuntimeProfileLabel && graph.mode === 'existing' ? ` Runtime profile: ${selectedRuntimeProfileLabel}.` : ''}
               </div>
             </div>
             <div className="orion-workspace-studio-actions-buttons">
@@ -749,7 +786,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
                 </>
               ) : (
                 <Link href="/workflows" className="btn-primary orion-workspace-studio-link">
-                  Open Automations
+                  Open Workflows
                 </Link>
               )}
             </div>
@@ -814,15 +851,24 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
             </aside>
           </div>
           <div className="orion-workspace-studio-footnote">
-            {actionNote?.trim()
-              ? actionNote
-              : latestRunSummary?.trim()
-              ? latestRunSummary
-              : graph.mode === 'existing'
-                ? 'Open the full editor to test, publish, or refine this workflow.'
-                : graph.mode === 'prompt'
-                  ? 'This draft is following your current request. Keep refining the prompt or open Automations to turn it into a saved workflow.'
-                  : 'Ask for a workflow in plain language. Empyralis should turn it into a draft you can inspect and activate.'}
+            {actionNote?.trim() ? (
+              <div className="orion-inline-actions" style={{ justifyContent: 'space-between', width: '100%' }}>
+                <span>{actionNote}</span>
+                {actionRunId ? (
+                  <Link className="btn-secondary" href={`/runs/${encodeURIComponent(actionRunId)}/inspect?focus=timeline`}>
+                    {OPEN_LIVE_RUN_LABEL}
+                  </Link>
+                ) : null}
+              </div>
+            ) : latestRunSummary?.trim() ? (
+              latestRunSummary
+            ) : graph.mode === 'existing' ? (
+              'Open the full editor to test, publish, or refine this workflow.'
+            ) : graph.mode === 'prompt' ? (
+              'This draft is following your current request. Keep refining the prompt or open Workflows to turn it into a saved workflow.'
+            ) : (
+              'Ask for a workflow in plain language. Empyralis should turn it into a draft you can inspect and activate.'
+            )}
           </div>
         </div>
       </section>
@@ -830,7 +876,7 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
       <section className="orion-workspace-studio-panel">
         <div className="orion-workspace-studio-section-header">
           <div>
-            <div className="orion-workspace-studio-section-title">Recent automations</div>
+            <div className="orion-workspace-studio-section-title">Recent workflows</div>
             <div className="orion-workspace-studio-section-copy">Select one to inspect it here. Use the library for full editing.</div>
           </div>
           <Link href="/solutions" className="btn-ghost orion-workspace-studio-link">
@@ -840,9 +886,9 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
         </div>
         <div className="orion-workspace-studio-list">
           {loading ? (
-            <div className="orion-workspace-studio-empty">Loading recent automations…</div>
+            <div className="orion-workspace-studio-empty">Loading recent workflows…</div>
           ) : workflows.length === 0 ? (
-            <div className="orion-workspace-studio-empty">No automations yet. Start by asking the assistant to build one.</div>
+            <div className="orion-workspace-studio-empty">No workflows yet. Start by asking the assistant to build one.</div>
           ) : (
             workflows.map((workflow) => (
               <button
@@ -852,8 +898,11 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
                 onClick={() => setSelectedWorkflowId(workflow.id)}
               >
                 <div>
-                  <div className="orion-workspace-studio-list-title">{workflow.name || 'Untitled automation'}</div>
+                  <div className="orion-workspace-studio-list-title">{workflow.name || 'Untitled workflow'}</div>
                   <div className="orion-workspace-studio-list-copy">{workflow.description || 'Open the canvas to refine this workflow.'}</div>
+                  {workflowRuntimeProfileSummary(workflow) ? (
+                    <div className="orion-workspace-studio-list-copy">Runtime {workflowRuntimeProfileSummary(workflow)}</div>
+                  ) : null}
                 </div>
                 <div className="orion-workspace-studio-list-meta">
                   <span className="orion-workspace-studio-list-status">{statusLabel(workflow.status)}</span>

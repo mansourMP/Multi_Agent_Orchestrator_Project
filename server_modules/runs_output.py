@@ -41,6 +41,22 @@ def _build_replay_request_from_context(context: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+def _active_profile_snapshot(run: Dict[str, Any]) -> Dict[str, Any]:
+    profile_id = str(run.get("active_profile_id") or "").strip()
+    profile = PROVIDER_PROFILES.get(profile_id) if profile_id else None
+    profile_row = profile if isinstance(profile, dict) else {}
+    provider = str(profile_row.get("provider") or run.get("active_provider") or "").strip()
+    model = str(profile_row.get("model") or run.get("active_model") or "").strip()
+    label = str(profile_row.get("label") or run.get("active_profile_label") or "").strip()
+    return {
+        "id": profile_id or None,
+        "label": label or None,
+        "provider": provider or None,
+        "model": model or None,
+        "adapter": str(run.get("active_adapter") or "").strip() or None,
+    }
+
+
 def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -52,6 +68,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     memory_trace = run.get("memory_trace") if isinstance(run.get("memory_trace"), dict) else {}
     trimmed_memory_trace = _trim_memory_trace(memory_trace)
     result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else None
+    active_profile = _active_profile_snapshot(run)
     result_summary = run.get("result")
     if isinstance(result_summary, str):
         summary_text = result_summary.strip()
@@ -72,6 +89,11 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "hitl_wait_total_ms": round(float(run.get("_hitl_wait_total_ms", 0.0)), 2),
         "workflow_id": context.get("workflow_id"),
         "workspace_id": context.get("workspace_id"),
+        "active_profile_id": active_profile.get("id"),
+        "active_profile_label": active_profile.get("label"),
+        "active_profile_provider": active_profile.get("provider"),
+        "active_profile_model": active_profile.get("model"),
+        "active_adapter": active_profile.get("adapter"),
         "pack_id": _pack_id_from_context(run),
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
@@ -338,6 +360,11 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "hitl_wait_total_ms": item.get("hitl_wait_total_ms"),
         "workflow_id": item.get("workflow_id"),
         "workspace_id": item.get("workspace_id"),
+        "active_profile_id": item.get("active_profile_id"),
+        "active_profile_label": item.get("active_profile_label"),
+        "active_profile_provider": item.get("active_profile_provider"),
+        "active_profile_model": item.get("active_profile_model"),
+        "active_adapter": item.get("active_adapter"),
         "pack_id": item.get("pack_id"),
         "agent_role": item.get("agent_role"),
         "agent_role_source": item.get("agent_role_source"),

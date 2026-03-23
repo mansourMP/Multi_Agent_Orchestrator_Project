@@ -689,7 +689,7 @@ export default function SkillsPage() {
           <div>
             <div className="orion-panel-title">Launch-week model</div>
             <div className="orion-panel-copy">
-              Do not create fake specialist agents. Keep one assistant and narrow it with skills, connections, and approvals.
+              Do not create fake specialist agents. Keep one assistant and narrow it with skills, integrations, and approvals.
             </div>
           </div>
         </div>
@@ -708,7 +708,7 @@ export default function SkillsPage() {
             </div>
           </article>
           <article className="orion-panel muted" style={{ display: 'grid', gap: 8 }}>
-            <div className="orion-panel-title" style={{ marginBottom: 0 }}>Automation defaults</div>
+            <div className="orion-panel-title" style={{ marginBottom: 0 }}>Workflow defaults</div>
             <div className="orion-panel-copy">
               Use these only for recurring or background workflows.
             </div>
@@ -716,14 +716,14 @@ export default function SkillsPage() {
               {automationBundle.length > 0 ? (
                 automationBundle.map((skill) => <span key={skill.id} className="orion-chip">{skill.title}</span>)
               ) : (
-                <span className="orion-chip">No automation defaults yet</span>
+                <span className="orion-chip">No workflow defaults yet</span>
               )}
             </div>
           </article>
           <article className="orion-panel muted" style={{ display: 'grid', gap: 8 }}>
             <div className="orion-panel-title" style={{ marginBottom: 0 }}>Safety posture</div>
             <div className="orion-panel-copy">
-              Keep approvals on. Add skills first, add connections second, loosen runtime policy last.
+              Keep approvals on. Add skills first, add integrations second, loosen runtime policy last.
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <span className="orion-chip">Trust: {String(runtimePolicy?.trust_mode_default || 'guarded')}</span>

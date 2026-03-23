@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { API_BASE } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
+const ORION_API_URL = process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
 
 type BuilderGenerateBody = {
   prompt?: string;
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
     headers['X-API-Key'] = xApiKey;
   }
 
-  const response = await fetch(`${API_BASE}/api/v1/builder/generate`, {
+  const response = await fetch(`${ORION_API_URL}/api/v1/builder/generate`, {
     method: 'POST',
     headers,
     body: JSON.stringify({

@@ -414,6 +414,29 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
                 run_context["metadata"] = metadata
             except Exception:
                 pass
+    metadata = run_context.get("metadata") if isinstance(run_context.get("metadata"), dict) else {}
+    runtime_profile_id = str(
+        metadata.get("runtime_profile_id") or metadata.get("profile_id") or ""
+    ).strip()
+    runtime_profile = PROVIDER_PROFILES.get(runtime_profile_id) if runtime_profile_id else None
+    runtime_profile_row = runtime_profile if isinstance(runtime_profile, dict) else {}
+    initial_active_provider = str(
+        runtime_profile_row.get("provider")
+        or metadata.get("runtime_profile_provider")
+        or run_context.get("provider")
+        or ""
+    ).strip()
+    initial_active_model = str(
+        runtime_profile_row.get("model")
+        or metadata.get("runtime_profile_model")
+        or run_context.get("model")
+        or ""
+    ).strip()
+    initial_active_label = str(
+        runtime_profile_row.get("label")
+        or metadata.get("runtime_profile_label")
+        or ""
+    ).strip()
     selected_target = selected_execution_target_from_context(run_context)
     runs[run_id] = {
         "status": "starting",
@@ -443,6 +466,11 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
             "last_error": None,
             "updated_at": _utc_now_iso(),
         },
+        "active_profile_id": runtime_profile_id or None,
+        "active_profile_label": initial_active_label or None,
+        "active_provider": initial_active_provider or None,
+        "active_model": initial_active_model or None,
+        "active_adapter": None,
     }
     RUN_QUEUE_INDEX[id(log_queue)] = run_id
     metrics_inc("runs_started", 1)
@@ -892,6 +920,10 @@ def _execute_orion_dag_once(run_id: str, context: Dict[str, Any], log_queue: que
         "result_text": final_text,
         "result_data": final_data,
         "usage_masked": final_usage,
+        "active_profile_id": state.get("active_profile_id"),
+        "active_provider": state.get("active_provider") or state.get("provider"),
+        "active_model": state.get("active_model") or state.get("selected_model"),
+        "active_adapter": state.get("active_adapter"),
     }
 
 
@@ -922,6 +954,10 @@ def run_orion_mission(run_id: str):
             run["result"] = result["result_text"]
             run["result_data"] = result.get("result_data")
             run["usage_masked"] = result["usage_masked"]
+            run["active_profile_id"] = result.get("active_profile_id")
+            run["active_provider"] = result.get("active_provider")
+            run["active_model"] = result.get("active_model")
+            run["active_adapter"] = result.get("active_adapter")
             set_run_status(run_id, "completed")
             run["logs"].put(None)
             return

@@ -339,7 +339,7 @@ function rowAssignedRole(row: ConnectorRow): '' | AgentRoleId {
 
 function rowRoutingLabel(row: ConnectorRow): string {
   const assigned = rowAssignedRole(row);
-  return assigned ? `Used by ${agentRoleLabel(assigned)}` : 'Available to shared automations';
+  return assigned ? `Used by ${agentRoleLabel(assigned)}` : 'Available to shared workflows';
 }
 
 function busyActionLabel(value: string): string {
@@ -742,6 +742,15 @@ export default function CredentialsPage() {
   );
   const googleSuiteRow = useMemo(() => connectors.find((row) => row.connector === 'google_workspace' && !rowPaused(row)) || connectors.find((row) => row.connector === 'google_workspace') || null, [connectors]);
   const microsoftSuiteRow = useMemo(() => connectors.find((row) => row.connector === 'microsoft_365' && !rowPaused(row)) || connectors.find((row) => row.connector === 'microsoft_365') || null, [connectors]);
+  const integrationOverview = useMemo(() => {
+    const connectedSuiteCount = [googleSuiteRow, microsoftSuiteRow].filter(Boolean).length;
+    return {
+      connectedSuiteCount,
+      activeCount: summary.active,
+      availableCount: directoryCounts.available,
+      connectedCount: directoryCounts.connected,
+    };
+  }, [directoryCounts.available, directoryCounts.connected, googleSuiteRow, microsoftSuiteRow, summary.active]);
   const selectedConnectorRow = useMemo(() => {
     const selectedConnectorId = focusedCatalogEntry ? resolveCatalogConnectorId(focusedCatalogEntry) : null;
     if (!selectedConnectorId) return null;
@@ -1223,6 +1232,63 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         }
       />
 
+      <section className="orion-panel orion-home-overview">
+        <div className="orion-home-overview-main">
+          <div className="orion-home-overview-kicker">System access</div>
+          <div className="orion-home-overview-title">Give agents the systems they need before you ask them to operate.</div>
+          <div className="orion-home-overview-copy">
+            Start with the systems your workflows depend on most. Connect business tools, confirm access, and set runtime defaults before execution begins.
+          </div>
+          <div className="orion-home-overview-actions">
+            <button className="btn-primary" onClick={openGenericCreateModal}>
+              <Plus size={14} />
+              Add system
+            </button>
+            <button className="btn-secondary" onClick={() => void loadConnectors()}>
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          </div>
+        </div>
+        <aside className="orion-home-overview-side">
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Current state</div>
+            <div className="orion-home-side-stats">
+              <div>
+                <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
+                <div className="orion-home-side-note">Active systems</div>
+              </div>
+              <div>
+                <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
+                <div className="orion-home-side-note">Available in directory</div>
+              </div>
+            </div>
+            <div className="orion-runs-overview-side-note">
+              {integrationOverview.connectedSuiteCount > 0
+                ? `${integrationOverview.connectedSuiteCount} core suite${integrationOverview.connectedSuiteCount === 1 ? '' : 's'} already connected.`
+                : 'No core suites connected yet. Start with Google Workspace or Microsoft 365.'}
+            </div>
+          </div>
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Recommended first</div>
+            <div className="orion-home-mini-list">
+              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
+                <span>Google Workspace</span>
+                <ArrowUpRight size={13} />
+              </button>
+              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('microsoft_365', 'Microsoft 365')}>
+                <span>Microsoft 365</span>
+                <ArrowUpRight size={13} />
+              </button>
+              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
+                <span>Telegram alerts</span>
+                <ArrowUpRight size={13} />
+              </button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
       <section className="orion-panel muted" style={{ display: 'grid', gap: 10, padding: '10px 14px' }}>
         <div
           style={{
@@ -1301,7 +1367,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               return (
                 <article
                   key={item.id}
-                  className="orion-connector-card"
+                  className={`orion-connector-card orion-integration-card${isFocused ? ' is-focused' : ''}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => setFocusedCatalogId(item.id)}
@@ -1311,27 +1377,16 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       setFocusedCatalogId(item.id);
                     }
                   }}
-                  style={{
-                    display: 'grid',
-                    gap: 6,
-                    padding: '14px 14px 12px',
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    boxShadow: isFocused ? '0 0 0 1px var(--primary-ring-soft), 0 6px 16px rgba(0, 0, 0, 0.08)' : undefined,
-                    cursor: 'pointer',
-                  }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+                  <div className="orion-integration-card-head">
+                    <div className="orion-integration-card-main">
                       <ConnectorMark visual={visual} size={40} />
-                      <div style={{ display: 'grid', gap: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{item.label}</div>
-                        <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                          {item.note}
-                        </div>
+                      <div className="orion-integration-card-copy">
+                        <div className="orion-integration-card-title">{item.label}</div>
+                        <div className="orion-integration-card-note">{item.note}</div>
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+                    <div className="orion-integration-card-action">
                       <button
                         className="orion-btn orion-btn-ghost"
                         style={{ minHeight: 30, paddingInline: 10 }}
@@ -1355,7 +1410,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div className="orion-integration-card-chips">
                     <span className="orion-chip" style={{ ...tierMeta.style, minHeight: 22 }}>
                       {tierMeta.label}
                     </span>
@@ -1391,24 +1446,17 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             return (
               <div
                 ref={focusedCatalogEntryRef}
-                style={{
-                  display: 'grid',
-                  gap: 10,
-                  borderRadius: 14,
-                  padding: 12,
-                  border: '1px solid var(--border-default)',
-                  background: 'color-mix(in srgb, var(--bg-element) 76%, transparent 24%)',
-                }}
+                className="orion-focus-panel"
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div className="orion-focus-panel-head">
+                  <div className="orion-focus-panel-main">
                     <ConnectorMark visual={visual} size={44} />
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <div style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{focusedCatalogEntry.label}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{focusedCatalogEntry.note}</div>
+                    <div className="orion-focus-panel-copy">
+                      <div className="orion-focus-panel-title">{focusedCatalogEntry.label}</div>
+                      <div className="orion-focus-panel-note">{focusedCatalogEntry.note}</div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <div className="orion-focus-panel-actions">
                     <span className="orion-chip" style={{ ...ROADMAP_TIER_META[connectorRoadmapTier(focusedCatalogEntry)].style, minHeight: 24 }}>
                       {ROADMAP_TIER_META[connectorRoadmapTier(focusedCatalogEntry)].label}
                     </span>
@@ -1425,22 +1473,11 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   </div>
                 </div>
 
-                <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>{focusedCatalogEntry.detail}</div>
+                <div className="orion-focus-panel-body">{focusedCatalogEntry.detail}</div>
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 4,
-                    borderRadius: 14,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'color-mix(in srgb, var(--bg-surface) 92%, transparent 8%)',
-                    padding: '10px 12px',
-                  }}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Access model
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <div className="orion-focus-callout">
+                  <div className="orion-focus-callout-label">Access model</div>
+                  <div className="orion-focus-callout-copy">
                     {focusedCatalogEntry.status === 'provider_next' && focusedConnectorId
                       ? 'You can connect this here today. Deeper app-specific actions can be added later without changing the overall platform model.'
                       : focusedCatalogEntry.status === 'provider_next'
@@ -1596,7 +1633,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         ) : null}
       </section>
 
-      <AiAccountsPanel apiUrl={ORION_API_URL} workspaceId={WORKSPACE_ID} runtimeApiKey={runtimeApiKey} />
+      <section className="orion-panel orion-home-list-panel">
+        <div className="orion-panel-header">
+          <div>
+            <div className="orion-panel-title">AI providers</div>
+            <div className="orion-panel-copy">Manage saved AI accounts, runtime defaults, and fallback order in one place.</div>
+          </div>
+        </div>
+        <AiAccountsPanel apiUrl={ORION_API_URL} workspaceId={WORKSPACE_ID} runtimeApiKey={runtimeApiKey} />
+      </section>
 
       {pageError && connectors.length > 0 ? (
         <section className="orion-empty" style={{ minHeight: 120, gap: 10 }}>

@@ -19,7 +19,9 @@ import {
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
+import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -30,7 +32,7 @@ import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 
-const ORION_API_URL = API_BASE;
+const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 const ORION_API_KEY =
     process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
@@ -99,6 +101,17 @@ interface WorkflowConnectorItem {
     id: string;
     connector: string;
     metadata?: Record<string, unknown>;
+}
+
+interface RuntimeProfileRow {
+    id: string;
+    provider: string;
+    label: string;
+    model?: string | null;
+    priority?: number;
+    enabled: boolean;
+    health?: string | null;
+    created_at?: string;
 }
 
 interface StreamLogPayload {
@@ -198,7 +211,7 @@ const CANVAS_NODE_GAP = 170;
 const DEFAULT_OPERATOR: OperatorConfig = {
     modelId: 'gpt-4.1',
     agentRole: DEFAULT_AGENT_ROLE_ID,
-    duty: 'Run automations reliably, explain what is happening, and ask before risky actions.',
+    duty: 'Run workflows reliably, explain what is happening, and ask before risky actions.',
     systemPrompt: `You are the ${BRAND.assistant}. Be practical, concise, and transparent.`,
     userGoal: '',
 };
@@ -563,6 +576,18 @@ function normalizeProvider(provider: string): ProviderId {
     return 'openai';
 }
 
+function sortRuntimeProfiles(items: RuntimeProfileRow[]): RuntimeProfileRow[] {
+    return [...items].sort((left, right) => {
+        const providerCompare = String(left.provider || '').localeCompare(String(right.provider || ''));
+        if (providerCompare !== 0) return providerCompare;
+        const priorityCompare = Number(left.priority ?? 100) - Number(right.priority ?? 100);
+        if (priorityCompare !== 0) return priorityCompare;
+        const createdCompare = String(left.created_at || '').localeCompare(String(right.created_at || ''));
+        if (createdCompare !== 0) return createdCompare;
+        return String(left.id || '').localeCompare(String(right.id || ''));
+    });
+}
+
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
     const router = useRouter();
@@ -612,6 +637,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [credentials, setCredentials] = useState<VaultCredentialItem[]>([]);
     const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
     const [models, setModels] = useState<string[]>([]);
+    const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfileRow[]>([]);
+    const [selectedProfileId, setSelectedProfileId] = useState('');
     const [providersLoading, setProvidersLoading] = useState(false);
     const [credentialsLoading, setCredentialsLoading] = useState(false);
     const [modelsLoading, setModelsLoading] = useState(false);
@@ -725,6 +752,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         return credentials.filter((item) => normalizeProvider(item.provider) === connection.provider);
     }, [credentials, connection.provider]);
 
+    const selectedRuntimeProfile = useMemo(
+        () => runtimeProfiles.find((profile) => profile.id === selectedProfileId) || null,
+        [runtimeProfiles, selectedProfileId],
+    );
+
     const appendLog = useCallback((message: string, level: LogLevel = 'info') => {
         setLogs((prev) => [...prev, { ts: new Date().toISOString(), level, message }]);
     }, []);
@@ -756,6 +788,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             meta: {
                 ...baseMeta,
                 mode: 'simple_operator',
+                runtime_profile_id: selectedProfileId || undefined,
+                runtime_profile_label: selectedRuntimeProfile?.label || undefined,
+                runtime_profile_provider: selectedRuntimeProfile?.provider || undefined,
+                runtime_profile_model: selectedRuntimeProfile?.model || undefined,
                 operator: {
                     modelId: nextOperator.modelId,
                     agentRole: nextOperator.agentRole,
@@ -770,7 +806,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 },
             },
         };
-    }, []);
+    }, [selectedProfileId, selectedRuntimeProfile]);
 
     const buildCanvasDefinition = useCallback((baseDefinition: WorkflowShape['definition'], nextNodes: CanvasWorkflowNode[], nextEdges: CanvasWorkflowEdge[]) => {
         const baseMeta = baseDefinition?.meta || {};
@@ -786,9 +822,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             meta: {
                 ...baseMeta,
                 mode: 'visual_builder',
+                runtime_profile_id: selectedProfileId || undefined,
+                runtime_profile_label: selectedRuntimeProfile?.label || undefined,
+                runtime_profile_provider: selectedRuntimeProfile?.provider || undefined,
+                runtime_profile_model: selectedRuntimeProfile?.model || undefined,
             },
         };
-    }, []);
+    }, [selectedProfileId, selectedRuntimeProfile]);
 
     const fetchProviders = useCallback(async () => {
         setProvidersLoading(true);
@@ -879,6 +919,52 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setCredentialsLoading(false);
         }
     }, [buildHeaders, addToast, withWorkspaceQuery]);
+
+    const fetchRuntimeProfiles = useCallback(async () => {
+        if (!runtimeApiKey) {
+            setRuntimeProfiles([]);
+            return;
+        }
+        try {
+            const res = await fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`, {
+                headers: buildHeaders(false),
+            });
+            if (!res.ok) {
+                throw new Error('Failed to load runtime profiles.');
+            }
+            const payload = await res.json().catch(() => ({}));
+            const rows = Array.isArray((payload as { items?: unknown[] }).items)
+                ? (payload as { items: unknown[] }).items.reduce<RuntimeProfileRow[]>((acc, item) => {
+                    if (!isRecord(item)) return acc;
+                    const id = String(item.id || '').trim();
+                    const provider = String(item.provider || '').trim();
+                    const label = String(item.label || '').trim();
+                    const enabled = Boolean(item.enabled);
+                    if (!id || !provider || !label || !enabled) return acc;
+                    acc.push({
+                        id,
+                        provider,
+                        label,
+                        model: typeof item.model === 'string' ? item.model : null,
+                        priority: typeof item.priority === 'number' ? item.priority : undefined,
+                        enabled,
+                        health: typeof item.health === 'string' ? item.health : null,
+                        created_at: typeof item.created_at === 'string' ? item.created_at : undefined,
+                    });
+                    return acc;
+                }, [])
+                : [];
+            const sorted = sortRuntimeProfiles(rows);
+            setRuntimeProfiles(sorted);
+            setSelectedProfileId((current) => {
+                if (current && sorted.some((item) => item.id === current)) return current;
+                const defaultReadyProfile = sorted.find((item) => String(item.health || '').trim().toLowerCase() === 'healthy');
+                return defaultReadyProfile?.id || current;
+            });
+        } catch {
+            setRuntimeProfiles([]);
+        }
+    }, [buildHeaders, runtimeApiKey, workspaceId]);
 
     const fetchConnectedChannels = useCallback(async () => {
         try {
@@ -976,6 +1062,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 mode: connectionStored?.mode === 'managed' ? 'managed' : 'byok',
                 credentialId: typeof connectionStored?.credentialId === 'string' ? connectionStored.credentialId : '',
             });
+            setSelectedProfileId(typeof wf?.definition?.meta?.runtime_profile_id === 'string' ? wf.definition.meta.runtime_profile_id : '');
             const parsedNodes = parseCanvasNodes(wf?.definition?.nodes);
             const nextNodes = parsedNodes.length > 0 ? parsedNodes : buildDefaultCanvasNodes();
             setCanvasNodes(nextNodes);
@@ -994,11 +1081,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         loadWorkflow();
         fetchProviders();
         fetchCredentials();
+        fetchRuntimeProfiles();
         fetchConnectedChannels();
         return () => {
             if (streamRef.current) streamRef.current.close();
         };
-    }, [fetchConnectedChannels, fetchCredentials, fetchModelAliases, fetchProviders, loadWorkflow]);
+    }, [fetchConnectedChannels, fetchCredentials, fetchModelAliases, fetchProviders, fetchRuntimeProfiles, loadWorkflow]);
 
     useEffect(() => {
         if (connection.mode === 'managed') {
@@ -1054,7 +1142,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const isWorkflowActive = String(workflow?.status || '').trim().toLowerCase() === 'published';
     const workflowStatusSentence = useMemo(() => {
         if (!channelConnected) {
-            return '⚠ Connect a channel to activate this automation';
+            return '⚠ Connect a channel to activate this workflow';
         }
         if (isWorkflowActive) {
             return `✓ Active — running ${triggerSummary} and sending alerts to ${statusChannel.label}`;
@@ -1270,7 +1358,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     const handleActivationToggle = useCallback(async () => {
         if (isWorkflowActive) {
-            addToast({ type: 'info', title: 'Already active', message: 'This automation is already turned on.' });
+            addToast({ type: 'info', title: 'Already active', message: 'This workflow is already turned on.' });
             return;
         }
         await handlePublish();
@@ -1552,7 +1640,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             addToast({ type: 'error', title: 'Goal Required', message: 'Describe what you want done first.' });
             return;
         }
-        if (connection.mode === 'byok' && !connection.credentialId) {
+        if (!selectedProfileId && connection.mode === 'byok' && !connection.credentialId) {
             addToast({ type: 'error', title: 'Credential Required', message: 'Connect a key before running.' });
             return;
         }
@@ -1567,6 +1655,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         setRunStatus('running');
 
         try {
+            const runtimeProvider = String(selectedRuntimeProfile?.provider || connection.provider).trim() || 'openai';
+            const runtimeModel = String(selectedRuntimeProfile?.model || operator.modelId).trim() || 'gpt-4o-mini';
+            const runtimeCredentialId = selectedProfileId ? undefined : connection.mode === 'byok' ? connection.credentialId : undefined;
             setIsPreflightChecking(true);
             const doctorRes = await fetch(`${ORION_API_URL}/doctor`, { headers: buildHeaders(false) });
             if (doctorRes.ok) {
@@ -1582,7 +1673,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 const openaiWarn = checks.find(
                     (check) => check.name === 'openai_connectivity' && check.status === 'warn',
                 );
-                if (openaiWarn && connection.provider === 'openai' && connection.mode === 'managed') {
+                if (openaiWarn && runtimeProvider === 'openai' && !selectedProfileId && connection.mode === 'managed') {
                     throw new Error(
                         'OpenAI connection is not ready. Open advanced setup and reconnect your OpenAI account.',
                     );
@@ -1595,11 +1686,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 `Agent Role: ${operator.agentRole}`,
                 `Duty: ${operator.duty.trim()}`,
                 `Prompt: ${operator.systemPrompt.trim()}`,
-                `Provider: ${connection.provider}`,
-                `Mode: ${connection.mode}`,
-                `Model: ${operator.modelId}`,
+                `Provider: ${runtimeProvider}`,
+                `Mode: ${selectedProfileId ? 'runtime_profile' : connection.mode}`,
+                `Model: ${runtimeModel}`,
+                selectedRuntimeProfile ? `Runtime Profile: ${selectedRuntimeProfile.label}` : '',
                 `Trust Mode: ${trustMode}`,
-            ].join('\n');
+            ].filter(Boolean).join('\n');
 
             const res = await fetch(`${ORION_API_URL}/runs/start`, {
                 method: 'POST',
@@ -1611,22 +1703,24 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     user_goal: operator.userGoal.trim(),
                     business_plan: businessPlan,
                     agent_role: operator.agentRole,
-                    provider: connection.provider,
-                    model: operator.modelId.trim(),
-                    credential_id: connection.mode === 'byok' ? connection.credentialId : undefined,
+                    provider: runtimeProvider,
+                    model: runtimeModel,
+                    credential_id: runtimeCredentialId || undefined,
                     agents: [
                         {
                             role: operator.agentRole,
-                            modelId: operator.modelId.trim(),
-                            provider: connection.provider,
+                            modelId: runtimeModel,
+                            provider: runtimeProvider,
                         },
                     ],
                     metadata: {
                         workspace_id: workspaceId,
                         agent_role: operator.agentRole,
-                        provider: connection.provider,
-                        model: operator.modelId.trim(),
-                        mode: connection.mode,
+                        provider: runtimeProvider,
+                        model: runtimeModel,
+                        mode: selectedProfileId ? 'runtime_profile' : connection.mode,
+                        profile_id: selectedProfileId || undefined,
+                        runtime_profile_id: selectedProfileId || undefined,
                         trust_mode: trustMode,
                     },
                 }),
@@ -1640,8 +1734,27 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const payload = await res.json();
             const nextRunId = typeof payload?.run_id === 'string' ? payload.run_id : '';
             if (!nextRunId) throw new Error('Run ID missing from backend response.');
+            upsertSeededRuntimeRun({
+                run_id: nextRunId,
+                status: 'running',
+                workflow_name: String(workflow?.name || workflowId || 'Workflow').trim() || 'Workflow',
+                user_goal: operator.userGoal.trim(),
+                created_at: new Date().toISOString(),
+                agent_role: operator.agentRole,
+                triggered_by: 'Direct',
+                active_profile_id:
+                    typeof payload?.active_profile_id === 'string' ? payload.active_profile_id : selectedProfileId || null,
+                active_profile_label:
+                    typeof payload?.active_profile_label === 'string'
+                        ? payload.active_profile_label
+                        : selectedRuntimeProfile?.label || null,
+                active_profile_provider:
+                    typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : runtimeProvider,
+                active_profile_model:
+                    typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : runtimeModel,
+            });
             setRunId(nextRunId);
-            appendLog(`Autopilot started using ${connection.provider}:${operator.modelId}.`);
+            appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
 
             const streamUrl = runtimeApiKey
                 ? `${ORION_API_URL}/runs/${nextRunId}/stream?api_key=${encodeURIComponent(runtimeApiKey)}`
@@ -1687,7 +1800,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
             eventSource.addEventListener('pause', () => {
                 setRunStatus('waiting');
-                appendLog('Approval required before continuing.', 'warn');
+                appendLog(RUN_WAITING_STATUS_COPY, 'warn');
             });
 
             eventSource.onerror = () => {
@@ -1703,7 +1816,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsPreflightChecking(false);
         }
-    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, runtimeApiKey, buildHeaders, closeStream, appendLog, addToast]);
+    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, runtimeApiKey, buildHeaders, closeStream, appendLog, addToast, selectedProfileId, selectedRuntimeProfile]);
 
     const runBadge = useMemo(() => {
         if (runStatus === 'running') return { label: 'Running', color: 'var(--success-fg)', bg: 'var(--success-bg)', border: 'var(--success-border)' };
@@ -1717,7 +1830,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         return (
             <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
                 <Loader2 size={18} style={{ marginRight: 8, animation: 'spin 1s linear infinite' }} />
-                Loading automation...
+                Loading workflow...
             </div>
         );
     }
@@ -1778,6 +1891,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 <Play size={14} />
                                 {runStatus === 'running' ? 'Testing…' : isPreflightChecking ? 'Preparing…' : 'Test once'}
                             </button>
+                            {runId ? (
+                                <button
+                                    onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
+                                    className="orion-btn orion-btn-ghost"
+                                >
+                                    {OPEN_LIVE_RUN_LABEL}
+                                </button>
+                            ) : null}
                             <button
                                 onClick={() => void handleActivationToggle()}
                                 className={`orion-btn ${isWorkflowActive ? 'orion-btn-success' : 'orion-btn-primary'}`}
@@ -2245,7 +2366,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                         <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            AI: {connection.provider.toUpperCase()} · {connection.mode === 'managed' ? 'Managed' : 'Your Key'} · {operator.modelId} · {AGENT_ROLE_OPTIONS.find((item) => item.id === operator.agentRole)?.label || operator.agentRole}
+                            AI: {selectedRuntimeProfile
+                                ? `${selectedRuntimeProfile.label} · ${String(selectedRuntimeProfile.model || operator.modelId).trim() || operator.modelId}`
+                                : `${connection.provider.toUpperCase()} · ${connection.mode === 'managed' ? 'Managed' : 'Your Key'} · ${operator.modelId}`} · {AGENT_ROLE_OPTIONS.find((item) => item.id === operator.agentRole)?.label || operator.agentRole}
                         </div>
                         <button
                             type="button"
@@ -2261,6 +2384,27 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         <>
 
                     <div className="workflow-pro-two-col">
+                        <div style={{ gridColumn: '1 / -1' }}>
+                            <label style={workflowLabelStyle}>Runtime Profile</label>
+                            <select
+                                value={selectedProfileId}
+                                onChange={(e) => setSelectedProfileId(e.target.value)}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="">Manual provider settings</option>
+                                {runtimeProfiles.map((profile) => (
+                                    <option key={profile.id} value={profile.id}>
+                                        {profile.label} · {String(profile.provider || '').trim().toUpperCase()}
+                                        {profile.model ? ` · ${profile.model}` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <div style={{ ...workflowMutedCopyStyle, marginTop: 6 }}>
+                                {selectedRuntimeProfile
+                                    ? `Runs use ${selectedRuntimeProfile.label}. Manual provider and BYOK fields stay saved, but execution follows the selected profile.`
+                                    : 'Choose a saved runtime profile to control provider routing and fallback for this workflow.'}
+                            </div>
+                        </div>
                         <div>
                             <label style={workflowLabelStyle}>Provider</label>
                             <select
@@ -2606,9 +2750,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 <section className="workflow-pro-panel log">
                     <div style={{ marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                         <div>
-                            <div className="workflow-pro-log-title">{isSimplifiedCanvasWorkflow ? 'Recent activity' : 'Live Activity'}</div>
+                            <div className="workflow-pro-log-title">{isSimplifiedCanvasWorkflow ? 'Recent runs' : 'Live run log'}</div>
                             <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                                {isSimplifiedCanvasWorkflow ? 'What happened the last time you tested this automation.' : 'Time-stamped events.'}
+                                {isSimplifiedCanvasWorkflow ? 'What happened the last time you tested this workflow.' : 'Time-stamped events.'}
                             </div>
                         </div>
                         {runStatus === 'waiting' && (
@@ -2627,6 +2771,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 </button>
                             </div>
                         )}
+                        {runId ? (
+                            <button
+                                onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
+                                className="orion-btn orion-btn-ghost"
+                            >
+                                {OPEN_LIVE_RUN_LABEL}
+                            </button>
+                        ) : null}
                     </div>
 
                     {usageTelemetry && (
@@ -2668,7 +2820,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         {logs.length === 0 ? (
                             <div style={{ padding: '12px 10px', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-tertiary)', fontSize: 13 }}>
                                 <CheckCircle2 size={14} />
-                                {isSimplifiedCanvasWorkflow ? 'Nothing to show yet. Try it once to see activity here.' : 'No events yet. Press Run to start.'}
+                                {isSimplifiedCanvasWorkflow ? 'Nothing to show yet. Try it once to see run details here.' : 'No events yet. Press Run to start.'}
                             </div>
                         ) : (
                             logs.map((entry, idx) => {

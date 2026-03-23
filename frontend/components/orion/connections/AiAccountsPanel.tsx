@@ -11,11 +11,16 @@ import {
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_MODEL_ALIAS_OPTIONS,
   DEFAULT_PROVIDER_LABELS,
   DEFAULT_PROVIDER_MODELS,
   DEFAULT_PROVIDER_OPTIONS,
   getProviderAuthModes,
   isProviderId,
+  mapModelOptionsToAliases,
+  normalizeProviderId,
+  resolveModelAlias,
+  type ModelAliasOption,
   type ProviderId,
   type ProviderOption,
 } from '@/app/page.catalog';
@@ -157,6 +162,35 @@ function knownProviderId(value?: unknown): ProviderId | null {
   return isProviderId(raw) ? raw : null;
 }
 
+function parseModelAliasCatalog(items: unknown[]): ModelAliasOption[] {
+  return items
+    .map((item: unknown) => {
+      const value = item as {
+        alias?: unknown;
+        provider?: unknown;
+        model?: unknown;
+        resolved_model?: unknown;
+        is_global_default?: unknown;
+        is_provider_default?: unknown;
+      };
+      const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
+      const provider = normalizeProviderId(rawProvider);
+      const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
+      const model = typeof value.model === 'string' ? value.model.trim() : '';
+      const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
+      if (!rawProvider || !alias || !model || !resolvedModel) return null;
+      return {
+        alias,
+        provider,
+        model,
+        resolvedModel,
+        isGlobalDefault: Boolean(value.is_global_default),
+        isProviderDefault: Boolean(value.is_provider_default),
+      } satisfies ModelAliasOption;
+    })
+    .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+}
+
 function buildProviderCredentialPayload(state: ProviderAccountFormState): Record<string, unknown> {
   if (state.provider === 'anthropic') {
     if (state.authMode === 'local_cli') return { auth_mode: 'local_cli' };
@@ -221,6 +255,16 @@ function claudeAuthTone(loggedIn: boolean): CSSProperties {
     : { color: 'var(--warning-fg)', border: '1px solid var(--warning-border)', background: 'var(--warning-bg)' };
 }
 
+function sortProviderProfiles(left: ProviderProfileRow, right: ProviderProfileRow): number {
+  const leftPriority = typeof left.priority === 'number' ? left.priority : 100;
+  const rightPriority = typeof right.priority === 'number' ? right.priority : 100;
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+  const leftCreated = String(left.created_at || '');
+  const rightCreated = String(right.created_at || '');
+  if (leftCreated !== rightCreated) return leftCreated.localeCompare(rightCreated);
+  return String(left.id || '').localeCompare(String(right.id || ''));
+}
+
 function normalizeClaudeCliError(message: string): string {
   const normalized = String(message || '').trim();
   const lowered = normalized.toLowerCase();
@@ -232,6 +276,7 @@ function normalizeClaudeCliError(message: string): string {
 
 export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: AiAccountsPanelProps) {
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
+  const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRow[]>([]);
   const [providerHealth, setProviderHealth] = useState<ProviderProfilesHealth>({ healthy: 0, cooldown: 0, disabled: 0, total: 0 });
@@ -258,7 +303,26 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     () => getProviderAuthModes(selectedProviderOption),
     [selectedProviderOption],
   );
+  const effectiveModelAliases = useMemo(
+    () => (modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS),
+    [modelAliases],
+  );
   const usesClaudeLocalCli = providerForm.provider === 'anthropic' && providerForm.authMode === 'local_cli';
+  const groupedModelAliases = useMemo(() => {
+    return providerOptions
+      .map((option) => ({
+        provider: option.id,
+        label: option.label,
+        items: effectiveModelAliases
+          .filter((item) => item.provider === option.id)
+          .sort((left, right) => {
+            if (left.isProviderDefault !== right.isProviderDefault) return left.isProviderDefault ? -1 : 1;
+            if (left.isGlobalDefault !== right.isGlobalDefault) return left.isGlobalDefault ? -1 : 1;
+            return left.alias.localeCompare(right.alias);
+          }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [effectiveModelAliases, providerOptions]);
 
   const providerProfilesByCredential = useMemo(() => {
     const map = new Map<string, ProviderProfileRow[]>();
@@ -279,6 +343,59 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       return !credentialId || !credentialIds.has(credentialId);
     });
   }, [providerCredentials, providerProfiles]);
+
+  const runtimeProfileGroups = useMemo(() => {
+    const orphanIds = new Set(orphanProviderProfiles.map((item) => item.id));
+    const groups = new Map<ProviderId, ProviderProfileRow[]>();
+    for (const profile of providerProfiles) {
+      if (orphanIds.has(profile.id)) continue;
+      const bucket = groups.get(profile.provider) || [];
+      bucket.push(profile);
+      groups.set(profile.provider, bucket);
+    }
+    return Array.from(groups.entries())
+      .map(([providerId, items]) => ({
+        provider: providerId,
+        label: providerLabel(providerId, providerOptions),
+        items: [...items].sort(sortProviderProfiles),
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [orphanProviderProfiles, providerOptions, providerProfiles]);
+
+  const profileOrderById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const group of runtimeProfileGroups) {
+      group.items.forEach((profile, index) => {
+        map.set(profile.id, index + 1);
+      });
+    }
+    return map;
+  }, [runtimeProfileGroups]);
+
+  const defaultProfileIdByProvider = useMemo(() => {
+    const map = new Map<ProviderId, string>();
+    for (const group of runtimeProfileGroups) {
+      if (group.items[0]?.id) {
+        map.set(group.provider, group.items[0].id);
+      }
+    }
+    return map;
+  }, [runtimeProfileGroups]);
+
+  const activeProfileIdByProvider = useMemo(() => {
+    const map = new Map<ProviderId, string>();
+    for (const group of runtimeProfileGroups) {
+      const active = group.items.find((item) => item.enabled && item.health !== 'cooldown') || null;
+      if (active?.id) {
+        map.set(group.provider, active.id);
+      }
+    }
+    return map;
+  }, [runtimeProfileGroups]);
+
+  const credentialLabelById = useMemo(() => {
+    return new Map(providerCredentials.map((item) => [item.id, item.label]));
+  }, [providerCredentials]);
 
   const setProviderActionBusy = useCallback((id: string, action: string | null) => {
     setProviderBusy((prev) => {
@@ -317,18 +434,25 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     setProviderError('');
     setProviderNotice('');
     try {
-      const [providersRes, credentialsRes, profilesRes] = await Promise.all([
+      const [providersRes, modelAliasesRes, credentialsRes, profilesRes] = await Promise.all([
         fetch(`${apiUrl}/providers`, { headers: buildHeaders(false) }),
+        fetch(`${apiUrl}/providers/model-aliases`, { headers: buildHeaders(false) }),
         fetch(`${apiUrl}/credentials/vault?workspace_id=${encodeURIComponent(workspaceId)}`, { headers: buildHeaders(false) }),
         fetch(`${apiUrl}/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`, { headers: buildHeaders(false) }),
       ]);
 
       const providersRaw = await providersRes.text().catch(() => '');
+      const modelAliasesRaw = await modelAliasesRes.text().catch(() => '');
       const credentialsRaw = await credentialsRes.text().catch(() => '');
       const profilesRaw = await profilesRes.text().catch(() => '');
       const providersBody = providersRaw ? JSON.parse(providersRaw) : {};
+      const modelAliasesBody = modelAliasesRaw ? JSON.parse(modelAliasesRaw) : {};
       const credentialsBody = credentialsRaw ? JSON.parse(credentialsRaw) : {};
       const profilesBody = profilesRaw ? JSON.parse(profilesRaw) : {};
+      const nextModelAliases = modelAliasesRes.ok
+        ? parseModelAliasCatalog(Array.isArray(modelAliasesBody?.models) ? modelAliasesBody.models : [])
+        : [];
+      const aliasCatalog = nextModelAliases.length > 0 ? nextModelAliases : DEFAULT_MODEL_ALIAS_OPTIONS;
 
       if (!providersRes.ok) {
         throw new Error(String(providersBody?.detail || providersBody?.message || 'Failed to load provider catalog.'));
@@ -338,6 +462,9 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       }
       if (!profilesRes.ok) {
         throw new Error(String(profilesBody?.detail || profilesBody?.message || 'Failed to load provider profiles.'));
+      }
+      if (nextModelAliases.length > 0) {
+        setModelAliases(nextModelAliases);
       }
 
       const providerItems: unknown[] = Array.isArray(providersBody?.providers) ? providersBody.providers : [];
@@ -360,9 +487,12 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
           return {
             id,
             label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : fallback?.label || id,
-            defaultModel: typeof value.default_model === 'string' && value.default_model.trim()
-              ? value.default_model.trim()
-              : fallback?.defaultModel || DEFAULT_PROVIDER_MODELS[id]?.[0] || '',
+            defaultModel: (() => {
+              const rawDefaultModel = typeof value.default_model === 'string' && value.default_model.trim()
+                ? value.default_model.trim()
+                : fallback?.defaultModel || DEFAULT_PROVIDER_MODELS[id]?.[0] || '';
+              return resolveModelAlias(id, rawDefaultModel, aliasCatalog) || rawDefaultModel;
+            })(),
             auth: Array.isArray(value.auth)
               ? value.auth.filter((entry): entry is string => typeof entry === 'string')
               : fallback?.auth || ['api_key'],
@@ -413,7 +543,9 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
             workspace_id: typeof item.workspace_id === 'string' ? item.workspace_id : null,
             priority: typeof item.priority === 'number' ? item.priority : 100,
             enabled: item.enabled !== false,
-            model: typeof item.model === 'string' ? item.model : null,
+            model: typeof item.model === 'string'
+              ? resolveModelAlias(normalizedProvider, item.model, aliasCatalog) || item.model
+              : null,
             health: typeof item.health === 'string' ? item.health : null,
             cooldown_until: typeof item.cooldown_until === 'string' ? item.cooldown_until : null,
             last_error: typeof item.last_error === 'string' ? item.last_error : null,
@@ -652,9 +784,10 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       const preview = Array.isArray(body?.models_preview)
         ? body.models_preview.filter((item: unknown): item is string => typeof item === 'string')
         : [];
+      const previewAliases = mapModelOptionsToAliases(credential.provider, preview, effectiveModelAliases);
       setProviderNotice(
-        preview.length > 0
-          ? `${body?.message || 'Connection verified.'} Models: ${preview.slice(0, 3).join(', ')}`
+        previewAliases.length > 0
+          ? `${body?.message || 'Connection verified.'} Models: ${previewAliases.slice(0, 3).join(', ')}`
           : String(body?.message || 'Connection verified.'),
       );
     } catch (error) {
@@ -663,7 +796,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(credential.id, null);
     }
-  }, [apiUrl, buildHeaders, setProviderActionBusy, workspaceId]);
+  }, [apiUrl, buildHeaders, effectiveModelAliases, setProviderActionBusy, workspaceId]);
 
   const handleToggleProviderProfile = useCallback(async (credential: ProviderCredentialRow, existingProfile?: ProviderProfileRow | null) => {
     const action = existingProfile?.enabled ? 'disable-runtime' : 'enable-runtime';
@@ -690,6 +823,47 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       setProviderActionBusy(credential.id, null);
     }
   }, [apiUrl, buildHeaders, loadProviderAccounts, setProviderActionBusy, upsertRuntimeProfileForCredential]);
+
+  const handlePromoteProviderProfile = useCallback(async (profile: ProviderProfileRow) => {
+    const siblings = runtimeProfileGroups.find((group) => group.provider === profile.provider)?.items || [];
+    if (siblings.length === 0) return;
+
+    setProviderActionBusy(profile.id, 'make-default');
+    setProviderError('');
+    setProviderNotice('');
+    try {
+      const reordered = [profile, ...siblings.filter((item) => item.id !== profile.id)];
+      for (let index = 0; index < reordered.length; index += 1) {
+        const item = reordered[index];
+        const res = await fetch(`${apiUrl}/providers/profiles`, {
+          method: 'POST',
+          headers: buildHeaders(true),
+          body: JSON.stringify({
+            id: item.id,
+            provider: item.provider,
+            label: item.label,
+            credential_id: item.credential_id || undefined,
+            auth_mode: item.auth_mode || undefined,
+            workspace_id: item.workspace_id || workspaceId,
+            priority: index * 100,
+            enabled: item.enabled,
+            model: item.model || undefined,
+          }),
+        });
+        const raw = await res.text().catch(() => '');
+        const body = raw ? JSON.parse(raw) : {};
+        if (!res.ok) {
+          throw new Error(String(body?.detail || body?.message || 'Failed to reorder runtime profiles.'));
+        }
+      }
+      await loadProviderAccounts();
+      setProviderNotice(`${providerLabel(profile.provider, providerOptions)} default updated. Runs will try ${profile.label} first.`);
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : 'Failed to update default runtime profile.');
+    } finally {
+      setProviderActionBusy(profile.id, null);
+    }
+  }, [apiUrl, buildHeaders, loadProviderAccounts, providerOptions, runtimeProfileGroups, setProviderActionBusy, workspaceId]);
 
   const handleDeleteProviderProfile = useCallback(async (profile: ProviderProfileRow) => {
     setProviderActionBusy(profile.id, 'remove-profile');
@@ -877,6 +1051,9 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
                   const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
                   const primaryProfile = linkedProfiles.find((item) => item.enabled || item.health === 'cooldown') || linkedProfiles[0] || null;
                   const busyAction = providerBusy[credential.id] || '';
+                  const isDefaultProfile = primaryProfile ? defaultProfileIdByProvider.get(primaryProfile.provider) === primaryProfile.id : false;
+                  const isActiveProfile = primaryProfile ? activeProfileIdByProvider.get(primaryProfile.provider) === primaryProfile.id : false;
+                  const profileOrder = primaryProfile ? profileOrderById.get(primaryProfile.id) || null : null;
                   return (
                     <article
                       key={credential.id}
@@ -905,6 +1082,9 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
                         <span className="orion-chip">{providerLabel(credential.provider, providerOptions)}</span>
                         <span className="orion-chip">{providerAuthModeLabel(credential.provider, credential.authMode, providerOptions)}</span>
                         {primaryProfile?.model ? <span className="orion-chip">Model {primaryProfile.model}</span> : null}
+                        {profileOrder ? <span className="orion-chip">Order #{profileOrder}</span> : null}
+                        {isDefaultProfile ? <span className="orion-chip">Default for runtime</span> : null}
+                        {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
                       </div>
 
                       {primaryProfile ? (
@@ -948,8 +1128,18 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
                                 ? 'Disable runtime'
                                 : primaryProfile
                                   ? 'Enable runtime'
-                                  : 'Use in runtime'}
+                                : 'Use in runtime'}
                         </button>
+                        {primaryProfile && !isDefaultProfile ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 34, paddingInline: 12 }}
+                            onClick={() => void handlePromoteProviderProfile(primaryProfile)}
+                            disabled={Boolean(busyAction) || providerBusy[primaryProfile.id] === 'make-default'}
+                          >
+                            {providerBusy[primaryProfile.id] === 'make-default' ? 'Setting default…' : 'Make default'}
+                          </button>
+                        ) : null}
                         {primaryProfile ? (
                           <button
                             className="orion-btn orion-btn-ghost"
@@ -974,6 +1164,101 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
                     </article>
                   );
                 })}
+              </div>
+            ) : null}
+
+            {runtimeProfileGroups.length > 0 ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 10,
+                  borderRadius: 16,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
+                  padding: 14,
+                }}
+              >
+                <div style={{ display: 'grid', gap: 3 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    Runtime profile order
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                    Runs try the first ready profile in each provider group. Reorder profiles to change the default and fallback order.
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gap: 12 }}>
+                  {runtimeProfileGroups.map((group) => (
+                    <div key={group.provider} style={{ display: 'grid', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{group.label}</div>
+                        <span className="orion-chip">{group.items.length} profiles</span>
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {group.items.map((profile, index) => {
+                          const linkedCredentialLabel = profile.credential_id ? credentialLabelById.get(profile.credential_id) || profile.credential_id : null;
+                          const isDefaultProfile = index === 0;
+                          const isActiveProfile = activeProfileIdByProvider.get(group.provider) === profile.id;
+                          const busyAction = providerBusy[profile.id] || '';
+                          return (
+                            <div
+                              key={profile.id}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                gap: 10,
+                                alignItems: 'center',
+                                borderRadius: 12,
+                                border: '1px solid var(--border-subtle)',
+                                background: 'var(--bg-surface)',
+                                padding: '10px 12px',
+                              }}
+                            >
+                              <div style={{ display: 'grid', gap: 5, minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                  <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                    #{index + 1} {profile.label}
+                                  </div>
+                                  {isDefaultProfile ? <span className="orion-chip">Default</span> : null}
+                                  {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
+                                  <span className="orion-chip" style={profileTone(profile)}>
+                                    {profileStatusLabel(profile)}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                  {linkedCredentialLabel ? `${linkedCredentialLabel} • ` : ''}
+                                  {providerAuthModeLabel(profile.provider, profile.auth_mode || undefined, providerOptions)}
+                                  {profile.model ? ` • ${profile.model}` : ''}
+                                  {typeof profile.priority === 'number' ? ` • priority ${profile.priority}` : ''}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                {!isDefaultProfile ? (
+                                  <button
+                                    className="orion-btn orion-btn-ghost"
+                                    style={{ minHeight: 32, paddingInline: 10 }}
+                                    onClick={() => void handlePromoteProviderProfile(profile)}
+                                    disabled={busyAction === 'make-default'}
+                                  >
+                                    {busyAction === 'make-default' ? 'Setting default…' : 'Make default'}
+                                  </button>
+                                ) : null}
+                                <button
+                                  className="orion-btn orion-btn-ghost"
+                                  style={{ minHeight: 32, paddingInline: 10 }}
+                                  onClick={() => void handleDeleteProviderProfile(profile)}
+                                  disabled={busyAction === 'remove-profile'}
+                                >
+                                  <Trash2 size={13} />
+                                  {busyAction === 'remove-profile' ? 'Removing…' : 'Remove'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
 
@@ -1161,12 +1446,45 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
 
                 <label style={{ display: 'grid', gap: 6 }}>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Runtime model</span>
-                  <input
+                  <select
                     className="input"
                     value={providerForm.model}
-                    onChange={(event) => setProviderForm((prev) => ({ ...prev, model: event.target.value }))}
-                    placeholder={defaultProviderModel(providerForm.provider, providerForm.authMode, providerOptions)}
-                  />
+                    onChange={(event) => {
+                      const nextAlias = event.target.value;
+                      const nextAliasOption = effectiveModelAliases.find((item) => item.alias === nextAlias) || null;
+                      if (!nextAliasOption) {
+                        setProviderForm((prev) => ({ ...prev, model: nextAlias }));
+                        return;
+                      }
+                      if (nextAliasOption.provider !== providerForm.provider) {
+                        const nextProvider = nextAliasOption.provider;
+                        const nextOption = providerOptionFor(nextProvider, providerOptions);
+                        const nextAuthMode = nextOption.defaultAuthMode || getProviderAuthModes(nextOption)[0]?.id || 'api_key';
+                        setProviderForm((prev) => ({
+                          ...prev,
+                          provider: nextProvider,
+                          authMode: nextAuthMode,
+                          label: prev.label === defaultProviderLabel(prev.provider, prev.authMode)
+                            ? defaultProviderLabel(nextProvider, nextAuthMode)
+                            : prev.label,
+                          model: nextAlias,
+                          secret: '',
+                          projectId: '',
+                          location: nextProvider === 'vertex' ? 'us-central1' : prev.location,
+                        }));
+                        return;
+                      }
+                      setProviderForm((prev) => ({ ...prev, model: nextAlias }));
+                    }}
+                  >
+                    {groupedModelAliases.map((group) => (
+                      <optgroup key={group.provider} label={group.label}>
+                        {group.items.map((item) => (
+                          <option key={item.alias} value={item.alias}>{item.alias}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                 </label>
 
                 {providerForm.provider === 'vertex' ? (
@@ -1304,7 +1622,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
               }}
             >
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                One centered account flow, then back to the Connections page.
+                One centered account flow, then back to the Integrations page.
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button

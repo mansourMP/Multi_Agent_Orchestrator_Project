@@ -425,6 +425,8 @@ export default function ArtifactsPage() {
     [payload],
   );
 
+  const latestArtifact = filteredItems[0] || payload?.items?.[0] || null;
+
   const channelOptions = useMemo(() => {
     const values = new Set<string>();
     (payload?.items || []).forEach((item) => {
@@ -524,6 +526,62 @@ export default function ArtifactsPage() {
           </button>
         }
       />
+
+      <section className="orion-panel orion-home-overview">
+        <div className="orion-home-overview-main">
+          <div className="orion-home-overview-kicker">Evidence and outputs</div>
+          <div className="orion-home-overview-title">Open deliverables, inspect proof, and trace what each run produced.</div>
+          <div className="orion-home-overview-copy">
+            Assets are the execution record. Use this page to review final deliverables, screenshots, and support files without digging through raw run logs first.
+          </div>
+          <div className="orion-home-overview-actions">
+            <button className="btn-secondary" onClick={() => void loadArtifacts()}>
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+            <Link href="/executions" className="btn-secondary">
+              Open Runs
+            </Link>
+          </div>
+        </div>
+        <aside className="orion-home-overview-side">
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Current totals</div>
+            <div className="orion-home-side-stats">
+              <div>
+                <div className="orion-home-side-value">{viewSummary.deliverables}</div>
+                <div className="orion-home-side-note">Deliverables</div>
+              </div>
+              <div>
+                <div className="orion-home-side-value">{viewSummary.evidence}</div>
+                <div className="orion-home-side-note">Evidence items</div>
+              </div>
+            </div>
+            <div className="orion-runs-overview-side-note">
+              {latestArtifact
+                ? `Latest update ${toDateLabel(latestArtifact.updated_at)}`
+                : 'No saved outputs yet.'}
+            </div>
+          </div>
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Quick focus</div>
+            <div className="orion-home-mini-list">
+              <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('deliverables')}>
+                <span>Deliverables</span>
+                <span>{viewSummary.deliverables}</span>
+              </button>
+              <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('evidence')}>
+                <span>Evidence</span>
+                <span>{viewSummary.evidence}</span>
+              </button>
+              <button type="button" className="orion-home-mini-link" onClick={() => setViewMode('system')}>
+                <span>System files</span>
+                <span>{viewSummary.system}</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+      </section>
 
       <section className="orion-panel muted" style={{ display: 'grid', gap: 10, padding: '10px 14px' }}>
         <div
@@ -658,15 +716,8 @@ export default function ArtifactsPage() {
         </section>
       ) : (
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr' }}>
-          <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
-            <section
-              style={{
-                padding: '16px 18px 18px',
-                display: 'grid',
-                gap: 14,
-                gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-              }}
-            >
+          <section className="orion-panel orion-home-list-panel" style={{ padding: 0, overflow: 'hidden' }}>
+            <section className="orion-asset-grid">
               {filteredItems.map((item, index) => {
                 const kindGroup = artifactKindGroup(item.kind);
                 const inspectHref = item.run_id
@@ -685,6 +736,7 @@ export default function ArtifactsPage() {
                 return (
                   <article
                     key={`${rowKey}::${index}`}
+                    className="orion-asset-card"
                     role="button"
                     tabIndex={0}
                     onClick={() => void openArtifact(item)}
@@ -694,55 +746,10 @@ export default function ArtifactsPage() {
                         void openArtifact(item);
                       }
                     }}
-                    style={{
-                      minWidth: 0,
-                      minHeight: 210,
-                      borderRadius: 14,
-                      border: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-surface)',
-                      boxShadow: '0 4px 14px rgba(15, 23, 42, 0.04)',
-                      padding: 10,
-                      display: 'grid',
-                      gridTemplateRows: 'auto auto auto 1fr auto',
-                      gap: 8,
-                      cursor: 'pointer',
-                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-default)'; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-subtle)'; }}
                   >
-                    <div
-                      style={{
-                        outline: 'none',
-                      }}
-                    >
-                      <div
-                        style={{
-                          borderRadius: 12,
-                          border: '1px solid var(--border-default)',
-                          background: kindGroup === 'screenshots'
-                            ? 'linear-gradient(180deg, color-mix(in srgb, var(--primary-soft) 80%, white) 0%, var(--bg-element) 100%)'
-                            : 'linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 85%, white) 0%, var(--bg-surface) 100%)',
-                          minHeight: 68,
-                          display: 'grid',
-                          placeItems: 'center',
-                          position: 'relative',
-                          overflow: 'hidden',
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: 36,
-                            height: 36,
-                            borderRadius: 11,
-                            border: '1px solid var(--border-default)',
-                            background: kindGroup === 'screenshots' ? 'var(--primary-soft)' : 'var(--bg-surface)',
-                            color: kindGroup === 'screenshots' ? 'var(--primary-base)' : 'var(--text-secondary)',
-                            display: 'grid',
-                            placeItems: 'center',
-                            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-                          }}
-                        >
+                    <div>
+                      <div className={`orion-asset-card-visual ${kindGroup === 'screenshots' ? 'is-screenshot' : ''}`}>
+                        <div className={`orion-asset-card-icon ${kindGroup === 'screenshots' ? 'is-screenshot' : ''}`}>
                           {kindGroup === 'screenshots' ? <ImageIcon size={20} /> : <FileStack size={20} />}
                         </div>
                         <span
@@ -772,54 +779,31 @@ export default function ArtifactsPage() {
                       </div>
                     </div>
 
-                    <div style={{ minWidth: 0, display: 'grid', gap: 8 }}>
-                      <div
-                        style={{
-                          fontSize: 14,
-                          fontWeight: 800,
-                          color: 'var(--text-primary)',
-                          lineHeight: 1.35,
-                          overflow: 'hidden',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                        }}
-                      >
-                        {artifactSurfaceLabel(item)}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 12.5,
-                          color: 'var(--text-secondary)',
-                          lineHeight: 1.55,
-                          overflow: 'hidden',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                        }}
-                      >
+                    <div className="orion-asset-card-copy">
+                      <div className="orion-asset-card-title">{artifactSurfaceLabel(item)}</div>
+                      <div className="orion-asset-card-summary">
                         {compactText(artifactSummary(item), artifactSummary(item), 110)}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', minHeight: 28 }}>
+                    <div className="orion-asset-card-chips">
                       <span className="orion-chip">{artifactKindLabel(item.kind)}</span>
                       {item.agent_label ? <span className="orion-chip">{item.agent_label}</span> : null}
                     </div>
 
-                    <div style={{ display: 'grid', gap: 6, alignContent: 'start' }}>
-                      <div style={{ fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.5 }}>
+                    <div className="orion-asset-card-meta">
+                      <div className="orion-asset-card-hint">
                         {artifactPathTail(resolvedLocation) || artifactActionHint(item)}
                       </div>
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                      <div className="orion-asset-card-details">
                         <span>{toDateLabel(item.updated_at)}</span>
-                        {item.run_id ? <span>Activity {item.run_id.slice(0, 8)}</span> : null}
+                        {item.run_id ? <span>Run {item.run_id.slice(0, 8)}</span> : null}
                         {connectorBindingText(item.connector_binding) ? <span>{connectorBindingText(item.connector_binding)}</span> : null}
                         {viewMode === 'system' && item.source ? <span>{item.source}</span> : null}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div className="orion-asset-card-actions">
                       <button
                         className="orion-btn orion-btn-ghost"
                         style={{ minHeight: 34, paddingInline: 10 }}

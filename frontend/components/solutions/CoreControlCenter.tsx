@@ -158,7 +158,7 @@ export function CoreControlCenter() {
         subtitle="See what is active, what changed, and where to continue."
         meta={
           <>
-            <span>{workflows.length} automation{workflows.length === 1 ? '' : 's'}</span>
+            <span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'}</span>
             <span>{summary.activeWorkflows} active</span>
             {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">Connected</span> : null}
           </>
@@ -166,7 +166,7 @@ export function CoreControlCenter() {
         actions={
           <>
             <Link href="/workflows" className="btn-secondary">
-              Automations
+              Workflows
             </Link>
             <Link href="/workspace" className="btn-primary">
               Open Assistant
@@ -177,9 +177,9 @@ export function CoreControlCenter() {
 
       <MetricStrip
         items={[
-          { label: 'Automations', value: String(workflows.length) },
+          { label: 'Workflows', value: String(workflows.length) },
           { label: 'Active', value: String(summary.activeWorkflows) },
-          { label: 'Recent activity', value: String(summary.recentRuns) },
+          { label: 'Recent runs', value: String(summary.recentRuns) },
           { label: 'Needs attention', value: String(summary.alerts) },
         ]}
       />
@@ -207,16 +207,16 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
-                <div className="orion-panel-title">Recent activity</div>
-                <div className="orion-panel-copy">Latest runs and outcomes. Use Activity for the full history.</div>
+                <div className="orion-panel-title">Recent runs</div>
+                <div className="orion-panel-copy">Latest runs and outcomes. Use Runs for the full history.</div>
               </div>
               <Link href="/executions" className="btn-secondary">
-                Open Activity
+                Open Runs
               </Link>
             </div>
             {recentRuns.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No recent activity</div>
+                <div className="orion-empty-title">No recent runs</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
@@ -243,18 +243,18 @@ export function CoreControlCenter() {
           <section className="orion-panel">
             <div className="orion-panel-header">
               <div>
-                <div className="orion-panel-title">Automations</div>
+                <div className="orion-panel-title">Workflows</div>
                 <div className="orion-panel-copy">
                   Systems currently available in this workspace.
                 </div>
               </div>
               <Link href="/workflows" className="btn-secondary">
-                Open Automations
+                Open Workflows
               </Link>
             </div>
             {workflows.length === 0 ? (
               <div className="orion-empty">
-                <div className="orion-empty-title">No automations yet</div>
+                <div className="orion-empty-title">No workflows yet</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>

@@ -2272,12 +2272,12 @@ export function WorkbenchCenterPanel({
               </div>
               <div style={{ fontSize: 11.5, color: UI.textMuted }}>
                 {isSimpleMode
-                  ? 'Use Automations when the pattern becomes repeatable, or open Runs after the first result lands.'
+                  ? 'Use Workflows when the pattern becomes repeatable, or open Runs after the first result lands.'
                   : singleAgentMode
-                    ? 'Use Automations when the pattern should be reusable, or open Runs after you start work.'
+                    ? 'Use Workflows when the pattern should be reusable, or open Runs after you start work.'
                     : chatMode === 'orchestrate'
-                      ? 'Use orchestration for multi-step outcomes. Use Automations when the pattern should be reusable.'
-                      : 'Use Automations when the task should be reusable, or open Runs after you start work.'}
+                      ? 'Use orchestration for multi-step outcomes. Use Workflows when the pattern should be reusable.'
+                      : 'Use Workflows when the task should be reusable, or open Runs after you start work.'}
               </div>
             </div>
           </section>
@@ -2655,13 +2655,13 @@ export function WorkbenchCenterPanel({
             ) : null}
 
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {runReceipt ? (
+              {runReceipt || runId ? (
                 <button
-                  onClick={() => onOpenRunOutput(runReceipt.id)}
+                  onClick={() => onOpenRun((runReceipt?.id || runId)!)}
                   className="orion-btn orion-btn-ghost"
                   style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
                 >
-                  Full inspect
+                  {runReceipt ? 'Full inspect' : 'Open live run'}
                 </button>
               ) : null}
               {runReceipt && !packResult ? (

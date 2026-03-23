@@ -59,7 +59,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.integrations',
-    title: 'Go to Connections',
+    title: 'Go to Integrations',
     description: 'Connect tools, channels, and accounts.',
     group: 'Navigate',
     keywords: ['connections', 'integrations', 'credentials', 'connectors', 'channels'],
@@ -92,14 +92,14 @@ const BASE_COMMANDS: PlatformCommand[] = [
   {
     id: 'nav.builder',
     title: 'Go to Builder',
-    description: 'Open the workflow builder and design a new automation visually.',
+    description: 'Open the workflow builder and design a new workflow visually.',
     group: 'Navigate',
     keywords: ['builder', 'workflow', 'canvas', 'editor', 'design'],
     action: { type: 'navigate', href: '/builder' },
   },
   {
     id: 'nav.files',
-    title: 'Go to Files',
+    title: 'Go to Assets',
     description: 'Browse finished work, evidence, and generated files.',
     group: 'Navigate',
     keywords: ['outputs', 'files', 'artifacts', 'deliverables', 'archive'],
@@ -107,7 +107,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.runs',
-    title: 'Go to Activity',
+    title: 'Go to Runs',
     description: 'Review run traces, statuses, and output summaries.',
     group: 'Navigate',
     keywords: ['history', 'runs', 'executions', 'activity', 'logs'],
@@ -123,8 +123,8 @@ const BASE_COMMANDS: PlatformCommand[] = [
   },
   {
     id: 'nav.workflows',
-    title: 'Go to Automations',
-    description: 'Open reusable automations and saved workflow library.',
+    title: 'Go to Workflows',
+    description: 'Open reusable workflows and the saved workflow library.',
     group: 'Navigate',
     keywords: ['flows', 'automation', 'builder', 'automations'],
     action: { type: 'navigate', href: '/workflows' },

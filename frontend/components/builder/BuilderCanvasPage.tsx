@@ -42,8 +42,11 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-import { createWorkflow, getWorkflow, publishWorkflow, runWorkflow, updateWorkflow } from '@/lib/api';
+import { createWorkflow, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { API_BASE } from '@/lib/config';
+import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
+import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
 type TriggerKind = 'schedule' | 'webhook' | 'manual';
@@ -112,6 +115,16 @@ type BuilderGeneratedWorkflow = {
   nodes?: BuilderGeneratedNode[];
   edges?: BuilderGeneratedEdge[];
 };
+type BuilderRuntimeProfileRow = {
+  id: string;
+  provider: string;
+  label: string;
+  model?: string | null;
+  priority?: number;
+  enabled: boolean;
+  health?: string | null;
+  created_at?: string;
+};
 
 const CANVAS_NODE_X = 260;
 const CANVAS_NODE_TOP = 64;
@@ -120,6 +133,8 @@ const GRID_SIZE = 16;
 const DEFAULT_NODE_SIZE = 96;
 const NODE_HORIZONTAL_GAP = 232;
 const CANVAS_EDGE_COLOR = 'rgba(128, 128, 120, 0.42)';
+const DEFAULT_WORKSPACE_ID = 'default';
+const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 const CANVAS_NODE_TYPES: NodeTypes = {
   trigger: TriggerNode,
@@ -388,7 +403,13 @@ function buildWorkflowDescription(goal: string): string {
   return compactText(goal, 160) || 'Workflow created from Builder.';
 }
 
-function buildWorkflowDefinition(nodes: CanvasWorkflowNode[], edges: CanvasWorkflowEdge[], goal: string) {
+function buildWorkflowDefinition(
+  nodes: CanvasWorkflowNode[],
+  edges: CanvasWorkflowEdge[],
+  goal: string,
+  runtimeProfileId?: string,
+  runtimeProfile?: BuilderRuntimeProfileRow | null,
+) {
   return {
     nodes: nodes.map((node) => ({
       id: node.id,
@@ -407,8 +428,65 @@ function buildWorkflowDefinition(nodes: CanvasWorkflowNode[], edges: CanvasWorkf
       mode: 'visual_builder',
       origin: 'builder',
       draft_goal: goal,
+      runtime_profile_id: String(runtimeProfileId || '').trim() || undefined,
+      runtime_profile_label: String(runtimeProfile?.label || '').trim() || undefined,
+      runtime_profile_provider: String(runtimeProfile?.provider || '').trim() || undefined,
+      runtime_profile_model: String(runtimeProfile?.model || '').trim() || undefined,
     },
   };
+}
+
+function formatProviderLabel(provider: string): string {
+  const normalized = String(provider || '').trim().toLowerCase();
+  if (normalized === 'openai') return 'OpenAI';
+  if (normalized === 'anthropic') return 'Anthropic';
+  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'deepseek') return 'DeepSeek';
+  if (normalized === 'xai') return 'xAI';
+  if (normalized === 'vertex') return 'Vertex';
+  if (normalized === 'ollama') return 'Ollama';
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Provider';
+}
+
+function buildBuilderAgentSummary(nodes: CanvasWorkflowNode[]): string {
+  const items = nodes
+    .filter((node) => node.type === 'agent')
+    .map((node) => {
+      const data = node.data as AgentCanvasData;
+      const role = String(data.role || data.label || 'Agent').trim();
+      const provider = String(data.provider || 'openai').trim();
+      const model = String(data.modelId || 'gpt-4o-mini').trim();
+      return `${role} (${provider}:${model})`;
+    });
+  return items.length > 0 ? items.join(', ') : 'No explicit agent nodes configured.';
+}
+
+function resolveBuilderRuntimeModel(
+  selectedRuntimeProfile: BuilderRuntimeProfileRow | null,
+  nodes: CanvasWorkflowNode[],
+): string {
+  const selectedModel = String(selectedRuntimeProfile?.model || '').trim();
+  if (selectedModel) return selectedModel;
+  const firstAgentNode = nodes.find((node) => {
+    if (node.type !== 'agent' || !isRecord(node.data)) return false;
+    return typeof (node.data as Partial<AgentCanvasData>).modelId === 'string';
+  });
+  const nodeModel = firstAgentNode && isRecord(firstAgentNode.data)
+    ? String((firstAgentNode.data as Partial<AgentCanvasData>).modelId || '').trim()
+    : '';
+  return nodeModel || 'gpt-4o-mini';
+}
+
+function sortBuilderProfiles(items: BuilderRuntimeProfileRow[]): BuilderRuntimeProfileRow[] {
+  return [...items].sort((left, right) => {
+    const providerCompare = String(left.provider || '').localeCompare(String(right.provider || ''));
+    if (providerCompare !== 0) return providerCompare;
+    const priorityCompare = Number(left.priority ?? 100) - Number(right.priority ?? 100);
+    if (priorityCompare !== 0) return priorityCompare;
+    const createdCompare = String(left.created_at || '').localeCompare(String(right.created_at || ''));
+    if (createdCompare !== 0) return createdCompare;
+    return String(left.id || '').localeCompare(String(right.id || ''));
+  });
 }
 
 function resolveBuilderGenerateUrl(): string {
@@ -539,6 +617,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [runState, setRunState] = useState<'idle' | 'testing' | 'publishing'>('idle');
   const [savedWorkflowId, setSavedWorkflowId] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [messageRunId, setMessageRunId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [nodeSearch, setNodeSearch] = useState<CanvasNodeSearchState | null>(null);
@@ -546,11 +625,29 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [historyStack, setHistoryStack] = useState<GraphSnapshot[]>([]);
   const [futureStack, setFutureStack] = useState<GraphSnapshot[]>([]);
   const [builderGenerating, setBuilderGenerating] = useState(false);
+  const [runtimeProfiles, setRuntimeProfiles] = useState<BuilderRuntimeProfileRow[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
 
   const pushHistory = useCallback(() => {
     setHistoryStack((current) => [...current.slice(-19), cloneGraph(nodes, edges)]);
     setFutureStack([]);
   }, [edges, nodes]);
+
+  const groupedRuntimeProfiles = useMemo(() => {
+    const groups = new Map<string, BuilderRuntimeProfileRow[]>();
+    for (const profile of sortBuilderProfiles(runtimeProfiles)) {
+      const provider = String(profile.provider || '').trim().toLowerCase() || 'openai';
+      const current = groups.get(provider) || [];
+      current.push(profile);
+      groups.set(provider, current);
+    }
+    return Array.from(groups.entries());
+  }, [runtimeProfiles]);
+
+  const selectedRuntimeProfile = useMemo(
+    () => runtimeProfiles.find((profile) => profile.id === selectedProfileId) || null,
+    [runtimeProfiles, selectedProfileId],
+  );
 
   const renderedEdges = useMemo(
     () =>
@@ -630,6 +727,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     const nextGoal = String(workflow?.definition?.meta?.draft_goal || workflow?.description || workflow?.name || '').trim();
     setDraftGoal(nextGoal);
     setPromptInput(nextGoal);
+    setSelectedProfileId(String(workflow?.definition?.meta?.runtime_profile_id || '').trim());
     setSaveState('saved');
     setSaveMessage('Workflow loaded.');
   }, []);
@@ -638,6 +736,64 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     if (!workflowId) return;
     void loadWorkflowIntoBuilder(workflowId);
   }, [loadWorkflowIntoBuilder, workflowId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRuntimeProfiles() {
+      const runtimeKey = readRuntimeApiKeyFromStorage('');
+      if (!runtimeKey) {
+        if (!cancelled) setRuntimeProfiles([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(DEFAULT_WORKSPACE_ID)}`, {
+          headers: {
+            'X-API-Key': runtimeKey,
+          },
+        });
+        const payload = (await response.json().catch(() => null)) as { items?: unknown[] } | null;
+        if (!response.ok) throw new Error('Failed to load runtime profiles.');
+        const rows = Array.isArray(payload?.items)
+          ? payload.items.reduce<BuilderRuntimeProfileRow[]>((acc, item) => {
+              if (!isRecord(item)) return acc;
+              const id = String(item.id || '').trim();
+              const provider = String(item.provider || '').trim();
+              const label = String(item.label || '').trim();
+              const enabled = Boolean(item.enabled);
+              if (!id || !provider || !label || !enabled) return acc;
+              acc.push({
+                id,
+                provider,
+                label,
+                model: typeof item.model === 'string' ? item.model : null,
+                priority: typeof item.priority === 'number' ? item.priority : undefined,
+                enabled,
+                health: typeof item.health === 'string' ? item.health : null,
+                created_at: typeof item.created_at === 'string' ? item.created_at : undefined,
+              });
+              return acc;
+            }, [])
+          : [];
+        if (cancelled) return;
+        const sorted = sortBuilderProfiles(rows);
+        setRuntimeProfiles(sorted);
+        setSelectedProfileId((current) => {
+          if (current && sorted.some((item) => item.id === current)) return current;
+          const defaultReadyProfile = sorted.find((item) => String(item.health || '').trim().toLowerCase() === 'healthy');
+          return defaultReadyProfile?.id || '';
+        });
+      } catch {
+        if (!cancelled) setRuntimeProfiles([]);
+      }
+    }
+
+    void loadRuntimeProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleBuild = () => {
     const next = promptInput.trim();
@@ -664,14 +820,21 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setSaveMessage(null);
 
     try {
+      const runtimeKey = readRuntimeApiKeyFromStorage('');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (runtimeKey) {
+        headers['X-API-Key'] = runtimeKey;
+      }
       const response = await fetch(resolveBuilderGenerateUrl(), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           prompt: next,
           model: 'gpt-4o-mini',
+          profile_id: selectedProfileId || undefined,
+          workspace_id: DEFAULT_WORKSPACE_ID,
         }),
       });
 
@@ -710,7 +873,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     } finally {
       setBuilderGenerating(false);
     }
-  }, [builderGenerating, promptInput, pushHistory]);
+  }, [builderGenerating, promptInput, pushHistory, selectedProfileId]);
 
   const handleReset = () => {
     if (nodes.length || edges.length) pushHistory();
@@ -813,7 +976,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
   const persistCurrentWorkflow = async (): Promise<string | null> => {
     if (nodes.length === 0 || !draftGoal.trim()) return null;
-    const definition = buildWorkflowDefinition(nodes, edges, draftGoal);
+    const definition = buildWorkflowDefinition(nodes, edges, draftGoal, selectedProfileId, selectedRuntimeProfile);
     if (savedWorkflowId) {
       await updateWorkflow(savedWorkflowId, definition);
       return savedWorkflowId;
@@ -839,7 +1002,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       const workflowId = await persistCurrentWorkflow();
       setSavedWorkflowId(workflowId);
       setSaveState('saved');
-      setSaveMessage(workflowId ? (savedWorkflowId ? 'Changes saved.' : 'Draft saved to Automations.') : 'Draft saved.');
+      setSaveMessage(workflowId ? (savedWorkflowId ? 'Changes saved.' : 'Draft saved to Workflows.') : 'Draft saved.');
     } catch (error) {
       setSaveState('error');
       setSaveMessage(error instanceof Error ? error.message : 'Unable to save the workflow draft.');
@@ -869,14 +1032,98 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     if (runState !== 'idle') return;
     setRunState('testing');
     setSaveMessage(null);
+    setMessageRunId(null);
     try {
       const workflowId = await persistCurrentWorkflow();
       if (!workflowId) throw new Error('Save the workflow before testing.');
+      const runtimeKey = readRuntimeApiKeyFromStorage('');
+      if (!runtimeKey) {
+        throw new Error('Add your runtime access key before starting a test run.');
+      }
+      const runtimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
+      const runtimeModel = resolveBuilderRuntimeModel(selectedRuntimeProfile, nodes);
+      const businessPlan = [
+        `Workflow: ${workflowName.trim() || buildWorkflowName(draftGoal)}`,
+        `Goal: ${draftGoal.trim() || 'No goal provided.'}`,
+        `Runtime Provider: ${runtimeProvider}`,
+        `Runtime Model: ${runtimeModel}`,
+        selectedRuntimeProfile ? `Runtime Profile: ${selectedRuntimeProfile.label}` : 'Runtime Profile: Automatic routing',
+        `Nodes: ${nodes.length}`,
+        `Agent Setup: ${buildBuilderAgentSummary(nodes)}`,
+      ].join('\n');
+      const response = await fetch(`${ORION_API_URL}/runs/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': runtimeKey,
+        },
+        body: JSON.stringify({
+          engine: 'orion',
+          workflow_id: workflowId,
+          workspace_id: DEFAULT_WORKSPACE_ID,
+          user_goal: draftGoal.trim() || workflowDescription.trim() || workflowName.trim() || 'Run builder workflow',
+          business_plan: businessPlan,
+          agent_role: 'builder',
+          provider: runtimeProvider,
+          model: runtimeModel,
+          metadata: {
+            workspace_id: DEFAULT_WORKSPACE_ID,
+            origin: 'builder',
+            runtime_profile_id: selectedProfileId || undefined,
+            profile_id: selectedProfileId || undefined,
+            provider: runtimeProvider,
+            model: runtimeModel,
+          },
+          agents: nodes
+            .filter((node) => node.type === 'agent')
+            .map((node) => {
+              const data = node.data as AgentCanvasData;
+              return {
+                role: String(data.role || data.label || 'Agent').trim(),
+                modelId: String(data.modelId || runtimeModel).trim(),
+                provider: String(data.provider || runtimeProvider).trim(),
+                duty: String(data.duty || data.description || '').trim(),
+              };
+            }),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        run_id?: string;
+        detail?: string;
+        error?: string;
+        active_profile_id?: string;
+        active_profile_label?: string;
+        active_profile_provider?: string;
+        active_profile_model?: string;
+      } | null;
+      if (!response.ok) {
+        throw new Error(
+          (payload && typeof payload.detail === 'string' && payload.detail) ||
+            (payload && typeof payload.error === 'string' && payload.error) ||
+            'Unable to start a test run.',
+        );
+      }
+      if (payload?.run_id) {
+        upsertSeededRuntimeRun({
+          run_id: payload.run_id,
+          status: 'running',
+          workflow_name: workflowName.trim() || buildWorkflowName(draftGoal),
+          user_goal: draftGoal.trim() || workflowDescription.trim() || workflowName.trim() || 'Run builder workflow',
+          created_at: new Date().toISOString(),
+          agent_role: 'builder',
+          triggered_by: 'Direct',
+          active_profile_id: payload.active_profile_id || selectedProfileId || null,
+          active_profile_label: payload.active_profile_label || selectedRuntimeProfile?.label || null,
+          active_profile_provider: payload.active_profile_provider || runtimeProvider,
+          active_profile_model: payload.active_profile_model || runtimeModel,
+        });
+      }
+      setMessageRunId(payload?.run_id || null);
       setSavedWorkflowId(workflowId);
-      await runWorkflow(workflowId);
       setSaveState('saved');
-      setSaveMessage('Test run started. Open Activity for live progress.');
+      setSaveMessage(RUN_STARTED_STATUS_COPY);
     } catch (error) {
+      setMessageRunId(null);
       setSaveState('error');
       setSaveMessage(error instanceof Error ? error.message : 'Unable to start a test run.');
     } finally {
@@ -1040,6 +1287,30 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             <span className="orion-builder-draft-badge">Draft</span>
           </div>
           <div className="orion-builder-toolbar-actions">
+            <label className="orion-builder-runtime-picker">
+              <span className="orion-builder-runtime-picker-label">Runtime</span>
+              <select
+                className="orion-builder-runtime-select"
+                value={selectedProfileId}
+                onChange={(event) => setSelectedProfileId(event.target.value)}
+              >
+                <option value="">Automatic</option>
+                {groupedRuntimeProfiles.map(([provider, profiles]) => (
+                  <optgroup key={provider} label={formatProviderLabel(provider)}>
+                    {profiles.map((profile) => {
+                      const health = String(profile.health || '').trim().toLowerCase();
+                      const healthSuffix = health === 'cooldown' ? ' · cooling down' : '';
+                      const modelSuffix = profile.model ? ` · ${profile.model}` : '';
+                      return (
+                        <option key={profile.id} value={profile.id}>
+                          {`${profile.label}${modelSuffix}${healthSuffix}`}
+                        </option>
+                      );
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
             <button type="button" className="btn-ghost" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
               {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
               Evaluate
@@ -1072,7 +1343,20 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 ))}
               </aside>
 
-              {saveMessage ? <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>{saveMessage}</div> : null}
+              {saveMessage ? (
+                <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>
+                  <span>{saveMessage}</span>
+                  {messageRunId && saveState === 'saved' ? (
+                    <button
+                      type="button"
+                      className="orion-builder-canvas-message-action"
+                      onClick={() => router.push(`/runs/${encodeURIComponent(messageRunId)}/inspect?focus=timeline`)}
+                    >
+                      {OPEN_LIVE_RUN_LABEL}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
 
               {nodes.length === 0 ? (
                 <div className="orion-builder-empty-state">
@@ -1143,12 +1427,19 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                     void handleBuilderGenerate();
                   }}
                 >
-                  <input
-                    className="orion-builder-ai-prompt-input"
-                    value={promptInput}
-                    onChange={(event) => setPromptInput(event.target.value)}
-                    placeholder="Describe what you want to automate..."
-                  />
+                  <div className="orion-builder-ai-prompt-body">
+                    <div className="orion-builder-ai-prompt-meta">
+                      {selectedRuntimeProfile
+                        ? `Using ${formatProviderLabel(selectedRuntimeProfile.provider)} · ${selectedRuntimeProfile.label}`
+                        : 'Using automatic runtime routing'}
+                    </div>
+                    <input
+                      className="orion-builder-ai-prompt-input"
+                      value={promptInput}
+                      onChange={(event) => setPromptInput(event.target.value)}
+                      placeholder="Describe what you want to automate..."
+                    />
+                  </div>
                   <button
                     type="submit"
                     className="orion-builder-ai-prompt-send"

@@ -31,14 +31,14 @@ const DEFAULT_MEMBERS: TeamMember[] = [
     id: 'owner',
     name: 'Workspace Owner',
     role: 'Owner',
-    scope: 'Full control over agents, connections, automations, billing, and settings.',
+    scope: 'Full control over agents, integrations, workflows, billing, and settings.',
     note: 'Responsible for final decisions and workspace direction.',
   },
   {
     id: 'admin',
     name: 'Operations Admin',
     role: 'Admin',
-    scope: 'Can manage agents, connections, settings, and most day-to-day configuration.',
+    scope: 'Can manage agents, integrations, settings, and most day-to-day configuration.',
     note: 'Best for the person running setup and maintaining the workspace.',
   },
   {
@@ -52,7 +52,7 @@ const DEFAULT_MEMBERS: TeamMember[] = [
     id: 'viewer',
     name: 'Read-only Viewer',
     role: 'Viewer',
-    scope: 'Can inspect status, files, and history without changing the workspace.',
+    scope: 'Can inspect status, assets, and history without changing the workspace.',
     note: 'Best for stakeholders who need visibility only.',
   },
 ];
@@ -152,7 +152,7 @@ export default function TeamPage() {
               {
                 icon: <ShieldCheck size={15} />,
                 title: 'Admin',
-                copy: 'Can manage setup, connections, automations, and most operational settings.',
+                copy: 'Can manage setup, integrations, workflows, and most operational settings.',
               },
               {
                 icon: <UserCog size={15} />,
@@ -162,7 +162,7 @@ export default function TeamPage() {
               {
                 icon: <Eye size={15} />,
                 title: 'Viewer',
-                copy: 'Can inspect the workspace, runs, and files without changing important settings.',
+                copy: 'Can inspect the workspace, runs, and assets without changing important settings.',
               },
             ].map((role) => (
               <div key={role.title} className="orion-list-row">

@@ -53,7 +53,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
     id: 'automation-editor',
     title: 'Automation',
-    breadcrumb: 'Automations',
+    breadcrumb: 'Workflows',
     slotLabel: 'Edit workflow graph',
     match: (pathname: string) => pathname.startsWith('/workflows/'),
   },
@@ -88,7 +88,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
     id: 'run-inspect',
     title: 'Run Inspect',
-    breadcrumb: 'Activity',
+    breadcrumb: 'Runs',
     slotLabel: 'Evidence and trace',
     match: (pathname: string) => pathname.startsWith('/runs/'),
   },

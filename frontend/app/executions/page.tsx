@@ -16,8 +16,9 @@ import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
 import { fetchExecution, fetchExecutions } from '@/lib/api';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { readSeededRuntimeRuns, RUNTIME_RUN_SEEDS_UPDATED_EVENT, type RuntimeRunSeed } from '@/lib/runtimeRunSeed';
 
-const ORION_API_URL = API_BASE;
+const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 type ExecutionRecord = {
   id: string;
@@ -61,7 +62,72 @@ type RuntimeRunMeta = {
     identity_label?: string | null;
     routing_scope?: string | null;
   } | null;
+  active_profile_id?: string | null;
+  active_profile_label?: string | null;
+  active_profile_provider?: string | null;
+  active_profile_model?: string | null;
 };
+
+function toSeededRunMeta(seed: RuntimeRunSeed): RuntimeRunMeta {
+  return {
+    run_id: seed.run_id,
+    status: String(seed.status || '').trim() || 'running',
+    user_goal: seed.user_goal || null,
+    created_at: seed.created_at || null,
+    duration_ms: null,
+    agent_role: seed.agent_role || null,
+    parent_run_id: null,
+    child_run_count: 0,
+    delegation_next_action: null,
+    delegation_ready: false,
+    delegation_summary: null,
+    connector_binding: null,
+    active_profile_id: seed.active_profile_id || null,
+    active_profile_label: seed.active_profile_label || null,
+    active_profile_provider: seed.active_profile_provider || null,
+    active_profile_model: seed.active_profile_model || null,
+  };
+}
+
+function mergeRuntimeMeta(base: RuntimeRunMeta | undefined, incoming: RuntimeRunMeta): RuntimeRunMeta {
+  if (!base) return incoming;
+  return {
+    ...base,
+    ...incoming,
+    status: incoming.status || base.status,
+    user_goal: incoming.user_goal || base.user_goal,
+    created_at: incoming.created_at || base.created_at,
+    duration_ms: typeof incoming.duration_ms === 'number' ? incoming.duration_ms : base.duration_ms ?? null,
+    agent_role: incoming.agent_role || base.agent_role,
+    connector_binding: incoming.connector_binding || base.connector_binding || null,
+    active_profile_id: incoming.active_profile_id || base.active_profile_id || null,
+    active_profile_label: incoming.active_profile_label || base.active_profile_label || null,
+    active_profile_provider: incoming.active_profile_provider || base.active_profile_provider || null,
+    active_profile_model: incoming.active_profile_model || base.active_profile_model || null,
+  };
+}
+
+function toSeedExecution(seed: RuntimeRunSeed): ExecutionRecord {
+  return {
+    id: seed.run_id,
+    source: 'runtime',
+    status: String(seed.status || '').trim() || 'running',
+    triggeredBy: String(seed.triggered_by || '').trim() || 'Direct',
+    createdAt: String(seed.created_at || '').trim() || undefined,
+    durationMs: null,
+    userGoal: String(seed.user_goal || '').trim() || null,
+    workflow: {
+      name: String(seed.workflow_name || seed.user_goal || `Run ${seed.run_id.slice(0, 8)}`).trim() || `Run ${seed.run_id.slice(0, 8)}`,
+      definition: {
+        meta: {
+          operator: {
+            agentRole: String(seed.agent_role || '').trim() || null,
+          },
+        },
+      },
+    },
+  };
+}
 
 type RuntimeHistoryItem = {
   run_id?: unknown;
@@ -83,6 +149,10 @@ type RuntimeHistoryItem = {
         routing_scope?: unknown;
       }
     | unknown;
+  active_profile_id?: unknown;
+  active_profile_label?: unknown;
+  active_profile_provider?: unknown;
+  active_profile_model?: unknown;
 };
 
 type ExecutionStep = {
@@ -205,6 +275,18 @@ function connectorChannelValue(meta?: RuntimeRunMeta | null): string {
   return String(meta?.connector_binding?.channel || '').trim().toLowerCase();
 }
 
+function runtimeProfileText(meta?: RuntimeRunMeta | null): string {
+  if (!meta) return '';
+  const label = String(meta.active_profile_label || '').trim();
+  const provider = String(meta.active_profile_provider || '').trim();
+  const model = String(meta.active_profile_model || '').trim();
+  if (label && model) return `${label} · ${model}`;
+  if (label && provider) return `${label} · ${provider}`;
+  if (label) return label;
+  if (provider && model) return `${provider} · ${model}`;
+  return provider || model;
+}
+
 function executionTimestampValue(execution: ExecutionRecord): number {
   const raw = execution.createdAt;
   if (!raw) return 0;
@@ -245,6 +327,30 @@ export default function ExecutionsPage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const syncSeededRuns = () => {
+      const seeds = readSeededRuntimeRuns();
+      if (seeds.length === 0) return;
+      setRuntimeRunMeta((current) => {
+        const next = { ...current };
+        seeds.forEach((seed) => {
+          next[seed.run_id] = mergeRuntimeMeta(next[seed.run_id], toSeededRunMeta(seed));
+        });
+        return next;
+      });
+      setExecutions((current) => {
+        const known = new Set(current.map((item) => item.id));
+        const seeded = seeds.filter((seed) => !known.has(seed.run_id)).map((seed) => toSeedExecution(seed));
+        if (seeded.length === 0) return current;
+        return [...seeded, ...current];
+      });
+    };
+    syncSeededRuns();
+    window.addEventListener(RUNTIME_RUN_SEEDS_UPDATED_EVENT, syncSeededRuns);
+    return () => window.removeEventListener(RUNTIME_RUN_SEEDS_UPDATED_EVENT, syncSeededRuns);
+  }, []);
+
+  useEffect(() => {
     if (!focusedRunId) return;
     setQuery(focusedRunId);
   }, [focusedRunId]);
@@ -253,6 +359,7 @@ export default function ExecutionsPage() {
     try {
       setLoading(true);
       setLoadError('');
+      const seededRuns = readSeededRuntimeRuns();
       const runtimeKey = readRuntimeApiKeyFromStorage('');
       const runtimeHeaders = new Headers();
       if (runtimeKey) runtimeHeaders.set('X-API-Key', runtimeKey);
@@ -267,10 +374,14 @@ export default function ExecutionsPage() {
       const runtimeItems: RuntimeHistoryItem[] = Array.isArray(runtimeHistory?.items)
         ? (runtimeHistory.items as RuntimeHistoryItem[])
         : [];
-      const metaByRunId = runtimeItems.reduce<Record<string, RuntimeRunMeta>>((acc, item) => {
+      const metaByRunId = seededRuns.reduce<Record<string, RuntimeRunMeta>>((acc, seed) => {
+        acc[seed.run_id] = toSeededRunMeta(seed);
+        return acc;
+      }, {});
+      runtimeItems.forEach((item) => {
         const runId = String(item?.run_id || '').trim();
-        if (!runId) return acc;
-        acc[runId] = {
+        if (!runId) return;
+        metaByRunId[runId] = mergeRuntimeMeta(metaByRunId[runId], {
           run_id: runId,
           status: String(item?.status || '').trim() || undefined,
           user_goal: String(item?.user_goal || '').trim() || null,
@@ -288,15 +399,19 @@ export default function ExecutionsPage() {
           connector_binding: item?.connector_binding && typeof item.connector_binding === 'object'
             ? item.connector_binding
             : null,
-        };
-        return acc;
-      }, {});
+          active_profile_id: String(item?.active_profile_id || '').trim() || null,
+          active_profile_label: String(item?.active_profile_label || '').trim() || null,
+          active_profile_provider: String(item?.active_profile_provider || '').trim() || null,
+          active_profile_model: String(item?.active_profile_model || '').trim() || null,
+        });
+      });
       setRuntimeRunMeta(metaByRunId);
       const backendExecutions = (Array.isArray(data) ? data : []).map((item) => ({
         ...item,
         source: 'backend' as const,
       }));
       const backendById = new Set(backendExecutions.map((item) => item.id));
+      const runtimeById = new Set(runtimeItems.map((item) => String(item?.run_id || '').trim()).filter(Boolean));
       const runtimeFallbacks: ExecutionRecord[] = runtimeItems
         .filter((item) => {
           const runId = String(item?.run_id || '').trim();
@@ -334,7 +449,10 @@ export default function ExecutionsPage() {
             },
           };
         });
-      setExecutions([...backendExecutions, ...runtimeFallbacks]);
+      const seededFallbacks = seededRuns
+        .filter((seed) => !backendById.has(seed.run_id) && !runtimeById.has(seed.run_id))
+        .map((seed) => toSeedExecution(seed));
+      setExecutions([...seededFallbacks, ...backendExecutions, ...runtimeFallbacks]);
     } catch (error) {
       console.error(error);
       setExecutions([]);
@@ -425,6 +543,31 @@ export default function ExecutionsPage() {
     );
   }, [executions]);
 
+  const activeSummary = useMemo(() => {
+    if (runSummary.failed > 0) {
+      return {
+        title: `${runSummary.failed} run${runSummary.failed === 1 ? '' : 's'} need review`,
+        note: 'Start with failed runs or blocked work before launching anything new.',
+      };
+    }
+    if (runSummary.running > 0) {
+      return {
+        title: `${runSummary.running} run${runSummary.running === 1 ? '' : 's'} in progress`,
+        note: 'Live execution is active now. Open the queue below to inspect current progress.',
+      };
+    }
+    if (runSummary.recent > 0) {
+      return {
+        title: `${runSummary.recent} run${runSummary.recent === 1 ? '' : 's'} in the last 24 hours`,
+        note: 'Recent execution history is available below, with profile and routing details.',
+      };
+    }
+    return {
+      title: 'No recent run pressure',
+      note: 'The queue is quiet. Use filters below when you want to inspect historical execution.',
+    };
+  }, [runSummary]);
+
   const tokenSummary = useMemo(() => {
     if (!selectedExecution) return 0;
     const logs = selectedExecution.output?.logs || selectedExecution.logs || [];
@@ -481,12 +624,6 @@ export default function ExecutionsPage() {
         icon={<Activity size={18} />}
         title="Runs"
         subtitle="Monitor live execution, completed work, and anything that needs your attention."
-        meta={
-          <>
-            <span>{filteredExecutions.length} visible</span>
-            <span>{executions.length} total</span>
-          </>
-        }
         actions={
           <button className="orion-btn orion-btn-ghost" onClick={() => void loadExecutions()}>
             <RefreshCw size={14} />
@@ -495,16 +632,43 @@ export default function ExecutionsPage() {
         }
       />
 
-      <MetricStrip
-        minWidth={160}
-        items={[
-          { label: 'Total', value: String(runSummary.total) },
-          { label: 'In progress', value: String(runSummary.running) },
-          { label: 'Completed', value: String(runSummary.completed) },
-          { label: 'Needs review', value: String(runSummary.failed) },
-          { label: 'Recent 24h', value: String(runSummary.recent) },
-        ]}
-      />
+      <section className="orion-panel orion-runs-overview">
+        <div className="orion-runs-overview-main">
+          <div className="orion-home-overview-kicker">Operations overview</div>
+          <div className="orion-runs-overview-title">{activeSummary.title}</div>
+          <div className="orion-runs-overview-copy">{activeSummary.note}</div>
+          <MetricStrip
+            minWidth={142}
+            items={[
+              { label: 'Total', value: String(runSummary.total) },
+              { label: 'In progress', value: String(runSummary.running) },
+              { label: 'Completed', value: String(runSummary.completed) },
+              { label: 'Needs review', value: String(runSummary.failed) },
+              { label: 'Recent 24h', value: String(runSummary.recent) },
+            ]}
+          />
+        </div>
+        <aside className="orion-runs-overview-side">
+          <div className="orion-home-side-card">
+            <div className="orion-home-side-label">Queue state</div>
+            <div className="orion-home-side-stats">
+              <div>
+                <div className="orion-home-side-value">{filteredExecutions.length}</div>
+                <div className="orion-home-side-note">Visible now</div>
+              </div>
+              <div>
+                <div className="orion-home-side-value">{channelOptions.length}</div>
+                <div className="orion-home-side-note">Channels in use</div>
+              </div>
+            </div>
+            <div className="orion-runs-overview-side-note">
+              {runSummary.failed > 0
+                ? 'Failed runs stay at the top of the queue so review starts where it matters.'
+                : 'Use the filters below to isolate one owner, channel, or run state.'}
+            </div>
+          </div>
+        </aside>
+      </section>
 
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
@@ -568,7 +732,7 @@ export default function ExecutionsPage() {
         </div>
         <div className="orion-toolbar">
           <div className="orion-toolbar-summary">
-            {filteredExecutions.length} of {executions.length} runs
+            {filteredExecutions.length} of {executions.length} runs visible
           </div>
           {(query || statusFilter !== 'all' || agentFilter !== 'all' || channelFilter !== 'all') ? (
             <button type="button" className="btn-secondary" onClick={clearFilters}>
@@ -596,7 +760,7 @@ export default function ExecutionsPage() {
           <div className="orion-empty-copy orion-empty-copy-spaced">
             {executions.length === 0
               ? 'Run a workflow to see execution history, approvals, and outcomes here.'
-              : 'Try another search or clear the current filters to see more activity.'}
+              : 'Try another search or clear the current filters to see more runs.'}
           </div>
           <div className="orion-inline-actions">
             {executions.length === 0 ? (
@@ -628,6 +792,7 @@ export default function ExecutionsPage() {
             const retryableFailedChildren = Number(runMeta?.delegation_summary?.retryable_failed_children || 0);
             const readyForMerge = Boolean(runMeta?.delegation_summary?.ready_for_merge || runMeta?.delegation_ready);
             const delegationNextAction = String(runMeta?.delegation_next_action || '').trim();
+            const runtimeProfile = runtimeProfileText(runMeta);
             const isOrchestrator = String(execution.workflow?.definition?.meta?.operator?.agentRole || '').trim() === 'orchestrator';
             const isRecent = isRecentExecution(execution);
             const routeLabel = execution.triggeredBy || 'Direct';
@@ -674,6 +839,7 @@ export default function ExecutionsPage() {
                     ) : null}
                     <div className="orion-run-meta">
                       <span>Owner {executionAgentRoleLabel(execution)}</span>
+                      {runtimeProfile ? <span>Profile {runtimeProfile}</span> : null}
                       {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
                       {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>

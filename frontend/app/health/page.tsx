@@ -394,7 +394,7 @@ export default function HealthPage() {
         id: 'daemon-offline',
         severity: 'warn',
         title: 'Ops daemon offline',
-        detail: 'Local automation helpers are unavailable until daemon is running.',
+        detail: 'Local workflow helpers are unavailable until daemon is running.',
       });
     }
     if (opsDaemon.watchdogHealthy === false) {

@@ -1913,6 +1913,270 @@ input:focus-visible {
   color: var(--danger-700);
 }
 
+.orion-page-shell.is-builder-page {
+  background: #efefec;
+  padding: 14px 18px 18px;
+}
+
+.orion-builder-shell {
+  gap: 14px;
+}
+
+.orion-builder-toolbar.is-agent-builder {
+  min-height: 56px;
+  height: 56px;
+  padding: 0 4px;
+}
+
+.orion-builder-toolbar-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.orion-builder-toolbar-back {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #404040;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.orion-builder-toolbar-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #161616;
+}
+
+.orion-builder-draft-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.08);
+  color: #53524d;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.orion-builder-toolbar-actions .btn-ghost,
+.orion-builder-toolbar-actions .btn-primary {
+  min-height: 40px;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
+.orion-builder-main.is-agent-builder {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.orion-builder-library {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 18px 14px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
+}
+
+.orion-builder-library-group {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-builder-library-title {
+  padding: 0 8px;
+  color: #8b8a84;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.orion-builder-library-list {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-builder-library-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #18181b;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.orion-builder-library-item:hover {
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.orion-builder-library-icon,
+.orion-builder-palette-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--builder-accent, #ececec);
+  color: #232323;
+  flex-shrink: 0;
+}
+
+.orion-builder-canvas-panel.is-agent-builder {
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.orion-builder-canvas-frame {
+  background: #ecece8;
+}
+
+.orion-builder-canvas-frame > .react-flow {
+  background: transparent;
+}
+
+.orion-builder-canvas-message {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #5a5a54;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06);
+}
+
+.orion-builder-canvas-message.is-error {
+  color: #b42318;
+}
+
+.orion-builder-empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.orion-builder-empty-title {
+  font-size: 28px;
+  font-weight: 600;
+  color: #171717;
+}
+
+.orion-builder-empty-copy {
+  max-width: 560px;
+  color: #62615b;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.orion-builder-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background: #171717;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.14);
+}
+
+.orion-builder-node-search {
+  width: 250px;
+  border-radius: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 24px 40px rgba(15, 23, 42, 0.12);
+}
+
+.orion-builder-node-search-input {
+  min-height: 44px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.orion-builder-node-search-list {
+  gap: 4px;
+  padding: 8px;
+}
+
+.orion-builder-node-search-item {
+  min-height: 42px;
+  border-radius: 14px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.orion-builder-node-search-item:hover {
+  background: rgba(17, 24, 39, 0.05);
+}
+
+.orion-builder-bottom-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 20px 36px rgba(15, 23, 42, 0.1);
+}
+
+.orion-builder-bottom-tool {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: transparent;
+  color: #4a4a45;
+}
+
+.orion-builder-bottom-tool.is-active {
+  background: rgba(17, 24, 39, 0.08);
+  color: #161616;
+}
+
+.orion-builder-bottom-tool:disabled {
+  opacity: 0.38;
+}
+
 .orion-workspace-studio {
   display: grid;
   gap: 16px;

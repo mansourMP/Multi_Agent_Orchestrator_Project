@@ -31,13 +31,11 @@ function StandardCanvasNodeComponent({
     variant = 'default',
 }: StandardCanvasNodeProps) {
     const normalizedStatus = String(status || '').trim().toLowerCase();
-    const statusClass = ['running', 'waiting', 'error', 'success'].includes(normalizedStatus)
-        ? normalizedStatus
-        : '';
+    const statusClass = ['running', 'waiting', 'error', 'success'].includes(normalizedStatus) ? normalizedStatus : '';
 
     return (
         <div
-            className={`canvas-node ${variant === 'trigger' ? 'trigger' : 'configurable'} ${selected ? 'selected' : ''} ${statusClass}`.trim()}
+            className={`canvas-node ${variant === 'trigger' ? 'trigger' : 'default'} ${selected ? 'selected' : ''} ${statusClass}`.trim()}
             data-node-kind={kindLabel}
             data-node-badge={badge || undefined}
             data-node-status={normalizedStatus || undefined}
@@ -50,11 +48,13 @@ function StandardCanvasNodeComponent({
                     type="target"
                     id="top"
                     position={Position.Left}
-                    style={{ left: -4 }}
+                    style={{ left: -5 }}
                 />
             ) : null}
 
-            <div className="icon">{icon}</div>
+            <div className="icon-shell">
+                <div className="icon">{icon}</div>
+            </div>
             <div className="description">
                 <div className="label">{title}</div>
                 <div className="subtitle" title={subtitle}>
@@ -67,136 +67,100 @@ function StandardCanvasNodeComponent({
                     type="source"
                     id="bottom"
                     position={Position.Right}
-                    style={{ right: -4 }}
+                    style={{ right: -5 }}
                 />
             ) : null}
 
             <style jsx>{`
                 .canvas-node {
-                    --canvas-node--border-width: 1.5px;
-                    --trigger-node--radius: 36px;
                     position: relative;
-                    height: 80px;
-                    width: 220px;
+                    min-width: 130px;
+                    max-width: 180px;
+                    min-height: 52px;
                     display: flex;
-                    align-items: center;
+                    align-items: flex-start;
                     justify-content: flex-start;
-                    background: var(--canvas-node--color--background, white);
-                    background-clip: padding-box;
-                    border: var(--canvas-node--border-width) solid
-                        var(--canvas-node--border-color, var(--canvas-node-border-color));
-                    border-radius: 8px;
-                    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-                    transition: box-shadow 150ms ease, transform 150ms ease, border-color 150ms ease;
-                    padding: 0 12px;
                     gap: 12px;
+                    padding: 10px 12px;
+                    border: 1px solid rgba(15, 23, 42, 0.08);
+                    border-radius: 16px;
+                    background: #ffffff;
+                    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+                    transition: box-shadow 160ms ease, border-color 160ms ease;
                     overflow: visible;
                 }
 
                 .canvas-node:hover {
-                    transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+                    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
                 }
 
                 .canvas-node.trigger {
-                    border-radius: var(--trigger-node--radius) 8px 8px var(--trigger-node--radius);
-                }
-
-                .canvas-node.configurable .description {
-                    position: relative;
-                    margin: 0;
-                    width: auto;
-                    min-width: 0;
-                    flex-grow: 1;
-                    flex-shrink: 1;
-                    overflow: hidden;
+                    border-radius: 16px;
                 }
 
                 .canvas-node.selected {
-                    box-shadow: 0 0 0 calc(6px * var(--canvas-zoom-compensation-factor, 1))
-                            var(--canvas--color--selected-transparent),
-                        0 1px 3px rgba(0, 0, 0, 0.08);
+                    border-color: rgba(15, 23, 42, 0.14);
+                    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.75), 0 10px 24px rgba(15, 23, 42, 0.08);
                 }
 
                 .canvas-node.success {
-                    --canvas-node--border-width: 2px;
-                    --canvas-node--border-color: var(--success-base);
+                    border-color: rgba(52, 211, 153, 0.45);
                 }
 
                 .canvas-node.error {
-                    --canvas-node--border-color: var(--error-base);
+                    border-color: rgba(248, 113, 113, 0.45);
                 }
 
                 .canvas-node.running,
                 .canvas-node.waiting {
-                    border-color: transparent;
+                    border-color: rgba(147, 197, 253, 0.42);
                 }
 
-                .canvas-node.running::after,
-                .canvas-node.waiting::after {
-                    content: '';
-                    position: absolute;
-                    inset: -3px;
-                    border-radius: inherit;
-                    z-index: -1;
-                    background: conic-gradient(
-                        from var(--node--gradient-angle),
-                        rgba(255, 109, 90, 1),
-                        rgba(255, 109, 90, 1) 20%,
-                        rgba(255, 109, 90, 0.2) 35%,
-                        rgba(255, 109, 90, 0.2) 65%,
-                        rgba(255, 109, 90, 1) 90%,
-                        rgba(255, 109, 90, 1)
-                    );
-                }
-
-                .canvas-node.running::after {
-                    animation: border-rotate 1.5s linear infinite;
-                }
-
-                .canvas-node.waiting::after {
-                    animation: border-rotate 4.5s linear infinite;
+                .icon-shell {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 10px;
+                    background: color-mix(in srgb, var(--canvas-node-accent) 14%, white 86%);
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
                 }
 
                 .icon {
-                    width: 40px;
-                    height: 40px;
+                    width: 24px;
+                    height: 24px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
                     color: var(--canvas-node-accent);
-                    flex-shrink: 0;
                 }
 
                 .description {
-                    top: 100%;
-                    width: 100%;
+                    min-width: 0;
                     min-width: 0;
                     display: flex;
                     flex-direction: column;
-                    gap: 4px;
-                    pointer-events: none;
+                    gap: 3px;
+                    padding-top: 2px;
+                    flex: 1;
                 }
 
                 .label {
-                    font-size: 16px;
+                    font-size: 14px;
                     text-align: left;
                     text-overflow: ellipsis;
-                    display: -webkit-box;
-                    -webkit-box-orient: vertical;
-                    -webkit-line-clamp: 2;
+                    white-space: nowrap;
                     overflow: hidden;
-                    overflow-wrap: anywhere;
-                    font-weight: 500;
+                    font-weight: 600;
                     line-height: 1.2;
-                    color: var(--text-primary);
+                    color: #171717;
                 }
 
                 .subtitle {
-                    width: 100%;
                     text-align: left;
-                    color: var(--text-secondary);
-                    font-size: 13px;
+                    color: #8a8a84;
+                    font-size: 12px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
@@ -204,19 +168,19 @@ function StandardCanvasNodeComponent({
                     font-weight: 400;
                 }
 
-                @property --node--gradient-angle {
-                    syntax: '<angle>';
-                    initial-value: 0deg;
-                    inherits: false;
+                .canvas-node :global(.react-flow__handle) {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 999px;
+                    border: 1px solid rgba(120, 120, 114, 0.32);
+                    background: #ffffff;
+                    opacity: 0;
+                    transition: opacity 160ms ease;
                 }
 
-                @keyframes border-rotate {
-                    from {
-                        --node--gradient-angle: 0deg;
-                    }
-                    to {
-                        --node--gradient-angle: 360deg;
-                    }
+                .canvas-node:hover :global(.react-flow__handle),
+                .canvas-node.selected :global(.react-flow__handle) {
+                    opacity: 1;
                 }
             `}</style>
         </div>

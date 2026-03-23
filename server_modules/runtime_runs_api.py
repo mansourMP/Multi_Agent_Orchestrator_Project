@@ -414,6 +414,9 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
     async def get_run(run_id: uuid.UUID):
         _refresh_server_exports()
+        from server_modules.runs_delegation import _build_delegation_summary, _find_run_relationships
+        from server_modules.runs_output import _get_replay_payload, _resolve_run_connector_binding, _serialize_run_snapshot, redact_sensitive
+        from server_modules.runtime_memory import _trim_memory_trace
         run_id_str = str(run_id)
         run = runs.get(run_id_str)
         archived = False

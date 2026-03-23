@@ -1,13 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Background,
-  BackgroundVariant,
-  Controls,
-  MarkerType,
   ReactFlow,
   addEdge,
   applyEdgeChanges,
@@ -20,7 +15,24 @@ import {
   type NodeChange,
   type NodeTypes,
 } from '@xyflow/react';
-import { BrainCircuit, CheckCircle2, Code2, FileUp, Globe, LayoutTemplate, LoaderCircle, Play, Plus, Rocket, Send, Shuffle, Sparkles, Zap } from 'lucide-react';
+import {
+  Bot,
+  BrainCircuit,
+  Code2,
+  Database,
+  Globe,
+  Hand,
+  LoaderCircle,
+  MousePointer2,
+  Play,
+  Plus,
+  Redo2,
+  Rocket,
+  Send,
+  Shuffle,
+  Undo2,
+  Zap,
+} from 'lucide-react';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import AgentNode from '@/components/nodes/AgentNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -72,7 +84,6 @@ type CanvasNodeSearchState = {
   query: string;
   insertEdgeId?: string;
 };
-type BuilderView = 'editor' | 'executions' | 'evaluations';
 type BuilderWorkflowRecord = {
   id: string;
   name?: string;
@@ -91,6 +102,7 @@ const CANVAS_NODE_GAP = 176;
 const GRID_SIZE = 16;
 const DEFAULT_NODE_SIZE = 96;
 const NODE_HORIZONTAL_GAP = 250;
+const CANVAS_EDGE_COLOR = 'rgba(128, 128, 120, 0.42)';
 
 const CANVAS_NODE_TYPES: NodeTypes = {
   trigger: TriggerNode,
@@ -112,14 +124,33 @@ const CANVAS_NODE_LIBRARY: Array<{
   accent: string;
   icon: ReactNode;
 }> = [
-  { type: 'trigger', label: 'Trigger', accent: '#f59e0b', icon: <Zap size={14} /> },
-  { type: 'agent', label: 'Agent', accent: '#7c3aed', icon: <BrainCircuit size={14} /> },
-  { type: 'action', label: 'Action', accent: '#10b981', icon: <Send size={14} /> },
-  { type: 'http_request', label: 'HTTP Request', accent: '#6b7280', icon: <Globe size={14} /> },
-  { type: 'condition', label: 'Condition', accent: '#f59e0b', icon: <Shuffle size={14} /> },
-  { type: 'transform', label: 'Transform', accent: '#3b82f6', icon: <Shuffle size={14} /> },
-  { type: 'code', label: 'Code', accent: '#1f2937', icon: <Code2 size={14} /> },
+  { type: 'trigger', label: 'Start', accent: '#d7f0ea', icon: <Play size={14} /> },
+  { type: 'agent', label: 'Agent', accent: '#dce9ff', icon: <Bot size={14} /> },
+  { type: 'action', label: 'Note', accent: '#ece8ff', icon: <Send size={14} /> },
+  { type: 'http_request', label: 'Tool', accent: '#f7ebc6', icon: <Globe size={14} /> },
+  { type: 'condition', label: 'If / else', accent: '#f7ebc6', icon: <Shuffle size={14} /> },
+  { type: 'transform', label: 'Transform', accent: '#ece1ff', icon: <Shuffle size={14} /> },
+  { type: 'code', label: 'Code', accent: '#ececec', icon: <Code2 size={14} /> },
 ];
+
+const CANVAS_NODE_GROUPS: Array<{
+  label: string;
+  items: CanvasNodeType[];
+}> = [
+  { label: 'Core', items: ['agent', 'trigger', 'action'] },
+  { label: 'Tools', items: ['http_request'] },
+  { label: 'Logic', items: ['condition', 'code'] },
+  { label: 'Data', items: ['transform'] },
+];
+
+type GraphSnapshot = {
+  nodes: CanvasWorkflowNode[];
+  edges: CanvasWorkflowEdge[];
+};
+
+function cloneGraph(nodes: CanvasWorkflowNode[], edges: CanvasWorkflowEdge[]): GraphSnapshot {
+  return JSON.parse(JSON.stringify({ nodes, edges })) as GraphSnapshot;
+}
 
 function compactText(value: string, max = 80): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -220,13 +251,9 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
       type: 'smoothstep',
       animated: false,
       style: {
-        stroke: 'var(--canvas-edge--color)',
+        stroke: CANVAS_EDGE_COLOR,
         strokeWidth: 2,
-        strokeLinecap: 'square' as const,
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: '#7c3aed',
+        strokeLinecap: 'round' as const,
       },
       interactionWidth: 40,
     });
@@ -311,13 +338,9 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
     type: 'smoothstep',
     animated: false,
     style: {
-      stroke: 'var(--canvas-edge--color)',
+      stroke: CANVAS_EDGE_COLOR,
       strokeWidth: 2,
-      strokeLinecap: 'square' as const,
-    },
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: '#7c3aed',
+      strokeLinecap: 'round' as const,
     },
     interactionWidth: 40,
   }));
@@ -378,7 +401,14 @@ export default function BuilderPage() {
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
   const [nodeSearch, setNodeSearch] = useState<CanvasNodeSearchState | null>(null);
-  const [currentView, setCurrentView] = useState<BuilderView>('editor');
+  const [interactionMode, setInteractionMode] = useState<'pan' | 'select'>('select');
+  const [historyStack, setHistoryStack] = useState<GraphSnapshot[]>([]);
+  const [futureStack, setFutureStack] = useState<GraphSnapshot[]>([]);
+
+  const pushHistory = useCallback(() => {
+    setHistoryStack((current) => [...current.slice(-19), cloneGraph(nodes, edges)]);
+    setFutureStack([]);
+  }, [edges, nodes]);
 
   const renderedEdges = useMemo(
     () =>
@@ -388,13 +418,9 @@ export default function BuilderPage() {
         selected: selectedEdgeId === edge.id,
         animated: false,
         style: {
-          stroke: 'var(--canvas-edge--color)',
+          stroke: CANVAS_EDGE_COLOR,
           strokeWidth: 2,
-          strokeLinecap: 'square' as const,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: '#7c3aed',
+          strokeLinecap: 'round' as const,
         },
         interactionWidth: 40,
         data: {
@@ -416,6 +442,7 @@ export default function BuilderPage() {
             });
           },
           onDelete: (edgeId: string) => {
+            pushHistory();
             setEdges((current) => current.filter((item) => item.id !== edgeId));
             setSelectedEdgeId(null);
             setNodeSearch(null);
@@ -424,7 +451,7 @@ export default function BuilderPage() {
           },
         } satisfies SmoothActionEdgeData,
       })),
-    [edges, nodes, selectedEdgeId],
+    [edges, nodes, pushHistory, selectedEdgeId],
   );
 
   const filteredNodeLibrary = useMemo(() => {
@@ -435,6 +462,17 @@ export default function BuilderPage() {
     if (!query) return library;
     return library.filter((item) => item.label.toLowerCase().includes(query));
   }, [nodeSearch?.insertEdgeId, nodeSearch?.query]);
+
+  const groupedNodeLibrary = useMemo(
+    () =>
+      CANVAS_NODE_GROUPS.map((group) => ({
+        ...group,
+        items: group.items
+          .map((type) => filteredNodeLibrary.find((item) => item.type === type) || null)
+          .filter((item): item is (typeof CANVAS_NODE_LIBRARY)[number] => item !== null),
+      })).filter((group) => group.items.length > 0),
+    [filteredNodeLibrary],
+  );
 
   const loadWorkflowIntoBuilder = useCallback(async (id: string) => {
     const workflow = (await getWorkflow(id)) as BuilderWorkflowRecord;
@@ -463,6 +501,7 @@ export default function BuilderPage() {
   const handleBuild = () => {
     const next = promptInput.trim();
     if (!next) return;
+    pushHistory();
     const nextNodes = buildDraftNodes(next);
     setDraftGoal(next);
     setNodes(nextNodes);
@@ -477,6 +516,7 @@ export default function BuilderPage() {
   };
 
   const handleReset = () => {
+    if (nodes.length || edges.length) pushHistory();
     setPromptInput('');
     setDraftGoal('');
     setNodes([]);
@@ -514,6 +554,7 @@ export default function BuilderPage() {
   );
 
   const addCanvasNode = (type: CanvasNodeType) => {
+    pushHistory();
     const position =
       nodeSearch?.insertEdgeId
         ? { x: snapToGrid(nodeSearch.flowX), y: snapToGrid(nodeSearch.flowY) }
@@ -643,6 +684,7 @@ export default function BuilderPage() {
   };
 
   const handleNodesChange = (changes: NodeChange<CanvasWorkflowNode>[]) => {
+    if (changes.length > 0) pushHistory();
     setNodes((current) =>
       applyNodeChanges(
         changes.map((change) => {
@@ -670,12 +712,14 @@ export default function BuilderPage() {
   };
 
   const handleEdgesChange = (changes: EdgeChange<CanvasWorkflowEdge>[]) => {
+    if (changes.length > 0) pushHistory();
     setEdges((current) => applyEdgeChanges(changes, current));
     setSaveState('idle');
     setSaveMessage(null);
   };
 
   const handleConnect = (connection: Connection) => {
+    pushHistory();
     setEdges((current) =>
       addEdge(
         {
@@ -684,13 +728,9 @@ export default function BuilderPage() {
           type: 'smoothstep',
           animated: false,
           style: {
-            stroke: 'var(--canvas-edge--color)',
+            stroke: CANVAS_EDGE_COLOR,
             strokeWidth: 2,
-            strokeLinecap: 'square' as const,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            color: '#7c3aed',
+            strokeLinecap: 'round' as const,
           },
           interactionWidth: 40,
         },
@@ -703,6 +743,32 @@ export default function BuilderPage() {
     setSaveState('idle');
     setSaveMessage(null);
   };
+
+  const handleUndo = useCallback(() => {
+    if (historyStack.length === 0) return;
+    const previous = historyStack[historyStack.length - 1];
+    if (!previous) return;
+    setFutureStack((current) => [cloneGraph(nodes, edges), ...current]);
+    setHistoryStack((current) => current.slice(0, -1));
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setNodeSearch(null);
+  }, [edges, historyStack, nodes]);
+
+  const handleRedo = useCallback(() => {
+    if (futureStack.length === 0) return;
+    const next = futureStack[0];
+    if (!next) return;
+    setHistoryStack((current) => [...current, cloneGraph(nodes, edges)]);
+    setFutureStack((current) => current.slice(1));
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setNodeSearch(null);
+  }, [edges, futureStack, nodes]);
 
   const handlePaneClick = (event: { detail?: number; clientX: number; clientY: number }) => {
     setSelectedNodeId(null);
@@ -732,6 +798,7 @@ export default function BuilderPage() {
       if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
       if (selectedEdgeId) {
         event.preventDefault();
+        pushHistory();
         setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
         setSelectedEdgeId(null);
         setSaveState('idle');
@@ -740,6 +807,7 @@ export default function BuilderPage() {
       }
       if (!selectedNodeId) return;
       event.preventDefault();
+      pushHistory();
       setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
       setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
       setSelectedNodeId(null);
@@ -748,109 +816,73 @@ export default function BuilderPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, selectedNodeId]);
+  }, [pushHistory, selectedEdgeId, selectedNodeId]);
 
   return (
     <div className="orion-page-shell orion-animate-in is-builder-page">
       <div className="orion-builder-shell">
-        <div className="orion-builder-toolbar">
-          <div className="orion-builder-toolbar-title">
-            {workflowName.trim() || (draftGoal ? compactText(draftGoal, 56) : 'Untitled workflow')}
+        <div className="orion-builder-toolbar is-agent-builder">
+          <div className="orion-builder-toolbar-title-row">
+            <button type="button" className="orion-builder-toolbar-back" onClick={() => router.push('/workflows')} aria-label="Back to workflows">
+              ‹
+            </button>
+            <div className="orion-builder-toolbar-title">
+              {workflowName.trim() || (draftGoal ? compactText(draftGoal, 56) : 'New agent')}
+            </div>
+            <span className="orion-builder-draft-badge">Draft</span>
           </div>
           <div className="orion-builder-toolbar-actions">
-            <button type="button" className="btn-secondary" onClick={handleReset}>
-              <Plus size={14} />
-              New workflow
-            </button>
-            <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
-              <LayoutTemplate size={14} />
-              Template
-            </button>
-            <button type="button" className="btn-ghost" onClick={() => router.push('/workflows')}>
-              <FileUp size={14} />
-              Import
-            </button>
-            <button type="button" className="btn-secondary" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
+            <button type="button" className="btn-ghost" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
               {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
-              Test run
+              Evaluate
             </button>
-            <button type="button" className="btn-ghost" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
+            <button type="button" className="btn-primary" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
               {runState === 'publishing' ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
               Publish
-            </button>
-            <button type="button" className="btn-primary" onClick={handleSaveDraft} disabled={nodes.length === 0 || saveState === 'saving' || runState !== 'idle'}>
-              {saveState === 'saving' ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
-              {saveState === 'saved' ? 'Saved' : savedWorkflowId ? 'Save changes' : 'Save draft'}
             </button>
           </div>
         </div>
 
-        <div className="orion-builder-main">
-          <section className="orion-builder-canvas-panel">
-            <div ref={canvasHostRef} className="orion-builder-canvas-frame">
-              <div className="orion-builder-canvas-topbar">
-                <div className="orion-builder-canvas-topbar-group is-status">
-                  <div className="orion-builder-toolbar-meta">
-                    <span className="orion-builder-meta-chip">{nodes.length || 0} steps</span>
-                    {savedWorkflowId ? <span className="orion-builder-meta-chip">Saved draft</span> : null}
-                    {saveState === 'saved' && saveMessage ? (
-                      <span className="orion-builder-meta-chip is-success">
-                        <CheckCircle2 size={13} />
-                        {saveMessage}
+        <div className="orion-builder-main is-agent-builder">
+          <aside className="orion-builder-library">
+            {groupedNodeLibrary.map((group) => (
+              <div key={group.label} className="orion-builder-library-group">
+                <div className="orion-builder-library-title">{group.label}</div>
+                <div className="orion-builder-library-list">
+                  {group.items.map((item) => (
+                    <button key={item.type} type="button" className="orion-builder-library-item" onClick={() => addCanvasNode(item.type)}>
+                      <span className="orion-builder-library-icon" style={{ ['--builder-accent' as string]: item.accent }}>
+                        {item.icon}
                       </span>
-                    ) : null}
-                    {saveState === 'error' && saveMessage ? <span className="orion-builder-meta-chip is-danger">{saveMessage}</span> : null}
-                  </div>
-                </div>
-                <div className="orion-builder-canvas-topbar-group is-tabs">
-                  <div className="orion-builder-view-tabs" role="tablist" aria-label="Builder views">
-                    <button type="button" className={`orion-builder-view-tab ${currentView === 'editor' ? 'is-active' : ''}`} onClick={() => setCurrentView('editor')}>
-                      Editor
+                      <span>{item.label}</span>
                     </button>
-                    <button type="button" className={`orion-builder-view-tab ${currentView === 'executions' ? 'is-active' : ''}`} onClick={() => setCurrentView('executions')}>
-                      Executions
-                    </button>
-                    <button type="button" className={`orion-builder-view-tab ${currentView === 'evaluations' ? 'is-active' : ''}`} onClick={() => setCurrentView('evaluations')}>
-                      Evaluations
-                    </button>
-                  </div>
+                  ))}
                 </div>
               </div>
+            ))}
+          </aside>
 
-              {currentView === 'editor' ? (
-                <>
-                {nodes.length === 0 ? (
-                  <div
-                    className="orion-builder-empty"
-                    onClick={() => {
-                      setSelectedNodeId(null);
-                      setSelectedEdgeId(null);
-                      setNodeSearch(null);
-                    }}
-                    onDoubleClick={(event) => {
-                      openNodeSearch({ clientX: event.clientX, clientY: event.clientY });
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="orion-builder-empty-card"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedNodeId(null);
-                        setSelectedEdgeId(null);
-                        setNodeSearch(null);
-                      }}
-                      onDoubleClick={(event) => {
-                        event.stopPropagation();
-                        openNodeSearch({ clientX: event.clientX, clientY: event.clientY });
-                      }}
-                      aria-label="Add first step"
-                    >
-                      <Plus size={40} />
-                    </button>
-                    <div className="orion-builder-empty-label">Add first step</div>
+          <section className="orion-builder-canvas-panel is-agent-builder">
+            <div ref={canvasHostRef} className="orion-builder-canvas-frame">
+              {saveMessage ? <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>{saveMessage}</div> : null}
+
+              {nodes.length === 0 ? (
+                <div className="orion-builder-empty-state">
+                  <div className="orion-builder-empty-title">Create a workflow</div>
+                  <div className="orion-builder-empty-copy">
+                    Build an agent workflow with custom logic and tools.
                   </div>
-                ) : (
+                  <button
+                    type="button"
+                    className="orion-builder-create-button"
+                    onClick={(event) => openNodeSearch({ clientX: event.clientX, clientY: event.clientY })}
+                  >
+                    <Plus size={18} />
+                    Create
+                  </button>
+                </div>
+              ) : (
+                <>
                   <ReactFlow
                     style={{ width: '100%', height: '100%' }}
                     onInit={(instance) => {
@@ -864,7 +896,7 @@ export default function BuilderPage() {
                     fitViewOptions={{ padding: 0.35 }}
                     nodesConnectable
                     nodesDraggable
-                    elementsSelectable
+                    elementsSelectable={interactionMode === 'select'}
                     onNodesChange={handleNodesChange}
                     onEdgesChange={handleEdgesChange}
                     onConnect={handleConnect}
@@ -879,97 +911,78 @@ export default function BuilderPage() {
                     }}
                     onEdgeContextMenu={(event, edge) => {
                       event.preventDefault();
+                      pushHistory();
                       setEdges((current) => current.filter((item) => item.id !== edge.id));
                       setSelectedEdgeId(null);
                       setNodeSearch(null);
                       setSaveState('idle');
                       setSaveMessage(null);
                     }}
-                    panOnDrag
+                    panOnDrag={interactionMode === 'pan'}
                     zoomOnScroll
                     zoomOnPinch
                     connectionLineComponent={SmoothConnectionLine}
                     proOptions={{ hideAttribution: true }}
-                  >
-                    <Background color="var(--canvas--dot--color)" gap={16} size={1.5} variant={BackgroundVariant.Dots} />
-                    <Controls position="bottom-left" showInteractive={false} showFitView />
-                  </ReactFlow>
-                )}
-                {nodeSearch ? (
-                  <div
-                    className="orion-builder-node-search"
-                    style={{ left: nodeSearch.screenX, top: nodeSearch.screenY }}
-                  >
-                    <input
-                      ref={nodeSearchInputRef}
-                      className="orion-builder-node-search-input"
-                      value={nodeSearch.query}
-                      onChange={(event) => setNodeSearch((current) => (current ? { ...current, query: event.target.value } : current))}
-                      placeholder="Search nodes..."
-                    />
-                    <div className="orion-builder-node-search-list">
-                      {filteredNodeLibrary.map((item) => (
-                        <button
-                          key={item.type}
-                          type="button"
-                          className="orion-builder-node-search-item"
-                          onClick={() => addCanvasNode(item.type)}
-                        >
-                          <span className="orion-builder-palette-icon" style={{ ['--builder-accent' as string]: item.accent }}>
-                            {item.icon}
-                          </span>
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+                  />
                 </>
-              ) : (
-                <div className="orion-builder-empty is-panel">
-                  <div className="orion-builder-empty-copy">
-                    <h2>{currentView === 'executions' ? 'Execution timeline' : 'Evaluation results'}</h2>
-                    <p>
-                      {currentView === 'executions'
-                        ? 'Run a test or publish this workflow, then track live activity here.'
-                        : 'Evaluation summaries can appear here after Builder supports step-level checks.'}
-                    </p>
-                  </div>
-                  <div className="orion-builder-empty-actions">
-                    <Link href="/executions" className="btn-secondary">Open Activity</Link>
-                    <button type="button" className="btn-primary" onClick={() => setCurrentView('editor')}>Back to Editor</button>
+              )}
+
+              <div className="orion-builder-bottom-toolbar">
+                <button
+                  type="button"
+                  className={`orion-builder-bottom-tool ${interactionMode === 'pan' ? 'is-active' : ''}`}
+                  onClick={() => setInteractionMode('pan')}
+                  aria-label="Hand tool"
+                >
+                  <Hand size={16} />
+                </button>
+                <button
+                  type="button"
+                  className={`orion-builder-bottom-tool ${interactionMode === 'select' ? 'is-active' : ''}`}
+                  onClick={() => setInteractionMode('select')}
+                  aria-label="Pointer tool"
+                >
+                  <MousePointer2 size={16} />
+                </button>
+                <button type="button" className="orion-builder-bottom-tool" onClick={handleUndo} disabled={historyStack.length === 0} aria-label="Undo">
+                  <Undo2 size={16} />
+                </button>
+                <button type="button" className="orion-builder-bottom-tool" onClick={handleRedo} disabled={futureStack.length === 0} aria-label="Redo">
+                  <Redo2 size={16} />
+                </button>
+              </div>
+
+              {nodeSearch ? (
+                <div
+                  className="orion-builder-node-search"
+                  style={{ left: nodeSearch.screenX, top: nodeSearch.screenY }}
+                >
+                  <input
+                    ref={nodeSearchInputRef}
+                    className="orion-builder-node-search-input"
+                    value={nodeSearch.query}
+                    onChange={(event) => setNodeSearch((current) => (current ? { ...current, query: event.target.value } : current))}
+                    placeholder="Search nodes..."
+                  />
+                  <div className="orion-builder-node-search-list">
+                    {filteredNodeLibrary.map((item) => (
+                      <button
+                        key={item.type}
+                        type="button"
+                        className="orion-builder-node-search-item"
+                        onClick={() => addCanvasNode(item.type)}
+                      >
+                        <span className="orion-builder-palette-icon" style={{ ['--builder-accent' as string]: item.accent }}>
+                          {item.icon}
+                        </span>
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
           </section>
-
-          <aside className="orion-builder-drawer">
-            <div className="orion-builder-drawer-header">
-              <div className="orion-builder-drawer-eyebrow">Builder AI</div>
-              <div className="orion-builder-drawer-title">Describe the workflow</div>
-              <div className="orion-builder-drawer-copy">
-                Tell Empyralis what to automate. This shapes the draft canvas without touching your main assistant chat.
-              </div>
-            </div>
-
-            <div className="orion-builder-drawer-body is-flat">
-              <label className="orion-builder-field-label" htmlFor="builder-prompt">
-                Prompt
-              </label>
-              <textarea
-                id="builder-prompt"
-                className="orion-builder-textarea"
-                value={promptInput}
-                onChange={(event) => setPromptInput(event.target.value)}
-                placeholder="Monitor my shop entrance and alert me on Telegram"
-                rows={6}
-              />
-              <button type="button" className="btn-primary orion-builder-submit" onClick={handleBuild} disabled={!promptInput.trim()}>
-                Build workflow
-              </button>
-            </div>
-          </aside>
         </div>
       </div>
     </div>

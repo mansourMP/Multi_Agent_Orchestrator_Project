@@ -113,6 +113,8 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     }
 
     try {
+      console.log("ChatScreen runtimeUrl", session.runtimeUrl);
+
       const response = await fetch(`${session.runtimeUrl}/runs/start`, {
         method: "POST",
         headers: {
@@ -121,10 +123,13 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
         },
         body: JSON.stringify({
           input: finalInput,
+          user_goal: finalInput,
           agent_role: agentId,
           workspace_id: "default",
           session_id: sessionId,
-          stream: false,
+          metadata: {
+            execution_target: "cloud",
+          },
         }),
       });
 
@@ -133,18 +138,20 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
       }
 
       const payload = await response.json();
-      const runId = String(payload?.run_id ?? payload?.id ?? "");
+      const runId = String(payload?.run_id || "").trim();
 
       if (!runId) {
         throw new Error("Run start did not return run_id");
       }
+
+      const runStatusUrl = `${session.runtimeUrl.replace(/\/+$/, "")}/runs/${encodeURIComponent(runId)}`;
 
       let finalRun: any = null;
 
       for (let i = 0; i < 30; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
 
-        const poll = await fetch(`${session.runtimeUrl}/runs/${encodeURIComponent(runId)}`, {
+        const poll = await fetch(runStatusUrl, {
           headers: {
             "X-API-Key": session.runtimeKey || "",
           },
@@ -200,16 +207,18 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
         throw new Error("Run polling timed out");
       }
 
-      if (String(finalRun?.status ?? "").toLowerCase() === "failed") {
-        throw new Error("Run failed");
-      }
+      console.log("ChatScreen finalRun", JSON.stringify(finalRun, null, 2));
 
       const responseText =
-        (typeof finalRun?.output === "string" && finalRun.output.trim()) ||
         (typeof finalRun?.result === "string" && finalRun.result.trim()) ||
+        (typeof finalRun?.result_summary === "string" && finalRun.result_summary.trim()) ||
+        (typeof finalRun?.result_data?.summary === "string" && finalRun.result_data.summary.trim()) ||
+        (typeof finalRun?.result_data?.outputs?.message === "string" && finalRun.result_data.outputs.message.trim()) ||
+        (typeof finalRun?.result_data?.outputs?.reply === "string" && finalRun.result_data.outputs.reply.trim()) ||
+        (typeof finalRun?.result_data?.outputs?.text === "string" && finalRun.result_data.outputs.text.trim()) ||
         (typeof finalRun?.result_data === "string" && finalRun.result_data.trim()) ||
         (finalRun?.result_data ? JSON.stringify(finalRun.result_data) : "") ||
-        "Received.";
+        (String(finalRun?.status ?? "").toLowerCase() === "failed" ? "Run failed." : "Received.");
 
       addMessage(sessionId, {
         intent: "assistant",

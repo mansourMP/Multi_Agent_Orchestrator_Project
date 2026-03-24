@@ -28,10 +28,15 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
         headers.set('X-API-Key', runtimeApiKey);
     }
 
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-        ...options,
-        headers,
-    });
+    let res: Response;
+    try {
+        res = await fetch(`${ORION_API_URL}${endpoint}`, {
+            ...options,
+            headers,
+        });
+    } catch {
+        throw new ApiError(`Cannot reach the backend API on ${ORION_API_URL}.`, 0);
+    }
 
     if (!res.ok) {
         let errorMsg = `API Error: ${res.status} ${res.statusText}`;

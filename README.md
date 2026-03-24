@@ -28,18 +28,13 @@ This includes:
 - outcome pack run flow
 - troubleshooting
 
-## Empyralis Desktop App
+## Primary Distribution Path
 
-If you want Empyralis as a real desktop application (VS Code-style shell):
+Empyralis now ships web-first, with PWA installability as the primary distribution path.
 
-- [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
-
-Quick commands:
-
-```bash
-bash scripts/install_empyralis_desktop.sh
-bash scripts/run_empyralis_desktop.sh
-```
+- Platform frontend: [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend)
+- Desktop/PWA strategy: [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
+- Frozen desktop wrapper note: [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
 
 ### Empyralis Terminal Commands
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -560,7 +560,28 @@ const CONNECTOR_CATALOG_BADGES: Record<ConnectorCatalogStatus, { label: string; 
   },
 };
 
-export default function CredentialsPage() {
+const CONNECTOR_DIRECTORY_STATUS_META: Record<ConnectorCatalogStatus, { label: string; note: string }> = {
+  native_now: {
+    label: 'Available',
+    note: 'Ready to connect now',
+  },
+  provider_next: {
+    label: 'Coming next',
+    note: 'Provider-backed path first',
+  },
+  custom_build: {
+    label: 'Custom',
+    note: 'Needs a custom connection flow',
+  },
+};
+
+function connectorTierLabel(tier: ConnectorRoadmapTier): string {
+  if (tier === 'core') return 'Core system';
+  if (tier === 'next') return 'Expansion';
+  return 'Later';
+}
+
+function CredentialsPageContent() {
   const searchParams = useSearchParams();
   const [runtimeApiKey] = useState<string>(() => readRuntimeApiKeyFromStorage(''));
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
@@ -582,6 +603,8 @@ export default function CredentialsPage() {
   const focusedCatalogEntryRef = useRef<HTMLDivElement | null>(null);
   const modalScrollLockRef = useRef(0);
   const onboardingModalOpenedRef = useRef(false);
+  const onboardingMode = searchParams.get('onboarding') === '1';
+  const requestedConnector = String(searchParams.get('connector') || '').trim();
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };
@@ -698,11 +721,10 @@ export default function CredentialsPage() {
   }, [showAddModal]);
 
   useEffect(() => {
-    const connector = String(searchParams.get('connector') || '').trim();
-    if (connector !== 'telegram_bot' || onboardingModalOpenedRef.current) return;
+    if (requestedConnector !== 'telegram_bot' || onboardingModalOpenedRef.current) return;
     onboardingModalOpenedRef.current = true;
     openCreateModal('telegram_bot', 'Telegram');
-  }, [searchParams]);
+  }, [requestedConnector]);
 
   const connectedConnectorIds = useMemo(() => new Set(connectors.map((row) => row.connector)), [connectors]);
   const connectorDirectoryItems = useMemo(() => {
@@ -1354,11 +1376,12 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
           </section>
         ) : (
-          <div className="orion-connector-grid orion-connector-grid-three">
+          <div className="orion-integration-directory">
             {filteredDirectoryItems.map((item) => {
               const tier = connectorRoadmapTier(item);
               const tierMeta = ROADMAP_TIER_META[tier];
               const badge = CONNECTOR_CATALOG_BADGES[item.status];
+              const statusMeta = CONNECTOR_DIRECTORY_STATUS_META[item.status];
               const cardConnectorId = resolveCatalogConnectorId(item);
               const canCreateFromCard = Boolean(cardConnectorId);
               const isFocused = focusedCatalogEntry?.id === item.id;
@@ -1382,6 +1405,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     <div className="orion-integration-card-main">
                       <ConnectorMark visual={visual} size={40} />
                       <div className="orion-integration-card-copy">
+                        <div className="orion-integration-card-kicker">{connectorTierLabel(tier)}</div>
                         <div className="orion-integration-card-title">{item.label}</div>
                         <div className="orion-integration-card-note">{item.note}</div>
                       </div>
@@ -1410,15 +1434,19 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     </div>
                   </div>
 
-                  <div className="orion-integration-card-chips">
-                    <span className="orion-chip" style={{ ...tierMeta.style, minHeight: 22 }}>
-                      {tierMeta.label}
-                    </span>
+                  <div className="orion-integration-card-foot">
+                    <div className="orion-integration-card-meta">
+                      <span className="orion-integration-card-meta-label">{tierMeta.description}</span>
+                      <span className="orion-integration-card-meta-sep" aria-hidden="true">•</span>
+                      <span className="orion-integration-card-meta-note">
+                        {isConnected ? 'Already connected in this workspace' : statusMeta.note}
+                      </span>
+                    </div>
                     {isConnected ? (
                       <span
                         className="orion-chip"
                         style={{
-                          minHeight: 22,
+                          minHeight: 24,
                           color: 'var(--success-fg)',
                           border: '1px solid var(--success-border)',
                           background: 'var(--success-bg)',
@@ -1427,8 +1455,8 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         Connected
                       </span>
                     ) : (
-                      <span className="orion-chip" style={{ ...badge.style, minHeight: 22 }}>
-                        {badge.label}
+                      <span className="orion-chip" style={{ ...badge.style, minHeight: 24 }}>
+                        {statusMeta.label}
                       </span>
                     )}
                   </div>
@@ -2191,7 +2219,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               const modalEntry = catalogEntryForConnector(form.connector);
               const visual = connectorVisual(form.connector);
               const title = modalLockedConnector ? `Connect ${connectorLabel(form.connector)}` : 'Add connection';
-              const isTelegramOnboarding = form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1';
+              const isTelegramOnboarding = form.connector === 'telegram_bot' && onboardingMode;
               const copy = modalLockedConnector
                 ? (isTelegramOnboarding
                     ? 'Finish Telegram in three steps, then send one message to your bot to start receiving notifications.'
@@ -2214,7 +2242,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             })()}
 
             <div style={{ display: 'grid', gap: 12 }}>
-              {form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1' ? (
+              {form.connector === 'telegram_bot' && onboardingMode ? (
                 <div
                   style={{
                     display: 'grid',
@@ -2280,7 +2308,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 </label>
               )}
 
-              {(form.connector !== 'telegram_bot' || String(searchParams.get('onboarding') || '') !== '1') ? (
+              {(form.connector !== 'telegram_bot' || !onboardingMode) ? (
                 <>
                   <label style={{ display: 'grid', gap: 6 }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
@@ -2301,7 +2329,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
               {form.connector === 'telegram_bot' ? (
                 <>
-                  {String(searchParams.get('onboarding') || '') !== '1' ? (
+                  {!onboardingMode ? (
                     <label style={{ display: 'grid', gap: 6 }}>
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Bot token</span>
                       <input className="input" value={form.botToken} onChange={(event) => setForm((prev) => ({ ...prev, botToken: event.target.value }))} placeholder="123456:ABC..." />
@@ -2319,7 +2347,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
                   {showTelegramAdvanced ? (
                     <>
-                      {String(searchParams.get('onboarding') || '') === '1' ? (
+                      {onboardingMode ? (
                         <label style={{ display: 'grid', gap: 6 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
                           <input className="input" value={form.label} onChange={(event) => setForm((prev) => ({ ...prev, label: event.target.value }))} placeholder={connectorLabel(form.connector)} />
@@ -2329,7 +2357,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Chat ID</span>
                         <input className="input" value={form.chatId} onChange={(event) => setForm((prev) => ({ ...prev, chatId: event.target.value }))} placeholder="1932934047" />
                       </label>
-                      {String(searchParams.get('onboarding') || '') === '1' ? (
+                      {onboardingMode ? (
                         <label style={{ display: 'grid', gap: 6 }}>
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Assign to worker</span>
                           <select className="input" value={form.agentRole} onChange={(event) => setForm((prev) => ({ ...prev, agentRole: (event.target.value || '') as '' | AgentRoleId }))}>
@@ -2543,12 +2571,20 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               <button className="orion-btn orion-btn-ghost" onClick={resetModal}>Cancel</button>
               <button className="orion-btn orion-btn-primary" onClick={() => void handleCreateConnector()} disabled={createBusy}>
                 <Plus size={14} />
-                {createBusy ? 'Connecting…' : form.connector === 'telegram_bot' && String(searchParams.get('onboarding') || '') === '1' ? 'Done' : 'Connect'}
+                {createBusy ? 'Connecting…' : form.connector === 'telegram_bot' && onboardingMode ? 'Done' : 'Connect'}
               </button>
             </div>
           </div>
         </div>
       ) : null}
     </div>
+  );
+}
+
+export default function CredentialsPage() {
+  return (
+    <Suspense fallback={<div className="orion-page-shell orion-animate-in" />}>
+      <CredentialsPageContent />
+    </Suspense>
   );
 }

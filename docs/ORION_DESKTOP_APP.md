@@ -1,6 +1,10 @@
-# Empyralis Desktop App (VS Code-style Shell)
+# Empyralis Desktop App (Frozen Local Bridge Shell)
 
-This project now includes a desktop wrapper so Empyralis can run as a real macOS app window (not only browser tabs).
+The Electron desktop wrapper is frozen.
+
+- Do not expand this surface.
+- Keep it only for local bridge capabilities that the web/PWA path cannot replace yet.
+- The primary distribution path is now the web app plus installable PWA.
 
 ## What this is
 - Electron desktop shell
@@ -13,7 +17,7 @@ Desktop source:
 - `desktop/preload.js`
 - `desktop/package.json`
 
-## Fast start (dev desktop app)
+## Local-only desktop usage
 From project root:
 
 ```bash
@@ -47,11 +51,6 @@ tail -f .orion-stack/logs/runtime.log
 tail -f .orion-stack/logs/frontend.log
 ```
 
-## Timeline to "VS Code-level" desktop polish
-- Current (now): desktop shell + auto-start + packaging scripts.
-- 1-2 days: native menu, command palette, desktop settings pane, window state restore.
-- 3-5 days: signed installer, auto-update channel, crash reporting, release pipeline.
-
 ## Scope note
 This is a desktop shell over the existing Empyralis runtime/frontend stack.  
-It is the correct short path to a downloadable app while keeping your AGI workflow speed.
+It is not the primary distribution path anymore.

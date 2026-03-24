@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { Viewport } from "next";
 import { Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
@@ -19,6 +20,16 @@ import "@fontsource/space-mono/700.css";
 export const metadata: Metadata = {
   title: `${BRAND.company} - Outcome Autopilot for Business`,
   description: `${BRAND.assistant} helps businesses run repeatable outcomes with AI autopilot: connect accounts, define goals, review approvals, and ship results.`,
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    title: BRAND.company,
+    statusBarStyle: 'default',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#0a0a0a',
 };
 
 const THEME_BOOTSTRAP_SCRIPT = `
@@ -34,6 +45,9 @@ const THEME_BOOTSTRAP_SCRIPT = `
     if (resolved === 'dark') root.classList.add('dark');
     else root.classList.remove('dark');
     root.style.colorScheme = resolved;
+    const sidebarCollapsed = localStorage.getItem('empyralist:sidebar-collapsed') === '1';
+    root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+    root.style.setProperty('--sidebar-width', sidebarCollapsed ? '72px' : '200px');
     document.body?.style?.setProperty('background', resolved === 'dark' ? '#0a0a0a' : '#ffffff');
   } catch {}
 })();

@@ -4,6 +4,7 @@ import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
 import { ChevronDown, Settings, UserRound } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
+import PwaInstallControl from '@/components/orion/PwaInstallControl';
 import { safeNavigate } from '@/lib/safeNavigate';
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
@@ -48,6 +49,7 @@ export default function PlatformTopBar() {
             <span>Offline</span>
           </button>
         ) : null}
+        <PwaInstallControl />
         <button
           type="button"
           className="orion-shellbar-icon-btn"

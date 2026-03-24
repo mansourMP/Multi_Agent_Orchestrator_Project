@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, type CSSProperties, type ComponentType } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   GitBranch,
   Home,
@@ -14,7 +14,6 @@ import {
   Settings,
   UserRound,
 } from 'lucide-react';
-import { safeNavigate } from '@/lib/safeNavigate';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
 
 type NavItem = {
@@ -60,6 +59,7 @@ function isActivePath(pathname: string, href: string): boolean {
 
 export default function Sidebar() {
   const pathname = usePathname() ?? '/';
+  const router = useRouter();
   const isBuilderEditorRoute = pathname.startsWith('/builder/');
   const pendingApprovalsCount = 0;
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
@@ -113,7 +113,7 @@ export default function Sidebar() {
           <button
             type="button"
             className={`sidebar-v2-item${isActivePath(pathname, HOME_NAV_ITEM.href) ? ' is-active' : ''}`}
-            onClick={() => safeNavigate(HOME_NAV_ITEM.href)}
+            onClick={() => router.push(HOME_NAV_ITEM.href)}
             aria-label={HOME_NAV_ITEM.label}
             title={HOME_NAV_ITEM.label}
           >
@@ -133,7 +133,7 @@ export default function Sidebar() {
                     key={item.href}
                     type="button"
                     className={`sidebar-v2-item${active ? ' is-active' : ''}`}
-                    onClick={() => safeNavigate(item.href)}
+                    onClick={() => router.push(item.href)}
                     aria-label={item.label}
                     title={item.label}
                   >
@@ -161,7 +161,7 @@ export default function Sidebar() {
                   key={item.href}
                   type="button"
                   className={`sidebar-v2-item${active ? ' is-active' : ''}`}
-                  onClick={() => safeNavigate(item.href)}
+                  onClick={() => router.push(item.href)}
                   aria-label={item.label}
                   title={item.label}
                 >
@@ -182,7 +182,7 @@ export default function Sidebar() {
               key={item.href}
               type="button"
               className={`sidebar-v2-item${active ? ' is-active' : ''}`}
-              onClick={() => safeNavigate(item.href)}
+              onClick={() => router.push(item.href)}
               aria-label={item.label}
               title={item.label}
             >

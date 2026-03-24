@@ -37,7 +37,7 @@ function AppGrid({
             key={app.id}
             activeOpacity={0.85}
             onPress={() => onPress && onPress(app)}
-            style={{ width: 92 }}
+            style={{ width: 96 }}
           >
             <View>
               <BrandedAppIcon appId={app.id} icon={app.icon ?? "apps-outline"} size={58} />
@@ -61,7 +61,7 @@ function AppGrid({
             </View>
             <Text
               style={{
-                marginTop: 8,
+                marginTop: 10,
                 fontSize: 12,
                 color: theme.colors.text,
                 textAlign: "center",
@@ -131,7 +131,7 @@ export default function AppsScreen() {
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: "#FFFFFF" }}
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 12, paddingBottom: 40 }}
     >
       <View
@@ -142,10 +142,13 @@ export default function AppsScreen() {
           marginBottom: 14,
         }}
       >
-        <Text style={{ fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>Apps</Text>
+        <View>
+          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Apps</Text>
+          <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>Focused tools your agents can use</Text>
+        </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <TouchableOpacity onPress={() => router.push("/apps/store")}>
-            <Text style={{ fontSize: 16, color: theme.colors.accent, fontWeight: "800" }}>Get more</Text>
+            <Text style={{ fontSize: 15, color: theme.colors.accent, fontWeight: "700" }}>Store</Text>
           </TouchableOpacity>
           <HeaderSearchButton />
         </View>
@@ -158,8 +161,8 @@ export default function AppsScreen() {
       {!isConnected ? (
         <View
           style={{
-            padding: 14,
-            borderRadius: 14,
+            padding: 16,
+            borderRadius: 20,
             borderWidth: 1,
             borderColor: theme.colors.border,
             backgroundColor: theme.colors.surface,
@@ -173,8 +176,8 @@ export default function AppsScreen() {
             onPress={() => router.push("/session")}
             style={{
               marginTop: 10,
-              height: 40,
-              borderRadius: 12,
+              height: 42,
+              borderRadius: 14,
               backgroundColor: theme.colors.accent,
               alignItems: "center",
               justifyContent: "center",
@@ -192,21 +195,31 @@ export default function AppsScreen() {
           No apps installed yet. Tap “Get more” to add one.
         </Text>
       ) : (
-        <AppGrid
-          items={installed}
-          variant="installed"
-          onPress={(app) => {
-            if (!session?.runtimeUrl || !session?.runtimeKey) {
-              router.push("/session");
-              return;
-            }
-            if (app.latestVersion && app.latestVersion !== app.version) {
-              router.push(`/apps/${app.id}`);
-              return;
-            }
-            router.push(`/apps/${app.id}/home`);
+        <View
+          style={{
+            borderRadius: 24,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            padding: 16,
           }}
-        />
+        >
+          <AppGrid
+            items={installed}
+            variant="installed"
+            onPress={(app) => {
+              if (!session?.runtimeUrl || !session?.runtimeKey) {
+                router.push("/session");
+                return;
+              }
+              if (app.latestVersion && app.latestVersion !== app.version) {
+                router.push(`/apps/${app.id}`);
+                return;
+              }
+              router.push(`/apps/${app.id}/home`);
+            }}
+          />
+        </View>
       )}
     </ScrollView>
   );

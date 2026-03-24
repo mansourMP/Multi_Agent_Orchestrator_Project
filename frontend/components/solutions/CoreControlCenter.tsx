@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Boxes, LayoutDashboard, Workflow } from 'lucide-react';
+import { AlertCircle, Bell, Boxes, LayoutDashboard, RefreshCw, Workflow } from 'lucide-react';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
@@ -198,9 +198,22 @@ export function CoreControlCenter() {
           </div>
         </section>
       ) : error ? (
-        <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 8, placeItems: 'center' }}>
+        <section className="orion-panel muted orion-state-panel">
+          <div className="orion-state-icon" aria-hidden="true">
+            <AlertCircle size={18} />
+          </div>
           <div className="orion-panel-title">Dashboard is unavailable</div>
-          <div className="orion-panel-copy">{error}</div>
+          <div className="orion-panel-copy">The workspace summary could not be loaded right now. You can retry, or continue in the assistant while the runtime settles.</div>
+          <div className="orion-panel-copy" style={{ marginTop: -4 }}>{error}</div>
+          <div className="orion-state-actions">
+            <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>
+              <RefreshCw size={14} />
+              Retry
+            </button>
+            <Link href="/workspace" className="btn-primary">
+              Open Assistant
+            </Link>
+          </div>
         </section>
       ) : (
         <>
@@ -217,6 +230,7 @@ export function CoreControlCenter() {
             {recentRuns.length === 0 ? (
               <div className="orion-empty">
                 <div className="orion-empty-title">No recent runs</div>
+                <div className="orion-empty-copy">Runs will appear here once an assistant or workflow has completed work in this workspace.</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
@@ -255,6 +269,15 @@ export function CoreControlCenter() {
             {workflows.length === 0 ? (
               <div className="orion-empty">
                 <div className="orion-empty-title">No workflows yet</div>
+                <div className="orion-empty-copy">Start with the assistant if you want help outlining a flow, then save the result here for reuse.</div>
+                <div className="orion-state-actions">
+                  <Link href="/workspace" className="btn-primary">
+                    Open Assistant
+                  </Link>
+                  <Link href="/workflows" className="btn-secondary">
+                    Browse Workflows
+                  </Link>
+                </div>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>

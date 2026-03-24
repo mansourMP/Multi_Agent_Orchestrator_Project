@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
+  AlertCircle,
   Download,
   Eye,
   RefreshCw,
@@ -454,10 +455,9 @@ export default function ExecutionsPage() {
         .map((seed) => toSeedExecution(seed));
       setExecutions([...seededFallbacks, ...backendExecutions, ...runtimeFallbacks]);
     } catch (error) {
-      console.error(error);
       setExecutions([]);
       setRuntimeRunMeta({});
-      setLoadError(error instanceof Error ? error.message : 'Failed to load runs.');
+      setLoadError(error instanceof Error ? error.message : `Cannot reach the backend API on ${API_BASE}.`);
     } finally {
       setLoading(false);
     }
@@ -473,8 +473,6 @@ export default function ExecutionsPage() {
       setDetailLoading(true);
       const detail = await fetchExecution(executionId);
       setSelectedExecution(detail as ExecutionDetail);
-    } catch (error) {
-      console.error(error);
     } finally {
       setDetailLoading(false);
     }
@@ -747,12 +745,22 @@ export default function ExecutionsPage() {
           <div className="orion-loading-copy">Loading runs...</div>
         </section>
       ) : loadError ? (
-        <section className="orion-empty">
-          <div className="orion-empty-title">Couldn't load this section.</div>
-          <div className="orion-empty-copy">{loadError}</div>
-          <button type="button" className="btn-secondary" onClick={() => void loadExecutions()}>
-            Retry
-          </button>
+        <section className="orion-panel muted orion-state-panel">
+          <div className="orion-state-icon" aria-hidden="true">
+            <AlertCircle size={18} />
+          </div>
+          <div className="orion-panel-title">Runs are unavailable</div>
+          <div className="orion-panel-copy">The execution history could not be loaded right now. If the backend is offline, bring it back up, then retry.</div>
+          <div className="orion-panel-copy" style={{ marginTop: -4 }}>{loadError}</div>
+          <div className="orion-state-actions">
+            <button type="button" className="btn-secondary" onClick={() => void loadExecutions()}>
+              <RefreshCw size={14} />
+              Retry
+            </button>
+            <Link href="/" className="btn-primary">
+              Open Chat
+            </Link>
+          </div>
         </section>
       ) : filteredExecutions.length === 0 ? (
         <section className="orion-empty">

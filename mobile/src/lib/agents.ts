@@ -17,7 +17,7 @@ const BUILT_IN_AGENTS: AgentThread[] = [
     runtimeRole: "private-assistant",
     subtitle: "General help, planning, and daily tasks",
     icon: "sparkles",
-    avatarColor: "#4F46E5",
+    avatarColor: "#6D28D9",
     intro: "I can help you plan, write, summarize, and take actions when needed.",
   },
   {
@@ -44,7 +44,7 @@ const BUILT_IN_AGENTS: AgentThread[] = [
     runtimeRole: "health-agent",
     subtitle: "Health logs, habits, and wellbeing check-ins",
     icon: "heart",
-    avatarColor: "#DC2626",
+    avatarColor: "#E85D75",
     intro: "I can help you track health notes, routines, and daily wellbeing check-ins.",
   },
   {
@@ -53,7 +53,7 @@ const BUILT_IN_AGENTS: AgentThread[] = [
     runtimeRole: "travel-agent",
     subtitle: "Trips, itineraries, and travel planning",
     icon: "airplane",
-    avatarColor: "#F97316",
+    avatarColor: "#2563EB",
     intro: "I can help you plan trips, organize travel details, and summarize itineraries.",
   },
 ];

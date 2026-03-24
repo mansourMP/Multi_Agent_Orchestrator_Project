@@ -47,9 +47,9 @@ function normalizeRuns(payload: any): RunSummary[] {
       .map((item: any) => ({
         run_id: String(item?.run_id ?? item?.id ?? ""),
         status: String(item?.status ?? "unknown"),
-        summary: item?.summary ?? item?.message ?? item?.title ?? undefined,
+        summary: item?.summary ?? item?.result_summary ?? item?.result ?? item?.message ?? item?.title ?? undefined,
         agent_role: item?.agent_role ?? item?.owner_agent ?? undefined,
-        started_at: item?.started_at ?? item?.created_at ?? item?.ts ?? undefined,
+        started_at: item?.started_at ?? item?.updated_at ?? item?.created_at ?? item?.ts ?? undefined,
       }))
       .filter((item) => item.run_id),
     (item) => item.run_id,

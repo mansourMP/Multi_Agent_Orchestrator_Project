@@ -4,14 +4,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { MobileSession } from "./types";
 
 const SESSION_KEY = "empyralis.mobile.session.v1";
-const RUNTIME_URL_KEY = "runtimeUrl";
-const RUNTIME_KEY_KEY = "runtimeKey";
+const LEGACY_RUNTIME_URL_KEY = "runtimeUrl";
+const LEGACY_RUNTIME_KEY_KEY = "runtimeKey";
 
 export async function getSession(): Promise<MobileSession | null> {
-  const [raw, storedRuntimeUrl, storedRuntimeKey] = await Promise.all([
+  const [raw, legacyRuntimeUrl, legacyRuntimeKey] = await Promise.all([
     SecureStore.getItemAsync(SESSION_KEY),
-    AsyncStorage.getItem(RUNTIME_URL_KEY),
-    AsyncStorage.getItem(RUNTIME_KEY_KEY),
+    AsyncStorage.getItem(LEGACY_RUNTIME_URL_KEY),
+    AsyncStorage.getItem(LEGACY_RUNTIME_KEY_KEY),
   ]);
 
   let parsed: MobileSession | null = null;
@@ -23,28 +23,42 @@ export async function getSession(): Promise<MobileSession | null> {
     }
   }
 
-  const runtimeUrl = storedRuntimeUrl?.trim() || parsed?.runtimeUrl || "";
-  const runtimeKey = storedRuntimeKey?.trim() || parsed?.runtimeKey || "";
+  const runtimeUrl = legacyRuntimeUrl?.trim() || parsed?.runtimeUrl || "";
+  const runtimeKey = legacyRuntimeKey?.trim() || parsed?.runtimeKey || "";
 
   if (!parsed && !runtimeUrl && !runtimeKey) return null;
 
-  try {
-    return {
-      runtimeUrl,
-      runtimeKey,
-      workspaceId: parsed?.workspaceId || "default",
-      platformUrl: parsed?.platformUrl,
-      platformKey: parsed?.platformKey,
-    } as MobileSession;
-  } catch {
-    return null;
+  const next: MobileSession = {
+    runtimeUrl,
+    runtimeKey,
+    workspaceId: parsed?.workspaceId || "default",
+    platformUrl: parsed?.platformUrl,
+    platformKey: parsed?.platformKey,
+  };
+
+  if (legacyRuntimeUrl || legacyRuntimeKey) {
+    await Promise.all([
+      SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(next)),
+      AsyncStorage.removeItem(LEGACY_RUNTIME_URL_KEY),
+      AsyncStorage.removeItem(LEGACY_RUNTIME_KEY_KEY),
+    ]);
   }
+
+  return next;
 }
 
 export async function setSession(session: MobileSession) {
-  await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+  await Promise.all([
+    SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session)),
+    AsyncStorage.removeItem(LEGACY_RUNTIME_URL_KEY),
+    AsyncStorage.removeItem(LEGACY_RUNTIME_KEY_KEY),
+  ]);
 }
 
 export async function clearSession() {
-  await SecureStore.deleteItemAsync(SESSION_KEY);
+  await Promise.all([
+    SecureStore.deleteItemAsync(SESSION_KEY),
+    AsyncStorage.removeItem(LEGACY_RUNTIME_URL_KEY),
+    AsyncStorage.removeItem(LEGACY_RUNTIME_KEY_KEY),
+  ]);
 }

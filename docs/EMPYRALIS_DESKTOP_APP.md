@@ -1,8 +1,12 @@
 # Empyralis Desktop App
 
-Empyralis includes a desktop wrapper so the platform can run as a real macOS app window instead of only in browser tabs.
+This desktop wrapper is frozen.
 
-## Fast start
+- Do not expand it as the main product surface.
+- Keep it only for local bridge capabilities.
+- The web app plus installable PWA is the primary distribution path.
+
+## Local-only desktop usage
 
 ```bash
 bash scripts/install_empyralis_desktop.sh

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, Clock, Workflow as WorkflowIcon, Search, Trash, Copy } from 'lucide-react';
+import { AlertCircle, Plus, Clock, Workflow as WorkflowIcon, Search, Trash, Copy, RefreshCw } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { fetchWorkflows, createWorkflow, deleteWorkflow, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -58,7 +58,6 @@ export default function WorkflowsPage() {
                     : [];
             setWorkflows(next);
         } catch (err) {
-            console.error(err);
             setWorkflows([]);
             setLoadError(formatApiError(err, 'Failed to load workflows'));
         } finally {
@@ -194,12 +193,23 @@ export default function WorkflowsPage() {
             ) : (
                 <>
                     {loadError ? (
-                        <section className="orion-empty">
-                            <div className="orion-empty-title">Couldn't load this section.</div>
-                            <div className="orion-empty-copy">{loadError}</div>
-                            <button type="button" className="btn-secondary" onClick={() => void loadWorkflows()}>
-                                Retry
-                            </button>
+                        <section className="orion-panel muted orion-state-panel">
+                            <div className="orion-state-icon" aria-hidden="true">
+                                <AlertCircle size={18} />
+                            </div>
+                            <div className="orion-panel-title">Workflows are unavailable</div>
+                            <div className="orion-panel-copy">The workflow library could not be loaded right now. If the backend is offline, start it first, then retry.</div>
+                            <div className="orion-panel-copy" style={{ marginTop: -4 }}>{loadError}</div>
+                            <div className="orion-state-actions">
+                                <button type="button" className="btn-secondary" onClick={() => void loadWorkflows()}>
+                                    <RefreshCw size={14} />
+                                    Retry
+                                </button>
+                                <Link href="/builder/new" className="btn-primary">
+                                    <Plus size={14} />
+                                    New Workflow
+                                </Link>
+                            </div>
                         </section>
                     ) : null}
                     {workflows.length > 0 ? (

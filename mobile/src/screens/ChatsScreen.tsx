@@ -8,6 +8,7 @@ import { HeaderSearchButton } from "@/src/components/HeaderSearchButton";
 import { buildAgentDirectory } from "@/src/lib/agents";
 import { useMobileOverviewData } from "@/src/lib/mobile-data";
 import { useChatStore } from "@/src/stores/chatStore";
+import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 function formatTimestamp(timestamp?: number) {
   if (!timestamp) return "";
@@ -23,6 +24,7 @@ function formatTimestamp(timestamp?: number) {
 }
 
 export default function ChatsScreen() {
+  const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { agents } = useMobileOverviewData();
@@ -47,36 +49,39 @@ export default function ChatsScreen() {
   }, [agents, sessions]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View
         style={{
           paddingTop: insets.top + 12,
           paddingHorizontal: 20,
-          paddingBottom: 12,
-          backgroundColor: "#FFFFFF",
+          paddingBottom: 14,
+          backgroundColor: theme.colors.background,
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
         }}
       >
-        <Text style={{ fontSize: 32, fontFamily: "Fraunces_700Bold", color: "#111827" }}>Chats</Text>
+        <View>
+          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Chats</Text>
+          <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>Your active AI team</Text>
+        </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <HeaderSearchButton />
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={() => router.push("/chats/settings")}
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 19,
+              width: 40,
+              height: 40,
+              borderRadius: 20,
               borderWidth: 1,
-              borderColor: "#E5E7EB",
-              backgroundColor: "#FFFFFF",
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Ionicons name="settings-outline" size={18} color="#111827" />
+            <Ionicons name="settings-outline" size={18} color={theme.colors.text} />
           </TouchableOpacity>
         </View>
       </View>
@@ -84,8 +89,8 @@ export default function ChatsScreen() {
       <FlatList
         data={rows}
         keyExtractor={(item) => item.agent.id}
-        contentContainerStyle={{ paddingBottom: 24 }}
-        ItemSeparatorComponent={() => <View style={{ marginLeft: 84, height: 1, backgroundColor: "#E5E7EB" }} />}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         renderItem={({ item }) => (
           <TouchableOpacity
             activeOpacity={0.82}
@@ -96,9 +101,12 @@ export default function ChatsScreen() {
             style={{
               flexDirection: "row",
               alignItems: "center",
-              paddingHorizontal: 20,
-              paddingVertical: 14,
-              backgroundColor: "#FFFFFF",
+              paddingHorizontal: 16,
+              paddingVertical: 15,
+              backgroundColor: theme.colors.surface,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: 22,
             }}
           >
             <View
@@ -116,10 +124,10 @@ export default function ChatsScreen() {
 
             <View style={{ flex: 1, marginLeft: 12 }}>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: "#111827" }} numberOfLines={1}>
+                <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
                   {item.agent.label}
                 </Text>
-                <Text style={{ fontSize: 12, color: "#6B7280", marginLeft: 12 }}>
+                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginLeft: 12 }}>
                   {formatTimestamp(item.timestamp)}
                 </Text>
               </View>
@@ -128,7 +136,7 @@ export default function ChatsScreen() {
                 style={{
                   marginTop: 4,
                   fontSize: 14,
-                  color: "#6B7280",
+                  color: theme.colors.textSecondary,
                   lineHeight: 20,
                 }}
               >

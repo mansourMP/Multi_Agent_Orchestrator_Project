@@ -1,3 +1,4 @@
+// FROZEN — do not expand. Kept for local bridge capabilities. PWA is the primary distribution path.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { execFile, spawn } = require('child_process');
 const path = require('path');

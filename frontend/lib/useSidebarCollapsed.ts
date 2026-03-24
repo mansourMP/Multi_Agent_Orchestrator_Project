@@ -6,6 +6,11 @@ const SIDEBAR_COLLAPSED_KEY = 'empyralist:sidebar-collapsed';
 const SIDEBAR_COLLAPSED_EVENT = 'empyralist:sidebar-collapsed-change';
 
 function readSidebarCollapsed(): boolean {
+  if (typeof document !== 'undefined') {
+    const attr = document.documentElement.getAttribute('data-sidebar-collapsed');
+    if (attr === '1') return true;
+    if (attr === '0') return false;
+  }
   if (typeof window === 'undefined') return false;
   try {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
@@ -14,8 +19,16 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
+function applySidebarCollapsedToRoot(next: boolean): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.setAttribute('data-sidebar-collapsed', next ? '1' : '0');
+  root.style.setProperty('--sidebar-width', next ? '72px' : '200px');
+}
+
 function persistSidebarCollapsed(next: boolean): void {
   if (typeof window === 'undefined') return;
+  applySidebarCollapsedToRoot(next);
   try {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
   } catch {
@@ -28,16 +41,22 @@ export function useSidebarCollapsed() {
   const [collapsed, setCollapsedState] = useState(false);
 
   useEffect(() => {
-    setCollapsedState(readSidebarCollapsed());
+    const initial = readSidebarCollapsed();
+    applySidebarCollapsedToRoot(initial);
+    setCollapsedState(initial);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key && event.key !== SIDEBAR_COLLAPSED_KEY) return;
-      setCollapsedState(readSidebarCollapsed());
+      const next = readSidebarCollapsed();
+      applySidebarCollapsedToRoot(next);
+      setCollapsedState(next);
     };
 
     const handleCustom = (event: Event) => {
       const next = (event as CustomEvent<boolean>).detail;
-      setCollapsedState(typeof next === 'boolean' ? next : readSidebarCollapsed());
+      const resolved = typeof next === 'boolean' ? next : readSidebarCollapsed();
+      applySidebarCollapsedToRoot(resolved);
+      setCollapsedState(resolved);
     };
 
     window.addEventListener('storage', handleStorage);

@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { MobileScreen } from "@/src/components/MobileScreen";
 import { SectionCard } from "@/src/components/SectionCard";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
-import { getDefaultPlatformUrl, getDefaultRuntimeUrl, getDefaultWorkspaceId } from "@/src/lib/api";
+import { getDefaultPlatformUrl, getDefaultRuntimeUrl, getDefaultWorkspaceId, normalizeServerUrl } from "@/src/lib/api";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
@@ -79,10 +79,10 @@ export default function SessionScreen() {
             setError(null);
             try {
               await saveSession({
-                runtimeUrl: runtimeUrl.trim(),
+                runtimeUrl: normalizeServerUrl(runtimeUrl),
                 runtimeKey: runtimeKey.trim(),
                 workspaceId: workspaceId.trim(),
-                platformUrl: platformUrl.trim(),
+                platformUrl: normalizeServerUrl(platformUrl),
                 platformKey: platformKey.trim(),
               });
               router.replace("/");

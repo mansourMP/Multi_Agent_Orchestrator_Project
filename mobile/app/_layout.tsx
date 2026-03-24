@@ -1,8 +1,9 @@
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useEffect } from "react";
+import * as Notifications from "expo-notifications";
 import * as Font from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -17,16 +18,14 @@ import {
 } from '@expo-google-fonts/fraunces';
 
 import { initDatabase } from "@/src/services/db";
-import { useAppTheme } from "@/src/theme/useAppTheme";
 import { SessionProvider } from "@/src/lib/session-context";
 import { ThemeProvider } from "@/src/theme";
 import { queryClient } from "@/src/lib/queryClient";
+import { configureNotificationChannelAsync, getNotificationHref } from "@/src/lib/notifications";
 
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const theme = useAppTheme();
-  
   const [fontsLoaded] = Font.useFonts({
     DMSans_400Regular,
     DMSans_500Medium,
@@ -39,6 +38,7 @@ export default function RootLayout() {
     async function prepare() {
       try {
         await initDatabase();
+        await configureNotificationChannelAsync();
       } catch (e) {
         console.warn('Database init error:', e);
       } finally {
@@ -49,6 +49,27 @@ export default function RootLayout() {
     }
     prepare();
   }, [fontsLoaded]);
+
+  useEffect(() => {
+    function handleResponse(response: Notifications.NotificationResponse) {
+      const href = getNotificationHref(response.notification.request.content.data as Record<string, unknown>);
+      if (!href) return;
+      requestAnimationFrame(() => {
+        router.push(href as never);
+      });
+    }
+
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) {
+        handleResponse(response);
+      }
+    });
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   if (!fontsLoaded) return null;
 

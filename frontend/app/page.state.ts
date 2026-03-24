@@ -30,7 +30,7 @@ import {
   type VaultCredentialItem,
 } from './page.catalog';
 
-const INITIAL_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
+const INITIAL_API_KEY = '';
 
 export interface PageState {
   goal: string;

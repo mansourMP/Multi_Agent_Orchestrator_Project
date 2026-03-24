@@ -33,8 +33,6 @@ import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 
 const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
-const ORION_API_KEY =
-    process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -627,7 +625,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [operator, setOperator] = useState<OperatorConfig>(DEFAULT_OPERATOR);
     const [connection, setConnection] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
     const [providerAuthMode, setProviderAuthMode] = useState('api_key');
-    const [runtimeApiKey, setRuntimeApiKey] = useState(ORION_API_KEY);
+    const [runtimeApiKey, setRuntimeApiKey] = useState('');
     const [showBehavior, setShowBehavior] = useState(false);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [trustMode, setTrustMode] = useState<TrustMode>('ask');

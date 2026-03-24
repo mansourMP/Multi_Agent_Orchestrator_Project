@@ -6,6 +6,7 @@ import { Bell, Boxes, LayoutDashboard } from 'lucide-react';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
+import { PACKAGED_SOLUTIONS_ENABLED } from '@/lib/appFlags';
 import { type InstalledSolution, fetchSolutionsState, formatRelativeTime } from '@/lib/solutions';
 
 export default function SolutionsPage() {
@@ -43,8 +44,8 @@ export default function SolutionsPage() {
     <div className="orion-page-shell narrow orion-animate-in">
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
-        title="Solutions"
-        subtitle="Packaged experiences built on top of Empyralis workflows, tools, and connectors."
+        title="Packages"
+        subtitle="Optional packaged capability layers built on top of workflows, skills, and connectors."
         meta={
           <>
             <span>{solutions.length} installed</span>
@@ -61,7 +62,12 @@ export default function SolutionsPage() {
         ]}
       />
 
-      {loading ? (
+      {!PACKAGED_SOLUTIONS_ENABLED ? (
+        <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 10, placeItems: 'center' }}>
+          <div className="orion-panel-title">Packages are disabled</div>
+          <div className="orion-panel-copy">This workspace is running the general platform surface. Packaged vertical experiences are opt-in.</div>
+        </section>
+      ) : loading ? (
         <section className="orion-panel muted">
           <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
             {Array.from({ length: 3 }).map((_, index) => (
@@ -75,13 +81,13 @@ export default function SolutionsPage() {
         </section>
       ) : error ? (
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 8, placeItems: 'center' }}>
-          <div className="orion-panel-title">Solutions are unavailable</div>
+          <div className="orion-panel-title">Packages are unavailable</div>
           <div className="orion-panel-copy">{error}</div>
         </section>
       ) : solutions.length === 0 ? (
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 10, placeItems: 'center' }}>
-          <div className="orion-panel-title">No solutions installed yet</div>
-          <div className="orion-panel-copy">Use core workflows and connectors first. Add packaged solutions only when they simplify a specific use case.</div>
+          <div className="orion-panel-title">No packages enabled</div>
+          <div className="orion-panel-copy">Use core workflows, skills, and connectors first. Turn on packaged capability layers only when you need a specific operating model.</div>
         </section>
       ) : (
         <section className="orion-panel">

@@ -16,8 +16,36 @@ except Exception:  # pragma: no cover - optional during bootstrap
 def skills_root() -> Path:
     explicit = str(os.getenv("ORION_INSTALLED_SKILLS_DIR", "")).strip()
     if explicit:
-        return Path(explicit).expanduser()
+        return Path(explicit).expanduser().resolve()
     return (Path(__file__).resolve().parent.parent / "skills").resolve()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_skill_dir(root: Path, candidate: Path) -> Optional[Path]:
+    try:
+        if candidate.is_symlink() or not candidate.is_dir():
+            return None
+    except Exception:
+        return None
+    resolved_root = root.resolve()
+    resolved_candidate = candidate.resolve()
+    if not _path_is_within(resolved_candidate, resolved_root):
+        return None
+    return resolved_candidate
+
+
+def _safe_skill_file(skill_dir: Path, filename: str) -> Optional[Path]:
+    candidate = (skill_dir / filename).resolve()
+    if not _path_is_within(candidate, skill_dir) or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
 
 
 def _read_text(path: Path) -> str:
@@ -88,7 +116,12 @@ def list_installed_skills() -> List[Dict[str, Any]]:
     if not root.exists():
         return []
     items: List[Dict[str, Any]] = []
-    for skill_dir in sorted([path for path in root.iterdir() if path.is_dir()], key=lambda item: item.name.lower()):
+    skill_dirs: List[Path] = []
+    for path in root.iterdir():
+        safe_dir = _safe_skill_dir(root, path)
+        if safe_dir is not None:
+            skill_dirs.append(safe_dir)
+    for skill_dir in sorted(skill_dirs, key=lambda item: item.name.lower()):
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             continue
@@ -153,9 +186,9 @@ def active_installed_skill_ids() -> List[str]:
 
 
 def _run_skill_query_handler(skill: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
-    skill_path = Path(str(skill.get("path") or "")).expanduser()
-    handler_path = skill_path / "query_handler.py"
-    if not handler_path.exists():
+    skill_path = Path(str(skill.get("path") or "")).expanduser().resolve()
+    handler_path = _safe_skill_file(skill_path, "query_handler.py")
+    if handler_path is None:
         return {}
     try:
         completed = subprocess.run(

@@ -50,7 +50,7 @@ export default function SkillsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const runtimeKey = useMemo(
-    () => readRuntimeApiKeyFromStorage(process.env.NEXT_PUBLIC_ORION_API_KEY || 'replace-with-strong-key'),
+    () => readRuntimeApiKeyFromStorage(''),
     [],
   );
 

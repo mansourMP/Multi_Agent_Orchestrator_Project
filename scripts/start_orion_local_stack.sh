@@ -71,10 +71,20 @@ else
   fi
 fi
 
-RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-replace-with-strong-key}}}}"
+generate_runtime_key() {
+  python3 - <<'PY'
+import secrets
+print(secrets.token_hex(24))
+PY
+}
+
+RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
+GENERATED_RUNTIME_KEY=0
 if [[ -z "${RUNTIME_KEY}" ]]; then
-  RUNTIME_KEY="replace-with-strong-key"
+  RUNTIME_KEY="$(generate_runtime_key)"
+  GENERATED_RUNTIME_KEY=1
+  echo "No runtime key supplied. Generated a random local runtime key."
 fi
 if [[ "${RUNTIME_KEY}" != "${RUNTIME_KEY_RAW}" ]]; then
   echo "Warning: runtime key contained whitespace and was normalized."
@@ -461,7 +471,6 @@ start_frontend() {
   (
     cd "${ROOT_DIR}/frontend"
     NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}" \
-    NEXT_PUBLIC_ORION_API_KEY="${RUNTIME_KEY}" \
     nohup npm run dev -- --hostname "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" > "${LOG_DIR}/frontend.log" 2>&1 &
     echo $! > "${PID_DIR}/frontend.pid"
   )
@@ -664,6 +673,9 @@ echo "Ops daemon: ${OPS_DAEMON_STATUS} (${OPS_DAEMON_URL})"
 echo "Ops daemon autorecover: enabled=${ORION_OPS_DAEMON_AUTORECOVER:-1} poll=${ORION_OPS_DAEMON_HEALTH_POLL_SECONDS:-8}s threshold=${ORION_OPS_DAEMON_FAILURE_THRESHOLD:-2} cooldown=${ORION_OPS_DAEMON_RECOVERY_COOLDOWN_SECONDS:-45}s"
 echo
 echo "Runtime key: ${RUNTIME_KEY}"
+if [[ "${GENERATED_RUNTIME_KEY}" == "1" ]]; then
+  echo "Runtime key source: generated for this local stack"
+fi
 echo
 echo "Health checks:"
 echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" ${ORION_API_URL}/health"

@@ -15,8 +15,36 @@ except Exception:  # pragma: no cover - optional during bootstrap
 def solutions_root() -> Path:
     explicit = str(os.getenv("ORION_INSTALLED_SOLUTIONS_DIR", "")).strip()
     if explicit:
-        return Path(explicit).expanduser()
+        return Path(explicit).expanduser().resolve()
     return (Path(__file__).resolve().parent.parent / "solutions").resolve()
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_solution_dir(root: Path, candidate: Path) -> Optional[Path]:
+    try:
+        if candidate.is_symlink() or not candidate.is_dir():
+            return None
+    except Exception:
+        return None
+    resolved_root = root.resolve()
+    resolved_candidate = candidate.resolve()
+    if not _path_is_within(resolved_candidate, resolved_root):
+        return None
+    return resolved_candidate
+
+
+def _safe_solution_file(solution_dir: Path, filename: str) -> Optional[Path]:
+    candidate = (solution_dir / filename).resolve()
+    if not _path_is_within(candidate, solution_dir) or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
 
 
 def _read_text(path: Path) -> str:
@@ -59,9 +87,14 @@ def _bool_from_any(value: Any, default: bool = False) -> bool:
     return default
 
 
+def packaged_solutions_enabled() -> bool:
+    return _bool_from_any(os.getenv("ORION_PACKAGED_SOLUTIONS_ENABLED"), False)
+
+
 def _load_solution_module(solution: Dict[str, Any]):
-    module_path = Path(str(solution.get("path") or "")).expanduser() / "solution.py"
-    if not module_path.exists():
+    solution_dir = Path(str(solution.get("path") or "")).expanduser().resolve()
+    module_path = _safe_solution_file(solution_dir, "solution.py")
+    if module_path is None:
         return None
     module_name = f"empyralis_solution_{str(solution.get('id') or 'solution').replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, str(module_path))
@@ -83,11 +116,18 @@ def _call_solution_hook(solution: Dict[str, Any], hook_name: str, *args: Any, **
 
 
 def list_installed_solutions() -> List[Dict[str, Any]]:
+    if not packaged_solutions_enabled():
+        return []
     root = solutions_root()
     if not root.exists():
         return []
     items: List[Dict[str, Any]] = []
-    for solution_dir in sorted([path for path in root.iterdir() if path.is_dir()], key=lambda item: item.name.lower()):
+    solution_dirs: List[Path] = []
+    for path in root.iterdir():
+        safe_dir = _safe_solution_dir(root, path)
+        if safe_dir is not None:
+            solution_dirs.append(safe_dir)
+    for solution_dir in sorted(solution_dirs, key=lambda item: item.name.lower()):
         solution_md = solution_dir / "SOLUTION.md"
         install_yaml = solution_dir / "install.yaml"
         ui_preset_path = solution_dir / "ui_preset.json"

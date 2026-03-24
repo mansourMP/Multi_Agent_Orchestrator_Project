@@ -16,14 +16,16 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import {
+  ArrowUp,
   Bot,
   BrainCircuit,
+  ChevronLeft,
   Code2,
-  Database,
   Globe,
   Hand,
   LoaderCircle,
   MousePointer2,
+  Paperclip,
   Play,
   Plus,
   Redo2,
@@ -31,6 +33,7 @@ import {
   Send,
   Shuffle,
   Undo2,
+  X,
   Zap,
 } from 'lucide-react';
 import TriggerNode from '@/components/nodes/TriggerNode';
@@ -390,6 +393,66 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
   }));
 }
 
+function buildStarterGraph(): GraphSnapshot {
+  const nodes: CanvasWorkflowNode[] = [
+    {
+      id: 'trigger-1',
+      type: 'trigger',
+      position: { x: 560, y: 300 },
+      data: normalizeCanvasNodeData('trigger', { label: 'Start', triggerType: 'manual' }),
+    },
+    {
+      id: 'agent-2',
+      type: 'agent',
+      position: { x: 920, y: 300 },
+      data: normalizeCanvasNodeData('agent', {
+        label: 'My agent',
+        modelId: '',
+        role: 'Agent',
+        description: 'Agent',
+        duty: 'Agent',
+        status: '',
+      }),
+    },
+  ];
+  return { nodes, edges: buildDraftEdges(nodes) };
+}
+
+function getCanvasLibraryItem(type: CanvasNodeType) {
+  return CANVAS_NODE_LIBRARY.find((item) => item.type === type) || CANVAS_NODE_LIBRARY[0]!;
+}
+
+function formatTriggerKindLabel(kind: TriggerKind): string {
+  if (kind === 'schedule') return 'Scheduled start';
+  if (kind === 'webhook') return 'Webhook start';
+  return 'Manual start';
+}
+
+function formatActionKindLabel(kind: ActionKind): string {
+  if (kind === 'send_wechat') return 'WeChat delivery';
+  if (kind === 'send_whatsapp') return 'WhatsApp delivery';
+  if (kind === 'send_email') return 'Email delivery';
+  if (kind === 'write_file') return 'File output';
+  return 'Telegram delivery';
+}
+
+function describeDraftRailNode(node: CanvasWorkflowNode): string {
+  if (node.type === 'trigger') return formatTriggerKindLabel((node.data as TriggerCanvasData).triggerType);
+  if (node.type === 'condition') return compactText((node.data as ConditionCanvasData).condition || '', 54) || 'Conditional branch';
+  if (node.type === 'transform') return compactText((node.data as TransformCanvasData).mapping || '', 54) || 'Prepare structured output';
+  if (node.type === 'http_request') {
+    const data = node.data as HttpRequestCanvasData;
+    return compactText(`${data.method || 'GET'} ${data.url || ''}`, 54) || 'External request';
+  }
+  if (node.type === 'agent') {
+    const data = node.data as AgentCanvasData;
+    return compactText(data.duty || data.description || '', 54) || 'AI reasoning step';
+  }
+  if (node.type === 'code') return compactText((node.data as CodeCanvasData).summary || '', 54) || 'Custom logic';
+  if (node.type === 'action') return formatActionKindLabel((node.data as ActionCanvasData).actionType);
+  return 'Workflow step';
+}
+
 function buildWorkflowName(goal: string): string {
   const clean = compactText(goal.replace(/[.?!]+$/g, ''), 56);
   if (!clean) return 'New workflow';
@@ -603,16 +666,21 @@ export type BuilderCanvasPageProps = {
 };
 
 export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPageProps) {
+  const starterGraph = useMemo(() => (workflowId ? { nodes: [], edges: [] } : buildStarterGraph()), [workflowId]);
   const router = useRouter();
   const flowRef = useRef<{ screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number } } | null>(null);
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
   const nodeSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const aiAssistantInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [assistantDockOpen, setAssistantDockOpen] = useState(true);
   const [promptInput, setPromptInput] = useState('');
+  const [stagedPrompt, setStagedPrompt] = useState('');
+  const [aiAssistantPrompt, setAiAssistantPrompt] = useState('');
   const [draftGoal, setDraftGoal] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [nodes, setNodes] = useState<CanvasWorkflowNode[]>([]);
-  const [edges, setEdges] = useState<CanvasWorkflowEdge[]>([]);
+  const [nodes, setNodes] = useState<CanvasWorkflowNode[]>(starterGraph.nodes);
+  const [edges, setEdges] = useState<CanvasWorkflowEdge[]>(starterGraph.edges);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [runState, setRunState] = useState<'idle' | 'testing' | 'publishing'>('idle');
   const [savedWorkflowId, setSavedWorkflowId] = useState<string | null>(null);
@@ -624,7 +692,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [interactionMode, setInteractionMode] = useState<'pan' | 'select'>('select');
   const [historyStack, setHistoryStack] = useState<GraphSnapshot[]>([]);
   const [futureStack, setFutureStack] = useState<GraphSnapshot[]>([]);
-  const [builderGenerating, setBuilderGenerating] = useState(false);
   const [runtimeProfiles, setRuntimeProfiles] = useState<BuilderRuntimeProfileRow[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
 
@@ -648,6 +715,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     () => runtimeProfiles.find((profile) => profile.id === selectedProfileId) || null,
     [runtimeProfiles, selectedProfileId],
   );
+
+  const stagedDraftGoal = stagedPrompt.trim();
 
   const renderedEdges = useMemo(
     () =>
@@ -726,6 +795,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setWorkflowDescription(String(workflow?.description || ''));
     const nextGoal = String(workflow?.definition?.meta?.draft_goal || workflow?.description || workflow?.name || '').trim();
     setDraftGoal(nextGoal);
+    setStagedPrompt(nextGoal);
     setPromptInput(nextGoal);
     setSelectedProfileId(String(workflow?.definition?.meta?.runtime_profile_id || '').trim());
     setSaveState('saved');
@@ -795,11 +865,12 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     };
   }, []);
 
-  const handleBuild = () => {
-    const next = promptInput.trim();
+  const handleBuild = (goal?: string) => {
+    const next = String(goal || stagedPrompt || promptInput).trim();
     if (!next) return;
     pushHistory();
     const nextNodes = layoutDraftNodes(buildDraftNodes(next), canvasHostRef.current);
+    setStagedPrompt(next);
     setDraftGoal(next);
     setNodes(nextNodes);
     setEdges(buildDraftEdges(nextNodes));
@@ -812,72 +883,24 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setWorkflowDescription(buildWorkflowDescription(next));
   };
 
-  const handleBuilderGenerate = useCallback(async () => {
+  const handleStageDraft = useCallback(() => {
     const next = promptInput.trim();
-    if (!next || builderGenerating) return;
+    if (!next) return;
 
-    setBuilderGenerating(true);
+    setStagedPrompt(next);
+    setDraftGoal(next);
     setSaveMessage(null);
-
-    try {
-      const runtimeKey = readRuntimeApiKeyFromStorage('');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (runtimeKey) {
-        headers['X-API-Key'] = runtimeKey;
-      }
-      const response = await fetch(resolveBuilderGenerateUrl(), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          prompt: next,
-          model: 'gpt-4o-mini',
-          profile_id: selectedProfileId || undefined,
-          workspace_id: DEFAULT_WORKSPACE_ID,
-        }),
-      });
-
-      const payload = (await response.json().catch(() => null)) as BuilderGeneratedWorkflow | { error?: string } | null;
-      if (!response.ok || !payload || !('nodes' in payload)) {
-        const payloadRecord = isRecord(payload) ? (payload as Record<string, unknown>) : null;
-        const errorMessage =
-          payloadRecord && typeof payloadRecord.error === 'string'
-            ? payloadRecord.error
-            : 'Unable to generate a workflow from that prompt.';
-        throw new Error(
-          errorMessage,
-        );
-      }
-
-      const generated = parseGeneratedWorkflow(payload, next);
-      if (generated.nodes.length === 0) {
-        throw new Error('Builder AI returned an empty workflow.');
-      }
-
-      pushHistory();
-      setDraftGoal(next);
-      setNodes(generated.nodes);
-      setEdges(generated.edges);
-      setSelectedNodeId(generated.nodes[0]?.id || null);
-      setSelectedEdgeId(null);
-      setSavedWorkflowId(null);
-      setSaveState('idle');
-      setSaveMessage(null);
-      setRunState('idle');
-      setWorkflowName(buildWorkflowName(next));
-      setWorkflowDescription(buildWorkflowDescription(next));
-    } catch (error) {
-      setSaveState('error');
-      setSaveMessage(error instanceof Error ? error.message : 'Unable to generate a workflow from that prompt.');
-    } finally {
-      setBuilderGenerating(false);
-    }
-  }, [builderGenerating, promptInput, pushHistory, selectedProfileId]);
+    setSaveState('idle');
+    setRunState('idle');
+    setWorkflowName(buildWorkflowName(next));
+    setWorkflowDescription(buildWorkflowDescription(next));
+    setPromptInput('');
+  }, [promptInput]);
 
   const handleReset = () => {
     if (nodes.length || edges.length) pushHistory();
     setPromptInput('');
+    setStagedPrompt('');
     setDraftGoal('');
     setNodes([]);
     setEdges([]);
@@ -1273,13 +1296,26 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     };
   }, []);
 
+  useEffect(() => {
+    if (!assistantDockOpen) return;
+    const timeout = window.setTimeout(() => aiAssistantInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(timeout);
+  }, [assistantDockOpen]);
+
+  const handleAssistantApply = useCallback((value?: string) => {
+    const next = String(value || aiAssistantPrompt).trim();
+    if (!next) return;
+    handleBuild(next);
+    setAiAssistantPrompt('');
+  }, [aiAssistantPrompt, handleBuild]);
+
   return (
     <div className="orion-page-shell orion-animate-in is-builder-page">
       <div className="orion-builder-shell">
         <div className="orion-builder-toolbar is-agent-builder">
           <div className="orion-builder-toolbar-title-row">
             <button type="button" className="orion-builder-toolbar-back" onClick={() => router.push('/builder')} aria-label="Back to builder">
-              ‹
+              <ChevronLeft size={18} strokeWidth={2.2} />
             </button>
             <div className="orion-builder-toolbar-title">
               {workflowName.trim() || (draftGoal ? compactText(draftGoal, 56) : 'New agent')}
@@ -1311,6 +1347,14 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="orion-builder-ai-button"
+              onClick={() => setAssistantDockOpen((current) => !current)}
+            >
+              <BrainCircuit size={15} />
+              AI
+            </button>
             <button type="button" className="btn-ghost" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
               {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
               Evaluate
@@ -1324,7 +1368,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
         <div className="orion-builder-main is-agent-builder">
           <section className="orion-builder-canvas-panel is-agent-builder">
-            <div ref={canvasHostRef} className="orion-builder-canvas-frame">
+            <div ref={canvasHostRef} className={`orion-builder-canvas-frame ${assistantDockOpen ? 'has-preview-dock' : ''}`.trim()}>
               <aside className="orion-builder-library is-floating">
                 {groupedNodeLibrary.map((group) => (
                   <div key={group.label} className="orion-builder-library-group">
@@ -1343,6 +1387,72 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 ))}
               </aside>
 
+              {assistantDockOpen ? (
+                <aside className="orion-builder-preview-dock is-floating">
+                <div className="orion-builder-preview-head">
+                  <div className="orion-builder-preview-head-copy" />
+                  <div className="orion-builder-preview-head-actions">
+                    <button
+                      type="button"
+                      className="orion-builder-preview-reset"
+                      onClick={() => setAiAssistantPrompt('')}
+                    >
+                      New chat
+                    </button>
+                    <button
+                      type="button"
+                      className="orion-builder-preview-close"
+                      onClick={() => setAssistantDockOpen(false)}
+                      aria-label="Close assistant"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="orion-builder-preview-body">
+                  <div className="orion-builder-preview-thread">
+                    <div className="orion-builder-preview-empty">
+                      <span className="orion-builder-preview-empty-icon">
+                        <BrainCircuit size={20} />
+                      </span>
+                      <div className="orion-builder-preview-empty-title">Preview your agent</div>
+                      <div className="orion-builder-preview-empty-copy">
+                        Prompt the agent as if you&apos;re the user.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <form
+                  className="orion-builder-preview-composer"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    handleAssistantApply();
+                  }}
+                >
+                  <textarea
+                    ref={aiAssistantInputRef}
+                    className="orion-builder-preview-input"
+                    value={aiAssistantPrompt}
+                    onChange={(event) => setAiAssistantPrompt(event.target.value)}
+                    placeholder="Send a message..."
+                  />
+                  <button type="button" className="orion-builder-preview-attach" aria-label="Attach context">
+                    <Paperclip size={16} />
+                  </button>
+                  <button
+                    type="submit"
+                    className="orion-builder-preview-send"
+                    disabled={!aiAssistantPrompt.trim()}
+                    aria-label="Apply assistant change"
+                  >
+                    <ArrowUp size={15} />
+                  </button>
+                </form>
+                </aside>
+              ) : null}
+
               {saveMessage ? (
                 <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>
                   <span>{saveMessage}</span>
@@ -1358,98 +1468,47 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 </div>
               ) : null}
 
-              {nodes.length === 0 ? (
-                <div className="orion-builder-empty-state">
-                  <div className="orion-builder-empty-title">Create a workflow</div>
-                  <div className="orion-builder-empty-copy">
-                    Build an agent workflow with custom logic and tools.
-                  </div>
-                  <button
-                    type="button"
-                    className="orion-builder-create-button"
-                    onClick={(event) => openNodeSearch({ clientX: event.clientX, clientY: event.clientY })}
-                  >
-                    <Plus size={18} />
-                    Create
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <ReactFlow
-                    style={{ width: '100%', height: '100%' }}
-                    onInit={(instance) => {
-                      flowRef.current = instance;
-                    }}
-                    nodes={nodes}
-                    edges={renderedEdges}
-                    nodeTypes={CANVAS_NODE_TYPES}
-                    edgeTypes={CANVAS_EDGE_TYPES}
-                    fitView
-                    fitViewOptions={{ padding: 0.35 }}
-                    nodesConnectable
-                    nodesDraggable
-                    elementsSelectable={interactionMode === 'select'}
-                    onNodesChange={handleNodesChange}
-                    onEdgesChange={handleEdgesChange}
-                    onConnect={handleConnect}
-                    onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
-                    onPaneClick={(event) => {
-                      handlePaneClick({ detail: event.detail, clientX: event.clientX, clientY: event.clientY });
-                    }}
-                    onEdgeClick={(_, edge) => {
-                      setSelectedNodeId(null);
-                      setSelectedEdgeId(edge.id);
-                      setNodeSearch(null);
-                    }}
-                    onEdgeContextMenu={(event, edge) => {
-                      event.preventDefault();
-                      pushHistory();
-                      setEdges((current) => current.filter((item) => item.id !== edge.id));
-                      setSelectedEdgeId(null);
-                      setNodeSearch(null);
-                      setSaveState('idle');
-                      setSaveMessage(null);
-                    }}
-                    panOnDrag={interactionMode === 'pan'}
-                    zoomOnScroll
-                    zoomOnPinch
-                    connectionLineComponent={SmoothConnectionLine}
-                    proOptions={{ hideAttribution: true }}
-                  />
-                </>
-              )}
-
-              {nodes.length === 0 ? (
-                <form
-                  className="orion-builder-ai-prompt"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void handleBuilderGenerate();
-                  }}
-                >
-                  <div className="orion-builder-ai-prompt-body">
-                    <div className="orion-builder-ai-prompt-meta">
-                      {selectedRuntimeProfile
-                        ? `Using ${formatProviderLabel(selectedRuntimeProfile.provider)} · ${selectedRuntimeProfile.label}`
-                        : 'Using automatic runtime routing'}
-                    </div>
-                    <input
-                      className="orion-builder-ai-prompt-input"
-                      value={promptInput}
-                      onChange={(event) => setPromptInput(event.target.value)}
-                      placeholder="Describe what you want to automate..."
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="orion-builder-ai-prompt-send"
-                    disabled={!promptInput.trim() || builderGenerating}
-                    aria-label="Generate workflow"
-                  >
-                    {builderGenerating ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
-                  </button>
-                </form>
-              ) : null}
+              <ReactFlow
+                style={{ width: '100%', height: '100%' }}
+                onInit={(instance) => {
+                  flowRef.current = instance;
+                }}
+                nodes={nodes}
+                edges={renderedEdges}
+                nodeTypes={CANVAS_NODE_TYPES}
+                edgeTypes={CANVAS_EDGE_TYPES}
+                fitView
+                fitViewOptions={{ padding: 0.42 }}
+                nodesConnectable
+                nodesDraggable
+                elementsSelectable={interactionMode === 'select'}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                onConnect={handleConnect}
+                onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
+                onPaneClick={(event) => {
+                  handlePaneClick({ detail: event.detail, clientX: event.clientX, clientY: event.clientY });
+                }}
+                onEdgeClick={(_, edge) => {
+                  setSelectedNodeId(null);
+                  setSelectedEdgeId(edge.id);
+                  setNodeSearch(null);
+                }}
+                onEdgeContextMenu={(event, edge) => {
+                  event.preventDefault();
+                  pushHistory();
+                  setEdges((current) => current.filter((item) => item.id !== edge.id));
+                  setSelectedEdgeId(null);
+                  setNodeSearch(null);
+                  setSaveState('idle');
+                  setSaveMessage(null);
+                }}
+                panOnDrag
+                zoomOnScroll
+                zoomOnPinch
+                connectionLineComponent={SmoothConnectionLine}
+                proOptions={{ hideAttribution: true }}
+              />
 
               <div className="orion-builder-bottom-toolbar">
                 <button

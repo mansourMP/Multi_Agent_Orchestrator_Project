@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-RUNTIME_KEY="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-replace-with-strong-key}}}}"
+RUNTIME_KEY="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-}}}}"
 
 # Best-effort LAN IP detection for Mac Mini / laptop.
 HOST_IP="$(
@@ -30,8 +30,16 @@ export START_OPS_DAEMON="${START_OPS_DAEMON:-0}"
 
 echo "Starting Empyralis Mobile V1 core..."
 echo "Runtime URL: http://${ORION_HOST}:${ORION_PORT}"
-echo "Runtime key: ${RUNTIME_KEY}"
+if [[ -n "${RUNTIME_KEY}" ]]; then
+  echo "Runtime key: ${RUNTIME_KEY}"
+else
+  echo "Runtime key: auto-generate"
+fi
 echo
 
 cd "${ROOT_DIR}"
-bash scripts/start_empyralis_local_stack.sh "${RUNTIME_KEY}"
+if [[ -n "${RUNTIME_KEY}" ]]; then
+  bash scripts/start_empyralis_local_stack.sh "${RUNTIME_KEY}"
+else
+  bash scripts/start_empyralis_local_stack.sh
+fi

@@ -32,7 +32,7 @@ export class IntegrationsController {
                 reply: text,
                 source: 'telegram',
                 user: username
-            });
+            }, 'telegram_webhook', true);
 
             // Ack receipt
             await this.telegramService.sendMessage(token, chatId, "✅ Input received. Resuming workflow...");

@@ -23,10 +23,7 @@ runtime_key_from_file=""
 if [[ -f "${ROOT_DIR}/.orion-stack/runtime_key" ]]; then
   runtime_key_from_file="$(normalize_runtime_key "$(cat "${ROOT_DIR}/.orion-stack/runtime_key" 2>/dev/null || true)")"
 fi
-RUNTIME_KEY_VALUE="$(normalize_runtime_key "${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${runtime_key_from_file:-replace-with-strong-key}}}}")"
-if [[ -z "${RUNTIME_KEY_VALUE}" ]]; then
-  RUNTIME_KEY_VALUE="replace-with-strong-key"
-fi
+RUNTIME_KEY_VALUE="$(normalize_runtime_key "${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${runtime_key_from_file:-}}}}")"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,7 +60,19 @@ if [[ ! -x "${START_SCRIPT}" ]]; then
 fi
 
 cd "${ROOT_DIR}"
-RUNTIME_KEY="${RUNTIME_KEY_VALUE}" bash "${START_SCRIPT}"
+if [[ -n "${RUNTIME_KEY_VALUE}" ]]; then
+  RUNTIME_KEY="${RUNTIME_KEY_VALUE}" bash "${START_SCRIPT}"
+else
+  bash "${START_SCRIPT}"
+  if [[ -f "${ROOT_DIR}/.orion-stack/runtime_key" ]]; then
+    RUNTIME_KEY_VALUE="$(normalize_runtime_key "$(cat "${ROOT_DIR}/.orion-stack/runtime_key" 2>/dev/null || true)")"
+  fi
+fi
+
+if [[ -z "${RUNTIME_KEY_VALUE}" ]]; then
+  echo "Failed to resolve runtime key after stack start."
+  exit 1
+fi
 
 echo
 echo "== Empyralis Go Checks =="

@@ -52,7 +52,7 @@ type DaemonResponse = {
 
 function normalizeRuntimeKey(raw: string | undefined): string {
   const cleaned = String(raw || '').replace(/\s+/g, '');
-  return cleaned || 'replace-with-strong-key';
+  return cleaned;
 }
 
 function redactSecrets(value: unknown): unknown {
@@ -97,6 +97,17 @@ async function readOpsDaemonKey(root: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(keyPath, 'utf8');
     const value = String(raw || '').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+async function readRuntimeKey(root: string): Promise<string | null> {
+  const keyPath = path.join(root, '.orion-stack', 'runtime_key');
+  try {
+    const raw = await fs.readFile(keyPath, 'utf8');
+    const value = normalizeRuntimeKey(raw);
     return value || null;
   } catch {
     return null;
@@ -397,8 +408,8 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as LocalOpsBody;
     const action = body.action;
-    const runtimeKey = normalizeRuntimeKey(body.runtimeKey);
     const root = await resolveProjectRoot();
+    const runtimeKey = normalizeRuntimeKey(body.runtimeKey) || (await readRuntimeKey(root)) || '';
     const env = { ...process.env, RUNTIME_KEY: runtimeKey };
 
     if (!action) {

@@ -74,33 +74,33 @@ function StandardCanvasNodeComponent({
             <style jsx>{`
                 .canvas-node {
                     position: relative;
-                    min-width: 118px;
-                    max-width: 160px;
-                    min-height: 48px;
+                    min-width: 152px;
+                    max-width: 228px;
+                    min-height: 78px;
                     display: flex;
                     align-items: center;
                     justify-content: flex-start;
-                    gap: 9px;
-                    padding: 8px 9px;
-                    border: 1px solid rgba(15, 23, 42, 0.08);
-                    border-radius: 14px;
+                    gap: 12px;
+                    padding: 12px 14px;
+                    border: 1px solid rgba(15, 23, 42, 0.07);
+                    border-radius: 20px;
                     background: #ffffff;
-                    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.03);
+                    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
                     transition: box-shadow 160ms ease, border-color 160ms ease;
                     overflow: visible;
                 }
 
                 .canvas-node:hover {
-                    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.045);
+                    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
                 }
 
                 .canvas-node.trigger {
-                    border-radius: 14px;
+                    border-radius: 20px;
                 }
 
                 .canvas-node.selected {
                     border-color: rgba(15, 23, 42, 0.14);
-                    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.75), 0 6px 16px rgba(15, 23, 42, 0.045);
+                    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.82), 0 12px 28px rgba(15, 23, 42, 0.08);
                 }
 
                 .canvas-node.success {
@@ -117,9 +117,9 @@ function StandardCanvasNodeComponent({
                 }
 
                 .icon-shell {
-                    width: 30px;
-                    height: 30px;
-                    border-radius: 8px;
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 16px;
                     background: color-mix(in srgb, var(--canvas-node-accent) 16%, white 84%);
                     display: inline-flex;
                     align-items: center;
@@ -128,8 +128,8 @@ function StandardCanvasNodeComponent({
                 }
 
                 .icon {
-                    width: 16px;
-                    height: 16px;
+                    width: 22px;
+                    height: 22px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
@@ -145,24 +145,24 @@ function StandardCanvasNodeComponent({
                 }
 
                 .label {
-                    font-size: 13px;
+                    font-size: 17px;
                     text-align: left;
                     text-overflow: ellipsis;
                     white-space: nowrap;
                     overflow: hidden;
                     font-weight: 600;
-                    line-height: 1.15;
+                    line-height: 1.2;
                     color: #171717;
                 }
 
                 .subtitle {
                     text-align: left;
                     color: #8a8a84;
-                    font-size: 11px;
+                    font-size: 13px;
                     white-space: nowrap;
                     overflow: hidden;
                     text-overflow: ellipsis;
-                    line-height: 1.15;
+                    line-height: 1.25;
                     font-weight: 400;
                 }
 

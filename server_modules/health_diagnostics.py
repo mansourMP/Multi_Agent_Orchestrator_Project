@@ -70,6 +70,72 @@ def _sanitize_skill_card(item: Any) -> Optional[Dict[str, Any]]:
     return card
 
 
+def _sanitize_public_installed_skill(item: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    skill_id = str(item.get("id") or "").strip().lower()
+    name = str(item.get("name") or "").strip()
+    if not skill_id or not name:
+        return None
+    return {
+        "id": skill_id[:120],
+        "name": name[:160],
+        "description": str(item.get("description") or "").strip()[:500],
+        "enabled": bool(item.get("enabled")),
+        "has_query_handler": bool(item.get("has_query_handler")),
+        "has_snapshot_worker": bool(item.get("has_snapshot_worker")),
+    }
+
+
+def _sanitize_public_solution_ui_preset(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {}
+
+    def _sanitize_nav(raw_items: Any) -> List[Dict[str, str]]:
+        out: List[Dict[str, str]] = []
+        if not isinstance(raw_items, list):
+            return out
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            label = str(raw.get("label") or "").strip()
+            href = str(raw.get("href") or "").strip()
+            icon = str(raw.get("icon") or "").strip()
+            if not label or not href:
+                continue
+            out.append({"label": label[:120], "href": href[:240], "icon": icon[:80]})
+        return out[:20]
+
+    sanitized: Dict[str, Any] = {}
+    nav_items = _sanitize_nav(item.get("nav_items"))
+    admin_bottom_items = _sanitize_nav(item.get("admin_bottom_items"))
+    if nav_items:
+        sanitized["nav_items"] = nav_items
+    if admin_bottom_items:
+        sanitized["admin_bottom_items"] = admin_bottom_items
+    return sanitized
+
+
+def _sanitize_public_installed_solution(item: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    solution_id = str(item.get("id") or "").strip().lower()
+    name = str(item.get("name") or "").strip()
+    if not solution_id or not name:
+        return None
+    return {
+        "id": solution_id[:120],
+        "name": name[:160],
+        "description": str(item.get("description") or "").strip()[:500],
+        "enabled": bool(item.get("enabled")),
+        "route_base": str(item.get("route_base") or "").strip()[:240] or None,
+        "primary_route": str(item.get("primary_route") or "").strip()[:240] or None,
+        "required_skills": _sanitize_skill_id_list(item.get("required_skills")),
+        "ui_preset": _sanitize_public_solution_ui_preset(item.get("ui_preset")),
+        "status": item.get("status") if isinstance(item.get("status"), dict) else {},
+    }
+
+
 def _sanitize_skill_id_list(raw_items: Any) -> List[str]:
     if not isinstance(raw_items, list):
         return []
@@ -417,19 +483,34 @@ async def doctor():
     )
 
 async def get_runtime_skills_state():
+    installed: List[Dict[str, Any]] = []
+    for item in list_installed_skills():
+        sanitized = _sanitize_public_installed_skill(item)
+        if sanitized:
+            installed.append(sanitized)
     state = _runtime_skills_snapshot()
     return {
         "ok": True,
         "state": state,
         "builtins": RUNTIME_BUILTIN_SKILLS,
-        "installed": list_installed_skills(),
+        "installed": installed,
     }
 
 async def get_runtime_solutions_state():
+    installed: List[Dict[str, Any]] = []
+    active: List[Dict[str, Any]] = []
+    for item in list_installed_solutions():
+        sanitized = _sanitize_public_installed_solution(item)
+        if sanitized:
+            installed.append(sanitized)
+    for item in active_installed_solutions():
+        sanitized = _sanitize_public_installed_solution(item)
+        if sanitized:
+            active.append(sanitized)
     return {
         "ok": True,
-        "installed": list_installed_solutions(),
-        "active": active_installed_solutions(),
+        "installed": installed,
+        "active": active,
         "mcp_endpoint": EMPYRALIST_MCP_ENDPOINT,
         "mcp_tools": EMPYRALIST_MCP_TOOLS,
     }

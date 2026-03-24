@@ -17,7 +17,7 @@ const TriggerNode = ({ data, selected }: { data: TriggerNodeData; selected?: boo
             kindLabel="Trigger"
             title={data.label || 'Start'}
             subtitle={`Starts from ${triggerType}`}
-            accentColor="#f59e0b"
+            accentColor="#53bca7"
             icon={<Zap size={20} strokeWidth={1.9} />}
             selected={selected}
             badge={triggerType.toUpperCase()}

@@ -1,5 +1,5 @@
 import { BRAND } from '@/lib/brand';
-import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { PACKAGED_SOLUTIONS_ENABLED, SINGLE_AGENT_MODE } from '@/lib/appFlags';
 
 export type PlatformLocalOpsAction =
   | 'start_services'
@@ -112,14 +112,6 @@ const BASE_COMMANDS: PlatformCommand[] = [
     group: 'Navigate',
     keywords: ['history', 'runs', 'executions', 'activity', 'logs'],
     action: { type: 'navigate', href: '/executions' },
-  },
-  {
-    id: 'nav.solutions',
-    title: 'Go to Solutions',
-    description: 'Browse packaged experiences built on the core platform.',
-    group: 'Navigate',
-    keywords: ['solutions', 'packages', 'apps', 'hotel vision'],
-    action: { type: 'navigate', href: '/solutions' },
   },
   {
     id: 'nav.workflows',
@@ -237,6 +229,17 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'local_op', action: 'ops_daemon_restart' },
   },
 ];
+
+if (PACKAGED_SOLUTIONS_ENABLED) {
+  BASE_COMMANDS.splice(9, 0, {
+    id: 'nav.solutions',
+    title: 'Go to Packages',
+    description: 'Browse optional packaged capability layers.',
+    group: 'Navigate',
+    keywords: ['packages', 'extensions', 'solutions', 'capabilities'],
+    action: { type: 'navigate', href: '/solutions' },
+  });
+}
 
 function scoreCommand(command: PlatformCommand, terms: string[]): number | null {
   const title = command.title.toLowerCase();

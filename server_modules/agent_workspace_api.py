@@ -127,6 +127,19 @@ AGENT_WORKSPACE_IGNORED_PATH_PREFIXES = {
     ".venv/",
     "venv/",
 }
+AGENT_WORKSPACE_SENSITIVE_FILENAMES = {
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.production",
+    ".env.test",
+    ".npmrc",
+    ".pypirc",
+    "runtime_key",
+    "ops_daemon_key",
+    "stack.env",
+    "users.db",
+}
 WORKSPACE_PREVIEW_IMAGE_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -315,9 +328,35 @@ def _workspace_allowed_roots() -> List[Path]:
     return roots
 
 
+def _workspace_path_is_restricted(path_value: str) -> bool:
+    normalized = str(path_value or "").strip().replace("\\", "/").lstrip("./")
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    for prefix in AGENT_WORKSPACE_IGNORED_PATH_PREFIXES:
+        cleaned = prefix.rstrip("/").lower()
+        if lowered == cleaned or lowered.startswith(f"{cleaned}/"):
+            return True
+    parts = [part for part in lowered.split("/") if part and part != "."]
+    if not parts:
+        return True
+    if any(part.startswith(".") for part in parts):
+        return True
+    if any(part in AGENT_WORKSPACE_SENSITIVE_FILENAMES for part in parts):
+        return True
+    return False
+
+
+def _ensure_workspace_path_allowed(path_value: str) -> None:
+    if _workspace_path_is_restricted(path_value):
+        raise HTTPException(status_code=403, detail="Path is not available through workspace APIs.")
+
+
 def _resolve_workspace_material_target(normalized_path: str) -> Optional[Path]:
     target_value = str(normalized_path or "").strip()
     if not target_value or target_value.lower().startswith(("http://", "https://", "file://")):
+        return None
+    if _workspace_path_is_restricted(target_value):
         return None
 
     candidate = Path(target_value).expanduser()
@@ -454,6 +493,8 @@ def _build_workspace_evidence_rows(snapshot: Dict[str, Any], normalized_path: st
 
 
 def _git_diff_for_workspace_path(normalized_path: str) -> Tuple[str, str]:
+    if _workspace_path_is_restricted(normalized_path):
+        return "", "Path is not available through workspace APIs."
     repo_root = _git_repo_root()
     if repo_root is None:
         return "", "Git repository unavailable."
@@ -1518,6 +1559,7 @@ def register_agent_workspace_routes(app) -> None:
         normalized_path = _normalize_workspace_material_path(path)
         if not normalized_path:
             raise HTTPException(status_code=400, detail="path is required.")
+        _ensure_workspace_path_allowed(normalized_path)
 
         target_run_id = str(run_id or "").strip()
         snapshots: List[Dict[str, Any]] = []
@@ -1625,6 +1667,7 @@ def register_agent_workspace_routes(app) -> None:
         normalized = _normalize_workspace_material_path(path_value)
         if not normalized:
             raise HTTPException(status_code=400, detail="path is required.")
+        _ensure_workspace_path_allowed(normalized)
         lowered = normalized.lower()
         if lowered.startswith(("http://", "https://", "file://")):
             raise HTTPException(status_code=400, detail="Only local paths are supported.")
@@ -1651,6 +1694,8 @@ def register_agent_workspace_routes(app) -> None:
             return target.as_posix()
 
     def _should_ignore_path(rel_path: str) -> bool:
+        if _workspace_path_is_restricted(rel_path):
+            return True
         lowered = rel_path.replace("\\", "/").lstrip("./")
         for prefix in AGENT_WORKSPACE_IGNORED_PATH_PREFIXES:
             cleaned = prefix.rstrip("/")
@@ -1685,7 +1730,7 @@ def register_agent_workspace_routes(app) -> None:
                 break
         return {
             "ok": True,
-            "root": str(root),
+            "root": ".",
             "path": _relative_to_root(target, root),
             "items": rows,
         }

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
 from scripts.platform_execution import stack_start_command_hint
-from server_modules.automation_intents import classify_automation_intent, looks_like_camera_source
+from server_modules.automation_intents import classify_automation_intent
 from server_modules.installed_skills import query_active_installed_skills
 try:
     from mcp import ClientSession
@@ -911,13 +911,13 @@ def _load_telegram_camera_setup_state() -> None:
         if not isinstance(value, dict):
             continue
         stage = str(value.get("stage") or "").strip().lower()
-        if stage not in {"awaiting_space_name", "awaiting_camera_source"}:
+        if stage not in {"awaiting_summary_target", "awaiting_followup_target"}:
             continue
         parsed[str(key)] = {
             "stage": stage,
             "original_prompt": str(value.get("original_prompt") or "").strip(),
-            "space_name": str(value.get("space_name") or "").strip(),
             "updated_at": str(value.get("updated_at") or "").strip() or _utc_now_iso(),
+            "intent": str(value.get("intent") or "").strip().upper(),
         }
     with _TELEGRAM_CAMERA_SETUP_LOCK:
         _TELEGRAM_CAMERA_SETUP_STATE["items"] = parsed
@@ -950,10 +950,9 @@ def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[st
         out = dict(item) if isinstance(item, dict) else {}
     return {
         "active": bool(out.get("stage")),
-        "intent": str(out.get("intent") or "").strip().upper() or "CAMERA_MONITOR",
+        "intent": str(out.get("intent") or "").strip().upper(),
         "stage": str(out.get("stage") or "").strip(),
         "original_prompt": str(out.get("original_prompt") or "").strip(),
-        "space_name": str(out.get("space_name") or "").strip(),
         "updated_at": str(out.get("updated_at") or "").strip(),
     }
 
@@ -963,8 +962,7 @@ def _set_telegram_camera_setup_state(
     chat_id: str,
     stage: str,
     original_prompt: str,
-    space_name: str = "",
-    intent: str = "CAMERA_MONITOR",
+    intent: str = "",
 ) -> Dict[str, Any]:
     _ensure_telegram_camera_setup_state_loaded()
     key = _telegram_camera_setup_key(workspace_id, chat_id)
@@ -975,10 +973,9 @@ def _set_telegram_camera_setup_state(
             items = {}
             _TELEGRAM_CAMERA_SETUP_STATE["items"] = items
         items[key] = {
-            "intent": str(intent or "CAMERA_MONITOR").strip().upper() or "CAMERA_MONITOR",
+            "intent": str(intent or "").strip().upper(),
             "stage": stage,
             "original_prompt": str(original_prompt or "").strip(),
-            "space_name": str(space_name or "").strip(),
             "updated_at": now,
         }
     _persist_telegram_camera_setup_state()
@@ -1056,61 +1053,6 @@ def _primary_email_connector_id(workspace_id: str) -> Optional[str]:
             if connector_id:
                 return connector_id
     return None
-
-
-def _camera_monitor_workflow_definition(space_name: str) -> Dict[str, Any]:
-    label = str(space_name or "").strip() or "Space"
-    return {
-        "nodes": [
-            {
-                "id": "trigger-schedule",
-                "type": "trigger",
-                "position": {"x": 265, "y": 50},
-                "data": {"label": "Scheduled Scan", "triggerType": "schedule"},
-            },
-            {
-                "id": "agent-vision",
-                "type": "agent",
-                "position": {"x": 265, "y": 220},
-                "data": {
-                    "label": "Vision Agent",
-                    "modelId": "gpt-4o",
-                    "prompt": f"Monitor {label} and report unusual activity.",
-                    "tools": ["vision-monitor"],
-                    "provider": "openai",
-                    "role": "Vision",
-                    "duty": f"Watch {label} and summarize unusual activity clearly.",
-                    "status": "ready",
-                    "description": f"{label} monitoring",
-                },
-            },
-            {
-                "id": "action-telegram",
-                "type": "action",
-                "position": {"x": 265, "y": 390},
-                "data": {"label": "Send Telegram", "actionType": "send_telegram"},
-            },
-        ],
-        "edges": [
-            {
-                "id": "edge-trigger-agent",
-                "source": "trigger-schedule",
-                "target": "agent-vision",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-            {
-                "id": "edge-agent-action",
-                "source": "agent-vision",
-                "target": "action-telegram",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-        ],
-        "meta": {"automationMode": "scheduled", "created_from": "camera_monitor_chat_bridge"},
-    }
 
 
 def _email_summary_workflow_definition(target_label: str, *, telegram_connected: bool) -> Dict[str, Any]:
@@ -1228,53 +1170,6 @@ def _lead_followup_workflow_definition(flow_label: str, *, email_connected: bool
     }
 
 
-def _create_hotel_vision_space_via_api(
-    *,
-    space_name: str,
-    camera_source: str,
-    workspace_id: str,
-    uploaded_mime_type: str = "",
-) -> Dict[str, Any]:
-    _init()
-    status_res = http_json_request(
-        f"{EMPYRALIST_RUNTIME_URL}/api/solutions/hotel-vision/onboarding/status",
-        headers=_runtime_api_headers(),
-        timeout=20,
-    )
-    status_json = status_res.get("json") if isinstance(status_res.get("json"), dict) else {}
-    payload = {
-        "hotel_name": "My Property",
-        "city": "Unknown",
-        "timezone": str(status_json.get("default_timezone") or "UTC").strip() or "UTC",
-        "alert_channel": "telegram",
-        "space_name": str(space_name or "").strip(),
-        "monitoring_modes": ["people count", "after-hours movement", "occupancy level"],
-        "busy_threshold": 15,
-        "quiet_hours_from": "22:00",
-        "quiet_hours_to": "06:00",
-        "scan_cadence_minutes": 5,
-        "workspace_id": str(workspace_id or "").strip() or "default",
-    }
-    if looks_like_camera_source(camera_source) and str(camera_source or "").strip().lower().startswith("data:image/"):
-        payload["camera_mode"] = "upload"
-        payload["uploaded_photo_data_url"] = camera_source
-    elif str(camera_source or "").strip().lower().startswith(("http://", "https://", "rtsp://", "rtmp://", "rtmps://")):
-        payload["camera_mode"] = "ip_camera"
-        payload["camera_url"] = str(camera_source or "").strip()
-    else:
-        payload["camera_mode"] = "upload"
-        payload["uploaded_photo_data_url"] = _data_url_from_local_file(camera_source, uploaded_mime_type)
-    response = http_json_request(
-        f"{EMPYRALIST_RUNTIME_URL}/api/solutions/hotel-vision/onboarding/space",
-        method="POST",
-        headers=_runtime_api_headers(),
-        payload=payload,
-        timeout=30,
-    )
-    payload_json = response.get("json") if isinstance(response.get("json"), dict) else {}
-    return payload_json
-
-
 def _create_published_workflow_record(name: str, description: str, definition: Dict[str, Any]) -> Optional[str]:
     _init()
     create_res = http_json_request(
@@ -1301,15 +1196,6 @@ def _create_published_workflow_record(name: str, description: str, definition: D
         except Exception:
             pass
     return workflow_id or None
-
-
-def _create_workflow_visibility_record(space_name: str) -> Optional[str]:
-    label = str(space_name or "").strip() or "Space"
-    return _create_published_workflow_record(
-        f"Monitor {label}",
-        f"Camera monitor for {label}",
-        _camera_monitor_workflow_definition(label),
-    )
 
 
 def _create_email_summary_visibility_record(target_label: str, *, telegram_connected: bool) -> Optional[str]:
@@ -1418,20 +1304,6 @@ def _create_lead_followup_visibility_record(flow_label: str, *, email_connected:
     )
 
 
-def _camera_monitor_completion_text(space_name: str, channel_connected: bool, workflow_id: Optional[str] = None) -> str:
-    label = str(space_name or "").strip() or "space"
-    lines = [
-        f"Done. Your {label} monitor is {'active' if channel_connected else 'ready'}.",
-        "You'll get Telegram alerts when anything unusual happens." if channel_connected else "Connect Telegram to receive alerts.",
-        f"Open Hotel Vision: {EMPYRALIST_WEB_URL}/solutions/hotel-vision",
-    ]
-    if workflow_id:
-        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
-    if not channel_connected:
-        lines.append(f"Connect Telegram to receive alerts → {EMPYRALIST_WEB_URL}/credentials?connector=telegram_bot&onboarding=1")
-    return "\n\n".join(lines)
-
-
 def _email_summary_completion_text(
     target_label: str,
     *,
@@ -1482,16 +1354,15 @@ def _lead_followup_completion_text(
     return "\n\n".join(lines)
 
 
-def _telegram_handle_camera_monitor_setup(
+def _telegram_handle_guided_automation_setup(
     *,
     workspace_id: str,
     chat_id: str,
     message_text: str,
-    stored_attachments: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     active_state = _get_telegram_camera_setup_state(workspace_id, chat_id)
     normalized_text = str(message_text or "").strip()
-    active_intent = str(active_state.get("intent") or "").strip().upper() or "CAMERA_MONITOR"
+    active_intent = str(active_state.get("intent") or "").strip().upper()
     connector_flags = _workspace_connector_flags(workspace_id)
 
     if active_state.get("active"):
@@ -1547,70 +1418,6 @@ def _telegram_handle_camera_monitor_setup(
                     "handled": True,
                     "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the follow-up automation.'}",
                 }
-        if stage == "awaiting_space_name":
-            if not normalized_text:
-                return {"handled": True, "reply": "What should I call this space? (e.g. Entrance, Reception, Parking)"}
-            _set_telegram_camera_setup_state(
-                workspace_id,
-                chat_id,
-                "awaiting_camera_source",
-                str(active_state.get("original_prompt") or "").strip(),
-                space_name=normalized_text,
-                intent=active_intent,
-            )
-            return {
-                "handled": True,
-                "reply": "Got it. Upload a photo of the space or paste a camera URL to get started.",
-            }
-        if stage == "awaiting_camera_source":
-            source_value = normalized_text if looks_like_camera_source(normalized_text) else ""
-            source_mime = ""
-            if not source_value and isinstance(stored_attachments, list) and stored_attachments:
-                first = stored_attachments[0] if isinstance(stored_attachments[0], dict) else {}
-                source_value = str(first.get("path") or "").strip()
-                source_mime = str(first.get("mime_type") or "").strip()
-            if not source_value:
-                return {
-                    "handled": True,
-                    "reply": "Paste a camera URL to continue, or upload one photo of the space.",
-                }
-            space_name = str(active_state.get("space_name") or "").strip() or "Space"
-            try:
-                created = _create_hotel_vision_space_via_api(
-                    space_name=space_name,
-                    camera_source=source_value,
-                    workspace_id=workspace_id,
-                    uploaded_mime_type=source_mime,
-                )
-                workflow_id = _create_workflow_visibility_record(space_name)
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": _camera_monitor_completion_text(
-                        space_name,
-                        bool(created.get("channel_connected")),
-                        workflow_id,
-                    ),
-                }
-            except Exception as exc:
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the monitor.'}",
-                }
-
-    if classify_automation_intent(normalized_text) == "CAMERA_MONITOR":
-        _set_telegram_camera_setup_state(
-            workspace_id,
-            chat_id,
-            "awaiting_space_name",
-            original_prompt=normalized_text,
-            intent="CAMERA_MONITOR",
-        )
-        return {
-            "handled": True,
-            "reply": "I'll set up a camera monitor for you.\n\nWhat should I call this space?\n\n(e.g. Entrance, Reception, Parking)",
-        }
     if classify_automation_intent(normalized_text) == "EMAIL_SUMMARY":
         _set_telegram_camera_setup_state(
             workspace_id,
@@ -4599,23 +4406,22 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                 },
             )
             source_event_id = str((inbound_event or {}).get("id") or "").strip()
-            camera_setup = _telegram_handle_camera_monitor_setup(
+            guided_setup = _telegram_handle_guided_automation_setup(
                 workspace_id=workspace_id,
                 chat_id=chat_id,
                 message_text=message_text,
-                stored_attachments=stored_attachments,
             )
-            if bool(camera_setup.get("handled")):
+            if bool(guided_setup.get("handled")):
                 _record_channel_event(
                     channel="telegram",
                     direction="system",
-                    event_type="camera_setup_reply",
-                    text=str(camera_setup.get("reply") or "").strip(),
+                    event_type="automation_setup_reply",
+                    text=str(guided_setup.get("reply") or "").strip(),
                     workspace_id=workspace_id,
                     session_key=session_key,
                     session_id=session_key,
                     parent_id=inbound_message_id or None,
-                    action="camera_setup",
+                    action="automation_setup",
                     metadata={
                         "connector_id": connector_id,
                         "profile_id": profile.get("id"),
@@ -4626,9 +4432,9 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                 _telegram_send_message(
                     bot_token,
                     chat_id,
-                    str(camera_setup.get("reply") or "").strip(),
+                    str(guided_setup.get("reply") or "").strip(),
                     workspace_id=workspace_id,
-                    action="camera_setup",
+                    action="automation_setup",
                     connector_id=connector_id,
                     parent_message_id=inbound_message_id or None,
                     profile=profile,

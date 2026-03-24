@@ -20,8 +20,6 @@ import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 const BACKEND_API_URL = API_BASE;
 const ORION_API_URL = API_BASE;
-const ORION_API_KEY =
-  process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type CardStatus = 'loading' | 'ok' | 'warn' | 'error';
 
@@ -489,9 +487,8 @@ export default function HealthPage() {
   }, [backend.status, doctorCard.status, runtime.status]);
 
   const resolveRuntimeKey = useCallback((): string => {
-    const key = readRuntimeApiKeyFromStorage(ORION_API_KEY);
-    const normalized = String(key || '').replace(/\s+/g, '');
-    return normalized || 'replace-with-strong-key';
+    const key = readRuntimeApiKeyFromStorage('');
+    return String(key || '').replace(/\s+/g, '');
   }, []);
 
   const updateOpsDaemonFromPayload = useCallback((payload: unknown) => {

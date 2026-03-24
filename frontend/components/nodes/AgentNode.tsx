@@ -13,11 +13,11 @@ type AgentNodeData = {
 };
 
 const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean }) => {
-    const accentColor = '#7c3aed';
+    const accentColor = '#8fa6ff';
     const status = String(data.status || 'ready').trim().toUpperCase();
-    const summary = [String(data.modelId || 'gpt-4.1').trim(), String(data.description || data.duty || 'Autonomous reasoning').trim()]
-        .filter(Boolean)
-        .join(' · ');
+    const model = String(data.modelId || '').trim();
+    const description = String(data.description || data.duty || 'Autonomous reasoning').trim();
+    const summary = [model, description].filter(Boolean).join(' · ') || 'Agent';
 
     return (
         <StandardCanvasNode

@@ -1,1 +1,0 @@
-{"id": "demo-pool-after-hours", "ts": "2026-03-22T13:15:00+08:00", "space_id": "pool", "severity": "critical", "code": "after_hours_activity", "message": "Pool activity was detected outside configured business hours.", "resolved": false}

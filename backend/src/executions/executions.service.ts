@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../ai/llm.service';
 import { VectorService } from '../memory/vector.service';
@@ -29,6 +29,74 @@ export class ExecutionsService {
         private telegramService: TelegramService,
     ) { }
 
+    private isSystemActor(userId?: string | null, isService = false): boolean {
+        const normalized = String(userId || '').trim();
+        return isService || !normalized || normalized === 'system' || normalized.startsWith('AESK_');
+    }
+
+    private async listAccessibleOrganizationIds(userId: string): Promise<string[]> {
+        const memberships = await this.prisma.organizationMember.findMany({
+            where: { userId },
+            select: { organizationId: true },
+        });
+        return memberships.map((item) => item.organizationId);
+    }
+
+    private async getWorkflowForActor(workflowId: string, userId?: string, isService = false) {
+        const workflow = await this.prisma.workflow.findUnique({
+            where: { id: workflowId },
+            include: {
+                workspace: {
+                    select: {
+                        id: true,
+                        organizationId: true,
+                    },
+                },
+            },
+        });
+        if (!workflow) {
+            throw new NotFoundException('Workflow not found');
+        }
+        if (this.isSystemActor(userId, isService)) {
+            return workflow;
+        }
+        const organizationIds = await this.listAccessibleOrganizationIds(String(userId || '').trim());
+        if (!organizationIds.includes(workflow.workspace.organizationId)) {
+            throw new ForbiddenException('Workflow is not accessible for this user.');
+        }
+        return workflow;
+    }
+
+    private async getExecutionForActor(executionId: string, userId?: string, isService = false) {
+        const execution = await this.prisma.execution.findUnique({
+            where: { id: executionId },
+            include: {
+                workflow: {
+                    include: {
+                        workspace: {
+                            select: {
+                                id: true,
+                                organizationId: true,
+                            },
+                        },
+                    },
+                },
+                steps: { include: { toolCalls: true }, orderBy: { stepOrder: 'asc' } },
+            },
+        });
+        if (!execution) {
+            throw new NotFoundException('Execution not found');
+        }
+        if (this.isSystemActor(userId, isService)) {
+            return execution;
+        }
+        const organizationIds = await this.listAccessibleOrganizationIds(String(userId || '').trim());
+        if (!organizationIds.includes(execution.workflow.workspace.organizationId)) {
+            throw new ForbiddenException('Execution is not accessible for this user.');
+        }
+        return execution;
+    }
+
     // --- AC-OS HELPERS ---
 
     private loadNiches(): any {
@@ -49,9 +117,8 @@ export class ExecutionsService {
 
     // --- MAIN API ---
 
-    async executeWorkflow(workflowId: string, input: any = {}) {
-        const workflow = await this.prisma.workflow.findUnique({ where: { id: workflowId } });
-        if (!workflow) throw new NotFoundException('Workflow not found');
+    async executeWorkflow(workflowId: string, input: any = {}, userId?: string, isService = false) {
+        const workflow = await this.getWorkflowForActor(workflowId, userId, isService);
 
         const definition = typeof workflow.definition === 'string'
             ? JSON.parse(workflow.definition)
@@ -66,7 +133,7 @@ export class ExecutionsService {
         const execution = await this.prisma.execution.create({
             data: {
                 workflowId,
-                organizationId: 'default-org-id', // Multi-tenant placeholder
+                organizationId: workflow.workspace.organizationId,
                 status: 'running',
                 triggeredBy: 'manual',
                 startedAt: new Date(),
@@ -86,9 +153,8 @@ export class ExecutionsService {
         return this.runExecutionLoop(execution.id, initialContext);
     }
 
-    async resumeExecution(executionId: string, resumeData: any = {}) {
-        const execution = await this.prisma.execution.findUnique({ where: { id: executionId } });
-        if (!execution) throw new NotFoundException('Execution not found');
+    async resumeExecution(executionId: string, resumeData: any = {}, userId?: string, isService = false) {
+        const execution = await this.getExecutionForActor(executionId, userId, isService);
         if (execution.status !== 'waiting') throw new Error('Only waiting executions can be resumed');
 
         const outputRaw = execution.output as string;
@@ -650,9 +716,16 @@ export class ExecutionsService {
         return { executionId, status: 'success', logs };
     }
 
-    async findAll() {
+    async findAll(userId?: string, isService = false) {
         try {
+            const organizationIds = this.isSystemActor(userId, isService)
+                ? null
+                : await this.listAccessibleOrganizationIds(String(userId || '').trim());
+            if (organizationIds && organizationIds.length === 0) {
+                return [];
+            }
             const executions = await this.prisma.execution.findMany({
+                where: organizationIds ? { organizationId: { in: organizationIds } } : undefined,
                 include: { workflow: true },
                 orderBy: { createdAt: 'desc' },
             });
@@ -663,15 +736,8 @@ export class ExecutionsService {
         }
     }
 
-    async findOne(id: string) {
-        const execution = await this.prisma.execution.findUnique({
-            where: { id },
-            include: {
-                workflow: true,
-                steps: { include: { toolCalls: true }, orderBy: { stepOrder: 'asc' } }
-            },
-        });
-        if (!execution) throw new NotFoundException('Execution not found');
+    async findOne(id: string, userId?: string, isService = false) {
+        const execution = await this.getExecutionForActor(id, userId, isService);
         return this.deserializeExecution(execution);
     }
 

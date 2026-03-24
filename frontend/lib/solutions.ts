@@ -60,7 +60,7 @@ export type AutomationRecord = {
 };
 
 function runtimeHeaders(): HeadersInit {
-  const runtimeKey = readRuntimeApiKeyFromStorage(process.env.NEXT_PUBLIC_ORION_API_KEY || 'replace-with-strong-key');
+  const runtimeKey = readRuntimeApiKeyFromStorage('');
   return runtimeKey ? { 'X-API-Key': runtimeKey } : {};
 }
 

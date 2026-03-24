@@ -82,14 +82,22 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
             "Fix Empyralis runtime configuration and restart the service.",
         )
 
-    if bool(config.get("ORION_AUTH_REQUIRED")) and not bool(config.get("ORION_API_KEY")):
+    runtime_api_key = str(config.get("ORION_API_KEY") or "").strip()
+    if bool(config.get("ORION_AUTH_REQUIRED")) and not runtime_api_key:
         add_check(
             "auth_policy",
             "fail",
             "ORION_AUTH_REQUIRED=1 but ORION_API_KEY is not configured.",
             "Set ORION_API_KEY or disable ORION_AUTH_REQUIRED for local dev only.",
         )
-    elif bool(config.get("ORION_API_KEY")):
+    elif runtime_api_key == "replace-with-strong-key":
+        add_check(
+            "auth_policy",
+            "warn",
+            "Runtime API key is using the default placeholder value.",
+            "Set a unique ORION_API_KEY or start the local stack without a preset key so it can generate one.",
+        )
+    elif runtime_api_key:
         add_check("auth_policy", "pass", "Runtime API key auth is configured.")
     else:
         add_check(

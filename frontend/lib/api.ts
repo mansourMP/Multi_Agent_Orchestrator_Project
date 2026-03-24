@@ -22,7 +22,16 @@ export class ApiError extends Error {
 }
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-    const res = await fetch(`${API_BASE}${endpoint}`, options);
+    const headers = new Headers(options.headers || {});
+    const runtimeApiKey = readRuntimeApiKeyFromStorage('');
+    if (runtimeApiKey && !headers.has('X-API-Key')) {
+        headers.set('X-API-Key', runtimeApiKey);
+    }
+
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+        ...options,
+        headers,
+    });
 
     if (!res.ok) {
         let errorMsg = `API Error: ${res.status} ${res.statusText}`;

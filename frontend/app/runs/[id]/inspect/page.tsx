@@ -24,7 +24,6 @@ import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
 
 const ORION_API_URL = API_BASE;
-const ORION_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type HistoryItem = {
   run_id: string;
@@ -556,7 +555,7 @@ export default function RunInspectPage() {
   }, []);
 
   const getRuntimeApiKey = useCallback((): string => {
-    return readRuntimeApiKeyFromStorage(ORION_API_KEY);
+    return readRuntimeApiKeyFromStorage('');
   }, []);
 
   const buildHeaders = useCallback((withJson = false): HeadersInit => {

@@ -6,6 +6,10 @@ async function bootstrap() {
     const app = await NestFactory.create(AppModule, {
         logger: ['error', 'warn', 'log', 'debug'],
     });
+    const frontendOrigins = (process.env.FRONTEND_ORIGINS || 'http://127.0.0.1:3000,http://localhost:3000')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean);
 
     // Global validation pipe
     app.useGlobalPipes(
@@ -18,7 +22,7 @@ async function bootstrap() {
 
     // CORS
     app.enableCors({
-        origin: true,
+        origin: frontendOrigins,
         credentials: true,
     });
 

@@ -33,7 +33,6 @@ import {
 } from '@/lib/skills';
 
 const ORION_API_URL = API_BASE;
-const ORION_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 
 type TrustMode = 'auto' | 'guarded' | 'strict';
 type ExecTarget = 'auto' | 'cloud' | 'local_companion';
@@ -243,7 +242,7 @@ function toRawManifestUrl(url: string): string {
 
 function runtimeHeaders(): Headers {
   const headers = new Headers();
-  const key = readRuntimeApiKeyFromStorage(ORION_API_KEY);
+  const key = readRuntimeApiKeyFromStorage('');
   if (key) headers.set('X-API-Key', key);
   return headers;
 }

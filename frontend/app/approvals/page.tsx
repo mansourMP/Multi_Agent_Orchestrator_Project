@@ -106,7 +106,7 @@ function toneForLabel(value?: string | null): { color: string; border: string; b
 
 export default function ApprovalsPage() {
   const router = useRouter();
-  const [runtimeKey, setRuntimeKey] = useState('replace-with-strong-key');
+  const [runtimeKey, setRuntimeKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingApproval[]>([]);
   const [audit, setAudit] = useState<ApprovalAudit[]>([]);

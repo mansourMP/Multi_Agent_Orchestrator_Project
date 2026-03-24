@@ -13,11 +13,13 @@ RUNTIME_KEY_VALUE="$(normalize_runtime_key "${RUNTIME_KEY_RAW}")"
 if [[ -z "${RUNTIME_KEY_VALUE}" && -f "${STACK_KEY_FILE}" ]]; then
   RUNTIME_KEY_VALUE="$(normalize_runtime_key "$(cat "${STACK_KEY_FILE}" 2>/dev/null || true)")"
 fi
-if [[ -z "${RUNTIME_KEY_VALUE}" ]]; then
-  RUNTIME_KEY_VALUE="replace-with-strong-key"
-fi
 
 cd "${ROOT_DIR}"
-ORION_OPENCLAW_GATEWAY_POLICY="${ORION_OPENCLAW_GATEWAY_POLICY:-auto_stop}" \
-RUNTIME_KEY="${RUNTIME_KEY_VALUE}" \
-bash scripts/start_orion_local_stack.sh
+if [[ -n "${RUNTIME_KEY_VALUE}" ]]; then
+  ORION_OPENCLAW_GATEWAY_POLICY="${ORION_OPENCLAW_GATEWAY_POLICY:-auto_stop}" \
+  RUNTIME_KEY="${RUNTIME_KEY_VALUE}" \
+  bash scripts/start_orion_local_stack.sh
+else
+  ORION_OPENCLAW_GATEWAY_POLICY="${ORION_OPENCLAW_GATEWAY_POLICY:-auto_stop}" \
+  bash scripts/start_orion_local_stack.sh
+fi

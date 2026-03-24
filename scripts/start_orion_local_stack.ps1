@@ -113,9 +113,23 @@ Ensure-Dir $StateDir
 Ensure-Dir $LogDir
 Ensure-Dir $PidDir
 
-$rawRuntimeKey = if ($RuntimeKey) { $RuntimeKey } elseif ($env:RUNTIME_KEY) { $env:RUNTIME_KEY } elseif ($env:ORION_API_KEY) { $env:ORION_API_KEY } else { "replace-with-strong-key" }
+function New-RuntimeKey {
+  $bytes = New-Object byte[] 24
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($bytes)
+  } finally {
+    $rng.Dispose()
+  }
+  return ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+}
+
+$rawRuntimeKey = if ($RuntimeKey) { $RuntimeKey } elseif ($env:RUNTIME_KEY) { $env:RUNTIME_KEY } elseif ($env:ORION_API_KEY) { $env:ORION_API_KEY } else { "" }
 $cleanRuntimeKey = ($rawRuntimeKey -replace "\s+", "")
-if ([string]::IsNullOrWhiteSpace($cleanRuntimeKey)) { $cleanRuntimeKey = "replace-with-strong-key" }
+if ([string]::IsNullOrWhiteSpace($cleanRuntimeKey)) {
+  $cleanRuntimeKey = New-RuntimeKey
+  Write-Host "No runtime key supplied. Generated a random local runtime key."
+}
 if ($rawRuntimeKey -ne $cleanRuntimeKey) { Write-Host "Warning: runtime key contained whitespace and was normalized." }
 
 $runtimeUrl = "http://$OrionHost`:$OrionPort"
@@ -237,7 +251,6 @@ if ($StartBackend -eq 1) {
 if ($StartFrontend -eq 1) {
   Write-Host "Starting frontend on $FrontendHost`:$FrontendPort ..."
   $env:NEXT_PUBLIC_ORION_API_URL = $runtimeUrl
-  $env:NEXT_PUBLIC_ORION_API_KEY = $cleanRuntimeKey
   $npm = Get-CommandPath "npm"
   if (-not $npm) { throw "npm was not found in PATH." }
   Start-TrackedProcess -Name "frontend" -FilePath $npm -Args @("run", "dev", "--", "--hostname", $FrontendHost, "--port", "$FrontendPort") -WorkingDir (Join-Path $RootDir "frontend") -LogPath $frontendLog | Out-Null

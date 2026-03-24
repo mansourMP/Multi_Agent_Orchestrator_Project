@@ -57,7 +57,6 @@ type KindFilter = 'all' | 'screenshots' | 'reports' | 'data' | 'links' | 'files'
 type ArtifactView = 'deliverables' | 'evidence' | 'system' | 'all';
 type ArtifactFormat = 'word' | 'powerpoint' | 'spreadsheet' | 'pdf' | 'image' | 'text' | 'generic';
 
-const ORION_API_KEY = process.env.NEXT_PUBLIC_ORION_API_KEY || '';
 const RUNTIME_TIMEOUT_MS = 3500;
 
 function toDateLabel(value?: string | null): string {
@@ -345,7 +344,7 @@ export default function ArtifactsPage() {
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [agentFilter, setAgentFilter] = useState<'all' | AgentRoleId>('all');
   const [channelFilter, setChannelFilter] = useState('all');
-  const runtimeKey = useMemo(() => readRuntimeApiKeyFromStorage(ORION_API_KEY), []);
+  const runtimeKey = useMemo(() => readRuntimeApiKeyFromStorage(''), []);
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };

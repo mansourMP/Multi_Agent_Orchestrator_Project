@@ -100,7 +100,11 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
 
     const refreshRemote = async () => {
       try {
-        const headers: HeadersInit = { 'X-API-Key': readRuntimeApiKeyFromStorage('replace-with-strong-key') };
+        const headers = new Headers();
+        const runtimeKey = readRuntimeApiKeyFromStorage('');
+        if (runtimeKey) {
+          headers.set('X-API-Key', runtimeKey);
+        }
         const [healthRes, workersRes, historyRes] = await Promise.allSettled([
           fetch(`${API_BASE}/health`, { headers }),
           fetch(`${API_BASE}/local/workers/status`, { headers }),

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
@@ -9,30 +9,106 @@ export class WorkflowsService {
         private prisma: PrismaService
     ) { }
 
-    async create(workspaceId: string, createWorkflowDto: CreateWorkflowDto, userId: string = 'system') {
-        let finalWorkspaceId = workspaceId;
+    private isSystemActor(userId?: string | null, isService = false): boolean {
+        const normalized = String(userId || '').trim();
+        return isService || !normalized || normalized === 'system' || normalized.startsWith('AESK_');
+    }
 
-        // Handle "default" workspace ID
-        if (workspaceId === 'default') {
-            const ws = await this.prisma.workspace.findFirst();
+    private async listAccessibleWorkspaceIds(userId: string): Promise<string[]> {
+        const memberships = await this.prisma.organizationMember.findMany({
+            where: { userId },
+            select: { organizationId: true },
+        });
+        const organizationIds = memberships.map((item) => item.organizationId);
+        if (organizationIds.length === 0) {
+            return [];
+        }
+        const workspaces = await this.prisma.workspace.findMany({
+            where: {
+                organizationId: { in: organizationIds },
+            },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+        });
+        return workspaces.map((item) => item.id);
+    }
+
+    private async resolveWorkspaceIdForActor(workspaceId: string | undefined, userId?: string, isService = false): Promise<string> {
+        const requestedWorkspaceId = String(workspaceId || '').trim();
+        if (this.isSystemActor(userId, isService)) {
+            if (requestedWorkspaceId && requestedWorkspaceId !== 'default') {
+                const workspace = await this.prisma.workspace.findUnique({ where: { id: requestedWorkspaceId } });
+                if (!workspace) {
+                    throw new NotFoundException(`Workspace with ID ${requestedWorkspaceId} not found`);
+                }
+                return workspace.id;
+            }
+            const ws = await this.prisma.workspace.findFirst({ orderBy: { createdAt: 'asc' } });
             if (ws) {
-                finalWorkspaceId = ws.id;
-            } else {
-                // Create a default workspace if none exists
-                const newWs = await this.prisma.workspace.create({
-                    data: {
-                        name: 'Default Workspace',
-                        organization: {
-                            create: {
-                                name: 'Default Org',
-                                slug: 'default-org-' + Date.now(),
-                            }
+                return ws.id;
+            }
+            const newWs = await this.prisma.workspace.create({
+                data: {
+                    name: 'Default Workspace',
+                    organization: {
+                        create: {
+                            name: 'Default Org',
+                            slug: 'default-org-' + Date.now(),
                         }
                     }
-                });
-                finalWorkspaceId = newWs.id;
-            }
+                }
+            });
+            return newWs.id;
         }
+
+        const normalizedUserId = String(userId || '').trim();
+        if (!normalizedUserId) {
+            throw new ForbiddenException('Authenticated user is required.');
+        }
+
+        const accessibleWorkspaceIds = await this.listAccessibleWorkspaceIds(normalizedUserId);
+        if (accessibleWorkspaceIds.length === 0) {
+            throw new ForbiddenException('No accessible workspace found for this user.');
+        }
+
+        if (!requestedWorkspaceId || requestedWorkspaceId === 'default') {
+            return accessibleWorkspaceIds[0];
+        }
+
+        if (!accessibleWorkspaceIds.includes(requestedWorkspaceId)) {
+            throw new ForbiddenException('Workspace is not accessible for this user.');
+        }
+
+        return requestedWorkspaceId;
+    }
+
+    private async getWorkflowForActor(id: string, userId?: string, isService = false) {
+        const workflow = await this.prisma.workflow.findUnique({
+            where: { id },
+            include: {
+                workspace: {
+                    select: {
+                        id: true,
+                        organizationId: true,
+                    },
+                },
+            },
+        });
+        if (!workflow) {
+            throw new NotFoundException(`Workflow with ID ${id} not found`);
+        }
+        if (this.isSystemActor(userId, isService)) {
+            return workflow;
+        }
+        const accessibleWorkspaceIds = await this.listAccessibleWorkspaceIds(String(userId || '').trim());
+        if (!accessibleWorkspaceIds.includes(workflow.workspaceId)) {
+            throw new ForbiddenException('Workflow is not accessible for this user.');
+        }
+        return workflow;
+    }
+
+    async create(workspaceId: string, createWorkflowDto: CreateWorkflowDto, userId: string = 'system', isService = false) {
+        const finalWorkspaceId = await this.resolveWorkspaceIdForActor(workspaceId, userId, isService);
 
         return this.prisma.workflow.create({
             data: {
@@ -45,18 +121,9 @@ export class WorkflowsService {
         });
     }
 
-    async findAll(workspaceId: string) {
-        let whereClause: any = { workspaceId, status: { not: 'archived' } };
-
-        if (workspaceId === 'default') {
-            // If default, try to find the first workspace to filter by, or just return all
-            const ws = await this.prisma.workspace.findFirst();
-            if (ws) {
-                whereClause = { workspaceId: ws.id, status: { not: 'archived' } };
-            } else {
-                whereClause = { status: { not: 'archived' } }; // Return all non-archived if no workspace found/created yet
-            }
-        }
+    async findAll(workspaceId: string, userId?: string, isService = false) {
+        const resolvedWorkspaceId = await this.resolveWorkspaceIdForActor(workspaceId, userId, isService);
+        const whereClause: any = { workspaceId: resolvedWorkspaceId, status: { not: 'archived' } };
 
         try {
             const workflows = await this.prisma.workflow.findMany({
@@ -70,25 +137,13 @@ export class WorkflowsService {
         }
     }
 
-    async findOne(id: string) {
-        console.log(`DEBUG: findOne called for ${id}`);
-        try {
-            const workflow = await this.prisma.workflow.findUnique({
-                where: { id },
-            });
-            console.log(`DEBUG: findOne result:`, workflow ? 'FOUND' : 'NULL');
-            if (!workflow) throw new NotFoundException(`Workflow with ID ${id} not found`);
-            const result = this.deserializeWorkflow(workflow);
-            console.log(`DEBUG: findOne deserialized`);
-            return result;
-        } catch (e) {
-            console.error(`DEBUG: findOne ERROR:`, e);
-            throw e;
-        }
+    async findOne(id: string, userId?: string, isService = false) {
+        const workflow = await this.getWorkflowForActor(id, userId, isService);
+        return this.deserializeWorkflow(workflow);
     }
 
-    async update(id: string, updateWorkflowDto: UpdateWorkflowDto) {
-        await this.findOne(id);
+    async update(id: string, updateWorkflowDto: UpdateWorkflowDto, userId?: string, isService = false) {
+        await this.getWorkflowForActor(id, userId, isService);
 
         const data: any = { ...updateWorkflowDto };
         if (data.definition) {
@@ -113,8 +168,8 @@ export class WorkflowsService {
         return workflow;
     }
 
-    async remove(id: string) {
-        await this.findOne(id);
+    async remove(id: string, userId?: string, isService = false) {
+        await this.getWorkflowForActor(id, userId, isService);
         return this.prisma.workflow.update({
             where: { id },
             data: {
@@ -123,8 +178,8 @@ export class WorkflowsService {
         });
     }
 
-    async publish(id: string) {
-        // Native Activation: Just mark as Published
+    async publish(id: string, userId?: string, isService = false) {
+        await this.getWorkflowForActor(id, userId, isService);
         return this.prisma.workflow.update({
             where: { id },
             data: {

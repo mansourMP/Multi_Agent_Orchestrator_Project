@@ -8,12 +8,13 @@ import { MemoryModule } from '../memory/memory.module';
 import { VisionModule } from '../vision/vision.module';
 import { CodingAgentModule } from '../coding-agent/coding-agent.module';
 import { ResearchAgentModule } from '../research-agent/research-agent.module';
+import { AuthModule } from '../auth/auth.module';
 
 import { forwardRef } from '@nestjs/common';
 import { IntegrationsModule } from '../integrations/integrations.module';
 
 @Module({
-    imports: [AiModule, MemoryModule, VisionModule, CodingAgentModule, ResearchAgentModule, forwardRef(() => IntegrationsModule)],
+    imports: [AiModule, MemoryModule, VisionModule, CodingAgentModule, ResearchAgentModule, AuthModule, forwardRef(() => IntegrationsModule)],
     controllers: [ExecutionsController],
     providers: [ExecutionsService, ExecutionsGateway],
     exports: [ExecutionsService, ExecutionsGateway],

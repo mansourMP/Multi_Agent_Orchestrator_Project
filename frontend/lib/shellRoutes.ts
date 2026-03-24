@@ -1,4 +1,4 @@
-import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { PACKAGED_SOLUTIONS_ENABLED, SINGLE_AGENT_MODE } from '@/lib/appFlags';
 
 export type ShellRouteMeta = {
   id: string;
@@ -99,13 +99,17 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     slotLabel: 'Outputs and results',
     match: (pathname: string) => pathname === '/artifacts',
   },
-  {
-    id: 'solutions',
-    title: 'Solutions',
-    breadcrumb: 'Solutions',
-    slotLabel: 'Packaged workflows built on the core platform',
-    match: (pathname: string) => pathname.startsWith('/solutions/'),
-  },
+  ...(PACKAGED_SOLUTIONS_ENABLED
+    ? [
+        {
+          id: 'solutions',
+          title: 'Packages',
+          breadcrumb: 'Packages',
+          slotLabel: 'Optional packaged capability layers',
+          match: (pathname: string) => pathname.startsWith('/solutions/'),
+        },
+      ]
+    : []),
   {
     id: 'control-center',
     title: 'Admin',

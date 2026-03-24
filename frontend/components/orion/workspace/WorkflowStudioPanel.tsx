@@ -879,9 +879,9 @@ export function WorkflowStudioPanel({ goal, setupReady, latestRunSummary }: Work
             <div className="orion-workspace-studio-section-title">Recent workflows</div>
             <div className="orion-workspace-studio-section-copy">Select one to inspect it here. Use the library for full editing.</div>
           </div>
-          <Link href="/solutions" className="btn-ghost orion-workspace-studio-link">
+          <Link href="/workflows" className="btn-ghost orion-workspace-studio-link">
             <Boxes size={14} />
-            Solutions
+            Workflows
           </Link>
         </div>
         <div className="orion-workspace-studio-list">

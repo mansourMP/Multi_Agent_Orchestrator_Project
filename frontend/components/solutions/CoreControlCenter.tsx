@@ -292,13 +292,13 @@ export function CoreControlCenter() {
             <section className="orion-panel">
               <div className="orion-panel-header">
                 <div>
-                  <div className="orion-panel-title">Solutions</div>
+                  <div className="orion-panel-title">Packages</div>
                   <div className="orion-panel-copy">
-                    Optional packaged experiences built on top of the core platform.
+                    Optional packaged capability layers built on top of the core platform.
                   </div>
                 </div>
                 <Link href="/solutions" className="btn-secondary">
-                  View Solutions
+                  View Packages
                 </Link>
               </div>
               <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
@@ -312,7 +312,7 @@ export function CoreControlCenter() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                       <div style={{ display: 'grid', gap: 4 }}>
                         <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
-                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Packaged workflow experience'}</div>
+                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Optional packaged capability layer'}</div>
                       </div>
                       <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
                         {solution.enabled ? 'Active' : 'Inactive'}

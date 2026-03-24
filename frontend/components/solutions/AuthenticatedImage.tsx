@@ -13,7 +13,7 @@ type AuthenticatedImageProps = {
 
 export function AuthenticatedImage({ src, alt, className, style }: AuthenticatedImageProps) {
   const runtimeKey = useMemo(
-    () => readRuntimeApiKeyFromStorage(process.env.NEXT_PUBLIC_ORION_API_KEY || 'replace-with-strong-key'),
+    () => readRuntimeApiKeyFromStorage(''),
     [],
   );
   const [blobUrl, setBlobUrl] = useState<string>('');

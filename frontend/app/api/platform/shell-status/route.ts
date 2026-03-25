@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
+import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -17,12 +18,14 @@ function countPendingApprovals(payload: unknown): number {
 export async function GET(request: NextRequest) {
   const rejection = enforceBffRouteGuard(request, { methods: ['GET'] });
   if (rejection) return rejection;
+  const authFailure = await requireControlPlaneSession(request);
+  if (authFailure) return authFailure;
 
   try {
-    const [health, runtimes, history] = await Promise.all([
+    const [health, runtimes, approvals] = await Promise.all([
       runtimeJsonRequest('/health', { method: 'GET' }),
       runtimeJsonRequest('/runtime/runtimes/status', { method: 'GET' }),
-      runtimeJsonRequest('/history/runs?limit=40&workspace_id=default', { method: 'GET' }),
+      runtimeJsonRequest('/approvals?limit=12&workspace_id=default', { method: 'GET' }),
     ]);
 
     const runtimesPayload = runtimes.payload && typeof runtimes.payload === 'object'
@@ -37,6 +40,9 @@ export async function GET(request: NextRequest) {
           }>;
         })
       : {};
+    const healthPayload = health.payload && typeof health.payload === 'object'
+      ? (health.payload as Record<string, unknown>)
+      : {};
 
     const runtimeItems = Array.isArray(runtimesPayload.items) ? runtimesPayload.items : [];
     const localRuntimeOnline = runtimeItems.some((item) => {
@@ -49,7 +55,11 @@ export async function GET(request: NextRequest) {
       onlineWorkers: Number(runtimesPayload.summary?.online || 0),
       machineCount: Number(runtimesPayload.summary?.known || 0),
       localRuntimeOnline,
-      pendingApprovals: countPendingApprovals(history.payload),
+      pendingApprovals: countPendingApprovals(approvals.payload),
+      runtimeApiMinCliVersion:
+        typeof healthPayload.runtime_api_min_cli_version === 'string'
+          ? healthPayload.runtime_api_min_cli_version
+          : null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Platform shell status proxy failed.';
@@ -61,6 +71,7 @@ export async function GET(request: NextRequest) {
         machineCount: 0,
         localRuntimeOnline: false,
         pendingApprovals: 0,
+        runtimeApiMinCliVersion: null,
       },
       { status: 503 },
     );

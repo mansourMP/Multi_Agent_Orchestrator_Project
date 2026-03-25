@@ -18,8 +18,8 @@ import {
     type ModelAliasOption,
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { openAuthenticatedEventStream, type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
-import { API_BASE } from '@/lib/config';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 import {
     type ExecutionTarget,
@@ -29,7 +29,6 @@ import {
     normalizeExecutionTarget,
 } from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
-import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
@@ -42,8 +41,6 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -269,7 +266,7 @@ const CANVAS_NODE_LIBRARY: Array<{
     icon: React.ReactNode;
 }> = [
     { type: 'trigger', label: 'Trigger', accent: '#f59e0b', icon: <Zap size={14} /> },
-    { type: 'agent', label: 'Agent', accent: '#7c3aed', icon: <BrainCircuit size={14} /> },
+    { type: 'agent', label: 'Agent', accent: BRAND.accentColor, icon: <BrainCircuit size={14} /> },
     { type: 'action', label: 'Action', accent: '#10b981', icon: <Send size={14} /> },
     { type: 'http_request', label: 'HTTP Request', accent: '#6b7280', icon: <Globe size={14} /> },
     { type: 'condition', label: 'If / Condition', accent: '#f59e0b', icon: <GitBranch size={14} /> },
@@ -463,7 +460,7 @@ function parseCanvasEdges(rawEdges: unknown, nodes: CanvasWorkflowNode[]): Canva
             },
             markerEnd: {
                 type: MarkerType.ArrowClosed,
-                color: '#7c3aed',
+                color: BRAND.accentColor,
             },
             interactionWidth: 40,
         });
@@ -633,7 +630,6 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [operator, setOperator] = useState<OperatorConfig>(DEFAULT_OPERATOR);
     const [connection, setConnection] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
     const [providerAuthMode, setProviderAuthMode] = useState('api_key');
-    const [runtimeApiKey, setRuntimeApiKey] = useState('');
     const [showBehavior, setShowBehavior] = useState(false);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [trustMode, setTrustMode] = useState<TrustMode>('ask');
@@ -667,14 +663,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [vaultImportOverwrite, setVaultImportOverwrite] = useState(false);
     const [vaultBusy, setVaultBusy] = useState(false);
 
-    const buildHeaders = useMemo(() => {
-        return (withJson: boolean): HeadersInit => {
-            const headers = new Headers();
-            if (withJson) headers.set('Content-Type', 'application/json');
-            if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-            return headers;
-        };
-    }, [runtimeApiKey]);
+    const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+        await ensureControlPlaneSession();
+        const headers = new Headers(init?.headers || {});
+        if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+        return fetch(input, {
+            ...init,
+            headers,
+            cache: 'no-store',
+        });
+    }, []);
 
     const withWorkspaceQuery = useCallback((path: string): string => {
         if (!workspaceId) return path;
@@ -770,15 +768,6 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         setLogs((prev) => [...prev, { ts: new Date().toISOString(), level, message }]);
     }, []);
 
-    useEffect(() => {
-        const stored = readRuntimeApiKeyFromStorage('');
-        if (stored) setRuntimeApiKey(stored);
-    }, []);
-
-    useEffect(() => {
-        writeRuntimeApiKeyToStorage(runtimeApiKey);
-    }, [runtimeApiKey]);
-
     const applyAutopilotPack = useCallback((pack: AutopilotPack) => {
         setOperator((prev) => ({
             ...prev,
@@ -844,7 +833,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const fetchProviders = useCallback(async () => {
         setProvidersLoading(true);
         try {
-            const res = await fetch(`${ORION_API_URL}/providers`, { headers: buildHeaders(false) });
+            const res = await controlPlaneFetch('/api/control-plane/providers');
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 throw new Error(text || 'Failed to load providers.');
@@ -867,11 +856,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setProvidersLoading(false);
         }
-    }, [buildHeaders, addToast, effectiveModelAliases]);
+    }, [controlPlaneFetch, addToast, effectiveModelAliases]);
 
     const fetchModelAliases = useCallback(async (): Promise<ModelAliasOption[]> => {
         try {
-            const res = await fetch(`${ORION_API_URL}/providers/model-aliases`, { headers: buildHeaders(false) });
+            const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
             if (!res.ok) {
                 throw new Error('Failed to load model aliases.');
             }
@@ -911,12 +900,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             // Keep built-in aliases when the catalog cannot be loaded.
         }
         return effectiveModelAliases;
-    }, [buildHeaders, effectiveModelAliases]);
+    }, [controlPlaneFetch, effectiveModelAliases]);
 
     const fetchCredentials = useCallback(async () => {
         setCredentialsLoading(true);
         try {
-            const res = await fetch(`${ORION_API_URL}${withWorkspaceQuery('/credentials/vault')}`, { headers: buildHeaders(false) });
+            const res = await controlPlaneFetch(`/api/control-plane/credentials?workspace_id=${encodeURIComponent(workspaceId)}`);
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 throw new Error(text || 'Failed to load credentials.');
@@ -929,17 +918,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setCredentialsLoading(false);
         }
-    }, [buildHeaders, addToast, withWorkspaceQuery]);
+    }, [controlPlaneFetch, addToast, workspaceId]);
 
     const fetchRuntimeProfiles = useCallback(async () => {
-        if (!runtimeApiKey) {
-            setRuntimeProfiles([]);
-            return;
-        }
         try {
-            const res = await fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`, {
-                headers: buildHeaders(false),
-            });
+            const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`);
             if (!res.ok) {
                 throw new Error('Failed to load runtime profiles.');
             }
@@ -975,13 +958,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } catch {
             setRuntimeProfiles([]);
         }
-    }, [buildHeaders, runtimeApiKey, workspaceId]);
+    }, [controlPlaneFetch, workspaceId]);
 
     const fetchConnectedChannels = useCallback(async () => {
         try {
-            const res = await fetch(`${ORION_API_URL}/connectors/vault?workspace_id=${encodeURIComponent(workspaceId)}`, {
-                headers: buildHeaders(false),
-            });
+            const res = await controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(workspaceId)}`);
             if (!res.ok) return;
             const payload = await res.json().catch(() => ({}));
             const items = Array.isArray((payload as { items?: unknown[] }).items) ? (payload as { items: unknown[] }).items : [];
@@ -999,17 +980,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } catch {
             setConnectedChannels([]);
         }
-    }, [buildHeaders, workspaceId]);
+    }, [controlPlaneFetch, workspaceId]);
 
     const fetchRuntimeMachinesState = useCallback(async () => {
-        if (!runtimeApiKey) {
-            setHasLocalRuntime(false);
-            return;
-        }
         try {
-            const res = await fetch(`${ORION_API_URL}/runtime/runtimes/status`, {
-                headers: buildHeaders(false),
-            });
+            const res = await controlPlaneFetch('/api/runtime/machines');
             if (!res.ok) {
                 setHasLocalRuntime(false);
                 return;
@@ -1019,15 +994,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } catch {
             setHasLocalRuntime(false);
         }
-    }, [buildHeaders, runtimeApiKey]);
+    }, [controlPlaneFetch]);
 
     const loadDoctorDecision = useCallback(async (silent = false) => {
-        if (!runtimeApiKey) {
-            setDoctorDecision(null);
-            if (!silent) setIsPreflightChecking(false);
-            return null;
-        }
-
         const runtimeProvider = String(selectedRuntimeProfile?.provider || connection.provider).trim() || 'openai';
         if (!silent) setIsPreflightChecking(true);
         try {
@@ -1037,14 +1006,13 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     runtimeProvider,
                     usesManagedOpenAi: runtimeProvider === 'openai' && !selectedProfileId && connection.mode === 'managed',
                 },
-                buildHeaders(false),
             );
             setDoctorDecision(nextDecision);
             return nextDecision;
         } finally {
             if (!silent) setIsPreflightChecking(false);
         }
-    }, [buildHeaders, connection.mode, connection.provider, executionTarget, runtimeApiKey, selectedProfileId, selectedRuntimeProfile]);
+    }, [connection.mode, connection.provider, executionTarget, selectedProfileId, selectedRuntimeProfile]);
 
     const fetchModels = useCallback(async (provider: ProviderId, credentialId?: string, suppressToast?: boolean) => {
         setModelsLoading(true);
@@ -1054,7 +1022,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             if (credentialId) params.set('credential_id', credentialId);
             if (workspaceId) params.set('workspace_id', workspaceId);
             const qs = params.toString();
-            const res = await fetch(`${ORION_API_URL}/providers/${provider}/models${qs ? `?${qs}` : ''}`, { headers: buildHeaders(false) });
+            const res = await controlPlaneFetch(`/api/control-plane/providers/${provider}/models${qs ? `?${qs}` : ''}`);
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
                 throw new Error(text || 'Failed to load models.');
@@ -1084,7 +1052,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setModelsLoading(false);
         }
-    }, [buildHeaders, addToast, fetchModelAliases, workspaceId]);
+    }, [controlPlaneFetch, addToast, fetchModelAliases, workspaceId]);
 
     const loadWorkflow = useCallback(async () => {
         if (!workflowId) {
@@ -1232,7 +1200,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             },
             markerEnd: {
                 type: MarkerType.ArrowClosed,
-                color: '#7c3aed',
+                color: BRAND.accentColor,
             },
             interactionWidth: 40,
             data: {
@@ -1345,7 +1313,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             },
             markerEnd: {
                 type: MarkerType.ArrowClosed,
-                color: '#7c3aed',
+                color: BRAND.accentColor,
             },
             interactionWidth: 40,
         }, prev));
@@ -1466,9 +1434,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         setCredentialBusy(true);
         try {
-            const res = await fetch(`${ORION_API_URL}/credentials/vault`, {
+            const res = await controlPlaneFetch('/api/control-plane/credentials', {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({
                     label: newCredentialLabel.trim(),
                     provider: connection.provider,
@@ -1499,7 +1466,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         newCredentialLabel,
         connection.provider,
         currentCredentialPayload,
-        buildHeaders,
+        controlPlaneFetch,
         fetchCredentials,
         fetchModels,
         providerAuthNeedsSecret,
@@ -1520,9 +1487,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         setCredentialBusy(true);
         try {
-            const res = await fetch(`${ORION_API_URL}${withWorkspaceQuery(`/credentials/vault/${connection.credentialId}/test`)}`, {
+            const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(connection.credentialId)}/test?workspace_id=${encodeURIComponent(workspaceId)}`, {
                 method: 'POST',
-                headers: buildHeaders(false),
             });
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
@@ -1551,13 +1517,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setCredentialBusy(false);
         }
-    }, [connection.mode, connection.credentialId, connection.provider, buildHeaders, addToast, effectiveModelAliases, withWorkspaceQuery]);
+    }, [connection.mode, connection.credentialId, connection.provider, controlPlaneFetch, addToast, effectiveModelAliases, workspaceId]);
 
     const deleteCredential = useCallback(async (credentialId: string) => {
         try {
-            const res = await fetch(`${ORION_API_URL}${withWorkspaceQuery(`/credentials/vault/${credentialId}`)}`, {
+            const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credentialId)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
                 method: 'DELETE',
-                headers: buildHeaders(false),
             });
             if (!res.ok) {
                 const text = await res.text().catch(() => '');
@@ -1571,7 +1536,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Delete Failed', message: getErrorMessage(error, 'Unable to delete credential.') });
         }
-    }, [buildHeaders, fetchCredentials, connection.credentialId, addToast, withWorkspaceQuery]);
+    }, [controlPlaneFetch, fetchCredentials, connection.credentialId, addToast, workspaceId]);
 
     const exportVaultBundle = useCallback(async () => {
         if (!vaultPassphrase.trim()) {
@@ -1580,9 +1545,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         setVaultBusy(true);
         try {
-            const res = await fetch(`${ORION_API_URL}/credentials/vault/export`, {
+            const res = await controlPlaneFetch('/api/control-plane/credentials/export', {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({ workspace_id: workspaceId, passphrase: vaultPassphrase.trim() }),
             });
             if (!res.ok) {
@@ -1602,7 +1566,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setVaultBusy(false);
         }
-    }, [vaultPassphrase, buildHeaders, workspaceId, addToast]);
+    }, [vaultPassphrase, controlPlaneFetch, workspaceId, addToast]);
 
     const importVaultBundle = useCallback(async () => {
         if (!vaultPassphrase.trim()) {
@@ -1615,9 +1579,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         setVaultBusy(true);
         try {
-            const res = await fetch(`${ORION_API_URL}/credentials/vault/import`, {
+            const res = await controlPlaneFetch('/api/control-plane/credentials/import', {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({
                     workspace_id: workspaceId,
                     passphrase: vaultPassphrase.trim(),
@@ -1641,7 +1604,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setVaultBusy(false);
         }
-    }, [vaultPassphrase, vaultBundle, vaultImportOverwrite, buildHeaders, workspaceId, fetchCredentials, addToast]);
+    }, [vaultPassphrase, vaultBundle, vaultImportOverwrite, controlPlaneFetch, workspaceId, fetchCredentials, addToast]);
 
     const rotateVaultKey = useCallback(async () => {
         if (!newVaultPassphrase.trim()) {
@@ -1650,9 +1613,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         setVaultBusy(true);
         try {
-            const res = await fetch(`${ORION_API_URL}/credentials/vault/rotate-key`, {
+            const res = await controlPlaneFetch('/api/control-plane/credentials/rotate-key', {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({ new_passphrase: newVaultPassphrase.trim() }),
             });
             if (!res.ok) {
@@ -1671,7 +1633,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setVaultBusy(false);
         }
-    }, [newVaultPassphrase, buildHeaders, addToast]);
+    }, [newVaultPassphrase, controlPlaneFetch, addToast]);
 
     const closeStream = useCallback(() => {
         if (!streamRef.current) return;
@@ -1682,9 +1644,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const submitDecision = useCallback(async (decision: 'Proceed' | 'Hold') => {
         if (!runId) return;
         try {
-            const res = await fetch(`${ORION_API_URL}/runs/${runId}/decision`, {
+            const res = await controlPlaneFetch(`/api/runs/${encodeURIComponent(runId)}/decision`, {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({ decision }),
             });
             if (!res.ok) {
@@ -1697,7 +1658,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setRunStatus('error');
             appendLog(getErrorMessage(error, 'Failed to send decision.'), 'error');
         }
-    }, [runId, buildHeaders, appendLog]);
+    }, [runId, controlPlaneFetch, appendLog]);
 
     const startRun = useCallback(async () => {
         if (!operator.userGoal.trim()) {
@@ -1749,9 +1710,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 `Trust Mode: ${trustMode}`,
             ].filter(Boolean).join('\n');
 
-            const res = await fetch(`${ORION_API_URL}/runs/start`, {
+            const res = await controlPlaneFetch('/api/runs/start', {
                 method: 'POST',
-                headers: buildHeaders(true),
                 body: JSON.stringify({
                     engine: 'codex',
                     workflow_id: workflowId,
@@ -1818,10 +1778,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setRunId(nextRunId);
             appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
 
-            const streamUrl = `${ORION_API_URL}/runs/${nextRunId}/stream`;
+            const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
             const eventSource = openAuthenticatedEventStream({
                 url: streamUrl,
-                apiKey: runtimeApiKey,
                 onEvent: (event) => {
                     if (event.event === 'pause') {
                         setRunStatus('waiting');
@@ -1884,7 +1843,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsPreflightChecking(false);
         }
-    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, runtimeApiKey, buildHeaders, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, selectedProfileId, selectedRuntimeProfile]);
+    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, controlPlaneFetch, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, selectedProfileId, selectedRuntimeProfile]);
 
     const runBadge = useMemo(() => {
         if (runStatus === 'running') return { label: 'Running', color: 'var(--success-fg)', bg: 'var(--success-bg)', border: 'var(--success-border)' };
@@ -2168,7 +2127,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     },
                                     markerEnd: {
                                         type: MarkerType.ArrowClosed,
-                                        color: '#7c3aed',
+                                        color: BRAND.accentColor,
                                     },
                                 }}
                             >
@@ -2550,16 +2509,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     </div>
 
                     <div style={{ display: 'grid', gap: 6 }}>
-                        <label style={workflowLabelStyle}>Runtime access key (if enabled)</label>
-                        <input
-                            value={runtimeApiKey}
-                            onChange={(e) => setRuntimeApiKey(e.target.value)}
-                            placeholder="Optional for local dev, required when ORION_AUTH_REQUIRED=1"
-                            type="password"
-                            style={workflowInputSurfaceStyle}
-                        />
+                        <label style={workflowLabelStyle}>Runtime access</label>
+                        <div style={workflowInputSurfaceStyle}>
+                            Managed through your admin browser session.
+                        </div>
                         <div style={workflowMutedCopyStyle}>
-                            Saved locally in your browser for this device.
+                            Direct runtime keys are no longer stored in this editor.
                         </div>
                     </div>
 

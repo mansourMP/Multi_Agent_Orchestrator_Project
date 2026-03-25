@@ -3,8 +3,11 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Bell, Boxes, LayoutDashboard, RefreshCw, Workflow } from 'lucide-react';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { MetricStrip } from '@/components/ui/MetricStrip';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { SkeletonBlock } from '@/components/ui/Skeleton';
 import {
   type AutomationRecord,
@@ -151,26 +154,50 @@ export function CoreControlCenter() {
   }, [solutions]);
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<LayoutDashboard size={18} />}
-        title="Dashboard"
-        subtitle="See what is active, what changed, and where to continue."
-        meta={
-          <>
-            <span>{workflows.length} workflow{workflows.length === 1 ? '' : 's'}</span>
-            <span>{summary.activeWorkflows} active</span>
-            {mcpEndpoint ? <span className="orion-chip" data-status-tone="green">Connected</span> : null}
-          </>
-        }
+    <div className="orion-page-shell orion-animate-in">
+      <PageHero
+        kicker="Dashboard"
+        title="See what is active, what changed, and where to continue."
+        copy="Start from recent runs, jump back into a workflow, or open the assistant when you need to move work forward."
         actions={
-          <>
+          <div className="orion-page-actions">
             <Link href="/workflows" className="btn-secondary">
               Workflows
             </Link>
             <Link href="/workspace" className="btn-primary">
               Open Assistant
             </Link>
+          </div>
+        }
+        aside={
+          <>
+            <PageHeroCard label="Workspace status">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{workflows.length}</div>
+                  <div className="orion-home-side-note">Workflows</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{summary.activeWorkflows}</div>
+                  <div className="orion-home-side-note">Active</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">
+                {mcpEndpoint ? 'Connected to the local control plane.' : 'Control plane connection is still settling.'}
+              </div>
+            </PageHeroCard>
+            <PageHeroCard label="Assistant access">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{summary.recentRuns}</div>
+                  <div className="orion-home-side-note">Recent runs</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{summary.alerts}</div>
+                  <div className="orion-home-side-note">Needs attention</div>
+                </div>
+              </div>
+            </PageHeroCard>
           </>
         }
       />
@@ -185,7 +212,7 @@ export function CoreControlCenter() {
       />
 
       {loading ? (
-        <section className="orion-panel muted">
+        <PageSection muted>
           <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
             {Array.from({ length: 3 }).map((_, index) => (
               <div key={index} className="orion-panel orion-skeleton-card">
@@ -196,55 +223,59 @@ export function CoreControlCenter() {
               </div>
             ))}
           </div>
-        </section>
+        </PageSection>
       ) : error ? (
-        <section className="orion-panel muted orion-state-panel">
-          <div className="orion-state-icon" aria-hidden="true">
-            <AlertCircle size={18} />
-          </div>
-          <div className="orion-panel-title">Dashboard is unavailable</div>
-          <div className="orion-panel-copy">The workspace summary could not be loaded right now. You can retry, or continue in the assistant while the runtime settles.</div>
-          <div className="orion-panel-copy" style={{ marginTop: -4 }}>{error}</div>
-          <div className="orion-state-actions">
-            <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>
-              <RefreshCw size={14} />
-              Retry
-            </button>
-            <Link href="/workspace" className="btn-primary">
-              Open Assistant
-            </Link>
-          </div>
-        </section>
+        <PageStatePanel
+          variant="error"
+          icon={<AlertCircle size={18} />}
+          title="Dashboard is unavailable"
+          copy={
+            <>
+              <span>The workspace summary could not be loaded right now. You can retry, or continue in the assistant while the runtime settles.</span>
+              <span className="orion-page-state-detail">{error}</span>
+            </>
+          }
+          actions={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>
+                <RefreshCw size={14} />
+                Retry
+              </button>
+              <Link href="/workspace" className="btn-primary">
+                Open Assistant
+              </Link>
+            </>
+          }
+        />
       ) : (
         <>
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
-                <div className="orion-panel-title">Recent runs</div>
-                <div className="orion-panel-copy">Latest runs and outcomes. Use Runs for the full history.</div>
-              </div>
+          <PageSection
+            title="Recent runs"
+            description="Latest runs and outcomes. Use Runs for the full history."
+            actions={
               <Link href="/executions" className="btn-secondary">
                 Open Runs
               </Link>
-            </div>
+            }
+          >
             {recentRuns.length === 0 ? (
               <div className="orion-empty">
                 <div className="orion-empty-title">No recent runs</div>
                 <div className="orion-empty-copy">Runs will appear here once an assistant or workflow has completed work in this workspace.</div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: 10 }}>
+              <div className="orion-dashboard-list">
                 {recentRuns.slice(0, 3).map((run) => (
                   <div key={run.run_id} className="orion-list-row">
                     <div className="orion-list-row-main">
                       <div className="orion-list-row-title">{humanizeAgentName(run.agent_role)}</div>
                       <div className="orion-list-row-subtitle">{summarizeRun(run)}</div>
                     </div>
-                    <div style={{ display: 'grid', justifyItems: 'end', gap: 6 }}>
+                    <div className="orion-dashboard-row-meta">
                       <span className="orion-chip" data-status-tone={statusTone(run.status)}>
                         {statusLabel(run.status)}
                       </span>
-                      <span className="orion-panel-copy" style={{ margin: 0 }}>
+                      <span className="orion-panel-copy orion-dashboard-row-time">
                         {formatRelativeTime(run.updated_at || run.created_at || null)}
                       </span>
                     </div>
@@ -252,20 +283,17 @@ export function CoreControlCenter() {
                 ))}
               </div>
             )}
-          </section>
+          </PageSection>
 
-          <section className="orion-panel">
-            <div className="orion-panel-header">
-              <div>
-                <div className="orion-panel-title">Workflows</div>
-                <div className="orion-panel-copy">
-                  Systems currently available in this workspace.
-                </div>
-              </div>
+          <PageSection
+            title="Workflows"
+            description="Systems currently available in this workspace."
+            actions={
               <Link href="/workflows" className="btn-secondary">
                 Open Workflows
               </Link>
-            </div>
+            }
+          >
             {workflows.length === 0 ? (
               <div className="orion-empty">
                 <div className="orion-empty-title">No workflows yet</div>
@@ -280,7 +308,7 @@ export function CoreControlCenter() {
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: 10 }}>
+              <div className="orion-dashboard-list">
                 {workflows.slice(0, 4).map((workflow) => (
                   <Link
                     key={workflow.id}
@@ -289,7 +317,7 @@ export function CoreControlCenter() {
                     style={{ textDecoration: 'none', color: 'inherit' }}
                   >
                     <div className="orion-list-row-main">
-                      <div className="orion-list-row-title" style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                      <div className="orion-list-row-title orion-dashboard-inline-title">
                         <Workflow size={14} />
                         {String(workflow.name || workflow.id || 'Automation')}
                       </div>
@@ -297,11 +325,11 @@ export function CoreControlCenter() {
                         {String(workflow.description || 'Open to view details.')}
                       </div>
                     </div>
-                    <div style={{ display: 'grid', justifyItems: 'end', gap: 6 }}>
+                    <div className="orion-dashboard-row-meta">
                       <span className="orion-chip" data-status-tone={workflowTone(workflow.status)}>
                         {workflowLabel(workflow.status)}
                       </span>
-                      <span className="orion-panel-copy" style={{ margin: 0 }}>
+                      <span className="orion-panel-copy orion-dashboard-row-time">
                         {formatRelativeTime(workflow.updatedAt || workflow.lastRun || null)}
                       </span>
                     </div>
@@ -309,62 +337,55 @@ export function CoreControlCenter() {
                 ))}
               </div>
             )}
-          </section>
+          </PageSection>
 
           {solutions.length > 0 ? (
-            <section className="orion-panel">
-              <div className="orion-panel-header">
-                <div>
-                  <div className="orion-panel-title">Packages</div>
-                  <div className="orion-panel-copy">
-                    Optional packaged capability layers built on top of the core platform.
-                  </div>
-                </div>
+            <PageSection
+              title="Packages"
+              description="Optional packaged capability layers built on top of the core platform."
+              actions={
                 <Link href="/solutions" className="btn-secondary">
                   View Packages
                 </Link>
-              </div>
-              <div className="orion-stagger-grid" style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+              }
+            >
+              <div className="orion-stagger-grid orion-dashboard-card-grid">
                 {solutions.slice(0, 2).map((solution) => (
                   <Link
                     key={solution.id}
                     href={solution.primary_route || solution.route_base || '/solutions'}
-                    className="orion-panel orion-surface-lift"
-                    style={{ display: 'grid', gap: 10, textDecoration: 'none', color: 'inherit' }}
+                    className="orion-panel orion-surface-lift orion-dashboard-package-card"
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                      <div style={{ display: 'grid', gap: 4 }}>
-                        <div className="orion-panel-title" style={{ margin: 0 }}>{solution.name}</div>
-                        <div className="orion-panel-copy" style={{ margin: 0 }}>{solution.description || 'Optional packaged capability layer'}</div>
+                    <div className="orion-dashboard-package-head">
+                      <div className="orion-dashboard-package-copy">
+                        <div className="orion-panel-title orion-dashboard-zero-margin">{solution.name}</div>
+                        <div className="orion-panel-copy orion-dashboard-zero-margin">{solution.description || 'Optional packaged capability layer'}</div>
                       </div>
                       <span className="orion-chip" data-status-tone={solution.enabled ? 'green' : 'grey'}>
                         {solution.enabled ? 'Active' : 'Inactive'}
                       </span>
                     </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <div className="orion-dashboard-package-chips">
                       <span className="orion-chip"><Boxes size={12} /> {solution.status?.spaces_monitored || 0} monitors</span>
                       <span className="orion-chip" data-status-tone={Number(solution.status?.unresolved_alerts || 0) > 0 ? 'red' : 'grey'}>
                         <Bell size={12} /> {solution.status?.unresolved_alerts || 0} alerts
                       </span>
                     </div>
-                    <div className="orion-panel-copy" style={{ margin: 0 }}>
+                    <div className="orion-panel-copy orion-dashboard-zero-margin">
                       {solution.status?.summary || 'No live summary available.'}
                     </div>
                   </Link>
                 ))}
               </div>
-            </section>
+            </PageSection>
           ) : null}
 
           {recentAlerts.length > 0 ? (
-            <section className="orion-panel">
-              <div className="orion-panel-header">
-                <div>
-                  <div className="orion-panel-title">Needs attention</div>
-                  <div className="orion-panel-copy">Items that may need a quick decision.</div>
-                </div>
-              </div>
-              <div style={{ display: 'grid', gap: 10 }}>
+            <PageSection
+              title="Needs attention"
+              description="Items that may need a quick decision."
+            >
+              <div className="orion-dashboard-list">
                 {recentAlerts.slice(0, 3).map((alert) => (
                   <div key={alert.id} className="orion-list-row">
                     <div className="orion-list-row-main">
@@ -375,7 +396,7 @@ export function CoreControlCenter() {
                   </div>
                 ))}
               </div>
-            </section>
+            </PageSection>
           ) : null}
         </>
       )}

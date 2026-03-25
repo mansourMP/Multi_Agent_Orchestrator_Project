@@ -26,10 +26,11 @@ import {
 import { useToast } from '@/components/Toast';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
-import { API_BASE } from '@/lib/config';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 import { getExecutionTargetGuides } from '@/lib/executionTargets';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import {
   buildFallbackPlan,
@@ -41,7 +42,6 @@ import {
   workflowToPlainSteps,
 } from '@/lib/setupFlow';
 
-const ORION_API_URL = API_BASE;
 const WORKSPACE_ID = 'default';
 const SETUP_FLOW_STORAGE_KEY = 'hekor.setup-flow.v1';
 const EXAMPLE_PROMPTS = [
@@ -50,6 +50,28 @@ const EXAMPLE_PROMPTS = [
   'Research competitors and send me a weekly report',
 ] as const;
 const TOTAL_STEPS = 5;
+const SETUP_STEP_META = [
+  {
+    title: 'Tell Hekor what needs to happen.',
+    copy: 'Start with plain language. Hekor will outline the plan, tell you what it needs, and help you run it.',
+  },
+  {
+    title: 'Review the plan before anything starts.',
+    copy: 'Check the steps, confirm the tools, and make sure the task still matches what you want.',
+  },
+  {
+    title: 'Choose AI access for this task.',
+    copy: 'Pick the AI source this run should use, then continue when the task is ready to proceed.',
+  },
+  {
+    title: 'Connect only the tools this task needs.',
+    copy: 'Hekor should ask for the minimum useful access, not the whole directory.',
+  },
+  {
+    title: 'Check the route and start the task.',
+    copy: 'Review the run setup, confirm the destination, and start when everything looks right.',
+  },
+] as const;
 
 type SetupProviderId = 'openai' | 'anthropic' | 'gemini';
 type SetupSourceMode = 'credits' | 'byok';
@@ -270,7 +292,6 @@ function statusIconForTool(toolId: SetupToolId | null) {
 export default function SetupPage() {
   const router = useRouter();
   const { addToast } = useToast();
-  const [runtimeApiKey] = useState(() => readRuntimeApiKeyFromStorage(''));
   const [hydrated, setHydrated] = useState(false);
   const [step, setStep] = useState(1);
   const [prompt, setPrompt] = useState('');
@@ -297,36 +318,27 @@ export default function SetupPage() {
   const [runPrecheck, setRunPrecheck] = useState<RunPrecheckPayload | null>(null);
   const [showAdvancedRouteOptions, setShowAdvancedRouteOptions] = useState(false);
 
-  const buildHeaders = useCallback((withJson = false): HeadersInit => {
-    const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-    return headers;
-  }, [runtimeApiKey]);
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
+    const headers = new Headers(init?.headers || {});
+    if (init?.body && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
 
   const loadRuntimeState = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setProfiles([]);
-      setConnectors([]);
-      setProfilesLoading(false);
-      setConnectorsLoading(false);
-      setHasLocalRuntime(false);
-      return;
-    }
-
     setProfilesLoading(true);
     setConnectorsLoading(true);
     try {
       const [profilesRes, connectorsRes, machinesRes] = await Promise.all([
-        fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
-          headers: buildHeaders(false),
-        }),
-        fetch(`${ORION_API_URL}/connectors/vault?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
-          headers: buildHeaders(false),
-        }),
-        fetch(`${ORION_API_URL}/runtime/runtimes/status`, {
-          headers: buildHeaders(false),
-        }),
+        controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`),
+        controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`),
+        controlPlaneFetch('/api/runtime/machines'),
       ]);
 
       const profilesPayload = profilesRes.ok ? await profilesRes.json().catch(() => ({ items: [] })) : { items: [] };
@@ -343,7 +355,7 @@ export default function SetupPage() {
       setProfilesLoading(false);
       setConnectorsLoading(false);
     }
-  }, [buildHeaders, runtimeApiKey]);
+  }, [controlPlaneFetch]);
 
   useEffect(() => {
     document.body.classList.add('orion-setup-focus');
@@ -446,6 +458,11 @@ export default function SetupPage() {
     () => tools.filter((tool) => isToolConnected(tool)),
     [isToolConnected, tools],
   );
+  const currentStepMeta = SETUP_STEP_META[Math.max(0, Math.min(step - 1, SETUP_STEP_META.length - 1))];
+  const setupTaskPreview = useMemo(() => {
+    const trimmed = prompt.trim();
+    return trimmed ? buildTaskSummary(trimmed, 96) : 'Describe the work and Hekor will build the setup around it.';
+  }, [prompt]);
   const selectedExecutionTargetLabel = useMemo(
     () => formatExecutionTargetLabel(selectedExecutionTarget),
     [selectedExecutionTarget],
@@ -611,17 +628,13 @@ export default function SetupPage() {
     setPlanError('');
     setRunError('');
 
-    if (!runtimeApiKey) {
-      setPlanSteps(buildFallbackPlan(trimmed, inferredTools));
-      setPlanError('Connect the runtime first to generate a detailed plan. You can still continue with a draft plan.');
-      setPlanLoading(false);
-      return;
-    }
-
     try {
+      await ensureControlPlaneSession();
       const response = await fetch('/api/builder/generate', {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           prompt: trimmed,
           workspace_id: WORKSPACE_ID,
@@ -645,7 +658,7 @@ export default function SetupPage() {
     } finally {
       setPlanLoading(false);
     }
-  }, [activeProfile?.id, activeProfile?.model, buildHeaders, runtimeApiKey]);
+  }, [activeProfile?.id, activeProfile?.model]);
 
   const handleSubmitTask = useCallback(() => {
     const trimmed = prompt.trim();
@@ -705,13 +718,6 @@ export default function SetupPage() {
   }, [connectors, planSteps, prompt, selectedExecutionTarget, tools]);
 
   const loadRunPrecheck = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setRunPrecheck(null);
-      setDoctorDecision(null);
-      setDoctorChecking(false);
-      return null;
-    }
-
     const payload = buildRunStartPayload(activeProfile);
     if (!payload) {
       setRunPrecheck(null);
@@ -722,9 +728,8 @@ export default function SetupPage() {
 
     setDoctorChecking(true);
     try {
-      const response = await fetch(`${ORION_API_URL}/runs/precheck`, {
+      const response = await controlPlaneFetch('/api/runs/precheck', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify(payload),
       });
       const nextBody = (await response.json().catch(() => null)) as RunPrecheckPayload | null;
@@ -742,7 +747,6 @@ export default function SetupPage() {
           runtimeProvider: currentProvider,
           usesManagedOpenAi: false,
         },
-        buildHeaders(false),
       );
       setRunPrecheck(null);
       setDoctorDecision(fallbackDecision);
@@ -750,7 +754,7 @@ export default function SetupPage() {
     } finally {
       setDoctorChecking(false);
     }
-  }, [activeProfile, buildHeaders, buildRunStartPayload, currentProvider, runtimeApiKey, selectedExecutionTarget]);
+  }, [activeProfile, buildRunStartPayload, controlPlaneFetch, currentProvider, selectedExecutionTarget]);
 
   const handleSelectCredits = useCallback(() => {
     setSelectedSourceMode('credits');
@@ -772,10 +776,6 @@ export default function SetupPage() {
   }, [addToast]);
 
   const handleSaveApiKey = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setSourceError('Add the runtime access key first, then save your AI source.');
-      return;
-    }
     if (!apiKeyInput.trim()) {
       setSourceError('Enter your API key to continue.');
       return;
@@ -793,9 +793,8 @@ export default function SetupPage() {
           ? { api_key: secret, auth_mode: authMode }
           : { api_key: secret, access_token: secret, oauth_token: secret, auth_mode: authMode };
 
-      const credentialRes = await fetch(`${ORION_API_URL}/credentials/vault`, {
+      const credentialRes = await controlPlaneFetch('/api/control-plane/credentials', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           label: DEFAULT_PROVIDER_LABELS[provider] || `${providerLabel(provider)} Key`,
           provider,
@@ -810,9 +809,8 @@ export default function SetupPage() {
       }
 
       const credentialId = String(credentialBody?.id || '').trim();
-      const profileRes = await fetch(`${ORION_API_URL}/providers/profiles`, {
+      const profileRes = await controlPlaneFetch('/api/control-plane/providers/profiles', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           provider,
           label: DEFAULT_PROVIDER_LABELS[provider] || `${providerLabel(provider)} Key`,
@@ -850,12 +848,11 @@ export default function SetupPage() {
   }, [
     addToast,
     apiKeyInput,
-    buildHeaders,
+    controlPlaneFetch,
     generatePlan,
     loadRuntimeState,
     proceedAfterSource,
     prompt,
-    runtimeApiKey,
     selectedProvider,
   ]);
 
@@ -869,10 +866,6 @@ export default function SetupPage() {
     if (!trimmedPrompt) {
       setRunError('Describe the task first.');
       setStep(1);
-      return;
-    }
-    if (!runtimeApiKey) {
-      setRunError('Add the runtime access key before running a task.');
       return;
     }
     const profile = activeProfile;
@@ -896,9 +889,8 @@ export default function SetupPage() {
         throw new Error('The task is missing information needed to start.');
       }
 
-      const response = await fetch(`${ORION_API_URL}/runs/start`, {
+      const response = await controlPlaneFetch('/api/runs/start', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify(payload),
       });
       const responseBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -932,7 +924,7 @@ export default function SetupPage() {
     } finally {
       setRunBusy(false);
     }
-  }, [activeProfile, buildHeaders, buildRunStartPayload, loadRunPrecheck, prompt, router, runtimeApiKey, showSourceStep]);
+  }, [activeProfile, buildRunStartPayload, controlPlaneFetch, loadRunPrecheck, prompt, router, showSourceStep]);
 
   useEffect(() => {
     if (!hydrated || step !== 5) return;
@@ -945,6 +937,35 @@ export default function SetupPage() {
 
   return (
     <div className="orion-page-shell is-setup-flow orion-animate-in">
+      <PageHero
+        kicker={`Setup · Step ${step} of ${TOTAL_STEPS}`}
+        title={currentStepMeta.title}
+        copy={currentStepMeta.copy}
+        aside={
+          <>
+            <PageHeroCard label="Current task">
+              <div className="hekor-setup-hero-note">{setupTaskPreview}</div>
+            </PageHeroCard>
+            <PageHeroCard label="Run summary">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{connectedSummaryTools.length}</div>
+                  <div className="orion-home-side-note">Tools ready</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{activeProfile ? providerLabel(activeProfile.provider) : 'Need AI'}</div>
+                  <div className="orion-home-side-note">AI access</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">
+                {step >= 5 ? `Route: ${effectiveExecutionTargetLabel}` : `Next: ${step < TOTAL_STEPS ? `step ${step + 1}` : 'ready to run'}`}
+              </div>
+            </PageHeroCard>
+          </>
+        }
+        className="hekor-setup-hero"
+      />
+
       <div className="hekor-setup-progress" aria-label={`Step ${step} of ${TOTAL_STEPS}`}>
         {Array.from({ length: TOTAL_STEPS }).map((_, index) => {
           const value = index + 1;
@@ -967,11 +988,6 @@ export default function SetupPage() {
 
       {step === 1 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-copy">
-            <h1>What do you want done?</h1>
-            <p>Describe the task in plain language.</p>
-          </div>
-
           <div className="hekor-setup-composer">
             <textarea
               className="orion-input hekor-setup-textarea"
@@ -980,7 +996,7 @@ export default function SetupPage() {
               placeholder="Example: Summarize my emails every morning and send the highlights to Slack"
             />
             <button type="button" className="btn-primary hekor-setup-submit" onClick={handleSubmitTask}>
-              Try a task
+              Continue
             </button>
           </div>
 
@@ -1001,11 +1017,6 @@ export default function SetupPage() {
 
       {step === 2 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-copy">
-            <h1>Here&apos;s how Hekor will handle it</h1>
-            <p>Review the steps before the task starts.</p>
-          </div>
-
           <div className="orion-panel hekor-setup-panel">
             {planLoading ? (
               <div className="hekor-setup-loading">
@@ -1065,11 +1076,6 @@ export default function SetupPage() {
 
       {step === 3 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-copy">
-            <h1>Choose AI access</h1>
-            <p>Pick the AI source for this task.</p>
-          </div>
-
           <div className="hekor-setup-source-grid">
             <button
               type="button"
@@ -1155,11 +1161,6 @@ export default function SetupPage() {
 
       {step === 4 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-copy">
-            <h1>Connect the tools this task needs</h1>
-            <p>Hekor only asks for access when it is needed for this task.</p>
-          </div>
-
           <div className="orion-panel hekor-setup-panel">
             <div className="hekor-setup-tool-list">
               {tools.map((tool) => {
@@ -1214,11 +1215,6 @@ export default function SetupPage() {
 
       {step === 5 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-copy">
-            <h1>Ready to run</h1>
-            <p>Check the task, AI access, and tools before it starts.</p>
-          </div>
-
           <div className="orion-panel hekor-setup-panel">
             <div className="hekor-setup-summary">
               <div className="hekor-setup-summary-row">

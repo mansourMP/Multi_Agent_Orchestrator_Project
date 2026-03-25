@@ -33,13 +33,13 @@ def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 async def list_provider_profiles(workspace_id: Optional[str] = None, provider: Optional[str] = None):
-    requested_ws = _normalize_workspace_id(workspace_id) or None
+    requested_ws = _normalize_workspace_id(workspace_id) or "default"
     requested_provider = normalize_provider_id(provider) if provider else None
     with PROFILES_LOCK:
         items = [dict(item) for item in PROVIDER_PROFILES.values() if isinstance(item, dict)]
     out: List[Dict[str, Any]] = []
     for item in items:
-        if requested_ws and str(item.get("workspace_id") or "default").strip() != requested_ws:
+        if str(item.get("workspace_id") or "default").strip() != requested_ws:
             continue
         if requested_provider and normalize_provider_id(item.get("provider")) != requested_provider:
             continue
@@ -123,13 +123,13 @@ async def delete_provider_profile(profile_id: str):
     return {"status": "ok"}
 
 async def provider_profiles_health(workspace_id: Optional[str] = None):
-    requested_ws = _normalize_workspace_id(workspace_id) or None
+    requested_ws = _normalize_workspace_id(workspace_id) or "default"
     with PROFILES_LOCK:
         profiles = [dict(item) for item in PROVIDER_PROFILES.values() if isinstance(item, dict)]
     summary = {"healthy": 0, "cooldown": 0, "disabled": 0, "total": 0}
     items: List[Dict[str, Any]] = []
     for profile in profiles:
-        if requested_ws and str(profile.get("workspace_id") or "default").strip() != requested_ws:
+        if str(profile.get("workspace_id") or "default").strip() != requested_ws:
             continue
         item = _serialize_profile(profile)
         health = str(item.get("health") or "disabled")
@@ -342,7 +342,8 @@ async def get_model_alias_catalog():
     return {"models": list_model_aliases()}
 
 async def list_credentials_vault(workspace_id: Optional[str] = None):
-    return {"items": list_vault_credentials(workspace_id)}
+    requested_ws = _normalize_workspace_id(workspace_id) or "default"
+    return {"items": list_vault_credentials(requested_ws)}
 
 async def list_connectors():
     items = []
@@ -357,7 +358,8 @@ async def list_connectors():
     return {"connectors": items}
 
 async def list_connectors_vault(workspace_id: Optional[str] = None):
-    return {"items": list_vault_connectors(workspace_id)}
+    requested_ws = _normalize_workspace_id(workspace_id) or "default"
+    return {"items": list_vault_connectors(requested_ws)}
 
 async def rotate_vault_key(body: VaultRotateKeyRequest):
     body.validate_fields()

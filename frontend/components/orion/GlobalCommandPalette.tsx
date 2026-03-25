@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { useToast } from '@/components/Toast';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import {
   GLOBAL_COMMAND_EVENT,
   LEGACY_ORION_GLOBAL_COMMAND_EVENT,
@@ -72,6 +73,7 @@ export function GlobalCommandPalette() {
   }, [open]);
 
   const runLocalOp = useCallback(async (action: PlatformLocalOpsAction) => {
+    await ensureControlPlaneSession();
     const res = await fetch('/api/local-ops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

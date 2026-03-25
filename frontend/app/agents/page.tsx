@@ -4,8 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Puzzle, Sparkles } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { MetricStrip } from '@/components/ui/MetricStrip';
-import { ORION_API_URL } from '../page.api';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type InstalledSkill = {
   id: string;
@@ -49,25 +48,13 @@ export default function SkillsPage() {
   const [skills, setSkills] = useState<InstalledSkill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const runtimeKey = useMemo(
-    () => readRuntimeApiKeyFromStorage(''),
-    [],
-  );
 
   const loadSkills = useCallback(async () => {
-    if (!runtimeKey) {
-      setSkills([]);
-      setLoading(false);
-      setError('Runtime key is missing. Open Setup to reconnect this device.');
-      return;
-    }
-
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${ORION_API_URL}/skills/state`, {
-        headers: { 'X-API-Key': runtimeKey },
-      });
+      await ensureControlPlaneSession();
+      const res = await fetch('/api/skills/state', { cache: 'no-store' });
       const body = (await res.json().catch(() => ({}))) as SkillsStateResponse & { detail?: string; message?: string };
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to load skills.'));
@@ -80,7 +67,7 @@ export default function SkillsPage() {
     } finally {
       setLoading(false);
     }
-  }, [runtimeKey]);
+  }, []);
 
   useEffect(() => {
     void loadSkills();

@@ -7,6 +7,57 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
+
+def _extract_owner_user_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    direct = str(payload.get("owner_user_id") or "").strip()
+    if direct:
+        return direct
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(metadata.get("owner_user_id") or "").strip()
+
+
+def _current_user_is_privileged(current_user: Any) -> bool:
+    if not isinstance(current_user, dict):
+        return False
+    if bool(current_user.get("is_admin")):
+        return True
+    if str(current_user.get("auth_type") or "").strip() == "api_key":
+        return True
+    user_id = str(current_user.get("user_id") or "").strip()
+    email = str(current_user.get("email") or "").strip().lower()
+    return bool((user_id and user_id in ORION_ADMIN_USER_IDS) or (email and email in ORION_ADMIN_EMAILS))
+
+
+def _current_user_owner_id(current_user: Any) -> str:
+    if not isinstance(current_user, dict):
+        return ""
+    return str(current_user.get("user_id") or "").strip()
+
+
+def _owned_run_ids_for_user(user_id: str) -> set[str]:
+    owned: set[str] = set()
+    if not user_id:
+        return owned
+    for run_id, run in list(runs.items()):
+        if _extract_owner_user_id(run) == user_id:
+            token = str(run_id or "").strip()
+            if token:
+                owned.add(token)
+    with RUN_HISTORY_LOCK:
+        items = list(RUN_HISTORY)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if _extract_owner_user_id(item) != user_id:
+            continue
+        token = str(item.get("run_id") or "").strip()
+        if token:
+            owned.add(token)
+    return owned
+
 def _persist_approval_audit():
     with APPROVAL_AUDIT_LOCK:
         payload = {
@@ -195,8 +246,15 @@ async def get_approval_audit(
     event_id: Optional[str] = None,
     approval_id: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    current_user=Depends(require_api_key),
 ):
     safe_limit = max(1, min(int(limit), 500))
+    owned_run_ids: Optional[set[str]] = None
+    if not _current_user_is_privileged(current_user):
+        owner_user_id = _current_user_owner_id(current_user)
+        if not owner_user_id:
+            raise HTTPException(status_code=401, detail="Authenticated user id is required.")
+        owned_run_ids = _owned_run_ids_for_user(owner_user_id)
     with APPROVAL_AUDIT_LOCK:
         items = list(APPROVAL_AUDIT)
     run_value = str(run_id or "").strip()
@@ -215,6 +273,10 @@ async def get_approval_audit(
             continue
         if correlation_value and str(item.get("correlation_id") or "").strip() != correlation_value:
             continue
+        if owned_run_ids is not None:
+            item_run_id = str(item.get("run_id") or "").strip()
+            if not item_run_id or item_run_id not in owned_run_ids:
+                continue
         filtered.append(item)
     payload = filtered[:safe_limit]
     return {
@@ -227,9 +289,15 @@ async def get_approval_audit(
 async def list_pending_approvals(
     workspace_id: Optional[str] = None,
     limit: int = 100,
+    current_user=Depends(require_api_key),
 ):
     safe_limit = max(1, min(int(limit), 300))
     workspace_filter = _normalize_workspace_id(workspace_id) if workspace_id else None
+    owner_user_id = ""
+    if not _current_user_is_privileged(current_user):
+        owner_user_id = _current_user_owner_id(current_user)
+        if not owner_user_id:
+            raise HTTPException(status_code=401, detail="Authenticated user id is required.")
     pending_items: List[Dict[str, Any]] = []
     for run_id, run in list(runs.items()):
         if not isinstance(run, dict):
@@ -245,6 +313,9 @@ async def list_pending_approvals(
         pending = run.get("pending_approval")
         if not isinstance(pending, dict):
             continue
+        run_owner_user_id = str(metadata.get("owner_user_id") or "").strip()
+        if owner_user_id and run_owner_user_id != owner_user_id:
+            continue
         approval_id = str(pending.get("approval_id") or "").strip()
         if not approval_id:
             continue
@@ -252,6 +323,8 @@ async def list_pending_approvals(
             {
                 "run_id": run_id,
                 "approval_id": approval_id,
+                "owner_user_id": str(metadata.get("owner_user_id") or "").strip() or None,
+                "owner_email": str(metadata.get("owner_email") or "").strip().lower() or None,
                 "prompt": str(pending.get("prompt") or "Approval required."),
                 "status": str(pending.get("status") or "pending").strip().lower() or "pending",
                 "labels": list(pending.get("metadata", {}).get("approval_labels") or []) if isinstance(pending.get("metadata"), dict) else [],

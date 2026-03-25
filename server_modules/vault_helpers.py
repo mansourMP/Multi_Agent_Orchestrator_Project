@@ -23,9 +23,6 @@ def workspace_visible(entry_workspace_id: Optional[str], requested_workspace_id:
     req_ws = normalize_workspace_id(requested_workspace_id)
     if req_ws is None:
         return True
-    if entry_ws is None:
-        # Legacy credentials without workspace scope remain visible.
-        return True
     return entry_ws == req_ws
 
 

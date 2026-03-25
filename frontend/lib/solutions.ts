@@ -1,8 +1,7 @@
 'use client';
 
-import { ORION_API_URL } from '@/app/page.api';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { fetchWorkflows } from '@/lib/api';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 export type InstalledSolution = {
   id: string;
@@ -59,13 +58,9 @@ export type AutomationRecord = {
   lastRun?: string | null;
 };
 
-function runtimeHeaders(): HeadersInit {
-  const runtimeKey = readRuntimeApiKeyFromStorage('');
-  return runtimeKey ? { 'X-API-Key': runtimeKey } : {};
-}
-
 async function readJson<T>(url: string, fallbackMessage: string): Promise<T> {
-  const res = await fetch(url, { headers: runtimeHeaders() });
+  await ensureControlPlaneSession();
+  const res = await fetch(url, { cache: 'no-store' });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(String((body as { detail?: string; message?: string })?.detail || (body as { message?: string })?.message || fallbackMessage));
@@ -74,7 +69,7 @@ async function readJson<T>(url: string, fallbackMessage: string): Promise<T> {
 }
 
 export async function fetchSolutionsState(): Promise<SolutionsState> {
-  const body = await readJson<{ installed?: InstalledSolution[]; active?: InstalledSolution[]; mcp_endpoint?: string | null; mcp_tools?: string[] }>(`${ORION_API_URL}/solutions/state`, 'Failed to load solutions.');
+  const body = await readJson<{ installed?: InstalledSolution[]; active?: InstalledSolution[]; mcp_endpoint?: string | null; mcp_tools?: string[] }>('/api/solutions/state', 'Failed to load solutions.');
   return {
     installed: Array.isArray(body.installed) ? body.installed : [],
     active: Array.isArray(body.active) ? body.active : [],
@@ -84,12 +79,12 @@ export async function fetchSolutionsState(): Promise<SolutionsState> {
 }
 
 export async function fetchSkillsState(): Promise<{ installed: Array<{ id: string; name: string; enabled: boolean }> }> {
-  const body = await readJson<{ installed?: Array<{ id: string; name: string; enabled: boolean }> }>(`${ORION_API_URL}/skills/state`, 'Failed to load skills.');
+  const body = await readJson<{ installed?: Array<{ id: string; name: string; enabled: boolean }> }>('/api/skills/state', 'Failed to load skills.');
   return { installed: Array.isArray(body.installed) ? body.installed : [] };
 }
 
 export async function fetchWeeklySchedules(): Promise<Array<Record<string, unknown>>> {
-  const body = await readJson<{ items?: Array<Record<string, unknown>> }>(`${ORION_API_URL}/schedules/weekly`, 'Failed to load schedules.');
+  const body = await readJson<{ items?: Array<Record<string, unknown>> }>('/api/control-plane/schedules/weekly', 'Failed to load schedules.');
   return Array.isArray(body.items) ? body.items : [];
 }
 
@@ -107,7 +102,7 @@ export async function fetchRecentRuns(limit: number = 5, workspaceId: string = '
   const params = new URLSearchParams();
   params.set('limit', String(Math.max(1, limit)));
   params.set('workspace_id', workspaceId);
-  const body = await readJson<{ items?: RecentRunItem[] }>(`${ORION_API_URL}/history/runs?${params.toString()}`, 'Failed to load recent runs.');
+  const body = await readJson<{ items?: RecentRunItem[] }>(`/api/executions/history?${params.toString()}`, 'Failed to load recent runs.');
   return Array.isArray(body.items) ? body.items : [];
 }
 

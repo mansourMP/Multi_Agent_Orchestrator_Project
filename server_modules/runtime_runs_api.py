@@ -52,6 +52,63 @@ def _limited_result_data_view(result_data: Any) -> Optional[dict]:
     }
 
 
+def _extract_run_owner_user_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    direct = str(payload.get("owner_user_id") or "").strip()
+    if direct:
+        return direct
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return str(metadata.get("owner_user_id") or "").strip()
+
+
+def _current_user_is_privileged(current_user: Any) -> bool:
+    if not isinstance(current_user, dict):
+        return False
+    if bool(current_user.get("is_admin")):
+        return True
+    if str(current_user.get("auth_type") or "").strip() == "api_key":
+        return True
+    user_id = str(current_user.get("user_id") or "").strip()
+    email = str(current_user.get("email") or "").strip().lower()
+    admin_user_ids = set(globals().get("ORION_ADMIN_USER_IDS") or [])
+    admin_emails = set(globals().get("ORION_ADMIN_EMAILS") or [])
+    return bool((user_id and user_id in admin_user_ids) or (email and email in admin_emails))
+
+
+def _enforce_run_owner_access(current_user: Any, payload: Any) -> None:
+    if _current_user_is_privileged(current_user):
+        return
+    if not isinstance(current_user, dict):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    request_user_id = str(current_user.get("user_id") or "").strip()
+    if not request_user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is required.")
+    owner_user_id = _extract_run_owner_user_id(payload)
+    if not owner_user_id:
+        raise HTTPException(status_code=403, detail="Run is not bound to an owner.")
+    if owner_user_id != request_user_id:
+        raise HTTPException(status_code=403, detail="Run is owned by another user.")
+
+
+def _stamp_request_owner(req: Any, current_user: Any) -> Any:
+    if not isinstance(current_user, dict):
+        return req
+    if str(current_user.get("auth_type") or "").strip() == "api_key":
+        return req
+    owner_user_id = str(current_user.get("user_id") or "").strip()
+    if not owner_user_id:
+        return req
+    metadata = dict(req.metadata or {})
+    metadata["owner_user_id"] = owner_user_id
+    email = str(current_user.get("email") or "").strip().lower()
+    if email:
+        metadata["owner_email"] = email
+    req.metadata = metadata
+    return req
+
+
 def _resolve_local_execution_start_approval(
     run_id_str: str,
     run: dict,
@@ -192,9 +249,9 @@ def register_run_routes(app) -> None:
             module_globals[key] = value
 
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
-    async def start_run(body: Optional[RunStartRequest] = None):
+    async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        req = body or RunStartRequest()
+        req = _stamp_request_owner(body or RunStartRequest(), current_user)
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
         route = decide_execution_target(metadata)
@@ -213,13 +270,14 @@ def register_run_routes(app) -> None:
         return result
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
-    async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest):
+    async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
         body.validate_fields()
         parent_run_id = str(run_id)
         parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
+        _enforce_run_owner_access(current_user, parent_snapshot)
         parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
         parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
         parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
@@ -265,7 +323,7 @@ def register_run_routes(app) -> None:
         }
 
     @app.post("/runs/{run_id}/delegate/auto", dependencies=[Depends(require_api_key)])
-    async def auto_delegate_run(run_id: uuid.UUID, body: Optional[RunAutoDelegationRequest] = None):
+    async def auto_delegate_run(run_id: uuid.UUID, body: Optional[RunAutoDelegationRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
@@ -273,6 +331,7 @@ def register_run_routes(app) -> None:
         req.validate_fields()
         parent_run_id = str(run_id)
         parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
+        _enforce_run_owner_access(current_user, parent_snapshot)
         parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
         parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
         parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
@@ -316,7 +375,7 @@ def register_run_routes(app) -> None:
         }
 
     @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[Depends(require_api_key)])
-    async def retry_failed_delegation_runs(run_id: uuid.UUID, body: Optional[RunDelegationRetryRequest] = None):
+    async def retry_failed_delegation_runs(run_id: uuid.UUID, body: Optional[RunDelegationRetryRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
@@ -324,6 +383,7 @@ def register_run_routes(app) -> None:
         req.validate_fields()
         parent_run_id = str(run_id)
         parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
+        _enforce_run_owner_access(current_user, parent_snapshot)
         parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
         parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
         parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
@@ -479,6 +539,7 @@ def register_run_routes(app) -> None:
                 snapshot = _get_replay_payload(run_id_str)
             except HTTPException:
                 raise HTTPException(404, "Run ID not found")
+            _enforce_run_owner_access(current_user, snapshot)
 
             context = snapshot.get("context") if isinstance(snapshot.get("context"), dict) else {}
             metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -489,6 +550,8 @@ def register_run_routes(app) -> None:
                 "run_id": run_id_str,
                 "engine": snapshot.get("engine", "orion"),
                 "status": snapshot.get("status", "unknown"),
+                "owner_user_id": snapshot.get("owner_user_id"),
+                "owner_email": snapshot.get("owner_email"),
                 "created_at": snapshot.get("created_at"),
                 "updated_at": snapshot.get("updated_at"),
                 "duration_ms": snapshot.get("duration_ms"),
@@ -561,6 +624,7 @@ def register_run_routes(app) -> None:
         context = run.get("context", {})
         metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
         snapshot = _serialize_run_snapshot(run_id_str, run)
+        _enforce_run_owner_access(current_user, snapshot)
         parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
         delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
         safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
@@ -568,6 +632,8 @@ def register_run_routes(app) -> None:
             "run_id": run_id_str,
             "engine": run.get("engine", "orion"),
             "status": run.get("status", "unknown"),
+            "owner_user_id": str(metadata.get("owner_user_id") or "").strip() or None,
+            "owner_email": str(metadata.get("owner_email") or "").strip().lower() or None,
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "duration_ms": run.get("duration_ms"),
@@ -637,13 +703,24 @@ def register_run_routes(app) -> None:
             "archived": archived,
         }
 
-    @app.get("/history/runs", dependencies=[Depends(require_admin_api_key)])
-    async def get_runs_history(limit: int = 30, workspace_id: Optional[str] = None, status: Optional[str] = None, pack_id: Optional[str] = None):
+    @app.get("/history/runs", dependencies=[Depends(require_api_key)])
+    async def get_runs_history(
+        limit: int = 30,
+        workspace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        pack_id: Optional[str] = None,
+        current_user=Depends(require_api_key),
+    ):
         _refresh_server_exports()
         safe_limit = max(1, min(limit, 200))
         with RUN_HISTORY_LOCK:
             items = list(RUN_HISTORY)
         filtered = [item for item in items if _history_item_matches(item, workspace_id, status, pack_id)]
+        if not _current_user_is_privileged(current_user):
+            request_user_id = str(current_user.get("user_id") or "").strip()
+            if not request_user_id:
+                raise HTTPException(status_code=401, detail="Authenticated user id is required.")
+            filtered = [item for item in filtered if _extract_run_owner_user_id(item) == request_user_id]
         child_counts: Dict[str, int] = {}
         for item in filtered:
             parent_run_id = _late_server_export("_normalize_run_id_token")(item.get("parent_run_id"))
@@ -683,20 +760,24 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/runs/{run_id}/stream", dependencies=[Depends(require_api_key)])
-    async def stream_run(run_id: uuid.UUID):
+    async def stream_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         run_id_str = str(run_id)
         if run_id_str not in runs:
             raise HTTPException(404, "Run ID not found")
+        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, runs[run_id_str])
+        _enforce_run_owner_access(current_user, snapshot)
         return EventSourceResponse(iter_logs_for_run(run_id_str))
 
     @app.post("/runs/{run_id}/decision", dependencies=[Depends(require_api_key)])
-    async def submit_run_decision(run_id: uuid.UUID, payload: DecisionPayload):
+    async def submit_run_decision(run_id: uuid.UUID, payload: DecisionPayload, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         payload.validate_fields()
         run_id_str = str(run_id)
         if run_id_str in runs:
             run = runs[run_id_str]
+            snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
+            _enforce_run_owner_access(current_user, snapshot)
             pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
             approval_id = str(pending.get("approval_id") or "").strip() if isinstance(pending, dict) else ""
             correlation_id = str(pending.get("correlation_id") or "").strip() if isinstance(pending, dict) else ""
@@ -728,13 +809,15 @@ def register_run_routes(app) -> None:
         raise HTTPException(404, "Run ID not found")
 
     @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[Depends(require_api_key)])
-    async def resolve_run_approval(run_id: uuid.UUID, approval_id: str, payload: ApprovalResolvePayload):
+    async def resolve_run_approval(run_id: uuid.UUID, approval_id: str, payload: ApprovalResolvePayload, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         payload.validate_fields()
         run_id_str = str(run_id)
         run = runs.get(run_id_str)
         if not isinstance(run, dict):
             raise HTTPException(status_code=404, detail="Run ID not found")
+        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
+        _enforce_run_owner_access(current_user, snapshot)
         pending = run.get("pending_approval")
         if not isinstance(pending, dict):
             raise HTTPException(status_code=409, detail="No pending approval for this run.")

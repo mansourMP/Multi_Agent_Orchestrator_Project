@@ -18,10 +18,7 @@ import {
   openAuthenticatedEventStream,
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
-import { API_BASE } from '@/lib/config';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
-
-const ORION_API_URL = API_BASE;
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
 
 type HistoryItem = {
@@ -264,25 +261,16 @@ export default function RunDetailPage() {
   const [liveEvents, setLiveEvents] = useState<ReplayEvent[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
 
-  const getRuntimeKey = useCallback(() => readRuntimeApiKeyFromStorage(''), []);
-  const buildHeaders = useCallback((withJson = false): HeadersInit => {
-    const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    const runtimeKey = getRuntimeKey();
-    if (runtimeKey) headers.set('X-API-Key', runtimeKey);
-    return headers;
-  }, [getRuntimeKey]);
-
   const load = useCallback(async () => {
     if (!runId) return;
     setLoading(true);
     setError('');
     try {
-      const headers = buildHeaders(false);
+      await ensureControlPlaneSession();
       const [historyRes, runRes, replayRes] = await Promise.all([
-        fetch(`${ORION_API_URL}/history/runs?limit=200&workspace_id=default`, { headers }),
-        fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}`, { headers }),
-        fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}/replay`, { headers }),
+        fetch(`/api/executions/history?limit=200&workspace_id=default`, { cache: 'no-store' }),
+        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+        fetch(`/api/runs/${encodeURIComponent(runId)}/replay`, { cache: 'no-store' }),
       ]);
 
       if (!historyRes.ok || !runRes.ok) {
@@ -302,7 +290,7 @@ export default function RunDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [buildHeaders, runId]);
+  }, [runId]);
 
   useEffect(() => {
     void load();
@@ -319,47 +307,53 @@ export default function RunDetailPage() {
       return;
     }
 
-    const runtimeKey = getRuntimeKey();
-    const url = `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
-    const source = openAuthenticatedEventStream({
-      url,
-      apiKey: runtimeKey,
-      onEvent: (event) => {
-        if (event.event !== 'log') return;
-        try {
-          const parsed = JSON.parse(String(event.data || '{}')) as ReplayEvent;
-          setLiveEvents((prev) => [...prev.slice(-19), parsed]);
-          const eventName = String(parsed.event || '').toLowerCase();
-          if (
-            eventName === 'run_complete'
-            || eventName === 'run_error'
-            || eventName === 'run_stopped'
-            || eventName === 'timeout'
-            || eventName.startsWith('approval_')
-          ) {
-            void load();
+    let active = true;
+    let source: AuthenticatedEventStreamConnection | null = null;
+
+    void (async () => {
+      await ensureControlPlaneSession();
+      if (!active) return;
+      const url = `/api/runs/${encodeURIComponent(runId)}/stream`;
+      source = openAuthenticatedEventStream({
+        url,
+        onEvent: (event) => {
+          if (event.event !== 'log') return;
+          try {
+            const parsed = JSON.parse(String(event.data || '{}')) as ReplayEvent;
+            setLiveEvents((prev) => [...prev.slice(-19), parsed]);
+            const eventName = String(parsed.event || '').toLowerCase();
+            if (
+              eventName === 'run_complete'
+              || eventName === 'run_error'
+              || eventName === 'run_stopped'
+              || eventName === 'timeout'
+              || eventName.startsWith('approval_')
+            ) {
+              void load();
+            }
+          } catch {
+            // Ignore malformed live events on the simplified view.
           }
-        } catch {
-          // Ignore malformed live events on the simplified view.
-        }
-      },
-      onError: () => {
-        if (source.readyState === AUTH_STREAM_CLOSED && streamRef.current === source) {
-          streamRef.current = null;
-        }
-        void load();
-      },
-      onClose: () => {
-        if (streamRef.current === source) streamRef.current = null;
-      },
-    });
-    streamRef.current = source;
+        },
+        onError: () => {
+          if (source?.readyState === AUTH_STREAM_CLOSED && streamRef.current === source) {
+            streamRef.current = null;
+          }
+          void load();
+        },
+        onClose: () => {
+          if (streamRef.current === source) streamRef.current = null;
+        },
+      });
+      streamRef.current = source;
+    })();
 
     return () => {
-      source.close();
+      active = false;
+      source?.close();
       if (streamRef.current === source) streamRef.current = null;
     };
-  }, [getRuntimeKey, historyItem?.status, load, loading, replayItem?.status, runDetail?.status, runId]);
+  }, [historyItem?.status, load, loading, replayItem?.status, runDetail?.status, runId]);
 
   // The current run payload does not expose a dedicated hero/result field, so the
   // frontend falls back through explicit result text, archived summaries, and pack output.
@@ -556,17 +550,17 @@ export default function RunDetailPage() {
     if (!runId || !runDetail?.pending_approval?.approval_id) return;
     setApprovalBusy(decision);
     try {
-      const response = await fetch(
-        `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(runDetail.pending_approval.approval_id)}/resolve`,
-        {
-          method: 'POST',
-          headers: buildHeaders(true),
-          body: JSON.stringify({
-            decision,
-            note: 'Resolved from Hekor run view',
-          }),
-        },
-      );
+      await ensureControlPlaneSession();
+      const response = await fetch('/api/approvals/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId,
+          approvalId: runDetail.pending_approval.approval_id,
+          decision,
+          note: 'Resolved from Hekor run view',
+        }),
+      });
       if (!response.ok) {
         const message = await response.text().catch(() => '');
         throw new Error(message || 'Failed to resolve this approval.');
@@ -577,7 +571,7 @@ export default function RunDetailPage() {
     } finally {
       setApprovalBusy(null);
     }
-  }, [buildHeaders, load, runDetail?.pending_approval?.approval_id, runId]);
+  }, [load, runDetail?.pending_approval?.approval_id, runId]);
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">

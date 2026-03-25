@@ -1,9 +1,6 @@
-import { API_BASE } from '@/lib/config';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel, normalizeExecutionTarget } from '@/lib/executionTargets';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
-
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 /**
  * Enhanced fetch wrapper to handle JSON errors and provide better feedback
@@ -54,24 +51,8 @@ async function jsonFetch(url: string, options: RequestInit = {}, connectionError
     return res.json();
 }
 
-async function runtimeApiFetch(endpoint: string, options: RequestInit = {}) {
-    const headers = new Headers(options.headers || {});
-    const runtimeApiKey = readRuntimeApiKeyFromStorage('');
-    if (runtimeApiKey && !headers.has('X-API-Key')) {
-        headers.set('X-API-Key', runtimeApiKey);
-    }
-
-    return jsonFetch(
-        `${ORION_API_URL}${endpoint}`,
-        {
-            ...options,
-            headers,
-        },
-        `Cannot reach the backend API on ${ORION_API_URL}.`,
-    );
-}
-
 async function internalApiFetch(endpoint: string, options: RequestInit = {}) {
+    await ensureControlPlaneSession();
     return jsonFetch(endpoint, options, `Cannot reach the internal API route on ${endpoint}.`);
 }
 
@@ -151,7 +132,7 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
 }
 
 export async function fetchWorkflows(workspaceId: string = 'default') {
-    return runtimeApiFetch(`/workflows?workspaceId=${workspaceId}`);
+    return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`);
 }
 
 export async function createWorkflow(
@@ -160,7 +141,7 @@ export async function createWorkflow(
     workspaceId: string = 'default',
     definition: unknown = { nodes: [], edges: [] }
 ) {
-    return runtimeApiFetch(`/workflows?workspaceId=${workspaceId}`, {
+    return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -172,11 +153,11 @@ export async function createWorkflow(
 }
 
 export async function getWorkflow(id: string) {
-    return runtimeApiFetch(`/workflows/${id}`);
+    return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`);
 }
 
 export async function updateWorkflow(id: string, definition: unknown) {
-    return runtimeApiFetch(`/workflows/${id}`, {
+    return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ definition }),
@@ -187,18 +168,13 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
     void credentials;
     void variables;
 
-    const runtimeApiKey = readRuntimeApiKeyFromStorage('');
-    if (!runtimeApiKey) {
-        throw new ApiError('Add your runtime access key before starting a test run.', 400);
-    }
-
     const workflow = await getWorkflow(id) as WorkflowExecutionShape;
     const config = extractWorkflowRunConfig(workflow, id);
-    const response = await fetch(`${ORION_API_URL}/runs/start`, {
+    await ensureControlPlaneSession();
+    const response = await fetch(`/api/workflows/${encodeURIComponent(id)}/run`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-API-Key': runtimeApiKey,
         },
         body: JSON.stringify({
             engine: 'orion',
@@ -265,7 +241,7 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
 }
 
 export async function resumeWorkflow(executionId: string, data: unknown = {}) {
-    return runtimeApiFetch(`/executions/${executionId}/resume`, {
+    return internalApiFetch(`/api/executions/${encodeURIComponent(executionId)}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -273,14 +249,14 @@ export async function resumeWorkflow(executionId: string, data: unknown = {}) {
 }
 
 export async function publishWorkflow(id: string) {
-    return runtimeApiFetch(`/workflows/${id}/publish`, {
+    return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
     });
 }
 
 export async function deleteWorkflow(id: string) {
-    return runtimeApiFetch(`/workflows/${id}`, {
+    return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`, {
         method: 'DELETE',
     });
 }
@@ -306,5 +282,5 @@ export async function fetchExecution(id: string) {
 }
 
 export async function fetchAgents() {
-    return runtimeApiFetch(`/agents`);
+    return internalApiFetch('/api/agents');
 }

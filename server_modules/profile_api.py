@@ -10,6 +10,7 @@ from urllib.parse import quote_plus
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
+from server_modules.auth import enforce_workspace_access
 
 
 PROFILE_TEMPLATE_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -437,8 +438,8 @@ def register_profile_routes(app) -> None:
             module_globals[key] = value
 
     @app.get("/profiles", dependencies=[Depends(require_admin_api_key)])
-    async def list_profiles(workspace_id: Optional[str] = None):
-        workspace_token = _normalize_workspace(workspace_id)
+    async def list_profiles(workspace_id: Optional[str] = None, current_user=Depends(require_admin_api_key)):
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         items = [_serialize_profile(profile_id, workspace_token, include_content=False) for profile_id in _list_profile_ids(workspace_token)]
         return {
             "items": items,
@@ -447,8 +448,8 @@ def register_profile_routes(app) -> None:
         }
 
     @app.get("/profiles/{profile_id}", dependencies=[Depends(require_admin_api_key)])
-    async def get_profile(profile_id: str, workspace_id: Optional[str] = None):
-        workspace_token = _normalize_workspace(workspace_id)
+    async def get_profile(profile_id: str, workspace_id: Optional[str] = None, current_user=Depends(require_admin_api_key)):
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         token = _slugify_profile_token(profile_id)
         if not _profile_exists(token, workspace_token):
             raise HTTPException(status_code=404, detail="Profile not found.")
@@ -458,8 +459,9 @@ def register_profile_routes(app) -> None:
         }
 
     @app.post("/profiles", dependencies=[Depends(require_admin_api_key)])
-    async def create_profile(body: ProfileCreateRequest):
+    async def create_profile(body: ProfileCreateRequest, current_user=Depends(require_admin_api_key)):
         body.validate_fields()
+        body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
         workspace_token = _normalize_workspace(body.workspace_id)
         template_id = str(body.template or "custom").strip() or "custom"
         explicit_id = _slugify_profile_token(body.id or body.name)
@@ -497,9 +499,14 @@ def register_profile_routes(app) -> None:
         return {"item": _serialize_profile(str(metadata["id"]), workspace_token, include_content=True)}
 
     @app.patch("/profiles/{profile_id}", dependencies=[Depends(require_admin_api_key)])
-    async def patch_profile(profile_id: str, body: ProfilePatchRequest, workspace_id: Optional[str] = None):
+    async def patch_profile(
+        profile_id: str,
+        body: ProfilePatchRequest,
+        workspace_id: Optional[str] = None,
+        current_user=Depends(require_admin_api_key),
+    ):
         body.validate_fields()
-        workspace_token = _normalize_workspace(workspace_id)
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         token = _slugify_profile_token(profile_id)
         if not _profile_exists(token, workspace_token):
             raise HTTPException(status_code=404, detail="Profile not found.")
@@ -536,8 +543,8 @@ def register_profile_routes(app) -> None:
         return {"item": _serialize_profile(token, workspace_token, include_content=True)}
 
     @app.post("/profiles/{profile_id}/set-default", dependencies=[Depends(require_admin_api_key)])
-    async def set_default_profile(profile_id: str, workspace_id: Optional[str] = None):
-        workspace_token = _normalize_workspace(workspace_id)
+    async def set_default_profile(profile_id: str, workspace_id: Optional[str] = None, current_user=Depends(require_admin_api_key)):
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         token = _slugify_profile_token(profile_id)
         if not _profile_exists(token, workspace_token):
             raise HTTPException(status_code=404, detail="Profile not found.")
@@ -545,8 +552,8 @@ def register_profile_routes(app) -> None:
         return {"ok": True, "default_profile_id": default_profile_id, "workspace_id": workspace_token}
 
     @app.post("/profiles/{profile_id}/reset", dependencies=[Depends(require_admin_api_key)])
-    async def reset_profile(profile_id: str, workspace_id: Optional[str] = None):
-        workspace_token = _normalize_workspace(workspace_id)
+    async def reset_profile(profile_id: str, workspace_id: Optional[str] = None, current_user=Depends(require_admin_api_key)):
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         token = _slugify_profile_token(profile_id)
         metadata = _safe_read_json(_profile_metadata_path(token, workspace_token), {})
         if not isinstance(metadata, dict):
@@ -579,8 +586,8 @@ def register_profile_routes(app) -> None:
         return {"item": _serialize_profile(token, workspace_token, include_content=True)}
 
     @app.post("/profiles/{profile_id}/test", dependencies=[Depends(require_admin_api_key)])
-    async def test_profile(profile_id: str, workspace_id: Optional[str] = None):
-        workspace_token = _normalize_workspace(workspace_id)
+    async def test_profile(profile_id: str, workspace_id: Optional[str] = None, current_user=Depends(require_admin_api_key)):
+        workspace_token = _normalize_workspace(enforce_workspace_access(current_user, workspace_id))
         token = _slugify_profile_token(profile_id)
         if not _profile_exists(token, workspace_token):
             raise HTTPException(status_code=404, detail="Profile not found.")

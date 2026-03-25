@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { API_BASE } from '@/lib/config';
+import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
+import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
-const ORION_API_URL = process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
 
 type BuilderGenerateBody = {
   prompt?: string;
@@ -12,6 +13,11 @@ type BuilderGenerateBody = {
 };
 
 export async function POST(request: NextRequest) {
+  const rejection = enforceBffRouteGuard(request, { methods: ['POST'] });
+  if (rejection) return rejection;
+  const authFailure = await requireControlPlaneSession(request);
+  if (authFailure) return authFailure;
+
   const body = (await request.json().catch(() => null)) as BuilderGenerateBody | null;
   const prompt = String(body?.prompt || '').trim();
   const model = String(body?.model || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
@@ -20,21 +26,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Prompt is required.' }, { status: 400 });
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  const authorization = request.headers.get('authorization');
-  const xApiKey = request.headers.get('x-api-key');
-  if (authorization) {
-    headers.Authorization = authorization;
-  }
-  if (xApiKey) {
-    headers['X-API-Key'] = xApiKey;
-  }
-
-  const response = await fetch(`${ORION_API_URL}/api/v1/builder/generate`, {
+  const { status, payload } = await runtimeJsonRequest('/api/v1/builder/generate', {
     method: 'POST',
-    headers,
     body: JSON.stringify({
       prompt,
       model,
@@ -43,7 +36,7 @@ export async function POST(request: NextRequest) {
     }),
   });
 
-  const payload = (await response.json().catch(() => null)) as
+  const normalizedPayload = payload as
     | {
         workflow?: unknown;
         detail?: string;
@@ -51,20 +44,20 @@ export async function POST(request: NextRequest) {
       }
     | null;
 
-  if (!response.ok) {
+  if (status < 200 || status >= 300) {
     const message =
-      (payload && typeof payload.detail === 'string' && payload.detail) ||
-      (payload && typeof payload.error === 'string' && payload.error) ||
+      (normalizedPayload && typeof normalizedPayload.detail === 'string' && normalizedPayload.detail) ||
+      (normalizedPayload && typeof normalizedPayload.error === 'string' && normalizedPayload.error) ||
       'Builder request failed.';
     return NextResponse.json(
       { error: message },
-      { status: response.status || 500 },
+      { status: status || 500 },
     );
   }
 
-  if (!payload || typeof payload.workflow !== 'object' || payload.workflow === null) {
+  if (!normalizedPayload || typeof normalizedPayload.workflow !== 'object' || normalizedPayload.workflow === null) {
     return NextResponse.json({ error: 'Builder returned an invalid workflow.' }, { status: 502 });
   }
 
-  return NextResponse.json(payload.workflow);
+  return NextResponse.json(normalizedPayload.workflow);
 }

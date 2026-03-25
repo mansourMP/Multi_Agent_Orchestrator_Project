@@ -13,6 +13,7 @@ import {
   type ArtifactView,
   type KindFilter,
 } from '@/lib/artifactsPresentation';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { useAsyncPageResource } from '@/hooks/pages/useAsyncPageResource';
 
 type DesktopBridge = {
@@ -40,6 +41,7 @@ export function useArtifactsBrowser() {
   }, []);
 
   const loadArtifacts = useCallback(async () => {
+    await ensureControlPlaneSession();
     const response = await fetch(
       '/api/artifacts/workspace?workspace_id=default&history_limit=80&limit=120',
       { cache: 'no-store' },

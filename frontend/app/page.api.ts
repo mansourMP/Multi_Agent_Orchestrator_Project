@@ -40,9 +40,9 @@ import { type PageState } from './page.state';
 import { resolveActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { getLocalExecutionCapabilityTitle, inferLocalExecutionCapabilityFromCommand } from '@/lib/localExecutionCapabilities';
 import { buildRunStartedMessage, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
 export const ORION_API_URL = API_BASE;
@@ -127,7 +127,6 @@ function describeLocalExecutionOperation(operation: LocalExecutionDraft['operati
 
 export function usePlatformApi(state: PageState, streamRef: MutableRefObject<AuthenticatedEventStreamConnection | null>) {
   const {
-    runtimeApiKey,
     setLogs,
     setSetupSession,
     setSetupSessionId,
@@ -222,20 +221,25 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setShowSetupWizard,
   } = state;
 
-  const buildHeaders = useCallback((withJson: boolean): HeadersInit => {
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
     const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    const effectiveRuntimeApiKey = runtimeApiKey || readRuntimeApiKeyFromStorage('');
-    if (effectiveRuntimeApiKey) headers.set('X-API-Key', effectiveRuntimeApiKey);
-    return headers;
-  }, [runtimeApiKey]);
+    const nextHeaders = new Headers(init?.headers || {});
+    nextHeaders.forEach((value, key) => headers.set(key, value));
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
 
   const appendLog = useCallback((message: string, level: LogLevel = 'info', event?: string, nodeId?: string) => {
     setLogs((prev) => [...prev, { ts: new Date().toISOString(), level, message, event, nodeId }]);
   }, [setLogs]);
 
   const refreshSetupSession = useCallback(async (sessionId: string) => {
-    const res = await fetch(`${ORION_API_URL}/setup/sessions/${sessionId}`, { headers: buildHeaders(false) });
+    const res = await controlPlaneFetch(`/api/control-plane/setup/sessions/${encodeURIComponent(sessionId)}`);
     if (!res.ok) {
       throw new Error(await readResponseMessage(res, 'Failed to load setup session.'));
     }
@@ -247,12 +251,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       return session;
     }
     throw new Error('Setup session response is invalid.');
-  }, [buildHeaders, setSetupSession, setSetupSessionId]);
+  }, [controlPlaneFetch, setSetupSession, setSetupSessionId]);
 
   const createSetupSession = useCallback(async () => {
-    const res = await fetch(`${ORION_API_URL}/setup/sessions`, {
+    const res = await controlPlaneFetch('/api/control-plane/setup/sessions', {
       method: 'POST',
-      headers: buildHeaders(true),
       body: JSON.stringify({ workspace_id: WORKSPACE_ID, provider }),
     });
     if (!res.ok) {
@@ -266,7 +269,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       return session;
     }
     throw new Error('Setup session response is invalid.');
-  }, [buildHeaders, provider, setSetupSession, setSetupSessionId]);
+  }, [controlPlaneFetch, provider, setSetupSession, setSetupSessionId]);
 
   const setupAction = useCallback(
     async (
@@ -286,9 +289,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       if (!setupSessionId) return;
       setSetupSessionBusy(true);
       try {
-        const res = await fetch(`${ORION_API_URL}/setup/sessions/${setupSessionId}/actions`, {
+        const res = await controlPlaneFetch(`/api/control-plane/setup/sessions/${encodeURIComponent(setupSessionId)}/actions`, {
           method: 'POST',
-          headers: buildHeaders(true),
           body: JSON.stringify({ action, payload: payload || {} }),
         });
         if (!res.ok) {
@@ -306,16 +308,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         setSetupSessionBusy(false);
       }
     },
-    [appendLog, buildHeaders, setupSessionId, setSetupSessionBusy, setSetupSession],
+    [appendLog, controlPlaneFetch, setupSessionId, setSetupSessionBusy, setSetupSession],
   );
 
   const cancelSetupSession = useCallback(async () => {
     if (!setupSessionId) return;
     setSetupSessionBusy(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/setup/sessions/${setupSessionId}/cancel`, {
+      const res = await controlPlaneFetch(`/api/control-plane/setup/sessions/${encodeURIComponent(setupSessionId)}/cancel`, {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       if (!res.ok) {
         throw new Error(await readResponseMessage(res, 'Failed to cancel setup session.'));
@@ -328,15 +329,14 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setSetupSessionBusy(false);
     }
-  }, [appendLog, buildHeaders, setupSessionId, setSetupSessionBusy, setSetupSession]);
+  }, [appendLog, controlPlaneFetch, setupSessionId, setSetupSessionBusy, setSetupSession]);
 
   const resumeSetupSession = useCallback(async () => {
     if (!setupSessionId) return;
     setSetupSessionBusy(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/setup/sessions/${setupSessionId}/resume`, {
+      const res = await controlPlaneFetch(`/api/control-plane/setup/sessions/${encodeURIComponent(setupSessionId)}/resume`, {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       if (!res.ok) {
         throw new Error(await readResponseMessage(res, 'Failed to resume setup session.'));
@@ -349,10 +349,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setSetupSessionBusy(false);
     }
-  }, [appendLog, buildHeaders, setupSessionId, setSetupSessionBusy, setSetupSession]);
+  }, [appendLog, controlPlaneFetch, setupSessionId, setSetupSessionBusy, setSetupSession]);
 
   const fetchDoctorChecks = useCallback(async (): Promise<DoctorCheck[]> => {
-    const doctorRes = await fetch(`${ORION_API_URL}/doctor`, { headers: buildHeaders(false) });
+    await ensureControlPlaneSession();
+    const doctorRes = await fetch('/api/doctor/preflight', { cache: 'no-store' });
     if (!doctorRes.ok) {
       if (doctorRes.status === 401) {
         throw new Error('Invalid API key. Enter runtime key in Setup step 1 (Runtime access key).');
@@ -362,27 +363,30 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
     const doctorPayload = await doctorRes.json();
     return Array.isArray(doctorPayload?.checks) ? (doctorPayload.checks as DoctorCheck[]) : [];
-  }, [buildHeaders]);
+  }, []);
 
   const fetchRuntimeMetrics = useCallback(async () => {
     setMetricsLoading(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/metrics`, { headers: buildHeaders(false) });
+      await ensureControlPlaneSession();
+      const res = await fetch('/api/health/overview', { cache: 'no-store' });
       if (!res.ok) return;
       const payload = await res.json();
-      if (payload && typeof payload === 'object') {
-        setRuntimeMetrics(payload as RuntimeMetrics);
+      const metricsPayload = payload?.metrics?.payload;
+      if (metricsPayload && typeof metricsPayload === 'object') {
+        setRuntimeMetrics(metricsPayload as RuntimeMetrics);
       }
     } catch {
       // Ignore transient metrics failures in simple mode.
     } finally {
       setMetricsLoading(false);
     }
-  }, [buildHeaders, setMetricsLoading, setRuntimeMetrics]);
+  }, [setMetricsLoading, setRuntimeMetrics]);
 
   const fetchLocalWorkerStatus = useCallback(async (silent = false) => {
     if (!silent) setWorkersLoading(true);
     try {
+      await ensureControlPlaneSession();
       const res = await fetch(`/api/runtime/machines`, { cache: 'no-store' });
       if (!res.ok) return;
       const payload = await res.json();
@@ -427,11 +431,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       if (!silent) setWorkersLoading(false);
     }
-  }, [buildHeaders, setWorkersLoading, setLocalWorkerStatus]);
+  }, [setWorkersLoading, setLocalWorkerStatus]);
 
   const refreshModelAliasCatalog = useCallback(async (): Promise<ModelAliasOption[]> => {
     try {
-      const res = await fetch(`${ORION_API_URL}/providers/model-aliases`, { headers: buildHeaders(false) });
+      const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
       if (!res.ok) {
         throw new Error('Failed to load model aliases.');
       }
@@ -471,12 +475,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       // Keep fallback aliases when the catalog endpoint is unavailable.
     }
     return modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS;
-  }, [buildHeaders, modelAliases, setModelAliases]);
+  }, [controlPlaneFetch, modelAliases, setModelAliases]);
 
   const refreshProviderCatalog = useCallback(async () => {
     try {
       const aliases = await refreshModelAliasCatalog();
-      const res = await fetch(`${ORION_API_URL}/providers`, { headers: buildHeaders(false) });
+      const res = await controlPlaneFetch('/api/control-plane/providers');
       if (!res.ok) return;
       const payload = await res.json();
       const items = Array.isArray(payload?.providers) ? payload.providers : [];
@@ -521,7 +525,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } catch {
       // Keep defaults when catalog cannot be fetched.
     }
-  }, [buildHeaders, refreshModelAliasCatalog, setProviderOptions]);
+  }, [controlPlaneFetch, refreshModelAliasCatalog, setProviderOptions]);
 
   const refreshProviderModels = useCallback(
     async (providerId: ProviderId, credentialForProvider?: string) => {
@@ -552,9 +556,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         if (credentialForProvider) {
           search.set('credential_id', credentialForProvider);
         }
-        const res = await fetch(`${ORION_API_URL}/providers/${providerId}/models?${search.toString()}`, {
-          headers: buildHeaders(false),
-        });
+        const res = await controlPlaneFetch(`/api/control-plane/providers/${encodeURIComponent(providerId)}/models?${search.toString()}`);
         if (!res.ok) {
           setModelOptions(fallbackModels);
           setModel((prev) => resolveSelectedModel(prev, fallbackModels));
@@ -578,7 +580,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         setModelsLoading(false);
       }
     },
-    [buildHeaders, connectionMode, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
+    [connectionMode, controlPlaneFetch, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
 
   const buildScheduledRunRequest = useCallback(() => {
@@ -667,9 +669,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   const loadWeeklySchedule = useCallback(async () => {
     setWeeklyScheduleBusy('load');
     try {
-      const res = await fetch(`${ORION_API_URL}/schedules/weekly?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
-        headers: buildHeaders(false),
-      });
+      const res = await controlPlaneFetch(`/api/control-plane/schedules/weekly?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
       if (!res.ok) return;
       const payload = await res.json();
       const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -690,7 +690,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setWeeklyScheduleBusy(null);
     }
-  }, [buildHeaders, setWeeklyScheduleBusy, setWeeklyScheduleId, setWeeklyScheduleStatusText, setWeeklyAutopilotEnabled, setWeeklyAutopilotDay, setWeeklyAutopilotTime, setWeeklyAutopilotTimezone]);
+  }, [controlPlaneFetch, setWeeklyScheduleBusy, setWeeklyScheduleId, setWeeklyScheduleStatusText, setWeeklyAutopilotEnabled, setWeeklyAutopilotDay, setWeeklyAutopilotTime, setWeeklyAutopilotTimezone]);
 
   const saveWeeklySchedule = useCallback(async () => {
     setWeeklyScheduleBusy('save');
@@ -700,9 +700,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         return;
       }
       if (!weeklyAutopilotEnabled && weeklyScheduleId) {
-        const disableRes = await fetch(`${ORION_API_URL}/schedules/weekly/${weeklyScheduleId}`, {
+        const disableRes = await controlPlaneFetch(`/api/control-plane/schedules/weekly/${encodeURIComponent(weeklyScheduleId)}`, {
           method: 'PATCH',
-          headers: buildHeaders(true),
           body: JSON.stringify({ enabled: false }),
         });
         if (!disableRes.ok) {
@@ -714,9 +713,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
       const runRequest = buildScheduledRunRequest();
       if (weeklyScheduleId) {
-        const patchRes = await fetch(`${ORION_API_URL}/schedules/weekly/${weeklyScheduleId}`, {
+        const patchRes = await controlPlaneFetch(`/api/control-plane/schedules/weekly/${encodeURIComponent(weeklyScheduleId)}`, {
           method: 'PATCH',
-          headers: buildHeaders(true),
           body: JSON.stringify({
             enabled: true,
             day_of_week: weeklyAutopilotDay,
@@ -729,9 +727,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           throw new Error(await readResponseMessage(patchRes, 'Failed to update weekly schedule.'));
         }
       } else {
-        const createRes = await fetch(`${ORION_API_URL}/schedules/weekly`, {
+        const createRes = await controlPlaneFetch('/api/control-plane/schedules/weekly', {
           method: 'POST',
-          headers: buildHeaders(true),
           body: JSON.stringify({
             name: 'Autopilot Weekly Schedule',
             workspace_id: WORKSPACE_ID,
@@ -760,8 +757,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [
     appendLog,
-    buildHeaders,
     buildScheduledRunRequest,
+    controlPlaneFetch,
     weeklyAutopilotDay,
     weeklyAutopilotEnabled,
     weeklyAutopilotTime,
@@ -776,7 +773,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   const refreshCredentials = useCallback(async () => {
     setIsCredentialsLoading(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/credentials/vault?workspace_id=default`, { headers: buildHeaders(false) });
+      const res = await controlPlaneFetch('/api/control-plane/credentials?workspace_id=default');
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text || 'Failed to load connected accounts.');
@@ -816,12 +813,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setIsCredentialsLoading(false);
     }
-  }, [buildHeaders, credentialId, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
+  }, [controlPlaneFetch, credentialId, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
 
   const refreshConnectors = useCallback(async () => {
     setIsConnectorsLoading(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault?workspace_id=default`, { headers: buildHeaders(false) });
+      const res = await controlPlaneFetch('/api/control-plane/connectors?workspace_id=default');
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(text || 'Failed to load connectors.');
@@ -852,7 +849,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setIsConnectorsLoading(false);
     }
-  }, [buildHeaders, connectorCredentialId, setIsConnectorsLoading, setConnectorCredentials, setConnectorCredentialId, setConnectorType, setTopError]);
+  }, [connectorCredentialId, controlPlaneFetch, setIsConnectorsLoading, setConnectorCredentials, setConnectorCredentialId, setConnectorType, setTopError]);
 
   const saveConnector = useCallback(async () => {
     const label = connectorLabel.trim() || DEFAULT_CONNECTOR_LABELS[connectorType];
@@ -932,9 +929,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setSetupBusy('save');
     setTopError(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault`, {
+      const res = await controlPlaneFetch('/api/control-plane/connectors', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           label,
           connector: connectorType,
@@ -977,9 +973,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [
     appendLog,
-    buildHeaders,
     connectorLabel,
     connectorType,
+    controlPlaneFetch,
     discordBotToken,
     discordChannelId,
     discordGuildId,
@@ -1025,9 +1021,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setSetupBusy('test');
     setTopError(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault/${connectorCredentialId}/test?workspace_id=default`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(connectorCredentialId)}/test?workspace_id=default`, {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -1041,7 +1036,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setSetupBusy(null);
     }
-  }, [appendLog, buildHeaders, connectorCredentialId, setSetupBusy, setTopError]);
+  }, [appendLog, connectorCredentialId, controlPlaneFetch, setSetupBusy, setTopError]);
 
   const runRuntimeCheck = useCallback(async () => {
     setSetupBusy('runtime');
@@ -1092,12 +1087,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         | 'telegram_media_status',
       extra: Record<string, unknown> = {},
     ) => {
+      await ensureControlPlaneSession();
       const res = await fetch('/api/local-ops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action,
-          runtimeKey: runtimeApiKey,
           ...extra,
         }),
       });
@@ -1137,7 +1132,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         recent_files?: Array<Record<string, unknown>>;
       };
     },
-    [runtimeApiKey],
+    [],
   );
 
   const startServicesFromWeb = useCallback(async () => {
@@ -1385,9 +1380,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           : providerId === 'openai'
           ? { api_key: secret, access_token: secret, oauth_token: secret }
           : { api_key: secret, auth_mode: selectedAuthMode };
-      const res = await fetch(`${ORION_API_URL}/credentials/vault`, {
+      const res = await controlPlaneFetch('/api/control-plane/credentials', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           label:
             credentialLabel.trim()
@@ -1425,8 +1419,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [
     appendLog,
-    buildHeaders,
     credentialLabel,
+    controlPlaneFetch,
     openaiKeyInput,
     provider,
     providerAuthMode,
@@ -1459,9 +1453,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         }
       } else if (connectionMode === 'byok') {
         if (!credentialId) throw new Error('Choose a saved account first.');
-        const res = await fetch(`${ORION_API_URL}/credentials/vault/${credentialId}/test?workspace_id=default`, {
+        const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credentialId)}/test?workspace_id=default`, {
           method: 'POST',
-          headers: buildHeaders(false),
         });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -1491,8 +1484,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [
     appendLog,
-    buildHeaders,
     connectionMode,
+    controlPlaneFetch,
     credentialId,
     fetchDoctorChecks,
     setupAction,
@@ -1564,10 +1557,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
   const checkCompatibility = useCallback(async () => {
     try {
-      const res = await fetch(`${ORION_API_URL}/health`, { headers: buildHeaders(false) });
+      await ensureControlPlaneSession();
+      const res = await fetch('/api/platform/shell-status', { cache: 'no-store' });
       if (!res.ok) return;
       const payload = await res.json();
-      const minFrontend = payload?.runtime_api_min_cli_version;
+      const minFrontend = payload?.runtimeApiMinCliVersion;
       if (minFrontend) {
         const v2t = (v: string) => v.split('.').map(Number);
         const lt = (a: string, b: string) => {
@@ -1585,21 +1579,27 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } catch {
       // Ignore handshake errors during compat check.
     }
-  }, [buildHeaders, setTopError]);
+  }, [setTopError]);
 
   const submitDecision = useCallback(async (decision: 'Proceed' | 'Hold') => {
     if (!state.runId) return;
     try {
       const useApprovalEndpoint = Boolean(state.pendingApprovalId);
       const decisionUrl = useApprovalEndpoint
-        ? `${ORION_API_URL}/runs/${state.runId}/approvals/${encodeURIComponent(state.pendingApprovalId || '')}/resolve`
-        : `${ORION_API_URL}/runs/${state.runId}/decision`;
+        ? '/api/approvals/resolve'
+        : `/api/runs/${encodeURIComponent(state.runId)}/decision`;
       const body = useApprovalEndpoint
-        ? { decision, note: `Resolved from ${BRAND.product} web UI` }
+        ? {
+            runId: state.runId,
+            approvalId: state.pendingApprovalId || '',
+            decision,
+            note: `Resolved from ${BRAND.product} web UI`,
+          }
         : { decision };
+      await ensureControlPlaneSession();
       const res = await fetch(decisionUrl, {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
@@ -1616,11 +1616,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       state.setStatus('error');
       appendLog(message, 'error');
     }
-  }, [appendLog, buildHeaders, fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
+  }, [appendLog, fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
 
   const fetchRunResult = useCallback(async (targetRunId: string): Promise<string | null> => {
     try {
-      const res = await fetch(`${ORION_API_URL}/runs/${targetRunId}`, { headers: buildHeaders(false) });
+      await ensureControlPlaneSession();
+      const res = await fetch(`/api/runs/${encodeURIComponent(targetRunId)}`, { cache: 'no-store' });
       if (!res.ok) return null;
       const payload = await res.json();
       void fetchLocalWorkerStatus(true);
@@ -1660,7 +1661,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } catch {
       return null;
     }
-  }, [buildHeaders, fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
+  }, [fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {
     const operations = Array.isArray(draft.operations) ? draft.operations : [];
@@ -1843,9 +1844,10 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         packInputs.slots = effectiveTertiary;
       }
 
-      const runRes = await fetch(`${ORION_API_URL}/runs/start`, {
+      await ensureControlPlaneSession();
+      const runRes = await fetch('/api/runs/start', {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           engine: 'orion',
           user_goal: effectiveGoal.trim(),
@@ -1946,11 +1948,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       void fetchRuntimeMetrics();
       state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
 
-      const effectiveRuntimeApiKey = state.runtimeApiKey || readRuntimeApiKeyFromStorage('');
-      const streamUrl = `${ORION_API_URL}/runs/${nextRunId}/stream`;
+      const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
       const source = openAuthenticatedEventStream({
         url: streamUrl,
-        apiKey: effectiveRuntimeApiKey,
         onEvent: (event) => {
           if (event.event === 'pause') {
             state.setStatus('waiting');
@@ -2019,11 +2019,10 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       state.setIsChecking(false); state.setIsStarting(false);
     }
-  }, [appendLog, buildHeaders, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, localExecutionDraft, state, streamRef]);
+  }, [appendLog, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, localExecutionDraft, state, streamRef]);
 
   return {
     appendLog,
-    buildHeaders,
     refreshSetupSession,
     createSetupSession,
     setupAction,

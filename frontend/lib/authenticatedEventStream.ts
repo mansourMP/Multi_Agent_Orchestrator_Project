@@ -15,7 +15,6 @@ export type AuthenticatedEventStreamConnection = {
 
 type OpenAuthenticatedEventStreamOptions = {
   url: string;
-  apiKey?: string | null;
   headers?: HeadersInit;
   onOpen?: () => void;
   onEvent?: (event: AuthenticatedStreamEvent) => void;
@@ -65,9 +64,6 @@ export function openAuthenticatedEventStream(
     try {
       const headers = new Headers(options.headers || {});
       headers.set("Accept", "text/event-stream");
-      if (options.apiKey && !headers.has("X-API-Key")) {
-        headers.set("X-API-Key", options.apiKey);
-      }
       const response = await fetch(options.url, {
         method: "GET",
         headers,

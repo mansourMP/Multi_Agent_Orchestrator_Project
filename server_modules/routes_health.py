@@ -2,9 +2,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from server_modules.auth import get_current_user
+from server_modules.auth import enforce_workspace_access, get_current_user
 from server_modules.runtime_common import require_api_key
-from server_modules.runtime_models import RuntimeSkillsStateUpsertRequest
+from server_modules.runtime_models import MemorySearchRequest, MemoryUpsertRequest, RuntimeSkillsStateUpsertRequest
 from server_modules import health_core as core
 from server_modules import health_diagnostics as diagnostics
 
@@ -18,10 +18,20 @@ async def skills_state(request: Request, body: Optional[RuntimeSkillsStateUpsert
     return await diagnostics.put_runtime_skills_state(body)
 
 
+async def memory_search(body: MemorySearchRequest, current_user=Depends(require_api_key)):
+    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    return await core.memory_search(body)
+
+
+async def memory_upsert(body: MemoryUpsertRequest, current_user=Depends(require_api_key)):
+    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    return await core.memory_upsert(body)
+
+
 router.add_api_route("/contract", core.runtime_contract, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/memory/health", core.memory_health, methods=['GET'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/memory/search", core.memory_search, methods=['POST'], dependencies=[Depends(require_api_key)])
-router.add_api_route("/memory/upsert", core.memory_upsert, methods=['POST'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/memory/search", memory_search, methods=['POST'])
+router.add_api_route("/memory/upsert", memory_upsert, methods=['POST'])
 router.add_api_route("/health", core.health, methods=['GET'])
 router.add_api_route("/mobile/handoff", core.mobile_handoff, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/validation/latest", core.validation_latest, methods=['GET'], dependencies=[Depends(require_api_key)])

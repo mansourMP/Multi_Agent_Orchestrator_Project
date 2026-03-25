@@ -19,8 +19,7 @@ import {
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { BRAND } from '@/lib/brand';
-import { API_BASE } from '@/lib/config';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import {
   BUILTIN_SKILLS,
   loadBindings,
@@ -31,8 +30,6 @@ import {
   type SkillCard,
   type SkillPolicyMode,
 } from '@/lib/skills';
-
-const ORION_API_URL = API_BASE;
 
 type TrustMode = 'auto' | 'guarded' | 'strict';
 type ExecTarget = 'auto' | 'cloud' | 'local_companion';
@@ -240,13 +237,6 @@ function toRawManifestUrl(url: string): string {
 }
 
 
-function runtimeHeaders(): Headers {
-  const headers = new Headers();
-  const key = readRuntimeApiKeyFromStorage('');
-  if (key) headers.set('X-API-Key', key);
-  return headers;
-}
-
 function chipColor(decision: string): { color: string; border: string; bg: string } {
   if (decision === 'allow') {
     return {
@@ -299,6 +289,17 @@ export default function SkillsPage() {
   const [extensionNotice, setExtensionNotice] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
+    const headers = new Headers(init?.headers || {});
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const next = String(new URLSearchParams(window.location.search).get('focus') || '').trim();
@@ -340,13 +341,8 @@ export default function SkillsPage() {
       },
     };
     try {
-      const res = await fetch(`${ORION_API_URL}/skills/state`, {
+      const res = await controlPlaneFetch('/api/skills/state', {
         method: 'PUT',
-        headers: (() => {
-          const h = runtimeHeaders();
-          h.set('Content-Type', 'application/json');
-          return h;
-        })(),
         body: JSON.stringify(payload),
       });
       if (res.ok) {
@@ -358,11 +354,11 @@ export default function SkillsPage() {
     } catch {
       // Runtime sync is best-effort; local UI keeps working offline.
     }
-  }, []);
+  }, [controlPlaneFetch]);
 
   const refreshRuntimeSkills = useCallback(async () => {
     try {
-      const res = await fetch(`${ORION_API_URL}/skills/state`, { headers: runtimeHeaders() });
+      const res = await controlPlaneFetch('/api/skills/state');
       if (!res.ok) throw new Error(`skills/state failed (HTTP ${res.status})`);
       const payload = await res.json();
       if (payload?.state && typeof payload.state === 'object') {
@@ -371,12 +367,12 @@ export default function SkillsPage() {
     } catch {
       setRuntimeSkillsState(null);
     }
-  }, []);
+  }, [controlPlaneFetch]);
 
   const refreshContracts = useCallback(async () => {
     setContractsLoading(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/tools/contracts`, { headers: runtimeHeaders() });
+      const res = await controlPlaneFetch('/api/tools/contracts');
       if (!res.ok) throw new Error(`tools/contracts failed (HTTP ${res.status})`);
       const payload = await res.json();
       const items = Array.isArray(payload?.items) ? (payload.items as ToolContract[]) : [];
@@ -389,15 +385,15 @@ export default function SkillsPage() {
     } finally {
       setContractsLoading(false);
     }
-  }, [selectedTools.length]);
+  }, [controlPlaneFetch, selectedTools.length]);
 
   const refreshRuntimePolicy = useCallback(async () => {
     setRuntimePolicyError(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/health`, { headers: runtimeHeaders() });
-      if (!res.ok) throw new Error(`health failed (HTTP ${res.status})`);
+      const res = await controlPlaneFetch('/api/control-plane/contract');
+      if (!res.ok) throw new Error(`contract failed (HTTP ${res.status})`);
       const payload = await res.json();
-      const policy = payload?.runtime_contract?.cognitive_operator_policy as RuntimeCognitivePolicy | undefined;
+      const policy = payload?.contract?.cognitive_operator_policy as RuntimeCognitivePolicy | undefined;
       if (!policy || typeof policy !== 'object') {
         throw new Error('No cognitive operator policy in runtime health payload.');
       }
@@ -407,19 +403,14 @@ export default function SkillsPage() {
       setRuntimePolicy(null);
       setRuntimePolicyError(message);
     }
-  }, []);
+  }, [controlPlaneFetch]);
 
   const evaluatePolicy = useCallback(async () => {
     if (selectedTools.length === 0) return;
     setPolicyBusy(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/tools/policy/evaluate`, {
+      const res = await controlPlaneFetch('/api/tools/policy/evaluate', {
         method: 'POST',
-        headers: (() => {
-          const h = runtimeHeaders();
-          h.set('Content-Type', 'application/json');
-          return h;
-        })(),
         body: JSON.stringify({
           tool_ids: selectedTools,
           trust_mode: trustMode,
@@ -437,7 +428,7 @@ export default function SkillsPage() {
     } finally {
       setPolicyBusy(false);
     }
-  }, [selectedTools, target, trustMode]);
+  }, [controlPlaneFetch, selectedTools, target, trustMode]);
 
   useEffect(() => {
     const custom = loadCustomSkills();

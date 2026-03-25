@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from server_modules.auth import enforce_workspace_access
 from server_modules.model_router import call_model, resolve_call_credentials
 from server_modules.runtime_common import require_api_key
 
@@ -111,10 +112,11 @@ def _parse_workflow_payload(raw: str) -> Dict[str, Any]:
 
 
 @router.post("/api/v1/builder/generate", dependencies=[Depends(require_api_key)])
-async def builder_generate(body: BuilderGenerateRequest):
+async def builder_generate(body: BuilderGenerateRequest, current_user=Depends(require_api_key)):
     prompt = str(body.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
+    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
 
     resolution = resolve_call_credentials(
         model=body.model,

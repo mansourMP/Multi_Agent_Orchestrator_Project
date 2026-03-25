@@ -14,9 +14,13 @@ import {
   Terminal,
   XCircle,
 } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import {
   collectPriorityFixes,
   DoctorCheckGroup,
@@ -607,6 +611,7 @@ export default function HealthPage() {
 
   const runLocalOpsAction = useCallback(
     async (action: LocalOpsAction): Promise<Record<string, unknown>> => {
+      await ensureControlPlaneSession();
       const res = await fetch('/api/local-ops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -639,41 +644,55 @@ export default function HealthPage() {
 
   const checkAll = useCallback(async () => {
     setIsRefreshing(true);
+    const entryDetail = (payload: unknown, fallback: string): string => {
+      if (payload && typeof payload === 'object') {
+        const record = payload as Record<string, unknown>;
+        const detail = String(record.detail || record.error || record.message || '').trim();
+        if (detail) return detail;
+      }
+      return fallback;
+    };
+    const fallbackEntry: HealthOverviewEntry = {
+      status: 503,
+      latency: 0,
+      payload: { detail: 'Health overview unavailable.' },
+    };
 
-    const [backendRes, runtimeRes, doctorRes, doctorHistoryRes, metricsRes, profilesRes, validationRes, validationHistoryRes, workersRes, desktopHistoryRes] = await Promise.allSettled([
-      timedFetch(`${BACKEND_API_URL}/health`),
-      timedFetch(`${ORION_API_URL}/health`),
-      timedFetch(`${ORION_API_URL}/doctor`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/doctor/history?limit=8`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/metrics`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=default`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/validation/latest`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/validation/history?limit=6`, { headers: runtimeHeaders() }),
-      timedFetch(`/api/runtime/machines`),
-      timedFetch(`${ORION_API_URL}/history/runs?limit=20&status=failed&pack_id=local-execution-v1`, { headers: runtimeHeaders() }),
-    ]);
+    try {
+      await ensureControlPlaneSession();
+      const overviewRes = await fetch('/api/health/overview', { cache: 'no-store' });
+      const overviewPayload = (await overviewRes.json().catch(() => null)) as Partial<HealthOverviewPayload> | null;
+      if (!overviewRes.ok || !overviewPayload) {
+        throw new Error(entryDetail(overviewPayload, 'Health overview is unavailable.'));
+      }
 
-    if (backendRes.status === 'fulfilled') {
-      if (backendRes.value.response.ok) {
+      const backendEntry = overviewPayload.backend ?? fallbackEntry;
+      const runtimeEntry = overviewPayload.runtime ?? fallbackEntry;
+      const doctorEntry = overviewPayload.doctor ?? fallbackEntry;
+      const doctorHistoryEntry = overviewPayload.doctorHistory ?? fallbackEntry;
+      const metricsEntry = overviewPayload.metrics ?? fallbackEntry;
+      const profilesEntry = overviewPayload.profiles ?? fallbackEntry;
+      const validationEntry = overviewPayload.validation ?? fallbackEntry;
+      const validationHistoryEntry = overviewPayload.validationHistory ?? fallbackEntry;
+      const workersEntry = overviewPayload.workers ?? fallbackEntry;
+      const desktopHistoryEntry = overviewPayload.desktopHistory ?? fallbackEntry;
+
+      if (backendEntry.status >= 200 && backendEntry.status < 300) {
         setBackend({
           status: 'ok',
-          latency: backendRes.value.latency,
+          latency: backendEntry.latency,
           detail: 'Backend API reachable.',
         });
       } else {
         setBackend({
           status: 'error',
-          latency: backendRes.value.latency,
-          detail: `Backend returned HTTP ${backendRes.value.response.status}.`,
+          latency: backendEntry.latency,
+          detail: entryDetail(backendEntry.payload, `Backend returned HTTP ${backendEntry.status}.`),
         });
       }
-    } else {
-      setBackend({ status: 'error', detail: 'Cannot reach backend API.' });
-    }
 
-    if (runtimeRes.status === 'fulfilled') {
-      if (runtimeRes.value.response.ok) {
-        const payload = (await runtimeRes.value.response.json()) as RuntimeHealthPayload;
+      if (runtimeEntry.status >= 200 && runtimeEntry.status < 300) {
+        const payload = (runtimeEntry.payload || {}) as RuntimeHealthPayload;
         const status: CardStatus = payload.ok ? 'ok' : payload.openai_key_present ? 'warn' : 'error';
         const detail = payload.ok
           ? 'Runtime healthy.'
@@ -682,171 +701,137 @@ export default function HealthPage() {
             : 'Runtime up, but provider key is missing.';
         setRuntime({
           status,
-          latency: runtimeRes.value.latency,
+          latency: runtimeEntry.latency,
           detail,
         });
       } else {
         setRuntime({
           status: 'error',
-          latency: runtimeRes.value.latency,
-          detail: `Runtime health returned HTTP ${runtimeRes.value.response.status}.`,
+          latency: runtimeEntry.latency,
+          detail: entryDetail(runtimeEntry.payload, `Runtime health returned HTTP ${runtimeEntry.status}.`),
         });
       }
-    } else {
-      setRuntime({ status: 'error', detail: `Cannot reach the ${BRAND.product} runtime health endpoint.` });
-    }
 
-    if (doctorRes.status === 'fulfilled') {
-      if (doctorRes.value.response.ok) {
-        const payload = (await doctorRes.value.response.json()) as DoctorPayload;
+      if (doctorEntry.status >= 200 && doctorEntry.status < 300) {
+        const payload = (doctorEntry.payload || {}) as DoctorPayload;
         setDoctor(payload);
         const status: CardStatus = payload.summary.fail > 0 ? 'error' : payload.summary.warn > 0 ? 'warn' : 'ok';
         setDoctorCard({
           status,
-          latency: doctorRes.value.latency,
+          latency: doctorEntry.latency,
           detail: `${payload.summary.pass} pass • ${payload.summary.warn} warn • ${payload.summary.fail} fail`,
         });
-      } else if (doctorRes.value.response.status === 401) {
+      } else if (doctorEntry.status === 401) {
         setDoctor(null);
         setDoctorCard({
           status: 'warn',
-          latency: doctorRes.value.latency,
-          detail: 'Diagnostics require runtime API key. Add it in Setup step 1.',
+          latency: doctorEntry.latency,
+          detail: 'Doctor diagnostics are unavailable because the server-side runtime access check failed.',
         });
       } else {
-        const errorText = await doctorRes.value.response.text().catch(() => '');
         setDoctor(null);
         setDoctorCard({
           status: 'error',
-          latency: doctorRes.value.latency,
-          detail: errorText || `Doctor returned HTTP ${doctorRes.value.response.status}.`,
+          latency: doctorEntry.latency,
+          detail: entryDetail(doctorEntry.payload, `Doctor returned HTTP ${doctorEntry.status}.`),
         });
       }
-    } else {
-      setDoctor(null);
-      setDoctorCard({ status: 'error', detail: 'Cannot reach /doctor endpoint.' });
-    }
 
-    if (doctorHistoryRes.status === 'fulfilled' && doctorHistoryRes.value.response.ok) {
-      const payload = (await doctorHistoryRes.value.response.json()) as DoctorHistoryPayload;
-      setDoctorHistory(payload);
-    } else {
-      setDoctorHistory(null);
-    }
+      if (doctorHistoryEntry.status >= 200 && doctorHistoryEntry.status < 300) {
+        setDoctorHistory((doctorHistoryEntry.payload || null) as DoctorHistoryPayload | null);
+      } else {
+        setDoctorHistory(null);
+      }
 
-    if (metricsRes.status === 'fulfilled') {
-      if (metricsRes.value.response.ok) {
-        const payload = (await metricsRes.value.response.json()) as MetricsPayload;
+      if (metricsEntry.status >= 200 && metricsEntry.status < 300) {
+        const payload = (metricsEntry.payload || {}) as MetricsPayload;
         setMetrics(payload);
         const hasFailures = payload.runs.failed > 0 || payload.runs.timeout > 0;
         const status: CardStatus = hasFailures ? 'warn' : 'ok';
         setMetricsCard({
           status,
-          latency: metricsRes.value.latency,
+          latency: metricsEntry.latency,
           detail: `Runs: ${payload.runs.started} total • ${payload.runs.active} active`,
         });
-      } else if (metricsRes.value.response.status === 401) {
+      } else if (metricsEntry.status === 401) {
         setMetrics(null);
         setMetricsCard({
           status: 'warn',
-          latency: metricsRes.value.latency,
-          detail: 'Metrics require runtime API key. Add it in Setup step 1.',
+          latency: metricsEntry.latency,
+          detail: 'Metrics are unavailable because the server-side runtime access check failed.',
         });
       } else {
-        const errorText = await metricsRes.value.response.text().catch(() => '');
         setMetrics(null);
         setMetricsCard({
           status: 'error',
-          latency: metricsRes.value.latency,
-          detail: errorText || `Metrics returned HTTP ${metricsRes.value.response.status}.`,
+          latency: metricsEntry.latency,
+          detail: entryDetail(metricsEntry.payload, `Metrics returned HTTP ${metricsEntry.status}.`),
         });
       }
-    } else {
-      setMetrics(null);
-      setMetricsCard({ status: 'error', detail: 'Cannot reach /metrics endpoint.' });
-    }
 
-    if (profilesRes.status === 'fulfilled') {
-      if (profilesRes.value.response.ok) {
-        const payload = (await profilesRes.value.response.json()) as ProviderProfilesHealthPayload;
+      if (profilesEntry.status >= 200 && profilesEntry.status < 300) {
+        const payload = (profilesEntry.payload || {}) as ProviderProfilesHealthPayload;
         setProfilesHealth(payload);
         const status: CardStatus =
           payload.summary.cooldown > 0 ? 'warn' : payload.summary.total > 0 ? 'ok' : 'warn';
         setProfilesCard({
           status,
-          latency: profilesRes.value.latency,
+          latency: profilesEntry.latency,
           detail: `${payload.summary.healthy} healthy • ${payload.summary.cooldown} cooldown • ${payload.summary.disabled} disabled`,
         });
-      } else if (profilesRes.value.response.status === 401) {
+      } else if (profilesEntry.status === 401) {
         setProfilesHealth(null);
         setProfilesCard({
           status: 'warn',
-          latency: profilesRes.value.latency,
-          detail: 'Provider profile diagnostics require runtime API key.',
+          latency: profilesEntry.latency,
+          detail: 'Provider profile diagnostics are unavailable because the server-side runtime access check failed.',
         });
       } else {
-        const errorText = await profilesRes.value.response.text().catch(() => '');
         setProfilesHealth(null);
         setProfilesCard({
           status: 'error',
-          latency: profilesRes.value.latency,
-          detail: errorText || `Provider profile health returned HTTP ${profilesRes.value.response.status}.`,
+          latency: profilesEntry.latency,
+          detail: entryDetail(profilesEntry.payload, `Provider profile health returned HTTP ${profilesEntry.status}.`),
         });
       }
-    } else {
-      setProfilesHealth(null);
-      setProfilesCard({ status: 'error', detail: 'Cannot reach /providers/profiles/health endpoint.' });
-    }
 
-    if (validationRes.status === 'fulfilled') {
-      if (validationRes.value.response.ok) {
-        const payload = (await validationRes.value.response.json()) as ValidationPayload;
+      if (validationEntry.status >= 200 && validationEntry.status < 300) {
+        const payload = (validationEntry.payload || {}) as ValidationPayload;
         setValidation(payload);
         const status: CardStatus =
           payload.summary.total === 0 ? 'warn' : payload.summary.fail > 0 ? 'error' : 'ok';
         setValidationCard({
           status,
-          latency: validationRes.value.latency,
+          latency: validationEntry.latency,
           detail:
             payload.summary.total === 0
               ? payload.detail || 'No validation suite run yet.'
               : `${payload.summary.pass}/${payload.summary.total} passing`,
         });
-      } else if (validationRes.value.response.status === 401) {
+      } else if (validationEntry.status === 401) {
         setValidation(null);
         setValidationCard({
           status: 'warn',
-          latency: validationRes.value.latency,
-          detail: 'Validation suite requires runtime API key.',
+          latency: validationEntry.latency,
+          detail: 'Validation diagnostics are unavailable because the server-side runtime access check failed.',
         });
       } else {
-        const errorText = await validationRes.value.response.text().catch(() => '');
         setValidation(null);
         setValidationCard({
           status: 'error',
-          latency: validationRes.value.latency,
-          detail: errorText || `Validation returned HTTP ${validationRes.value.response.status}.`,
+          latency: validationEntry.latency,
+          detail: entryDetail(validationEntry.payload, `Validation returned HTTP ${validationEntry.status}.`),
         });
       }
-    } else {
-      setValidation(null);
-      setValidationCard({ status: 'error', detail: 'Cannot reach /validation/latest endpoint.' });
-    }
 
-    if (validationHistoryRes.status === 'fulfilled') {
-      if (validationHistoryRes.value.response.ok) {
-        const payload = (await validationHistoryRes.value.response.json()) as ValidationHistoryPayload;
-        setValidationHistory(payload);
+      if (validationHistoryEntry.status >= 200 && validationHistoryEntry.status < 300) {
+        setValidationHistory((validationHistoryEntry.payload || null) as ValidationHistoryPayload | null);
       } else {
         setValidationHistory(null);
       }
-    } else {
-      setValidationHistory(null);
-    }
 
-    if (workersRes.status === 'fulfilled') {
-      if (workersRes.value.response.ok) {
-        const runtimePayload = (await workersRes.value.response.json()) as {
+      if (workersEntry.status >= 200 && workersEntry.status < 300) {
+        const runtimePayload = (workersEntry.payload || {}) as {
           summary?: LocalWorkersPayload['summary'];
           items?: Array<{
             runtime_id?: string;
@@ -891,64 +876,77 @@ export default function HealthPage() {
                 : 'ok';
         setWorkersCard({
           status,
-          latency: workersRes.value.latency,
+          latency: workersEntry.latency,
           detail: !payload.enabled
             ? 'Local companion disabled.'
             : `${payload.summary.online} online • ${payload.summary.busy} busy • ${payload.summary.pending_runs} queued`,
         });
-      } else if (workersRes.value.response.status === 401) {
+      } else if (workersEntry.status === 401) {
         setWorkers(null);
         setWorkersCard({
           status: 'warn',
-          latency: workersRes.value.latency,
-          detail: 'Local companion status requires runtime API key.',
+          latency: workersEntry.latency,
+          detail: 'Local companion status is unavailable because the server-side runtime access check failed.',
         });
       } else {
-        const errorText = await workersRes.value.response.text().catch(() => '');
         setWorkers(null);
         setWorkersCard({
           status: 'error',
-          latency: workersRes.value.latency,
-          detail: errorText || `Local companion returned HTTP ${workersRes.value.response.status}.`,
+          latency: workersEntry.latency,
+          detail: entryDetail(workersEntry.payload, `Local companion returned HTTP ${workersEntry.status}.`),
         });
       }
-    } else {
-      setWorkers(null);
-      setWorkersCard({ status: 'error', detail: 'Cannot reach runtime machine status endpoint.' });
-    }
 
-    if (desktopHistoryRes.status === 'fulfilled' && desktopHistoryRes.value.response.ok) {
-      const payload = (await desktopHistoryRes.value.response.json()) as HistoryRunsPayload;
-      const failedDesktopRun = (payload.items || []).find((item) => {
-        const summary = String(item.result_summary || '').toLowerCase();
-        return (
-          summary.includes('screen recording permission') ||
-          summary.includes('active display session') ||
-          summary.includes('electron runtime not found') ||
-          summary.includes('browser capture failed') ||
-          summary.includes('capture page')
-        );
-      });
-      if (failedDesktopRun) {
-        const summary = String(failedDesktopRun.result_summary || '').trim();
-        let title = 'Recent desktop execution issue';
-        if (summary.toLowerCase().includes('screen recording permission')) {
-          title = 'Screen Recording permission missing';
-        } else if (summary.toLowerCase().includes('active display session')) {
-          title = 'Desktop session unavailable';
-        } else if (summary.toLowerCase().includes('electron runtime not found')) {
-          title = 'Browser runtime unavailable';
-        }
-        setDesktopIssue({
-          title,
-          detail: summary.slice(0, 220),
-          runId: failedDesktopRun.run_id || null,
-          createdAt: failedDesktopRun.created_at || null,
+      if (desktopHistoryEntry.status >= 200 && desktopHistoryEntry.status < 300) {
+        const payload = (desktopHistoryEntry.payload || { items: [] }) as HistoryRunsPayload;
+        const failedDesktopRun = (payload.items || []).find((item) => {
+          const summary = String(item.result_summary || '').toLowerCase();
+          return (
+            summary.includes('screen recording permission') ||
+            summary.includes('active display session') ||
+            summary.includes('electron runtime not found') ||
+            summary.includes('browser capture failed') ||
+            summary.includes('capture page')
+          );
         });
+        if (failedDesktopRun) {
+          const summary = String(failedDesktopRun.result_summary || '').trim();
+          let title = 'Recent desktop execution issue';
+          if (summary.toLowerCase().includes('screen recording permission')) {
+            title = 'Screen Recording permission missing';
+          } else if (summary.toLowerCase().includes('active display session')) {
+            title = 'Desktop session unavailable';
+          } else if (summary.toLowerCase().includes('electron runtime not found')) {
+            title = 'Browser runtime unavailable';
+          }
+          setDesktopIssue({
+            title,
+            detail: summary.slice(0, 220),
+            runId: failedDesktopRun.run_id || null,
+            createdAt: failedDesktopRun.created_at || null,
+          });
+        } else {
+          setDesktopIssue(null);
+        }
       } else {
         setDesktopIssue(null);
       }
-    } else {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Health overview is unavailable.';
+      setBackend({ status: 'error', detail });
+      setRuntime({ status: 'error', detail });
+      setDoctor(null);
+      setDoctorCard({ status: 'error', detail });
+      setDoctorHistory(null);
+      setMetrics(null);
+      setMetricsCard({ status: 'error', detail });
+      setProfilesHealth(null);
+      setProfilesCard({ status: 'error', detail });
+      setValidation(null);
+      setValidationCard({ status: 'error', detail });
+      setValidationHistory(null);
+      setWorkers(null);
+      setWorkersCard({ status: 'error', detail });
       setDesktopIssue(null);
     }
 
@@ -972,7 +970,7 @@ export default function HealthPage() {
 
     setLastCheckedAt(new Date().toISOString());
     setIsRefreshing(false);
-  }, [desktopBridge, runLocalOpsAction, runtimeHeaders, updateOpsDaemonFromPayload]);
+  }, [desktopBridge, runLocalOpsAction, updateOpsDaemonFromPayload]);
 
   const runOps = useCallback(
     async (action: LocalOpsAction) => {
@@ -1025,54 +1023,32 @@ export default function HealthPage() {
   ) => {
     const meta = statusMeta(data.status);
     return (
-      <div
-        style={{
-          background: 'var(--glass-panel)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 10,
-          padding: 12,
-          display: 'grid',
-          gap: 8,
-        }}
-      >
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+      <div className="orion-health-status-card">
+        <div className="orion-health-status-card-head">
           <div
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              display: 'grid',
-              placeItems: 'center',
-              background: meta.bg,
-              border: meta.border,
-              flexShrink: 0,
-            }}
+            className="orion-health-status-card-icon"
+            style={{ background: meta.bg, border: meta.border }}
           >
             <Icon size={18} color={meta.iconColor} />
           </div>
-          <div style={{ minWidth: 0, display: 'grid', gap: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>{title}</span>
+          <div className="orion-health-status-card-copy">
+            <div className="orion-health-status-card-topline">
+              <span className="orion-health-status-card-title">{title}</span>
               <span
+                className="orion-health-status-card-badge"
                 style={{
-                  fontSize: 10,
-                  fontWeight: 800,
                   color: meta.textColor,
                   background: meta.bg,
                   border: meta.border,
-                  borderRadius: 999,
-                  padding: '2px 7px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
                 }}
               >
                 {meta.label}
               </span>
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              <span className="orion-health-status-card-latency">
                 {typeof data.latency === 'number' ? `${data.latency} ms` : '--'}
               </span>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{data.detail || 'No details.'}</div>
+            <div className="orion-health-status-card-detail">{data.detail || 'No details.'}</div>
           </div>
         </div>
       </div>
@@ -1087,33 +1063,51 @@ export default function HealthPage() {
     : 'Hekor is ready for a local runtime, but the local companion is not running yet. Start it here, then confirm the machine appears online.';
 
   return (
-    <div className="orion-page-shell orion-animate-in" style={{ maxWidth: 1320 }}>
-      <OsPageHeader
-        icon={<Activity size={18} />}
-        title="Health"
-        subtitle="Diagnostics, runtime checks, and recovery for the platform."
-        meta={
-          <>
-            <span>Admin</span>
-            <span>Last checked: {formatDisplayDate(lastCheckedAt, 'never')}</span>
-          </>
-        }
+    <div className="orion-page-shell orion-animate-in is-health-page">
+      <PageHero
+        kicker="Health"
+        title="Diagnostics, runtime checks, and recovery for the platform."
+        copy="Check runtime health, local companion status, desktop shell readiness, and recovery tools from one place."
         actions={
           <>
-            <Link href="/control-center" className="orion-btn orion-btn-ghost" style={{ minHeight: 36 }}>
+            <Link href="/control-center" className="orion-btn orion-btn-ghost">
               <ShieldCheck size={14} />
               Overview
             </Link>
-            <button onClick={checkAll} className="orion-btn orion-btn-ghost" style={{ minHeight: 36 }}>
+            <button onClick={checkAll} className="orion-btn orion-btn-ghost">
               <RefreshCw size={14} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : undefined} />
               Run Check
             </button>
           </>
         }
+        aside={
+          <>
+            <PageHeroCard label="Current state">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{localRuntimeOnline ? 'Online' : 'Waiting'}</div>
+                  <div className="orion-home-side-note">Local runtime</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{opsDaemon.running ? 'Ready' : 'Offline'}</div>
+                  <div className="orion-home-side-note">Local companion</div>
+                </div>
+              </div>
+            </PageHeroCard>
+            <PageHeroCard label="Last checked">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{formatDisplayDate(lastCheckedAt, 'never')}</div>
+                  <div className="orion-home-side-note">Diagnostic sweep</div>
+                </div>
+              </div>
+            </PageHeroCard>
+          </>
+        }
       />
 
       {showLocalRuntimeGuide ? (
-        <section className="orion-panel muted orion-health-runtime-guide">
+        <PageSection className="orion-health-runtime-guide" muted>
           <div className="orion-health-runtime-guide-header">
             <div className="orion-state-icon" aria-hidden="true">
               <Laptop size={18} />
@@ -1171,10 +1165,10 @@ export default function HealthPage() {
           </div>
 
           {opsReport ? <div className="orion-health-runtime-guide-report">{opsReport}</div> : null}
-        </section>
+        </PageSection>
       ) : null}
 
-      <section className="orion-panel orion-health-doctor-overview">
+      <PageSection className="orion-health-doctor-overview">
         <div className="orion-health-doctor-overview-header">
           <div>
             <div className="orion-panel-title">Doctor overview</div>
@@ -1244,57 +1238,39 @@ export default function HealthPage() {
             </div>
           )}
         </div>
-      </section>
+      </PageSection>
 
-      <section className="orion-panel" style={{ display: 'grid', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>Needs attention</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+      <PageSection className="orion-health-attention-section" bodyClassName="orion-health-attention-body">
+        <div className="orion-health-attention-header">
+          <div className="orion-health-attention-title">Needs attention</div>
+          <div className="orion-health-attention-meta">
             Daemon {opsDaemon.running ? 'running' : 'stopped'} • {opsDaemon.url} • {opsDaemon.transport}
             {opsDaemon.watchdogHealthy === null ? '' : ` • watchdog ${opsDaemon.watchdogHealthy ? 'healthy' : 'unhealthy'}`}
           </div>
         </div>
         {attentionItems.length === 0 ? (
-          <div
-            style={{
-              borderLeft: '2px solid rgba(34,197,94,0.45)',
-              background: 'var(--success-bg)',
-              color: 'var(--success-fg)',
-              padding: '10px 12px',
-              fontSize: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
+          <div className="orion-health-attention-empty">
             <CheckCircle2 size={14} />
             No active issues.
           </div>
         ) : (
-          <div style={{ display: 'grid', gap: 0, borderTop: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div className="orion-health-attention-list">
             {attentionItems.map((item, index) => (
               <div
                 key={item.id}
-                style={{
-                  borderLeft: item.severity === 'error' ? '2px solid var(--error-border)' : '2px solid var(--warning-border)',
-                  background: item.severity === 'error' ? 'var(--error-bg)' : 'var(--warning-bg)',
-                  color: 'var(--text-primary)',
-                  padding: '10px 12px',
-                  display: 'grid',
-                  gap: 4,
-                  borderBottom: index < attentionItems.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                }}
+                className={`orion-health-attention-item is-${item.severity}`}
+                style={{ borderBottom: index < attentionItems.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div className="orion-health-attention-item-title-row">
                   {item.severity === 'error' ? <XCircle size={14} color="var(--error-fg)" /> : <AlertTriangle size={14} color="var(--warning-fg)" />}
-                  <span style={{ fontSize: 12, fontWeight: 800 }}>{item.title}</span>
+                  <span className="orion-health-attention-item-title">{item.title}</span>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.detail}</div>
+                <div className="orion-health-attention-item-detail">{item.detail}</div>
               </div>
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="orion-health-attention-actions">
           <button
             onClick={checkAll}
             className="orion-btn orion-btn-ghost"
@@ -1308,16 +1284,11 @@ export default function HealthPage() {
           </Link>
         </div>
 
-        <details
-          style={{
-            borderTop: '1px solid var(--border-subtle)',
-            paddingTop: 8,
-          }}
-        >
-          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: 'var(--text-primary)' }}>
+        <details className="orion-health-attention-details">
+          <summary className="orion-health-attention-summary">
             Ops actions
           </summary>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8, marginTop: 10 }}>
+          <div className="orion-health-ops-grid">
           <button
             onClick={() => void runOps('start_services')}
             disabled={Boolean(opsBusy)}
@@ -1369,25 +1340,13 @@ export default function HealthPage() {
           </div>
         </details>
         {opsReport ? (
-          <pre
-            style={{
-              margin: 0,
-              borderTop: '1px solid var(--border-subtle)',
-              borderBottom: '1px solid var(--border-subtle)',
-              color: 'var(--text-secondary)',
-              padding: '10px 12px',
-              fontSize: 12,
-              lineHeight: 1.45,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
+          <pre className="orion-health-ops-report">
             {opsReport}
           </pre>
         ) : null}
-      </section>
+      </PageSection>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+      <div className="orion-health-status-grid">
         {statusCard('Backend API', Server, backend)}
         {statusCard(`${BRAND.product} Runtime`, Terminal, runtime)}
         {statusCard('Doctor Checks', ShieldCheck, doctorCard)}
@@ -1407,71 +1366,61 @@ export default function HealthPage() {
                       : desktopStatus.lastError || 'Desktop wrapper cannot reach local services.',
                   }
                 : { status: 'loading', detail: 'Checking desktop wrapper.' },
-            )
+        )
           : null}
       </div>
 
-      <section className="orion-panel">
-        <div className="orion-panel-header" style={{ marginBottom: 12 }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <PageSection
+        title={
+          <span className="orion-health-section-title">
             <CheckCircle2 size={16} color="var(--primary-base)" />
-            <h2 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>Validation Suite</h2>
-          </div>
-        </div>
+            Validation Suite
+          </span>
+        }
+      >
         {!validation || validation.summary.total === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div className="orion-health-validation-empty">
             No validation report yet. Run <code>bash scripts/empyralis_core_smoke.sh</code> to publish the latest suite.
           </div>
         ) : (
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              Latest suite: <strong style={{ color: 'var(--text-primary)' }}>{validation.suite}</strong>
+          <div className="orion-health-validation-layout">
+            <div className="orion-health-validation-meta">
+              Latest suite: <strong className="orion-health-validation-strong">{validation.suite}</strong>
               <br />
               Generated: {formatDisplayDate(validation.generated_at)}
               <br />
               Result: {validation.summary.pass}/{validation.summary.total} passing
             </div>
-            <div style={{ borderTop: '1px solid var(--border-default)', borderBottom: '1px solid var(--border-default)' }}>
+            <div className="orion-health-validation-list">
               {validation.checks.map((check, index) => {
                 const badge = checkBadgeColor(check.status);
                 return (
                   <div
                     key={`${check.name}:${index}`}
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '84px 1fr',
-                      gap: 8,
-                      padding: '9px 10px',
-                      borderBottom: index < validation.checks.length - 1 ? '1px solid var(--border-default)' : 'none',
-                      alignItems: 'center',
-                    }}
+                    className="orion-health-validation-row"
+                    style={{ borderBottom: index < validation.checks.length - 1 ? '1px solid var(--border-default)' : 'none' }}
                   >
                     <span
+                      className="orion-health-validation-badge"
                       style={{
-                        borderRadius: 999,
-                        padding: '2px 8px',
-                        fontSize: 10,
-                        fontWeight: 800,
-                        textTransform: 'uppercase',
                         background: badge.bg,
                         color: badge.text,
                         border: badge.border,
-                        width: 'fit-content',
                       }}
                     >
                       {check.status}
                     </span>
-                    <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{check.name}</span>
+                    <span className="orion-health-validation-name">{check.name}</span>
                   </div>
                 );
               })}
             </div>
             {validationHistory?.items?.length ? (
-              <div style={{ display: 'grid', gap: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-primary)' }}>
+              <div className="orion-health-validation-history-block">
+                <div className="orion-health-validation-history-title">
                   Recent suite history
                 </div>
-                <div style={{ borderTop: '1px solid var(--border-default)', borderBottom: '1px solid var(--border-default)' }}>
+                <div className="orion-health-validation-list">
                   {validationHistory.items.map((item, index) => {
                     const tone = item.summary.fail > 0 ? 'var(--error-fg)' : 'var(--success-fg)';
                     const bg = item.summary.fail > 0 ? 'var(--error-bg)' : 'var(--success-bg)';
@@ -1479,37 +1428,26 @@ export default function HealthPage() {
                     return (
                       <div
                         key={`${item.filename || item.generated_at || item.suite}:${index}`}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '100px 1fr auto',
-                          gap: 8,
-                          alignItems: 'center',
-                          padding: '9px 10px',
-                          borderBottom: index < validationHistory.items.length - 1 ? '1px solid var(--border-default)' : 'none',
-                        }}
+                        className="orion-health-validation-history-row"
+                        style={{ borderBottom: index < validationHistory.items.length - 1 ? '1px solid var(--border-default)' : 'none' }}
                       >
                         <span
+                          className="orion-health-validation-badge"
                           style={{
-                            borderRadius: 999,
-                            padding: '2px 8px',
-                            fontSize: 10,
-                            fontWeight: 800,
-                            textTransform: 'uppercase',
                             background: bg,
                             color: tone,
                             border: `1px solid ${border}`,
-                            width: 'fit-content',
                           }}
                         >
                           {item.summary.pass}/{item.summary.total}
                         </span>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{item.suite}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        <div className="orion-health-validation-history-copy">
+                          <div className="orion-health-validation-history-suite">{item.suite}</div>
+                          <div className="orion-health-validation-history-time">
                             {formatDisplayDate(item.generated_at, 'Unknown time')}
                           </div>
                         </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', textAlign: 'right' }}>
+                        <div className="orion-health-validation-history-result">
                           {item.summary.fail > 0 ? `${item.summary.fail} failed` : 'Passing'}
                         </div>
                       </div>
@@ -1520,7 +1458,7 @@ export default function HealthPage() {
             ) : null}
           </div>
         )}
-      </section>
+      </PageSection>
 
       {isMounted && desktopBridge ? (
         <section className="orion-panel">

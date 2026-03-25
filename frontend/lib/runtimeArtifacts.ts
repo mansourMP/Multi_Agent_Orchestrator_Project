@@ -1,18 +1,13 @@
-export function buildRuntimeArtifactEndpoint(apiBase: string, path: string): string {
-  return `${apiBase}/artifacts/file?path=${encodeURIComponent(String(path || "").trim())}`;
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+
+export function buildRuntimeArtifactEndpoint(path: string): string {
+  return `/api/artifacts/file?path=${encodeURIComponent(String(path || "").trim())}`;
 }
 
-export async function fetchRuntimeArtifactBlob(
-  apiBase: string,
-  path: string,
-  apiKey: string,
-): Promise<Blob> {
-  const headers = new Headers();
-  const normalizedKey = String(apiKey || "").trim();
-  if (normalizedKey) headers.set("X-API-Key", normalizedKey);
-  const response = await fetch(buildRuntimeArtifactEndpoint(apiBase, path), {
+export async function fetchRuntimeArtifactBlob(path: string): Promise<Blob> {
+  await ensureControlPlaneSession();
+  const response = await fetch(buildRuntimeArtifactEndpoint(path), {
     method: "GET",
-    headers,
     cache: "no-store",
   });
   if (!response.ok) {

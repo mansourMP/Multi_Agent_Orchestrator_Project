@@ -27,6 +27,9 @@ JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
 ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
 ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
+ORION_DEFAULT_WORKSPACE_IDS = tuple(
+    item.strip() for item in str(os.getenv("ORION_DEFAULT_WORKSPACE_IDS", "default")).split(",") if item.strip()
+) or ("default",)
 
 
 def _jwt_secret() -> str:
@@ -98,6 +101,7 @@ def issue_token(user_id: str, *, email: Optional[str] = None) -> str:
     payload = {
         "sub": str(user_id),
         "email": str(email or "").strip().lower() or None,
+        "workspace_ids": list(ORION_DEFAULT_WORKSPACE_IDS),
         "iat": now,
         "exp": now + JWT_EXP_SECONDS,
     }
@@ -136,6 +140,45 @@ def verify_token(token: str) -> str:
     if exp and exp < int(time.time()):
         raise HTTPException(status_code=401, detail="Bearer token has expired.")
     return user_id
+
+
+def _normalize_workspace_ids_claim(value: Any) -> list[str]:
+    items: list[str] = []
+    if isinstance(value, str):
+        items = [part.strip() for part in value.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        items = [str(part or "").strip() for part in value if str(part or "").strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        token = item.strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return normalized or list(ORION_DEFAULT_WORKSPACE_IDS)
+
+
+def allowed_workspace_ids(user: Optional[Dict[str, Any]]) -> Optional[set[str]]:
+    if not isinstance(user, dict):
+        return None
+    if bool(user.get("is_admin")):
+        return None
+    if str(user.get("auth_type") or "").strip() == "api_key":
+        return None
+    values = user.get("workspace_ids")
+    normalized = _normalize_workspace_ids_claim(values)
+    return set(normalized)
+
+
+def enforce_workspace_access(current_user: Optional[Dict[str, Any]], workspace_id: Optional[str]) -> str:
+    token = str(workspace_id or "").strip() or "default"
+    allowed = allowed_workspace_ids(current_user)
+    if allowed is None:
+        return token
+    if token not in allowed:
+        raise HTTPException(status_code=403, detail="Workspace is not accessible for this user.")
+    return token
 
 
 def _enforce_window_limit(*, buckets: Dict[str, list[float]], lock: threading.Lock, key: str, limit: int) -> None:
@@ -251,13 +294,14 @@ def get_current_user(
         if exp and exp < int(time.time()):
             raise HTTPException(status_code=401, detail="Bearer token has expired.")
         email = str(payload.get("email") or "").strip().lower() or None
+        workspace_ids = _normalize_workspace_ids_claim(payload.get("workspace_ids"))
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{user_id}",
             limit=60,
         )
-        return {"user_id": user_id, "auth_type": "bearer", "email": email}
+        return {"user_id": user_id, "auth_type": "bearer", "email": email, "workspace_ids": workspace_ids}
 
     expected_api_key = str(ORION_API_KEY or "").strip()
     provided_api_key = str(x_api_key or "").strip()

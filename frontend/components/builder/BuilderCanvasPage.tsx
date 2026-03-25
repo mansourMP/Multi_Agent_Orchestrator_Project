@@ -49,6 +49,7 @@ import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
 import { createWorkflow, fetchRuntimeMachines, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { API_BASE } from '@/lib/config';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 import {
   type ExecutionTarget,
@@ -58,7 +59,6 @@ import {
   hasOnlineLocalRuntime,
   normalizeExecutionTarget,
 } from '@/lib/executionTargets';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
@@ -148,7 +148,6 @@ const DEFAULT_NODE_SIZE = 96;
 const NODE_HORIZONTAL_GAP = 232;
 const CANVAS_EDGE_COLOR = 'rgba(128, 128, 120, 0.42)';
 const DEFAULT_WORKSPACE_ID = 'default';
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 const CANVAS_NODE_TYPES: NodeTypes = {
   trigger: TriggerNode,
@@ -713,6 +712,17 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
   const executionTargetGuides = useMemo(() => getExecutionTargetGuides(hasLocalRuntime), [hasLocalRuntime]);
 
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
+    const headers = new Headers(init?.headers || {});
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
+
   const refreshLocalRuntimeState = useCallback(async () => {
     try {
       const machinesPayload = await fetchRuntimeMachines().catch(() => ({ items: [] }));
@@ -745,12 +755,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const currentRuntimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
 
   const loadDoctorDecision = useCallback(async () => {
-    const runtimeKey = readRuntimeApiKeyFromStorage('');
-    if (!runtimeKey) {
-      setDoctorDecision(null);
-      setDoctorChecking(false);
-      return null;
-    }
     setDoctorChecking(true);
     try {
       const nextDecision = await fetchDoctorRunGate({
@@ -861,22 +865,9 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     let cancelled = false;
 
     async function loadRuntimeProfiles() {
-      const runtimeKey = readRuntimeApiKeyFromStorage('');
-      if (!runtimeKey) {
-        if (!cancelled) {
-          setRuntimeProfiles([]);
-          setHasLocalRuntime(false);
-        }
-        return;
-      }
-
       try {
         const [response, machinesPayload] = await Promise.all([
-          fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(DEFAULT_WORKSPACE_ID)}`, {
-            headers: {
-              'X-API-Key': runtimeKey,
-            },
-          }),
+          controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(DEFAULT_WORKSPACE_ID)}`),
           fetchRuntimeMachines().catch(() => ({ items: [] })),
         ]);
         const payload = (await response.json().catch(() => null)) as { items?: unknown[] } | null;
@@ -923,7 +914,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [controlPlaneFetch]);
 
   const handleBuild = (goal?: string) => {
     const next = String(goal || stagedPrompt || promptInput).trim();
@@ -1119,10 +1110,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     try {
       const workflowId = await persistCurrentWorkflow();
       if (!workflowId) throw new Error('Save the workflow before testing.');
-      const runtimeKey = readRuntimeApiKeyFromStorage('');
-      if (!runtimeKey) {
-        throw new Error('Add your runtime access key before starting a test run.');
-      }
       if (executionTarget === 'local_companion' && !hasLocalRuntime) {
         throw new Error('No local machine is online. Choose Automatic or Cloud runtime, or connect a local runtime first.');
       }
@@ -1142,12 +1129,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
         `Nodes: ${nodes.length}`,
         `Agent Setup: ${buildBuilderAgentSummary(nodes)}`,
       ].join('\n');
-      const response = await fetch(`${ORION_API_URL}/runs/start`, {
+      const response = await controlPlaneFetch('/api/runs/start', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': runtimeKey,
-        },
         body: JSON.stringify({
           engine: 'orion',
           workflow_id: workflowId,

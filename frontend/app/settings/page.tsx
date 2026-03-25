@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, LogOut } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-import { ORION_API_URL } from '../page.api';
-import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { RUNTIME_KEY_STORAGE_CANDIDATES } from '@/lib/runtimeKey';
 
 const ACCOUNT_STORAGE_KEY = 'empyralis_account_profile_v1';
 
@@ -65,26 +65,17 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
-  const runtimeKey = useMemo(() => readRuntimeApiKeyFromStorage(''), []);
   const profile = useMemo(() => loadStoredProfile(), []);
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [email, setEmail] = useState(profile.email || '');
   const [saveNotice, setSaveNotice] = useState('');
 
   const loadConnectors = useCallback(async () => {
-    if (!runtimeKey) {
-      setConnectors([]);
-      setLoading(false);
-      setError('This app is not connected on this device yet. Open Integrations to reconnect it.');
-      return;
-    }
-
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault?workspace_id=default`, {
-        headers: { 'X-API-Key': runtimeKey },
-      });
+      await ensureControlPlaneSession();
+      const res = await fetch('/api/control-plane/connectors?workspace_id=default', { cache: 'no-store' });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to load connectors.'));
@@ -105,7 +96,7 @@ export default function SettingsPage() {
     } finally {
       setLoading(false);
     }
-  }, [runtimeKey]);
+  }, []);
 
   useEffect(() => {
     void loadConnectors();
@@ -116,7 +107,10 @@ export default function SettingsPage() {
   const handleSignOut = useCallback(() => {
     setSigningOut(true);
     try {
-      writeRuntimeApiKeyToStorage('');
+      for (const key of RUNTIME_KEY_STORAGE_CANDIDATES) {
+        window.sessionStorage.removeItem(key);
+        window.localStorage.removeItem(key);
+      }
       window.localStorage.removeItem(ACCOUNT_STORAGE_KEY);
       router.replace('/setup');
     } finally {

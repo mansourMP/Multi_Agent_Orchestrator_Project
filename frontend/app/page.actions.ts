@@ -25,7 +25,6 @@ import {
 } from './page.catalog';
 import { type PageState } from './page.state';
 import { type usePlatformApi } from './page.api';
-import { writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
 
 export function usePageActions(state: PageState, api: ReturnType<typeof usePlatformApi>) {
   const {
@@ -408,8 +407,6 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
   useEffect(() => {
     if (!setupHydrated) return;
     try {
-      writeRuntimeApiKeyToStorage(runtimeApiKey);
-
       for (const key of SETUP_SESSION_ID_STORAGE_KEYS) {
         if (setupSessionId) window.localStorage.setItem(key, setupSessionId);
         else window.localStorage.removeItem(key);
@@ -422,7 +419,7 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
         window.localStorage.setItem(key, setupPayload);
       }
     } catch { /* ignore */ }
-  }, [setupHydrated, setupStatus, connectionMode, provider, providerAuthMode, model, credentialId, state.connectorCredentialId, connectorType, runtimeApiKey, trustMode, selectedPackId, selectedPresetId, selectedAgentRole, showSetupWizard, showPackInputs, showAdvancedControls, showKpis, guidedDefaultsEnabled, weeklyAutopilotEnabled, weeklyAutopilotDay, weeklyAutopilotTime, weeklyAutopilotTimezone, setupSessionId]);
+  }, [setupHydrated, setupStatus, connectionMode, provider, providerAuthMode, model, credentialId, state.connectorCredentialId, connectorType, trustMode, selectedPackId, selectedPresetId, selectedAgentRole, showSetupWizard, showPackInputs, showAdvancedControls, showKpis, guidedDefaultsEnabled, weeklyAutopilotEnabled, weeklyAutopilotDay, weeklyAutopilotTime, weeklyAutopilotTimezone, setupSessionId]);
 
   useEffect(() => {
     if (setupReady) setShowSetupWizard(false);

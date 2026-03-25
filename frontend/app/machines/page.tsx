@@ -4,7 +4,10 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Cpu, Laptop, RefreshCw, Server, ShieldCheck, Workflow } from 'lucide-react';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { ApiError, fetchRuntimeMachines } from '@/lib/api';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 
@@ -150,10 +153,14 @@ export default function MachinesPage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
-        icon={<Server size={18} />}
-        title="Machines"
-        subtitle="Monitor every registered runtime that can execute work for Hekor."
+      <PageHero
+        kicker="Runtime overview"
+        title={machines.length > 0 ? `${summary.online ?? 0} machine${(summary.online ?? 0) === 1 ? '' : 's'} online` : 'No machines registered yet'}
+        copy={
+          machines.length > 0
+            ? 'Monitor every registered runtime that can execute work for Hekor. Local and headless execution both flow through this machine registry.'
+            : 'Install or start a runtime to unlock local or headless execution outside the browser.'
+        }
         actions={
           <div className="orion-inline-actions">
             <Link href="/health" className="orion-btn orion-btn-ghost">
@@ -166,73 +173,57 @@ export default function MachinesPage() {
             </button>
           </div>
         }
+        aside={
+          <>
+            <PageHeroCard label="Queue pressure">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{summary.pending_runs ?? 0}</div>
+                  <div className="orion-home-side-note">Pending</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{summary.claimed_runs ?? 0}</div>
+                  <div className="orion-home-side-note">Claimed</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">
+                Local companion jobs are already flowing through this bridge. Headless and cloud runtimes can use the same contract next.
+              </div>
+            </PageHeroCard>
+            <DoctorPreflightNotice decision={doctorDecision} showWhenPass actionLabel="Open Health" />
+          </>
+        }
+        className="orion-machines-overview"
       />
 
-      <section className="orion-panel orion-machines-overview">
-        <div className="orion-machines-overview-main">
-          <div className="orion-home-overview-kicker">Runtime overview</div>
-          <div className="orion-runs-overview-title">
-            {machines.length > 0 ? `${summary.online ?? 0} machine${(summary.online ?? 0) === 1 ? '' : 's'} online` : 'No machines registered yet'}
+      <section className="orion-panel muted orion-machines-kpi-panel">
+        <div className="orion-machines-kpi-grid">
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Known</div>
+            <div className="orion-machines-kpi-value">{summary.known ?? 0}</div>
           </div>
-          <div className="orion-runs-overview-copy">
-            {machines.length > 0
-              ? 'Hekor can route local and headless execution through these registered runtimes.'
-              : 'Install or start a runtime to unlock local or headless execution outside the browser.'}
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Online</div>
+            <div className="orion-machines-kpi-value">{summary.online ?? 0}</div>
           </div>
-          <div className="orion-machines-kpi-grid">
-            <div className="orion-machines-kpi-card">
-              <div className="orion-machines-kpi-label">Known</div>
-              <div className="orion-machines-kpi-value">{summary.known ?? 0}</div>
-            </div>
-            <div className="orion-machines-kpi-card">
-              <div className="orion-machines-kpi-label">Online</div>
-              <div className="orion-machines-kpi-value">{summary.online ?? 0}</div>
-            </div>
-            <div className="orion-machines-kpi-card">
-              <div className="orion-machines-kpi-label">Busy</div>
-              <div className="orion-machines-kpi-value">{summary.busy ?? 0}</div>
-            </div>
-            <div className="orion-machines-kpi-card">
-              <div className="orion-machines-kpi-label">Capabilities</div>
-              <div className="orion-machines-kpi-value">{capabilityCount}</div>
-            </div>
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Busy</div>
+            <div className="orion-machines-kpi-value">{summary.busy ?? 0}</div>
+          </div>
+          <div className="orion-machines-kpi-card">
+            <div className="orion-machines-kpi-label">Capabilities</div>
+            <div className="orion-machines-kpi-value">{capabilityCount}</div>
           </div>
         </div>
-        <aside className="orion-runs-overview-side">
-          <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Queue pressure</div>
-            <div className="orion-home-side-stats">
-              <div>
-                <div className="orion-home-side-value">{summary.pending_runs ?? 0}</div>
-                <div className="orion-home-side-note">Pending</div>
-              </div>
-              <div>
-                <div className="orion-home-side-value">{summary.claimed_runs ?? 0}</div>
-                <div className="orion-home-side-note">Claimed</div>
-              </div>
-            </div>
-            <div className="orion-runs-overview-side-note">
-              Local companion jobs are already flowing through this bridge. Headless and cloud runtimes can use the same contract next.
-            </div>
-          </div>
-          <DoctorPreflightNotice decision={doctorDecision} showWhenPass actionLabel="Open Health" />
-        </aside>
       </section>
 
       {!loading && !error && localMachineOnline && capabilityWaitingCount > 0 ? (
-        <section className="orion-panel muted orion-machines-capability-panel">
-          <div className="orion-machines-capability-header">
-            <div className="orion-state-icon" aria-hidden="true">
-              <Workflow size={18} />
-            </div>
-            <div>
-              <div className="orion-panel-title">Runs waiting on machine capabilities</div>
-              <div className="orion-panel-copy">
-                {capabilityWaitingCount} local run{capabilityWaitingCount === 1 ? '' : 's'} are queued because they are missing required capabilities or waiting for capacity on capable machines.
-              </div>
-            </div>
-          </div>
-
+        <PageSection
+          title="Runs waiting on machine capabilities"
+          description={`${capabilityWaitingCount} local run${capabilityWaitingCount === 1 ? '' : 's'} are queued because they are missing required capabilities or waiting for capacity on capable machines.`}
+          className="orion-machines-capability-panel"
+          muted
+        >
           <div className="orion-machines-capability-list">
             {capabilityWaitingItems.map((item) => (
               <div key={item.run_id} className="orion-machines-capability-item">
@@ -314,25 +305,20 @@ export default function MachinesPage() {
               )}
             </div>
           </div>
-        </section>
+        </PageSection>
       ) : null}
 
       {!loading && !error && !localMachineOnline ? (
-        <section className="orion-panel muted orion-machines-connect-panel">
-          <div className="orion-machines-connect-header">
-            <div className="orion-state-icon" aria-hidden="true">
-              <Laptop size={18} />
-            </div>
-            <div>
-              <div className="orion-panel-title">{hasKnownMachines ? 'Bring a local machine online' : 'Connect this machine'}</div>
-              <div className="orion-panel-copy">
-                {hasKnownMachines
-                  ? 'A runtime is registered, but no local machine is online right now. Bring one online to unlock local execution.'
-                  : 'Install or start the local runtime on this device. Once it appears here, Hekor can run work locally when needed.'}
-              </div>
-            </div>
-          </div>
-
+        <PageSection
+          title={hasKnownMachines ? 'Bring a local machine online' : 'Connect this machine'}
+          description={
+            hasKnownMachines
+              ? 'A runtime is registered, but no local machine is online right now. Bring one online to unlock local execution.'
+              : 'Install or start the local runtime on this device. Once it appears here, Hekor can run work locally when needed.'
+          }
+          className="orion-machines-connect-panel"
+          muted
+        >
           <div className="orion-machines-connect-steps">
             <div className="orion-machines-connect-step">
               <div className="orion-machines-connect-step-index">1</div>
@@ -369,47 +355,54 @@ export default function MachinesPage() {
               Refresh
             </button>
           </div>
-        </section>
+        </PageSection>
       ) : null}
 
       {loading ? (
-        <section className="orion-panel muted orion-loading-panel">
-          <div className="orion-loading-copy">Loading machines...</div>
-        </section>
+        <PageStatePanel
+          variant="loading"
+          title="Loading machines..."
+        />
       ) : error ? (
-        <section className="orion-panel muted orion-state-panel">
-          <div className="orion-state-icon" aria-hidden="true">
-            <AlertCircle size={18} />
-          </div>
-          <div className="orion-panel-title">Machines are unavailable</div>
-          <div className="orion-panel-copy">The runtime registry could not be loaded right now. If the runtime is offline, bring it back up, then retry.</div>
-          <div className="orion-panel-copy" style={{ marginTop: -4 }}>{error}</div>
-          <div className="orion-state-actions">
-            <button type="button" className="btn-secondary" onClick={() => void loadMachines()}>
-              <RefreshCw size={14} />
-              Retry
-            </button>
-            <Link href="/health" className="btn-primary">
-              Open Health
-            </Link>
-          </div>
-        </section>
+        <PageStatePanel
+          variant="error"
+          icon={<AlertCircle size={18} />}
+          title="Machines are unavailable"
+          copy={
+            <>
+              <span>The runtime registry could not be loaded right now. If the runtime is offline, bring it back up, then retry.</span>
+              <span className="orion-page-state-detail">{error}</span>
+            </>
+          }
+          actions={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => void loadMachines()}>
+                <RefreshCw size={14} />
+                Retry
+              </button>
+              <Link href="/health" className="btn-primary">
+                Open Health
+              </Link>
+            </>
+          }
+        />
       ) : machines.length === 0 ? (
-        <section className="orion-panel muted orion-state-panel">
-          <div className="orion-state-icon" aria-hidden="true">
-            <Cpu size={18} />
-          </div>
-          <div className="orion-panel-title">No machines registered</div>
-          <div className="orion-panel-copy">Hekor is ready for runtimes, but no local or headless machine has registered yet.</div>
-          <div className="orion-state-actions">
-            <Link href="/setup" className="btn-primary">
-              New task
-            </Link>
-            <Link href="/health" className="btn-secondary">
-              Check runtime
-            </Link>
-          </div>
-        </section>
+        <PageStatePanel
+          variant="empty"
+          icon={<Cpu size={18} />}
+          title="No machines registered"
+          copy="Hekor is ready for runtimes, but no local or headless machine has registered yet."
+          actions={
+            <>
+              <Link href="/setup" className="btn-primary">
+                New task
+              </Link>
+              <Link href="/health" className="btn-secondary">
+                Check runtime
+              </Link>
+            </>
+          }
+        />
       ) : (
         <section className="orion-machines-grid">
           {machines.map((machine) => (

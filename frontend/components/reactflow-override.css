@@ -77,7 +77,7 @@ div.react-flow__node.selected div.react-flow__handle {
 
 div.react-flow__handle:hover {
     background: #f5f5f5 !important;
-    border: 1.5px solid #7c3aed !important;
+    border: 1.5px solid var(--primary-base) !important;
     transform: scale(1.5) !important;
 }
 

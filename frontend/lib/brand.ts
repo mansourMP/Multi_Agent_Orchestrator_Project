@@ -3,8 +3,8 @@ export const BRAND = {
   product: 'Empyralis',
   assistant: 'Empyralis Assistant',
   shortMark: 'empyralis',
-  accentColor: '#6D28D9',
-  highlightColor: '#8B5CF6',
+  accentColor: '#2F3136',
+  highlightColor: '#4A4D55',
   warningColor: '#F59E0B',
 } as const;
 

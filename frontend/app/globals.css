@@ -43,36 +43,36 @@
   --btn-radius: var(--radius-md);
   --btn-font-size: var(--text-sm);
 
-  /* Core palette: neutral-first with restrained indigo accents */
-  --claude-crail: #6F2DBD;
-  --claude-cloudy: #BCB0C9;
-  --claude-pampas: #F2EDF8;
+  /* Core palette: neutral-first with restrained charcoal accents */
+  --claude-crail: #35383f;
+  --claude-cloudy: #a7adb8;
+  --claude-pampas: #f3f4f6;
   --claude-white: #FFFFFF;
-  --claude-neutral-900: #141414;
-  --claude-neutral-800: #1B1A1C;
-  --claude-neutral-700: #232123;
-  --claude-neutral-600: #2C282D;
-  --claude-neutral-500: #433B43;
-  --claude-neutral-400: #7C727D;
-  --claude-neutral-300: #BCB0C9;
-  --claude-neutral-200: #E0D8EA;
-  --claude-neutral-100: #F2EDF8;
+  --claude-neutral-900: #101114;
+  --claude-neutral-800: #17191d;
+  --claude-neutral-700: #202329;
+  --claude-neutral-600: #2b2f36;
+  --claude-neutral-500: #454b56;
+  --claude-neutral-400: #7f8692;
+  --claude-neutral-300: #a7adb8;
+  --claude-neutral-200: #d9dde4;
+  --claude-neutral-100: #f3f4f6;
 
   --text-primary: var(--claude-pampas);
-  --text-secondary: #C9BFDA;
-  --text-tertiary: #9387A6;
+  --text-secondary: #b8bec8;
+  --text-tertiary: #848b97;
   --text-inverse: var(--claude-neutral-900);
 
-  --primary-base: #7c3aed;
-  --primary-hover: #8E5AD6;
-  --primary-soft: rgba(111, 45, 189, 0.14);
-  --primary-border-soft: rgba(111, 45, 189, 0.3);
-  --primary-ring-soft: rgba(111, 45, 189, 0.14);
-  --primary-ring-strong: rgba(111, 45, 189, 0.22);
-  --primary-border-strong: rgba(111, 45, 189, 0.44);
+  --primary-base: #2f3136;
+  --primary-hover: #44474f;
+  --primary-soft: rgba(47, 49, 54, 0.18);
+  --primary-border-soft: rgba(47, 49, 54, 0.34);
+  --primary-ring-soft: rgba(47, 49, 54, 0.16);
+  --primary-ring-strong: rgba(47, 49, 54, 0.28);
+  --primary-border-strong: rgba(47, 49, 54, 0.5);
   --primary-glow: 0 0 0 rgba(0, 0, 0, 0);
   --primary-text: var(--claude-white);
-  --btn-primary-bg: #7c3aed;
+  --btn-primary-bg: var(--primary-base);
   --btn-primary-text: #ffffff;
   --btn-secondary-bg: transparent;
   --btn-secondary-border: var(--border);
@@ -85,7 +85,7 @@
   --success-base: #3F9C6B;
   --warning-base: #F59E0B;
   --error-base: #D16B6B;
-  --info-base: #8E5AD6;
+  --info-base: #5f6470;
   --success-fg: #BBF7D0;
   --success-bg: rgba(34, 197, 94, 0.14);
   --success-border: rgba(34, 197, 94, 0.35);
@@ -112,11 +112,11 @@
 
   --glass-panel: rgba(35, 33, 35, 0.9);
   --glass-border: rgba(93, 83, 92, 0.38);
-  --glass-highlight: rgba(111, 45, 189, 0.08);
+  --glass-highlight: rgba(47, 49, 54, 0.1);
 
-  --border-subtle: rgba(98, 92, 98, 0.14);
-  --border-default: rgba(98, 92, 98, 0.24);
-  --border: rgba(98, 92, 98, 0.24);
+  --border-subtle: rgba(123, 129, 141, 0.14);
+  --border-default: rgba(123, 129, 141, 0.24);
+  --border: rgba(123, 129, 141, 0.24);
   --border-active: var(--primary-base);
   --shellbar-divider: #1f1f1f;
 
@@ -174,33 +174,33 @@
 }
 
 [data-theme='light'] {
-  --claude-crail: #6F2DBD;
-  --claude-cloudy: #6F6780;
-  --claude-pampas: #191523;
-  --claude-neutral-900: #F4F1FA;
-  --claude-neutral-800: #F8F6FD;
-  --claude-neutral-700: #FDFBFF;
-  --claude-neutral-600: #EEE8F7;
-  --claude-neutral-500: #D9D1E7;
-  --claude-neutral-400: #938AA7;
-  --claude-neutral-300: #6B607F;
-  --claude-neutral-200: #4A415B;
-  --claude-neutral-100: #191523;
+  --claude-crail: #303238;
+  --claude-cloudy: #6f747f;
+  --claude-pampas: #1a1c21;
+  --claude-neutral-900: #f3f4f6;
+  --claude-neutral-800: #f7f8fa;
+  --claude-neutral-700: #fcfcfd;
+  --claude-neutral-600: #ebeef2;
+  --claude-neutral-500: #d5dae1;
+  --claude-neutral-400: #8c939f;
+  --claude-neutral-300: #686e78;
+  --claude-neutral-200: #484d56;
+  --claude-neutral-100: #1a1c21;
 
-  --text-primary: #191523;
-  --text-secondary: #5E5472;
-  --text-tertiary: #887E9A;
-  --text-inverse: #FCFAFF;
+  --text-primary: #1a1c21;
+  --text-secondary: #5d636e;
+  --text-tertiary: #8a909b;
+  --text-inverse: #fcfcfd;
 
-  --primary-base: #7c3aed;
-  --primary-hover: #8350D3;
-  --primary-soft: rgba(111, 45, 189, 0.16);
-  --primary-border-soft: rgba(111, 45, 189, 0.30);
-  --primary-ring-soft: rgba(111, 45, 189, 0.12);
-  --primary-ring-strong: rgba(111, 45, 189, 0.22);
-  --primary-border-strong: rgba(111, 45, 189, 0.48);
-  --primary-text: #FCFAFF;
-  --btn-primary-bg: #7c3aed;
+  --primary-base: #2f3136;
+  --primary-hover: #44474f;
+  --primary-soft: rgba(47, 49, 54, 0.12);
+  --primary-border-soft: rgba(47, 49, 54, 0.24);
+  --primary-ring-soft: rgba(47, 49, 54, 0.1);
+  --primary-ring-strong: rgba(47, 49, 54, 0.18);
+  --primary-border-strong: rgba(47, 49, 54, 0.42);
+  --primary-text: #fcfcfd;
+  --btn-primary-bg: var(--primary-base);
   --btn-primary-text: #ffffff;
   --btn-secondary-bg: transparent;
   --btn-secondary-border: var(--border);
@@ -213,7 +213,7 @@
   --success-base: #2F7A55;
   --warning-base: #D68A12;
   --error-base: #B95757;
-  --info-base: #8B5CF6;
+  --info-base: #5f6470;
   --success-fg: #1F5F42;
   --success-bg: rgba(47, 122, 85, 0.14);
   --success-border: rgba(47, 122, 85, 0.32);
@@ -239,12 +239,12 @@
   --overlay-scrim: color-mix(in srgb, var(--bg-app) 38%, transparent);
 
   --glass-panel: rgba(252, 250, 255, 0.88);
-  --glass-border: rgba(94, 84, 114, 0.14);
-  --glass-highlight: rgba(111, 45, 189, 0.09);
+  --glass-border: rgba(93, 99, 110, 0.14);
+  --glass-highlight: rgba(47, 49, 54, 0.08);
 
-  --border-subtle: rgba(94, 84, 114, 0.12);
-  --border-default: rgba(94, 84, 114, 0.20);
-  --border: rgba(94, 84, 114, 0.20);
+  --border-subtle: rgba(93, 99, 110, 0.12);
+  --border-default: rgba(93, 99, 110, 0.2);
+  --border: rgba(93, 99, 110, 0.2);
   --border-active: var(--primary-base);
   --shellbar-divider: rgba(10, 10, 10, 0.05);
 
@@ -970,9 +970,9 @@ body.orion-chat-home .sidebar::before {
 .orion-btn-primary,
 .orion-btn-success,
 .orion-btn-danger {
-  background: #7c3aed;
-  color: #ffffff;
-  border: none;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  border: 1px solid color-mix(in srgb, var(--btn-primary-bg) 82%, transparent);
 }
 
 .btn-primary:hover,
@@ -4383,6 +4383,16 @@ input:focus-visible {
 }
 
 .orion-control-card {
+  display: grid;
+  gap: 12px;
+  min-height: 124px;
+  justify-content: flex-start;
+  border-radius: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-element) 8%);
+  text-decoration: none;
+  color: inherit;
   transition:
     transform var(--motion-fast) var(--easing-standard),
     border-color var(--motion-fast) var(--easing-standard),
@@ -4393,6 +4403,65 @@ input:focus-visible {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--border-default) 58%, var(--primary-base) 42%);
   box-shadow: var(--shadow-card-hover);
+}
+
+.orion-control-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orion-control-card-intro {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.orion-control-card-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-element) 78%, var(--primary-base) 22%);
+  border: 1px solid color-mix(in srgb, var(--border-default) 62%, var(--primary-base) 38%);
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.orion-control-card-copy {
+  min-width: 0;
+}
+
+.orion-control-card-title {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-control-card-note {
+  margin-top: 4px;
+}
+
+.orion-control-card-arrow {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.orion-control-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  border-radius: 999px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .orion-control-link {
@@ -4968,6 +5037,19 @@ a.orion-list-row {
     width: 100%;
     justify-content: center;
   }
+
+  .orion-connector-detail-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .orion-connector-detail-actions {
+    justify-items: stretch;
+  }
+
+  .orion-connector-detail-action-row,
+  .orion-connector-config-actions {
+    justify-content: flex-start;
+  }
 }
 
 .orion-modal.orion-modal-builder {
@@ -5451,6 +5533,17 @@ a.orion-list-row {
   line-height: 1.6;
 }
 
+.orion-focus-panel-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.orion-focus-panel-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .orion-focus-callout {
   display: grid;
   gap: 4px;
@@ -5472,6 +5565,283 @@ a.orion-list-row {
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.6;
+}
+
+.orion-connector-detail-body {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-connector-detail-card {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+}
+
+.orion-connector-detail-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.orion-connector-detail-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.orion-connector-detail-copy {
+  min-width: 0;
+}
+
+.orion-connector-detail-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.orion-connector-detail-meta-row {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.orion-connector-detail-actions {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.orion-connector-detail-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.orion-connector-config-panel {
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-element) 80%, transparent 20%);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.orion-connector-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.orion-connector-config-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-connector-config-kicker {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.orion-connector-config-note {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.orion-connector-config-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-connector-suite-panel {
+  display: grid;
+  gap: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  padding: 12px;
+}
+
+.orion-connector-suite-account {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-connector-suite-account-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-connector-suite-account-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-connector-suite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 8px;
+}
+
+.orion-connector-suite-capability {
+  display: grid;
+  gap: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-element) 70%, transparent 30%);
+  padding: 10px 12px;
+}
+
+.orion-connector-suite-capability-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.orion-connector-suite-capability-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-connector-suite-capability-note {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.orion-connector-suite-calendars {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-drive-browser-panel {
+  width: 100%;
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, transparent 18%);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.orion-drive-browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.orion-drive-browser-title-wrap {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-drive-browser-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.orion-drive-browser-path {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.orion-drive-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-drive-browser-copy {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-drive-browser-error {
+  font-size: 12px;
+  color: var(--warning-fg);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.orion-drive-browser-list {
+  display: grid;
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.orion-drive-browser-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.orion-drive-browser-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  padding: 10px 12px;
+}
+
+.orion-drive-browser-item-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.orion-drive-browser-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orion-drive-browser-item-path {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orion-drive-browser-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .orion-asset-grid {
@@ -5768,16 +6138,16 @@ body.orion-chat-home .sidebar-brandmark {
 }
 
 .sidebar-nav-btn.is-active {
-  background: #7c3aed;
-  color: #ffffff;
+  background: var(--primary-base);
+  color: var(--primary-text);
   border-color: transparent;
   box-shadow: none;
 }
 
 .sidebar-nav-btn.is-rail.is-active {
-  background: #7c3aed;
+  background: var(--primary-base);
   border-color: transparent;
-  color: #ffffff;
+  color: var(--primary-text);
   box-shadow: none;
 }
 
@@ -5969,9 +6339,9 @@ body.orion-chat-home .sidebar-brandmark {
 }
 
 .sidebar-account-btn.is-active {
-  background: #7c3aed;
+  background: var(--primary-base);
   border-color: transparent;
-  color: #ffffff;
+  color: var(--primary-text);
   box-shadow: none;
 }
 
@@ -7053,6 +7423,11 @@ html[data-sidebar-collapsed='1'] .sidebar-v2 .sidebar-v2-item {
   max-width: 1720px;
 }
 
+.orion-page-shell.is-health-page {
+  width: min(1320px, 100%);
+  max-width: 1320px;
+}
+
 .orion-page-shell.narrow {
   width: min(1200px, 100%);
   max-width: 1200px;
@@ -7097,6 +7472,12 @@ body.orion-setup-focus .orion-main-stage {
   display: grid;
   align-content: center;
   gap: 18px;
+}
+
+.hekor-setup-hero-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
 }
 
 .hekor-setup-progress {
@@ -8485,12 +8866,6 @@ select:focus-visible {
   text-align: center;
 }
 
-.orion-control-card {
-  min-height: 124px;
-  justify-content: flex-start;
-  gap: 12px;
-}
-
 .orion-control-card .orion-stat-label {
   font-size: 14px;
   font-weight: 600;
@@ -8503,6 +8878,70 @@ select:focus-visible {
   line-height: 1.5;
   color: var(--text-secondary);
   font-weight: 400;
+}
+
+.orion-dashboard-list {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-dashboard-row-meta {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.orion-dashboard-row-time {
+  margin: 0;
+}
+
+.orion-dashboard-inline-title {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.orion-dashboard-card-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.orion-dashboard-package-card {
+  display: grid;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.orion-dashboard-package-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.orion-dashboard-package-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.orion-dashboard-package-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.orion-dashboard-zero-margin {
+  margin: 0;
+}
+
+.orion-home-list-link {
+  text-decoration: none;
+}
+
+.orion-control-center-list {
+  margin-top: 12px;
 }
 
 .orion-page-actions {
@@ -9218,6 +9657,283 @@ select:focus-visible {
 .orion-health-doctor-fix-category {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.orion-health-attention-section {
+  display: grid;
+}
+
+.orion-health-attention-body {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-health-attention-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.orion-health-attention-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-health-attention-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-health-attention-empty {
+  border-left: 2px solid rgba(34, 197, 94, 0.45);
+  background: var(--success-bg);
+  color: var(--success-fg);
+  padding: 10px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orion-health-attention-list {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.orion-health-attention-item {
+  color: var(--text-primary);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.orion-health-attention-item.is-error {
+  border-left: 2px solid var(--error-border);
+  background: var(--error-bg);
+}
+
+.orion-health-attention-item.is-warn {
+  border-left: 2px solid var(--warning-border);
+  background: var(--warning-bg);
+}
+
+.orion-health-attention-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orion-health-attention-item-title {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.orion-health-attention-item-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-health-attention-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-health-attention-details {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.orion-health-attention-summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-health-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.orion-health-ops-report {
+  margin: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.orion-health-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.orion-health-status-card {
+  background: var(--glass-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.orion-health-status-card-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.orion-health-status-card-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.orion-health-status-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.orion-health-status-card-topline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-health-status-card-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-health-status-card-badge {
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 2px 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.orion-health-status-card-latency {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.orion-health-status-card-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-health-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orion-health-validation-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.orion-health-validation-layout {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-health-validation-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.orion-health-validation-strong {
+  color: var(--text-primary);
+}
+
+.orion-health-validation-list {
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.orion-health-validation-row {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 8px;
+  padding: 9px 10px;
+  align-items: center;
+}
+
+.orion-health-validation-badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  width: fit-content;
+}
+
+.orion-health-validation-name {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.orion-health-validation-history-block {
+  display: grid;
+  gap: 8px;
+}
+
+.orion-health-validation-history-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-health-validation-history-row {
+  display: grid;
+  grid-template-columns: 100px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+}
+
+.orion-health-validation-history-copy {
+  min-width: 0;
+}
+
+.orion-health-validation-history-suite {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-health-validation-history-time {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.orion-health-validation-history-result {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: right;
 }
 
 .orion-health-doctor-fix-title {

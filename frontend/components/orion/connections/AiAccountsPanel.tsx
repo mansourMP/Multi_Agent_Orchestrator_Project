@@ -24,6 +24,7 @@ import {
   type ProviderId,
   type ProviderOption,
 } from '@/app/page.catalog';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type ProviderCredentialRow = {
   id: string;
@@ -76,9 +77,7 @@ type ProviderAccountFormState = {
 };
 
 type AiAccountsPanelProps = {
-  apiUrl: string;
   workspaceId: string;
-  runtimeApiKey: string;
 };
 
 type ClaudeAuthStatus = {
@@ -274,7 +273,7 @@ function normalizeClaudeCliError(message: string): string {
   return normalized;
 }
 
-export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: AiAccountsPanelProps) {
+export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -288,12 +287,16 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
   const [claudeAuthStatus, setClaudeAuthStatus] = useState<ClaudeAuthStatus | null>(null);
 
-  const buildHeaders = useCallback((withJson: boolean): HeadersInit => {
-    const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-    return headers;
-  }, [runtimeApiKey]);
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
+    const headers = new Headers(init?.headers || {});
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
 
   const selectedProviderOption = useMemo(
     () => providerOptionFor(providerForm.provider, providerOptions),
@@ -420,25 +423,15 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
   }, [providerOptions]);
 
   const loadProviderAccounts = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setProviderError('Runtime key is missing. Open Setup and enter the same runtime key used by the local stack.');
-      setProviderNotice('');
-      setProviderCredentials([]);
-      setProviderProfiles([]);
-      setProviderHealth({ healthy: 0, cooldown: 0, disabled: 0, total: 0 });
-      setProviderLoading(false);
-      return;
-    }
-
     setProviderLoading(true);
     setProviderError('');
     setProviderNotice('');
     try {
       const [providersRes, modelAliasesRes, credentialsRes, profilesRes] = await Promise.all([
-        fetch(`${apiUrl}/providers`, { headers: buildHeaders(false) }),
-        fetch(`${apiUrl}/providers/model-aliases`, { headers: buildHeaders(false) }),
-        fetch(`${apiUrl}/credentials/vault?workspace_id=${encodeURIComponent(workspaceId)}`, { headers: buildHeaders(false) }),
-        fetch(`${apiUrl}/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`, { headers: buildHeaders(false) }),
+        controlPlaneFetch('/api/control-plane/providers'),
+        controlPlaneFetch('/api/control-plane/providers/model-aliases'),
+        controlPlaneFetch(`/api/control-plane/credentials?workspace_id=${encodeURIComponent(workspaceId)}`),
+        controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`),
       ]);
 
       const providersRaw = await providersRes.text().catch(() => '');
@@ -580,7 +573,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderLoading(false);
     }
-  }, [apiUrl, buildHeaders, runtimeApiKey, workspaceId]);
+  }, [controlPlaneFetch, workspaceId]);
 
   useEffect(() => {
     void loadProviderAccounts();
@@ -619,9 +612,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
   const refreshClaudeAuthStatus = useCallback(async (silent = false) => {
     if (!silent) setProviderBusy((prev) => ({ ...prev, 'claude-auth': 'status' }));
     try {
-      const res = await fetch(`${apiUrl}/providers/anthropic/local-cli/status`, {
-        headers: buildHeaders(false),
-      });
+      const res = await controlPlaneFetch('/api/control-plane/providers/anthropic/local-cli/status');
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
       if (!res.ok) {
@@ -644,7 +635,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
         });
       }
     }
-  }, [apiUrl, buildHeaders]);
+  }, [controlPlaneFetch]);
 
   useEffect(() => {
     if (!showProviderForm || !usesClaudeLocalCli) return;
@@ -671,21 +662,16 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       enabled,
       model: preferredModel || existingProfile?.model || defaultProviderModel(credential.provider, authMode, providerOptions),
     };
-    const res = await fetch(`${apiUrl}/providers/profiles`, {
+    const res = await controlPlaneFetch('/api/control-plane/providers/profiles', {
       method: 'POST',
-      headers: buildHeaders(true),
       body: JSON.stringify(payload),
     });
     const raw = await res.text().catch(() => '');
     const body = raw ? JSON.parse(raw) : {};
     if (!res.ok) throw new Error(String(body?.detail || body?.message || 'Failed to save runtime profile.'));
-  }, [apiUrl, buildHeaders, providerOptions, workspaceId]);
+  }, [controlPlaneFetch, providerOptions, workspaceId]);
 
   const handleSaveProviderCredential = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setProviderError('Runtime key is missing. Open Setup first and use the same runtime key as the local stack.');
-      return;
-    }
     const authMode = providerForm.authMode || selectedProviderOption.defaultAuthMode || selectedProviderAuthModes[0]?.id || 'api_key';
     const authConfig = selectedProviderAuthModes.find((item) => item.id === authMode);
     const needsSecret = authConfig?.secretRequired !== false;
@@ -711,9 +697,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     setProviderNotice('');
     try {
       const credentials = buildProviderCredentialPayload(providerForm);
-      const res = await fetch(`${apiUrl}/credentials/vault`, {
+      const res = await controlPlaneFetch('/api/control-plane/credentials', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           label: providerForm.label.trim(),
           provider: providerForm.provider,
@@ -753,13 +738,11 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       setProviderActionBusy('provider-create', null);
     }
   }, [
-    apiUrl,
-    buildHeaders,
+    controlPlaneFetch,
     loadProviderAccounts,
     providerForm,
     providerOptions,
     resetProviderForm,
-    runtimeApiKey,
     selectedProviderAuthModes,
     selectedProviderOption.defaultAuthMode,
     setProviderActionBusy,
@@ -774,9 +757,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     setProviderError('');
     setProviderNotice('');
     try {
-      const res = await fetch(`${apiUrl}/credentials/vault/${encodeURIComponent(credential.id)}/test?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credential.id)}/test?workspace_id=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -796,7 +778,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(credential.id, null);
     }
-  }, [apiUrl, buildHeaders, effectiveModelAliases, setProviderActionBusy, workspaceId]);
+  }, [controlPlaneFetch, effectiveModelAliases, setProviderActionBusy, workspaceId]);
 
   const handleToggleProviderProfile = useCallback(async (credential: ProviderCredentialRow, existingProfile?: ProviderProfileRow | null) => {
     const action = existingProfile?.enabled ? 'disable-runtime' : 'enable-runtime';
@@ -805,9 +787,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     setProviderNotice('');
     try {
       if (existingProfile?.enabled) {
-        const res = await fetch(`${apiUrl}/providers/profiles/${encodeURIComponent(existingProfile.id)}/disable`, {
+        const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/${encodeURIComponent(existingProfile.id)}/disable`, {
           method: 'POST',
-          headers: buildHeaders(false),
         });
         const raw = await res.text().catch(() => '');
         const body = raw ? JSON.parse(raw) : {};
@@ -822,7 +803,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(credential.id, null);
     }
-  }, [apiUrl, buildHeaders, loadProviderAccounts, setProviderActionBusy, upsertRuntimeProfileForCredential]);
+  }, [controlPlaneFetch, loadProviderAccounts, setProviderActionBusy, upsertRuntimeProfileForCredential]);
 
   const handlePromoteProviderProfile = useCallback(async (profile: ProviderProfileRow) => {
     const siblings = runtimeProfileGroups.find((group) => group.provider === profile.provider)?.items || [];
@@ -835,9 +816,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
       const reordered = [profile, ...siblings.filter((item) => item.id !== profile.id)];
       for (let index = 0; index < reordered.length; index += 1) {
         const item = reordered[index];
-        const res = await fetch(`${apiUrl}/providers/profiles`, {
+        const res = await controlPlaneFetch('/api/control-plane/providers/profiles', {
           method: 'POST',
-          headers: buildHeaders(true),
           body: JSON.stringify({
             id: item.id,
             provider: item.provider,
@@ -863,16 +843,15 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(profile.id, null);
     }
-  }, [apiUrl, buildHeaders, loadProviderAccounts, providerOptions, runtimeProfileGroups, setProviderActionBusy, workspaceId]);
+  }, [controlPlaneFetch, loadProviderAccounts, providerOptions, runtimeProfileGroups, setProviderActionBusy, workspaceId]);
 
   const handleDeleteProviderProfile = useCallback(async (profile: ProviderProfileRow) => {
     setProviderActionBusy(profile.id, 'remove-profile');
     setProviderError('');
     setProviderNotice('');
     try {
-      const res = await fetch(`${apiUrl}/providers/profiles/${encodeURIComponent(profile.id)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/${encodeURIComponent(profile.id)}`, {
         method: 'DELETE',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -884,7 +863,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(profile.id, null);
     }
-  }, [apiUrl, buildHeaders, loadProviderAccounts, setProviderActionBusy]);
+  }, [controlPlaneFetch, loadProviderAccounts, setProviderActionBusy]);
 
   const handleRemoveProviderCredential = useCallback(async (credential: ProviderCredentialRow) => {
     setProviderActionBusy(credential.id, 'remove');
@@ -893,9 +872,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     try {
       const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
       for (const profile of linkedProfiles) {
-        const deleteRes = await fetch(`${apiUrl}/providers/profiles/${encodeURIComponent(profile.id)}`, {
+        const deleteRes = await controlPlaneFetch(`/api/control-plane/providers/profiles/${encodeURIComponent(profile.id)}`, {
           method: 'DELETE',
-          headers: buildHeaders(false),
         });
         const deleteRaw = await deleteRes.text().catch(() => '');
         const deleteBody = deleteRaw ? JSON.parse(deleteRaw) : {};
@@ -904,9 +882,8 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
         }
       }
 
-      const res = await fetch(`${apiUrl}/credentials/vault/${encodeURIComponent(credential.id)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credential.id)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
         method: 'DELETE',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -918,16 +895,15 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy(credential.id, null);
     }
-  }, [apiUrl, buildHeaders, loadProviderAccounts, providerProfilesByCredential, setProviderActionBusy, workspaceId]);
+  }, [controlPlaneFetch, loadProviderAccounts, providerProfilesByCredential, setProviderActionBusy, workspaceId]);
 
   const handleClaudeAuthLogin = useCallback(async () => {
     setProviderActionBusy('claude-auth', 'login');
     setProviderError('');
     setProviderNotice('');
     try {
-      const res = await fetch(`${apiUrl}/providers/anthropic/local-cli/login`, {
+      const res = await controlPlaneFetch('/api/control-plane/providers/anthropic/local-cli/login', {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -943,7 +919,7 @@ export default function AiAccountsPanel({ apiUrl, workspaceId, runtimeApiKey }: 
     } finally {
       setProviderActionBusy('claude-auth', null);
     }
-  }, [apiUrl, buildHeaders, refreshClaudeAuthStatus, setProviderActionBusy]);
+  }, [controlPlaneFetch, refreshClaudeAuthStatus, setProviderActionBusy]);
 
   return (
     <>

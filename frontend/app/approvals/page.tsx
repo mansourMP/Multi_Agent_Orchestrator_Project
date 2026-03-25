@@ -4,12 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ClipboardCheck, ExternalLink, RefreshCw } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '../page.catalog';
-import { API_BASE } from '@/lib/config';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-
-const ORION_API_URL = API_BASE;
 
 type PendingApproval = {
   runId: string;
@@ -124,7 +121,6 @@ function approvalSensitivitySignal(row: PendingApproval): { label: string; tone:
 
 export default function ApprovalsPage() {
   const router = useRouter();
-  const [runtimeKey, setRuntimeKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<PendingApproval[]>([]);
   const [audit, setAudit] = useState<ApprovalAudit[]>([]);
@@ -133,17 +129,11 @@ export default function ApprovalsPage() {
   const [agentFilter, setAgentFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('all');
 
-  const mutationHeaders = useMemo<HeadersInit>(() => {
-    const next = new Headers();
-    next.set('Content-Type', 'application/json');
-    if (runtimeKey) next.set('X-API-Key', runtimeKey);
-    return next;
-  }, [runtimeKey]);
-
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      await ensureControlPlaneSession();
       const overviewRes = await fetch('/api/approvals/overview', { cache: 'no-store' });
       const overviewPayload = await overviewRes.json().catch(() => null);
       if (!overviewRes.ok) {
@@ -248,17 +238,26 @@ export default function ApprovalsPage() {
       const key = `${row.runId}:${row.approvalId}:${decision}`;
       setActionBusy((prev) => ({ ...prev, [key]: true }));
       try {
-        const res = await fetch(
-          `${ORION_API_URL}/runs/${encodeURIComponent(row.runId)}/approvals/${encodeURIComponent(row.approvalId)}/resolve`,
-          {
-            method: 'POST',
-            headers: mutationHeaders,
-            body: JSON.stringify({ decision, note: 'Resolved from approvals inbox' }),
+        await ensureControlPlaneSession();
+        const res = await fetch('/api/approvals/resolve', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        );
+          body: JSON.stringify({
+            runId: row.runId,
+            approvalId: row.approvalId,
+            decision,
+            note: 'Resolved from approvals inbox',
+          }),
+        });
         if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          throw new Error(text || 'Approval action failed.');
+          const payload = await res.json().catch(() => null);
+          throw new Error(
+            payload && typeof payload.detail === 'string' && payload.detail.trim()
+              ? payload.detail.trim()
+              : 'Approval action failed.',
+          );
         }
         await refresh();
       } catch (nextError: unknown) {
@@ -272,15 +271,8 @@ export default function ApprovalsPage() {
         });
       }
     },
-    [mutationHeaders, refresh],
+    [refresh],
   );
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const stored = readRuntimeApiKeyFromStorage('');
-      if (stored && stored.trim()) setRuntimeKey(stored.trim());
-    }
-  }, []);
 
   useEffect(() => {
     void refresh();

@@ -27,12 +27,14 @@ import {
   type ConnectorId,
   isConnectorId,
 } from '../page.catalog';
-import { API_BASE } from '@/lib/config';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 
-const ORION_API_URL = API_BASE;
 const WORKSPACE_ID = 'default';
 const RUNTIME_TIMEOUT_MS = 3500;
 
@@ -583,7 +585,6 @@ function connectorTierLabel(tier: ConnectorRoadmapTier): string {
 
 function CredentialsPageContent() {
   const searchParams = useSearchParams();
-  const [runtimeApiKey] = useState<string>(() => readRuntimeApiKeyFromStorage(''));
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [catalogViewFilter, setCatalogViewFilter] = useState<CatalogViewFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -612,27 +613,24 @@ function CredentialsPageContent() {
     return scopedWindow.orionDesktop || scopedWindow.empyralisDesktop || null;
   }, []);
 
-  const buildHeaders = useCallback((withJson: boolean): HeadersInit => {
-    const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-    return headers;
-  }, [runtimeApiKey]);
+  const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
+    await ensureControlPlaneSession();
+    const headers = new Headers(init?.headers || {});
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    });
+  }, []);
 
   const loadConnectors = useCallback(async () => {
-    if (!runtimeApiKey) {
-      setPageError('This local app is not connected yet. Add the local access key, then try again.');
-      setConnectors([]);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     setPageError('');
     try {
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), RUNTIME_TIMEOUT_MS);
-      const res = await fetch(`${ORION_API_URL}/connectors/vault?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
-        headers: buildHeaders(false),
+      const res = await controlPlaneFetch(`/api/control-plane/connectors?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
         signal: controller.signal,
       });
       window.clearTimeout(timeoutId);
@@ -660,7 +658,7 @@ function CredentialsPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [buildHeaders, runtimeApiKey]);
+  }, [controlPlaneFetch]);
 
   useEffect(() => {
     void loadConnectors();
@@ -823,9 +821,8 @@ function CredentialsPageContent() {
   }
 
   async function patchConnector(id: string, payload: { label?: string; metadata?: Record<string, unknown> }) {
-    const res = await fetch(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(id)}`, {
+    const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      headers: buildHeaders(true),
       body: JSON.stringify({ workspace_id: WORKSPACE_ID, ...payload }),
     });
     const raw = await res.text().catch(() => '');
@@ -872,9 +869,8 @@ function CredentialsPageContent() {
     setBusy(row.id, 'test');
     setPageError('');
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(row.id)}/test?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}/test?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
         method: 'POST',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -920,10 +916,9 @@ function CredentialsPageContent() {
       },
     }));
     try {
-      const url = new URL(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(row.id)}/microsoft-drive`);
-      url.searchParams.set('workspace_id', WORKSPACE_ID);
-      if (nextPath && nextPath !== 'onedrive:/') url.searchParams.set('path', nextPath);
-      const res = await fetch(url.toString(), { headers: buildHeaders(false) });
+      const params = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+      if (nextPath && nextPath !== 'onedrive:/') params.set('path', nextPath);
+      const res = await controlPlaneFetch(`/api/connectors/${encodeURIComponent(row.id)}/microsoft-drive?${params.toString()}`);
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
       if (!res.ok) throw new Error(String(body?.detail || body?.message || 'Failed to browse OneDrive.'));
@@ -963,10 +958,9 @@ function CredentialsPageContent() {
       },
     }));
     try {
-      const url = new URL(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(row.id)}/google-drive`);
-      url.searchParams.set('workspace_id', WORKSPACE_ID);
-      if (nextPath && nextPath !== 'gdrive:/') url.searchParams.set('path', nextPath);
-      const res = await fetch(url.toString(), { headers: buildHeaders(false) });
+      const params = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+      if (nextPath && nextPath !== 'gdrive:/') params.set('path', nextPath);
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}/google-drive?${params.toString()}`);
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
       if (!res.ok) throw new Error(String(body?.detail || body?.message || 'Failed to browse Google Drive.'));
@@ -1046,11 +1040,11 @@ function CredentialsPageContent() {
     setPageError('');
     try {
       const title = `${label} ${new Date().toLocaleDateString()}`;
-      const res = await fetch(
-        `${ORION_API_URL}/connectors/vault/${encodeURIComponent(row.id)}/${kind === 'doc' ? 'google-doc' : 'google-sheet'}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`,
+      const path = kind === 'doc' ? 'google-doc' : 'google-sheet';
+      const res = await controlPlaneFetch(
+        `/api/control-plane/connectors/${encodeURIComponent(row.id)}/${path}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`,
         {
           method: 'POST',
-          headers: buildHeaders(true),
           body: JSON.stringify({ title }),
         },
       );
@@ -1072,9 +1066,8 @@ function CredentialsPageContent() {
     setBusy(row.id, 'remove');
     setPageError('');
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(row.id)}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+      const res = await controlPlaneFetch(`/api/control-plane/connectors/${encodeURIComponent(row.id)}?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
         method: 'DELETE',
-        headers: buildHeaders(false),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
@@ -1188,10 +1181,6 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
   }
 
   async function handleCreateConnector() {
-    if (!runtimeApiKey) {
-      setCreateError('This local app is not connected yet. Add the local access key, then try again.');
-      return;
-    }
     if (form.connector === 'microsoft_365' && !form.accessToken.trim()) {
       setCreateError('Enter a Microsoft Graph access token with mail, calendar, and files scopes.');
       return;
@@ -1211,9 +1200,8 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
     setCreateBusy(true);
     setCreateError('');
     try {
-      const res = await fetch(`${ORION_API_URL}/connectors/vault`, {
+      const res = await controlPlaneFetch('/api/control-plane/connectors', {
         method: 'POST',
-        headers: buildHeaders(true),
         body: JSON.stringify({
           label: form.label.trim() || connectorLabel(form.connector),
           connector: form.connector,
@@ -1236,42 +1224,18 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
   return (
     <div className="orion-page-shell is-integrations-page orion-animate-in">
-      <OsPageHeader
-        icon={null}
-        title="Integrations"
-        subtitle="Connect the tools Hekor needs for real work."
-        meta={
-          summary.total > 0 ? (
-            <>
-              <span>{summary.active} connected</span>
-              <span>{directoryCounts.available} ready to connect</span>
-            </>
-          ) : undefined
-        }
+      <PageHero
+        kicker="Integrations"
+        title="Start with one or two tools, not the whole directory."
+        copy="Most teams start with Google Workspace, Microsoft 365, or Telegram. Add more tools later when a task actually depends on them."
         actions={
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <>
             {onboardingMode ? (
               <Link href={returnTo} className="btn-secondary">
                 <ChevronLeft size={14} />
                 Return to setup
               </Link>
             ) : null}
-            <button className="btn-secondary" onClick={() => void loadConnectors()}>
-              <RefreshCw size={14} />
-              Refresh
-            </button>
-          </div>
-        }
-      />
-
-      <section className="orion-panel orion-home-overview">
-        <div className="orion-home-overview-main">
-          <div className="orion-home-overview-kicker">Connect only what the task needs</div>
-          <div className="orion-home-overview-title">Start with one or two tools, not the whole directory.</div>
-          <div className="orion-home-overview-copy">
-            Most teams start with Google Workspace, Microsoft 365, or Telegram. Add more tools later when a task actually depends on them.
-          </div>
-          <div className="orion-home-overview-actions">
             <button className="btn-primary" onClick={openGenericCreateModal}>
               <Plus size={14} />
               Add tool
@@ -1280,65 +1244,53 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               <RefreshCw size={14} />
               Refresh
             </button>
-          </div>
-        </div>
-        <aside className="orion-home-overview-side">
-          <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Current access</div>
-            <div className="orion-home-side-stats">
-              <div>
-                <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
-                <div className="orion-home-side-note">Connected tools</div>
+          </>
+        }
+        aside={
+          <>
+            <PageHeroCard label="Current access">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
+                  <div className="orion-home-side-note">Connected tools</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
+                  <div className="orion-home-side-note">Ready to connect</div>
+                </div>
               </div>
-              <div>
-                <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
-                <div className="orion-home-side-note">Ready to connect</div>
+              <div className="orion-runs-overview-side-note">
+                {integrationOverview.connectedSuiteCount > 0
+                  ? `${integrationOverview.connectedSuiteCount} core suite${integrationOverview.connectedSuiteCount === 1 ? '' : 's'} already connected.`
+                  : 'No core suites connected yet. Start with Google Workspace or Microsoft 365.'}
               </div>
-            </div>
-            <div className="orion-runs-overview-side-note">
-              {integrationOverview.connectedSuiteCount > 0
-                ? `${integrationOverview.connectedSuiteCount} core suite${integrationOverview.connectedSuiteCount === 1 ? '' : 's'} already connected.`
-                : 'No core suites connected yet. Start with Google Workspace or Microsoft 365.'}
-            </div>
-          </div>
-          <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Best first tools</div>
-            <div className="orion-home-mini-list">
-              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
-                <span>Google Workspace</span>
-                <ArrowUpRight size={13} />
-              </button>
-              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('microsoft_365', 'Microsoft 365')}>
-                <span>Microsoft 365</span>
-                <ArrowUpRight size={13} />
-              </button>
-              <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
-                <span>Telegram alerts</span>
-                <ArrowUpRight size={13} />
-              </button>
-            </div>
-          </div>
-        </aside>
-      </section>
+            </PageHeroCard>
+            <PageHeroCard label="Best first tools">
+              <div className="orion-home-mini-list">
+                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
+                  <span>Google Workspace</span>
+                  <ArrowUpRight size={13} />
+                </button>
+                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('microsoft_365', 'Microsoft 365')}>
+                  <span>Microsoft 365</span>
+                  <ArrowUpRight size={13} />
+                </button>
+                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
+                  <span>Telegram alerts</span>
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+            </PageHeroCard>
+          </>
+        }
+      />
 
-      <section className="orion-panel muted" style={{ display: 'grid', gap: 10, padding: '10px 14px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            flexWrap: 'wrap',
-          }}
-        >
-            <div style={{ display: 'grid', gap: 2 }}>
-              <div className="orion-panel-title">Tool directory</div>
-              <div className="orion-panel-copy">
-                Choose the tools Hekor can use. Connect a tool only when a task depends on it.
-              </div>
-            </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            {summary.total > 0 ? <span className="orion-chip">{summary.active} active</span> : null}
+      <PageFilterBar
+        title="Tool directory"
+        description="Choose the tools Hekor can use. Connect a tool only when a task depends on it."
+        summary={summary.total > 0 ? <span className="orion-chip">{summary.active} active</span> : null}
+        actions={
+          <>
             <button className="btn-secondary" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void loadConnectors()}>
               <RefreshCw size={13} />
               Refresh
@@ -1347,9 +1299,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               <Plus size={13} />
               Add tool
             </button>
-          </div>
-        </div>
-
+          </>
+        }
+      >
         <div className="orion-segmented" style={{ padding: 0, borderBottom: 0 }}>
           {[
             ['all', 'All', directoryCounts.all],
@@ -1369,22 +1321,25 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             );
           })}
         </div>
+      </PageFilterBar>
 
         {filteredDirectoryItems.length === 0 ? (
-          <section className="orion-empty" style={{ minHeight: 220 }}>
-            <div className="orion-empty-title">No tools match this filter</div>
-            <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-              Try another filter or switch back to the full directory.
-            </div>
-            <button
-              className="orion-btn orion-btn-ghost"
-              onClick={() => {
-                setCatalogViewFilter('all');
-              }}
-            >
-              Clear filters
-            </button>
-          </section>
+          <PageStatePanel
+            variant="filtered-empty"
+            title="No tools match this filter"
+            copy="Try another filter or switch back to the full directory."
+            className="orion-state-panel"
+            actions={
+              <button
+                className="orion-btn orion-btn-ghost"
+                onClick={() => {
+                  setCatalogViewFilter('all');
+                }}
+              >
+                Clear filters
+              </button>
+            }
+          />
         ) : (
           <div className="orion-integration-directory">
             {filteredDirectoryItems.map((item) => {
@@ -1523,7 +1478,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <div className="orion-focus-panel-cta-row">
                   {canAddFocused ? (
                     <button
                       className="orion-btn orion-btn-primary"
@@ -1653,12 +1608,12 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   ) : null}
                 </div>
                 {focusedCatalogEntry.id === 'google_workspace' && !googleSuiteRow ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  <div className="orion-focus-panel-hint">
                     Connect Google Workspace first, then this detail will light up with Drive, Docs, Sheets, and account checks.
                   </div>
                 ) : null}
                 {focusedCatalogEntry.id === 'microsoft_365' && !microsoftSuiteRow ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                  <div className="orion-focus-panel-hint">
                     Connect Microsoft 365 first, then this detail will light up with OneDrive, Word, PowerPoint, Excel, and account checks.
                   </div>
                 ) : null}
@@ -1666,75 +1621,74 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             );
           })()
         ) : null}
-      </section>
+      
 
-      <section className="orion-panel orion-home-list-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">AI providers</div>
-            <div className="orion-panel-copy">Manage saved AI accounts and choose what Hekor should use by default.</div>
-          </div>
-        </div>
-        <AiAccountsPanel apiUrl={ORION_API_URL} workspaceId={WORKSPACE_ID} runtimeApiKey={runtimeApiKey} />
-      </section>
+      <PageSection
+        title="AI providers"
+        description="Manage saved AI accounts and choose what Hekor should use by default."
+        className="orion-home-list-panel"
+      >
+        <AiAccountsPanel workspaceId={WORKSPACE_ID} />
+      </PageSection>
 
       {pageError && connectors.length > 0 ? (
-        <section className="orion-empty" style={{ minHeight: 120, gap: 10 }}>
-          <div className="orion-empty-title">Couldn't load this section.</div>
-          <div className="orion-empty-copy" style={{ marginTop: 0 }}>{pageError}</div>
-          <button type="button" className="btn-secondary" onClick={() => void loadConnectors()}>
-            Retry
-          </button>
-        </section>
+        <PageStatePanel
+          variant="error"
+          title="Couldn't load this section."
+          copy={pageError}
+          actions={
+            <button type="button" className="btn-secondary" onClick={() => void loadConnectors()}>
+              Retry
+            </button>
+          }
+          className="orion-state-panel"
+        />
       ) : null}
 
       {loading ? (
-        <section className="orion-empty">
-          <div className="orion-empty-title">Loading...</div>
-        </section>
+        <PageStatePanel variant="loading" title="Loading integrations…" />
       ) : pageError && connectors.length === 0 ? (
-        <section className="orion-empty">
-          <div className="orion-empty-title">Couldn't load this section.</div>
-          <div className="orion-empty-copy" style={{ marginBottom: 16 }}>{pageError}</div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <PageStatePanel
+          variant="error"
+          title="Couldn't load this section."
+          copy={pageError}
+          actions={
             <button className="btn-secondary" onClick={() => void loadConnectors()}>
               <RefreshCw size={14} />
               Retry
             </button>
-          </div>
-        </section>
+          }
+          className="orion-state-panel"
+        />
       ) : connectors.length === 0 ? (
-        <section className="orion-empty">
-          <div className="orion-empty-title">No tools connected yet</div>
-          <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-            Start with one tool your first task depends on. You can add more later.
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 10 }}>
-            <button className="btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
-              <Plus size={14} />
-              Connect Google Workspace
-            </button>
-            <button className="btn-secondary" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
-              <Plus size={14} />
-              Connect Telegram
-            </button>
-            <button className="btn-secondary" onClick={openGenericCreateModal}>
-              <Plus size={14} />
-              Browse all tools
-            </button>
-          </div>
-          <div className="orion-empty-copy" style={{ maxWidth: 560, margin: '0 auto' }}>
-            Recommended starting point: Google Workspace for documents and calendar, or Telegram if you want alerts first.
-          </div>
-        </section>
+        <PageStatePanel
+          variant="empty"
+          title="No tools connected yet"
+          copy="Start with one tool your first task depends on. You can add more later."
+          actions={
+            <>
+              <button className="btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
+                <Plus size={14} />
+                Connect Google Workspace
+              </button>
+              <button className="btn-secondary" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
+                <Plus size={14} />
+                Connect Telegram
+              </button>
+              <button className="btn-secondary" onClick={openGenericCreateModal}>
+                <Plus size={14} />
+                Browse all tools
+              </button>
+            </>
+          }
+          className="orion-state-panel"
+        />
       ) : selectedConnectorRow ? (
-        <section className="orion-panel" style={{ display: 'grid', gap: 12 }}>
-          <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-            <div>
-              <div className="orion-panel-title">Connected tool</div>
-              <div className="orion-panel-copy">Test access, pause it, or update how Hekor should use it.</div>
-            </div>
-          </div>
+        <PageSection
+          title="Connected tool"
+          description="Test access, pause it, or update how Hekor should use it."
+          bodyClassName="orion-connector-detail-body"
+        >
           <section className="orion-list">
             {[selectedConnectorRow].map((row) => {
               const paused = rowPaused(row);
@@ -1760,25 +1714,13 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 <article
                   id={`connector-row-${row.id}`}
                   key={row.id}
-                  className="orion-list-row"
-                  style={{
-                    display: 'grid',
-                    gap: 14,
-                    width: '100%',
-                  }}
+                  className="orion-list-row orion-connector-detail-card"
                 >
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(0, 1fr) auto',
-                      alignItems: 'start',
-                      gap: 16,
-                    }}
-                  >
-                    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'flex-start', gap: 14, minWidth: 0 }}>
+                  <div className="orion-connector-detail-header">
+                    <div className="orion-connector-detail-main">
                       <ConnectorMark visual={visual} size={58} />
-                      <div className="orion-list-row-main" style={{ minWidth: 0 }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                      <div className="orion-list-row-main orion-connector-detail-copy">
+                        <div className="orion-connector-detail-title-row">
                           <div className="orion-list-row-title">{row.label}</div>
                           <span
                             className="orion-chip"
@@ -1803,7 +1745,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         <div className="orion-list-row-subtitle">
                           {rowIdentity(row)} • Added {formatDate(row.created_at)}
                         </div>
-                        <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <div className="orion-connector-detail-meta-row">
                           <span className="orion-chip" style={statusStyles(!paused)}>
                             {paused ? 'Paused' : 'Active'}
                           </span>
@@ -1828,8 +1770,8 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       </div>
                     </div>
 
-                    <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <div className="orion-connector-detail-actions">
+                      <div className="orion-connector-detail-action-row">
                         {row.connector === 'google_workspace' ? (
                           <button
                             className="orion-btn orion-btn-ghost"
@@ -1882,26 +1824,17 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   </div>
 
                   {isConfiguredOpen ? (
-                    <div
-                      style={{
-                        borderRadius: 16,
-                        border: '1px solid var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--bg-element) 80%, transparent 20%)',
-                        padding: 14,
-                        display: 'grid',
-                        gap: 12,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    <div className="orion-connector-config-panel">
+                      <div className="orion-connector-config-head">
+                        <div className="orion-connector-config-copy">
+                          <div className="orion-connector-config-kicker">
                             Configure
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                          <div className="orion-connector-config-note">
                             Choose who uses this connection, test it, or pause it.
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <div className="orion-connector-config-actions">
                           <select
                             className="input"
                             value={assignedRole}
@@ -1931,49 +1864,30 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         </div>
                       </div>
                       {isSuite ? (
-                        <div
-                          style={{
-                            display: 'grid',
-                            gap: 10,
-                            borderRadius: 14,
-                            border: '1px solid var(--border-subtle)',
-                            background: 'var(--bg-surface)',
-                            padding: 12,
-                          }}
-                        >
-                          <div style={{ display: 'grid', gap: 4 }}>
-                            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-primary)' }}>
+                        <div className="orion-connector-suite-panel">
+                          <div className="orion-connector-suite-account">
+                            <div className="orion-connector-suite-account-title">
                               {googleSuite?.accountName || microsoftSuite?.accountName}
                             </div>
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            <div className="orion-connector-suite-account-note">
                               {googleSuite?.accountEmail || microsoftSuite?.accountEmail} · {googleSuite?.driveLabel || microsoftSuite?.driveLabel}
                             </div>
                           </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: 8 }}>
+                          <div className="orion-connector-suite-grid">
                             {suiteCapabilities.map((capability) => (
-                              <div
-                                key={capability.label}
-                                style={{
-                                  display: 'grid',
-                                  gap: 4,
-                                  borderRadius: 12,
-                                  border: '1px solid var(--border-subtle)',
-                                  background: 'color-mix(in srgb, var(--bg-element) 70%, transparent 30%)',
-                                  padding: '10px 12px',
-                                }}
-                              >
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{capability.label}</div>
+                              <div key={capability.label} className="orion-connector-suite-capability">
+                                <div className="orion-connector-suite-capability-head">
+                                  <div className="orion-connector-suite-capability-title">{capability.label}</div>
                                   <span className="orion-chip" style={capabilityTone(capability.enabled)}>
                                     {capability.enabled ? 'Ready' : 'Scope needed'}
                                   </span>
                                 </div>
-                                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>{capability.note}</div>
+                                <div className="orion-connector-suite-capability-note">{capability.note}</div>
                               </div>
                             ))}
                           </div>
                           {(googleSuite?.calendars.length || microsoftSuite?.calendars.length) ? (
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <div className="orion-connector-suite-calendars">
                               {(googleSuite?.calendars || microsoftSuite?.calendars || []).slice(0, 3).map((calendar, index) => (
                                 <span
                                   key={`${calendar.id || calendar.name || 'calendar'}:${index}`}
@@ -1990,27 +1904,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     </div>
                   ) : null}
                   {row.connector === 'google_workspace' && googleDriveBrowser?.open ? (
-                    <div
-                      style={{
-                        width: '100%',
-                        gridColumn: '1 / -1',
-                        marginTop: 12,
-                        borderRadius: 16,
-                        border: '1px solid var(--border-default)',
-                        background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
-                        padding: 14,
-                        display: 'grid',
-                        gap: 10,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    <div className="orion-drive-browser-panel">
+                      <div className="orion-drive-browser-head">
+                        <div className="orion-drive-browser-title-wrap">
+                          <div className="orion-drive-browser-kicker">
                             Google Drive
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{googleDriveBrowser.path || 'gdrive:/'}</div>
+                          <div className="orion-drive-browser-path">{googleDriveBrowser.path || 'gdrive:/'}</div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div className="orion-drive-browser-toolbar">
                           {googleDriveBrowser.path && googleDriveBrowser.path !== 'gdrive:/' ? (
                             <button
                               className="orion-btn orion-btn-ghost"
@@ -2034,44 +1936,32 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                           </button>
                         </div>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      <div className="orion-drive-browser-copy">
                         Open folders here inside Empyralis. Google Docs, Sheets, and other provider-native files will hand off to your default browser when you open them.
                       </div>
                       {googleDriveBrowser.error ? (
-                        <div style={{ fontSize: 12, color: 'var(--warning-fg)', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div className="orion-drive-browser-error">
                           {googleDriveBrowser.error}
                         </div>
                       ) : null}
-                      <div style={{ display: 'grid', gap: 8, maxHeight: 460, overflow: 'auto', paddingRight: 4 }}>
+                      <div className="orion-drive-browser-list">
                         {googleDriveBrowser.items.length === 0 && !googleDriveBrowser.loading ? (
-                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No items in this folder.</div>
+                          <div className="orion-drive-browser-empty">No items in this folder.</div>
                         ) : null}
                         {googleDriveBrowser.items.map((item, index) => {
                           const itemPath = String(item.path || '').trim();
                           const isFolder = String(item.kind || '').toLowerCase() === 'folder';
                           return (
-                            <div
-                              key={String(item.id || itemPath || index)}
-                              style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'minmax(0, 1fr) auto',
-                                gap: 10,
-                                alignItems: 'center',
-                                borderRadius: 12,
-                                border: '1px solid var(--border-subtle)',
-                                background: 'var(--bg-surface)',
-                                padding: '10px 12px',
-                              }}
-                            >
-                              <div style={{ minWidth: 0, display: 'grid', gap: 4 }}>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
+                              <div className="orion-drive-browser-item-copy">
+                                <div className="orion-drive-browser-item-title">
                                   {item.name || 'Untitled'}
                                 </div>
-                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                <div className="orion-drive-browser-item-path">
                                   {itemPath || 'gdrive:/'}
                                 </div>
                               </div>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <div className="orion-drive-browser-item-actions">
                                 {isFolder ? (
                                   <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, itemPath)}>
                                     <FolderOpen size={13} />
@@ -2096,27 +1986,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     </div>
                   ) : null}
                   {row.connector === 'microsoft_365' && driveBrowser?.open ? (
-                    <div
-                      style={{
-                        width: '100%',
-                        gridColumn: '1 / -1',
-                        marginTop: 12,
-                        borderRadius: 16,
-                        border: '1px solid var(--border-default)',
-                        background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
-                        padding: 14,
-                        display: 'grid',
-                        gap: 10,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'grid', gap: 4 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    <div className="orion-drive-browser-panel">
+                      <div className="orion-drive-browser-head">
+                        <div className="orion-drive-browser-title-wrap">
+                          <div className="orion-drive-browser-kicker">
                             OneDrive
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{driveBrowser.path || 'onedrive:/'}</div>
+                          <div className="orion-drive-browser-path">{driveBrowser.path || 'onedrive:/'}</div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <div className="orion-drive-browser-toolbar">
                           {driveBrowser.path && driveBrowser.path !== 'onedrive:/' ? (
                             <button
                               className="orion-btn orion-btn-ghost"
@@ -2140,44 +2018,32 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                           </button>
                         </div>
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      <div className="orion-drive-browser-copy">
                         Use these paths directly in Spreadsheet Ops, for example <span style={{ color: 'var(--text-primary)' }}>onedrive:/Sales/customers.xlsx</span>. Microsoft files open through the native Microsoft web editors when you hand off.
                       </div>
                       {driveBrowser.error ? (
-                        <div style={{ fontSize: 12, color: 'var(--warning-fg)', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div className="orion-drive-browser-error">
                           {driveBrowser.error}
                         </div>
                       ) : null}
-                      <div style={{ display: 'grid', gap: 8, maxHeight: 460, overflow: 'auto', paddingRight: 4 }}>
+                      <div className="orion-drive-browser-list">
                         {driveBrowser.items.length === 0 && !driveBrowser.loading ? (
-                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No items in this folder.</div>
+                          <div className="orion-drive-browser-empty">No items in this folder.</div>
                         ) : null}
                         {driveBrowser.items.map((item, index) => {
                           const itemPath = String(item.path || '').trim();
                           const isFolder = String(item.kind || '').toLowerCase() === 'folder';
                           return (
-                            <div
-                              key={String(item.id || itemPath || index)}
-                              style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'minmax(0, 1fr) auto',
-                                gap: 10,
-                                alignItems: 'center',
-                                borderRadius: 12,
-                                border: '1px solid var(--border-subtle)',
-                                background: 'var(--bg-surface)',
-                                padding: '10px 12px',
-                              }}
-                            >
-                              <div style={{ minWidth: 0, display: 'grid', gap: 4 }}>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
+                              <div className="orion-drive-browser-item-copy">
+                                <div className="orion-drive-browser-item-title">
                                   {item.name || 'Untitled'}
                                 </div>
-                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                <div className="orion-drive-browser-item-path">
                                   {itemPath || 'onedrive:/'}
                                 </div>
                               </div>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <div className="orion-drive-browser-item-actions">
                                 {isFolder ? (
                                   <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, itemPath)}>
                                     <FolderOpen size={13} />
@@ -2205,7 +2071,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               );
             })}
           </section>
-        </section>
+        </PageSection>
       ) : null}
       {showAddModal ? (
         <div className="orion-modal-overlay" style={{ alignItems: 'flex-start', padding: '72px 16px 24px' }} onClick={resetModal}>

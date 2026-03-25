@@ -1,4 +1,5 @@
 import { collectPriorityFixes, type DoctorCheckRecord, type PriorityFix } from '@/lib/doctorChecks';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { type ExecutionTarget, formatExecutionTargetLabel } from '@/lib/executionTargets';
 
 type DoctorOverview = {
@@ -80,6 +81,7 @@ export async function fetchDoctorPreflight(headers?: HeadersInit): Promise<Docto
   void headers;
   let response: Response;
   try {
+    await ensureControlPlaneSession();
     response = await fetch('/api/doctor/preflight', {
       cache: 'no-store',
     });

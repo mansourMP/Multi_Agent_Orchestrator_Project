@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { Laptop, LoaderCircle, RefreshCw } from 'lucide-react';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type RecoveryAction = 'start_services' | 'readiness';
 
@@ -37,11 +37,11 @@ export default function LocalRuntimeRecoveryCard({
   const runAction = useCallback(async (action: RecoveryAction) => {
     setBusyAction(action);
     try {
-      const runtimeKey = readRuntimeApiKeyFromStorage('');
+      await ensureControlPlaneSession();
       const res = await fetch('/api/local-ops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, runtimeKey }),
+        body: JSON.stringify({ action }),
       });
       const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {

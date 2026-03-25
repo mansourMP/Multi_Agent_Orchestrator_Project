@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 export type PlatformAccessMode = 'default' | 'full';
 
@@ -102,6 +103,7 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
 
     const refreshRemote = async () => {
       try {
+        await ensureControlPlaneSession();
         const res = await fetch('/api/platform/shell-status', { cache: 'no-store' });
         const payload = await res.json().catch(() => null);
         if (!res.ok) {

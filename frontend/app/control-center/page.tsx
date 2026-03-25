@@ -13,8 +13,10 @@ import {
   SlidersHorizontal,
   UserRound,
 } from 'lucide-react';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
 import { MetricStrip } from '@/components/ui/MetricStrip';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 
 type ControlCenterCard = {
@@ -97,21 +99,44 @@ export default function ControlCenterPage() {
   ];
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<ShieldCheck size={18} />}
-        title="Admin"
-        subtitle="Advanced platform controls for setup, integrations, diagnostics, and defaults."
-        meta={
-          <>
-            <span>{accessMode === 'full' ? 'Full access mode' : 'Default access mode'}</span>
-            <span>{approvalStatus}</span>
-          </>
-        }
+    <div className="orion-page-shell orion-animate-in">
+      <PageHero
+        kicker="Admin"
+        title="Advanced platform controls for setup, integrations, diagnostics, and defaults."
+        copy="Assistant stays focused on getting work done. Admin is where you adjust setup, permissions, integrations, and diagnostics."
         actions={
           <Link href="/" className="orion-btn orion-btn-ghost">
             Return Home
           </Link>
+        }
+        aside={
+          <>
+            <PageHeroCard label="Access mode">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{accessMode === 'full' ? 'Full' : 'Default'}</div>
+                  <div className="orion-home-side-note">Platform access</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{status.pendingApprovals > 0 ? status.pendingApprovals : 0}</div>
+                  <div className="orion-home-side-note">Pending approvals</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">{approvalStatus}</div>
+            </PageHeroCard>
+            <PageHeroCard label="Runtime">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{runtimeStatus}</div>
+                  <div className="orion-home-side-note">Runtime health</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{status.onlineWorkers}</div>
+                  <div className="orion-home-side-note">Workers online</div>
+                </div>
+              </div>
+            </PageHeroCard>
+          </>
         }
       />
 
@@ -125,16 +150,10 @@ export default function ControlCenterPage() {
         minWidth={180}
       />
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-              <div className="orion-panel-title">Where advanced controls live</div>
-              <div className="orion-panel-copy">
-              Assistant stays focused on getting work done. Admin is where you adjust setup, permissions, integrations, and diagnostics.
-              </div>
-          </div>
-        </div>
-
+      <PageSection
+        title="Where advanced controls live"
+        description="Use Admin when you need to change how the platform behaves, not when you just want to get work done."
+      >
         <div className="orion-grid-2">
           {cards.map((card) => {
             const Icon = card.icon;
@@ -143,56 +162,24 @@ export default function ControlCenterPage() {
                 key={card.href}
                 href={card.href}
                 className="orion-control-card"
-                style={{
-                  display: 'grid',
-                  gap: 12,
-                  borderRadius: 14,
-                  padding: 16,
-                  border: '1px solid var(--border-default)',
-                  background: 'color-mix(in srgb, var(--bg-surface) 92%, var(--bg-element) 8%)',
-                  textDecoration: 'none',
-                  color: 'inherit',
-                }}
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <span
-                      aria-hidden
-                      style={{
-                        width: 34,
-                        height: 34,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: 10,
-                        background: 'color-mix(in srgb, var(--bg-element) 78%, var(--primary-base) 22%)',
-                        border: '1px solid color-mix(in srgb, var(--border-default) 62%, var(--primary-base) 38%)',
-                        color: 'var(--text-primary)',
-                        flexShrink: 0,
-                      }}
-                    >
+                <div className="orion-control-card-head">
+                  <div className="orion-control-card-intro">
+                    <span aria-hidden className="orion-control-card-icon">
                       <Icon size={16} />
                     </span>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)' }}>{card.title}</div>
-                      <div className="orion-panel-copy" style={{ marginTop: 4 }}>{card.copy}</div>
+                    <div className="orion-control-card-copy">
+                      <div className="orion-control-card-title">{card.title}</div>
+                      <div className="orion-panel-copy orion-control-card-note">{card.copy}</div>
                     </div>
                   </div>
-                  <ArrowRight size={15} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginTop: 2 }} />
+                  <ArrowRight size={15} className="orion-control-card-arrow" />
                 </div>
 
                 <div
+                  className="orion-control-card-status"
                   style={{
                     ...toneStyle(card.tone),
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    width: 'fit-content',
-                    borderRadius: 999,
-                    minHeight: 28,
-                    padding: '0 10px',
-                    fontSize: '0.76rem',
-                    fontWeight: 700,
                   }}
                 >
                   {card.tone === 'ok' ? <CheckCircle2 size={13} /> : card.tone === 'warn' ? <Activity size={13} /> : <ShieldCheck size={13} />}
@@ -202,32 +189,20 @@ export default function ControlCenterPage() {
             );
           })}
         </div>
-      </section>
+      </PageSection>
 
       <div className="orion-grid-2">
-        <section className="orion-panel muted">
-          <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-            <div>
-              <div className="orion-panel-title">What belongs here</div>
-              <div className="orion-panel-copy">Use Admin when you need to change how the platform behaves, not when you just want to get work done.</div>
-            </div>
-          </div>
-          <div className="orion-list" style={{ marginTop: 12 }}>
+        <PageSection title="What belongs here" description="Use Admin when you need to change how the platform behaves, not when you just want to get work done." muted>
+          <div className="orion-list orion-control-center-list">
             <div className="orion-panel-copy">Connect or revoke tools and channels.</div>
             <div className="orion-panel-copy">Check runtime health, workers, and diagnostics.</div>
             <div className="orion-panel-copy">Choose safer default access or broader platform control.</div>
             <div className="orion-panel-copy">Change platform defaults and provider configuration.</div>
           </div>
-        </section>
+        </PageSection>
 
-        <section className="orion-panel muted">
-          <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-            <div>
-              <div className="orion-panel-title">Quick links</div>
-              <div className="orion-panel-copy">Jump into the most common advanced destinations without scanning the full grid.</div>
-            </div>
-          </div>
-          <div className="orion-list" style={{ marginTop: 12 }}>
+        <PageSection title="Quick links" description="Jump into the most common advanced destinations without scanning the full grid." muted>
+          <div className="orion-list orion-control-center-list">
             <Link href="/account" className="orion-control-link">
               <UserRound size={14} />
               Account and identity
@@ -241,7 +216,7 @@ export default function ControlCenterPage() {
               Return to Home
             </Link>
           </div>
-        </section>
+        </PageSection>
       </div>
     </div>
   );

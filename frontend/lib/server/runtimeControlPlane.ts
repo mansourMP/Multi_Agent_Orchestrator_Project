@@ -35,20 +35,27 @@ export async function readServerRuntimeKey(): Promise<string> {
   return normalized;
 }
 
-export async function runtimeJsonRequest(
+export async function runtimeAuthorizedFetch(
   runtimePath: string,
   init?: RequestInit,
-): Promise<{ status: number; payload: unknown }> {
+): Promise<Response> {
   const runtimeKey = await readServerRuntimeKey();
   const headers = new Headers(init?.headers || {});
   headers.set('X-API-Key', runtimeKey);
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
-  const response = await fetch(`${API_BASE}${runtimePath}`, {
+  return fetch(`${API_BASE}${runtimePath}`, {
     ...init,
     headers,
     cache: 'no-store',
   });
+}
+
+export async function runtimeJsonRequest(
+  runtimePath: string,
+  init?: RequestInit,
+): Promise<{ status: number; payload: unknown }> {
+  const response = await runtimeAuthorizedFetch(runtimePath, init);
 
   const raw = await response.text().catch(() => '');
   let payload: unknown = raw || {};
@@ -64,3 +71,17 @@ export async function runtimeJsonRequest(
   };
 }
 
+export async function runtimeProxyResponse(
+  runtimePath: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await runtimeAuthorizedFetch(runtimePath, init);
+  const headers = new Headers();
+  const contentType = response.headers.get('content-type');
+  if (contentType) headers.set('content-type', contentType);
+  headers.set('cache-control', 'no-store');
+  return new Response(await response.arrayBuffer(), {
+    status: response.status,
+    headers,
+  });
+}

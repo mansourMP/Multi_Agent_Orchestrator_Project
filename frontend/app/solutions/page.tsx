@@ -41,7 +41,7 @@ export default function SolutionsPage() {
   const totalSpaces = solutions.reduce((count, item) => count + Number(item.status?.spaces_monitored || 0), 0);
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
+    <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<LayoutDashboard size={18} />}
         title="Packages"

@@ -21,15 +21,12 @@ import {
   type AuthenticatedEventStreamConnection,
 } from '@/lib/authenticatedEventStream';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-import { API_BASE } from '@/lib/config';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 import { fetchRuntimeArtifactBlob } from '@/lib/runtimeArtifacts';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { getLocalExecutionCapabilityTitle } from '@/lib/localExecutionCapabilities';
-
-const ORION_API_URL = API_BASE;
 
 type HistoryItem = {
   run_id: string;
@@ -375,7 +372,7 @@ function isLocalFileTarget(value?: string | null): boolean {
   return !/^[a-z]+:/i.test(normalized);
 }
 
-function ArtifactImagePreview({ path, runtimeKey, alt }: { path: string; runtimeKey: string; alt: string }) {
+function ArtifactImagePreview({ path, alt }: { path: string; alt: string }) {
   const [objectUrl, setObjectUrl] = useState('');
 
   useEffect(() => {
@@ -391,7 +388,7 @@ function ArtifactImagePreview({ path, runtimeKey, alt }: { path: string; runtime
     let active = true;
     let nextObjectUrl = '';
     setObjectUrl('');
-    void fetchRuntimeArtifactBlob(ORION_API_URL, normalized, runtimeKey)
+    void fetchRuntimeArtifactBlob(normalized)
       .then((blob) => {
         nextObjectUrl = URL.createObjectURL(blob);
         if (active) setObjectUrl(nextObjectUrl);
@@ -404,7 +401,7 @@ function ArtifactImagePreview({ path, runtimeKey, alt }: { path: string; runtime
       active = false;
       if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
     };
-  }, [path, runtimeKey]);
+  }, [path]);
 
   if (!objectUrl) {
     return (
@@ -609,18 +606,6 @@ export default function RunInspectPage() {
     return scopedWindow.orionDesktop || scopedWindow.empyralisDesktop || null;
   }, []);
 
-  const getRuntimeApiKey = useCallback((): string => {
-    return readRuntimeApiKeyFromStorage('');
-  }, []);
-
-  const buildHeaders = useCallback((withJson = false): HeadersInit => {
-    const headers = new Headers();
-    if (withJson) headers.set('Content-Type', 'application/json');
-    const key = getRuntimeApiKey();
-    if (key) headers.set('X-API-Key', key);
-    return headers;
-  }, [getRuntimeApiKey]);
-
   const mapApprovalAudit = useCallback((payload: unknown): ApprovalAuditItem[] => {
     const items = Array.isArray((payload as { items?: unknown[] })?.items) ? (payload as { items: unknown[] }).items : [];
     return items
@@ -656,11 +641,11 @@ export default function RunInspectPage() {
   const refreshRunState = useCallback(async () => {
     if (!runId) return;
     try {
-      const headers = buildHeaders(false);
+      await ensureControlPlaneSession();
       const [historyRes, runRes, approvalsRes] = await Promise.all([
-        fetch(`${ORION_API_URL}/history/runs?limit=200&workspace_id=default`, { headers }),
-        fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}`, { headers }),
-        fetch(`${ORION_API_URL}/approvals/audit?limit=200`, { headers }),
+        fetch('/api/executions/history?limit=200&workspace_id=default', { cache: 'no-store' }),
+        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+        fetch('/api/approvals/audit?limit=200', { cache: 'no-store' }),
       ]);
 
       if (historyRes.ok) {
@@ -682,7 +667,7 @@ export default function RunInspectPage() {
     } catch {
       // Keep inspect page stable on transient sync errors.
     }
-  }, [buildHeaders, mapApprovalAudit, runId]);
+  }, [mapApprovalAudit, runId]);
 
   const load = useCallback(async () => {
     if (!runId) return;
@@ -691,12 +676,12 @@ export default function RunInspectPage() {
     setStreamError(null);
     setLiveEvents([]);
     try {
-      const headers = buildHeaders(false);
+      await ensureControlPlaneSession();
       const [historyRes, runRes, approvalsRes, replayRes] = await Promise.all([
-        fetch(`${ORION_API_URL}/history/runs?limit=200&workspace_id=default`, { headers }),
-        fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}`, { headers }),
-        fetch(`${ORION_API_URL}/approvals/audit?limit=200`, { headers }),
-        fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}/replay`, { headers }),
+        fetch('/api/executions/history?limit=200&workspace_id=default', { cache: 'no-store' }),
+        fetch(`/api/runs/${encodeURIComponent(runId)}`, { cache: 'no-store' }),
+        fetch('/api/approvals/audit?limit=200', { cache: 'no-store' }),
+        fetch(`/api/runs/${encodeURIComponent(runId)}/replay`, { cache: 'no-store' }),
       ]);
 
       if (!historyRes.ok) {
@@ -729,7 +714,7 @@ export default function RunInspectPage() {
     } finally {
       setLoading(false);
     }
-  }, [buildHeaders, mapApprovalAudit, runId]);
+  }, [mapApprovalAudit, runId]);
 
   useEffect(() => {
     void load();
@@ -747,81 +732,86 @@ export default function RunInspectPage() {
       setStreamError(null);
       return;
     }
-    const key = getRuntimeApiKey();
-    const streamUrl = `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
     setStreamState('connecting');
     setStreamError(null);
+    let active = true;
+    let source: AuthenticatedEventStreamConnection | null = null;
 
-    const source = openAuthenticatedEventStream({
-      url: streamUrl,
-      apiKey: key,
-      onOpen: () => {
-        setStreamState('connected');
-        setStreamError(null);
-      },
-      onEvent: (event) => {
-        if (event.event === 'pause') {
-          void refreshRunState();
-          return;
-        }
-        if (event.event !== 'log') return;
-        const parsed = parseEventJson(String(event.data || ''));
-        if (!parsed) return;
-        setLiveEvents((prev) => {
-          const eventId = String(parsed.event_id || '').trim();
-          if (eventId && prev.some((item) => String(item.event_id || '').trim() === eventId)) return prev;
-          const next = [...prev, parsed];
-          if (next.length > 800) return next.slice(next.length - 800);
-          return next;
-        });
-        const eventName = String(parsed.event || '').toLowerCase();
-        if (
-          eventName === 'run_complete' ||
-          eventName === 'run_error' ||
-          eventName === 'run_stopped' ||
-          eventName === 'timeout' ||
-          eventName.startsWith('approval_')
-        ) {
+    void (async () => {
+      await ensureControlPlaneSession();
+      if (!active) return;
+      const streamUrl = `/api/runs/${encodeURIComponent(runId)}/stream`;
+      source = openAuthenticatedEventStream({
+        url: streamUrl,
+        onOpen: () => {
+          setStreamState('connected');
+          setStreamError(null);
+        },
+        onEvent: (event) => {
+          if (event.event === 'pause') {
+            void refreshRunState();
+            return;
+          }
+          if (event.event !== 'log') return;
+          const parsed = parseEventJson(String(event.data || ''));
+          if (!parsed) return;
+          setLiveEvents((prev) => {
+            const eventId = String(parsed.event_id || '').trim();
+            if (eventId && prev.some((item) => String(item.event_id || '').trim() === eventId)) return prev;
+            const next = [...prev, parsed];
+            if (next.length > 800) return next.slice(next.length - 800);
+            return next;
+          });
+          const eventName = String(parsed.event || '').toLowerCase();
           if (
             eventName === 'run_complete' ||
             eventName === 'run_error' ||
             eventName === 'run_stopped' ||
-            eventName === 'timeout'
+            eventName === 'timeout' ||
+            eventName.startsWith('approval_')
           ) {
-            source.close();
+            if (
+              eventName === 'run_complete' ||
+              eventName === 'run_error' ||
+              eventName === 'run_stopped' ||
+              eventName === 'timeout'
+            ) {
+              source?.close();
+              if (streamRef.current === source) streamRef.current = null;
+              setStreamState('closed');
+              setStreamError(null);
+            }
+            void refreshRunState();
+          }
+        },
+        onError: () => {
+          const latestStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
+          if (TERMINAL_RUN_STATUSES.has(latestStatus) || source?.readyState === AUTH_STREAM_CLOSED) {
+            source?.close();
             if (streamRef.current === source) streamRef.current = null;
             setStreamState('closed');
             setStreamError(null);
+            void refreshRunState();
+            return;
           }
           void refreshRunState();
-        }
-      },
-      onError: () => {
-        const latestStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
-        if (TERMINAL_RUN_STATUSES.has(latestStatus) || source.readyState === AUTH_STREAM_CLOSED) {
-          source.close();
+          setStreamState('disconnected');
+          setStreamError('Live stream disconnected. Waiting for reconnect...');
+        },
+        onClose: () => {
           if (streamRef.current === source) streamRef.current = null;
-          setStreamState('closed');
-          setStreamError(null);
-          void refreshRunState();
-          return;
-        }
-        void refreshRunState();
-        setStreamState('disconnected');
-        setStreamError('Live stream disconnected. Waiting for reconnect...');
-      },
-      onClose: () => {
-        if (streamRef.current === source) streamRef.current = null;
-      },
-    });
-    streamRef.current = source;
+        },
+      });
+      streamRef.current = source;
+    })();
 
     return () => {
-      source.close();
+      active = false;
+      source?.close();
       if (streamRef.current === source) streamRef.current = null;
       setStreamState('idle');
     };
-  }, [getRuntimeApiKey, historyItem?.status, loading, refreshRunState, runDetail?.status, runId]);
+  }, [historyItem?.status, loading, refreshRunState, runDetail?.status, runId]);
 
   useEffect(() => {
     const status = String(historyItem?.status || runDetail?.status || '').toLowerCase();
@@ -879,9 +869,10 @@ export default function RunInspectPage() {
     setDelegateError(null);
     setDelegateNotice(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}/delegate`, {
+      await ensureControlPlaneSession();
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/delegate`, {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           note: String(delegateNote || '').trim() || undefined,
           children: [
@@ -907,7 +898,7 @@ export default function RunInspectPage() {
     } finally {
       setDelegating(false);
     }
-  }, [buildHeaders, delegateGoal, delegateNote, delegateRole, load, runId]);
+  }, [delegateGoal, delegateNote, delegateRole, load, runId]);
 
   const handleAutoDelegate = useCallback(async () => {
     if (!runId) return;
@@ -915,9 +906,10 @@ export default function RunInspectPage() {
     setDelegateError(null);
     setDelegateNotice(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}/delegate/auto`, {
+      await ensureControlPlaneSession();
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/delegate/auto`, {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           note: String(delegateNote || '').trim() || undefined,
           max_children: 3,
@@ -943,7 +935,7 @@ export default function RunInspectPage() {
     } finally {
       setAutoDelegating(false);
     }
-  }, [buildHeaders, delegateNote, load, runId]);
+  }, [delegateNote, load, runId]);
 
   const handleRetryFailedDelegation = useCallback(async () => {
     if (!runId) return;
@@ -951,9 +943,10 @@ export default function RunInspectPage() {
     setDelegateError(null);
     setDelegateNotice(null);
     try {
-      const res = await fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}/delegate/retry-failed`, {
+      await ensureControlPlaneSession();
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/delegate/retry-failed`, {
         method: 'POST',
-        headers: buildHeaders(true),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           note: String(delegateNote || '').trim() || undefined,
           failed_run_ids: failedDelegationRunIds.length > 0 ? failedDelegationRunIds : undefined,
@@ -976,7 +969,7 @@ export default function RunInspectPage() {
     } finally {
       setRetryingDelegation(false);
     }
-  }, [buildHeaders, delegateNote, failedDelegationRunIds, load, runId]);
+  }, [delegateNote, failedDelegationRunIds, load, runId]);
 
   const timelineEvents = useMemo((): TimelineEvent[] => {
     const replayEvents = Array.isArray(replayItem?.events) ? replayItem.events : [];
@@ -1027,7 +1020,6 @@ export default function RunInspectPage() {
   const canDelegate = !singleAgentMode && effectiveAgentRole === 'orchestrator';
   const specialistAgentOptions = AGENT_ROLE_OPTIONS.filter((item) => item.id !== 'orchestrator');
   const connectorBinding = historyItem?.connector_binding || runDetail?.connector_binding || null;
-  const runtimeApiKey = getRuntimeApiKey();
   const openArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
     if (!normalized) return;
@@ -1052,7 +1044,7 @@ export default function RunInspectPage() {
         window.open(normalized, '_blank', 'noopener,noreferrer');
         return;
       }
-      const blob = await fetchRuntimeArtifactBlob(ORION_API_URL, normalized, runtimeApiKey);
+      const blob = await fetchRuntimeArtifactBlob(normalized);
       const objectUrl = URL.createObjectURL(blob);
       const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer');
       if (!opened) {
@@ -1066,7 +1058,7 @@ export default function RunInspectPage() {
     } catch (error) {
       setStreamError(error instanceof Error ? error.message : 'Could not open artifact preview.');
     }
-  }, [desktopBridge, runtimeApiKey]);
+  }, [desktopBridge]);
   const revealArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
     if (!desktopBridge?.desktop || !desktopBridge.revealPath || !isLocalFileTarget(normalized)) return;
@@ -2236,7 +2228,7 @@ export default function RunInspectPage() {
                           background: 'var(--bg-panel)',
                         }}
                       >
-                        <ArtifactImagePreview path={item} runtimeKey={runtimeApiKey} alt={item} />
+                        <ArtifactImagePreview path={item} alt={item} />
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{item}</div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

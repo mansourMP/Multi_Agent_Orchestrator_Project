@@ -1,7 +1,6 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ORION_API_URL } from '@/app/page.api';
 import {
   DEFAULT_LOCAL_EXECUTION_OPERATION,
   UI,
@@ -15,6 +14,7 @@ import {
   type OutcomePack,
 } from '@/app/page.catalog';
 import type { ChatMessageRecord } from '@/components/orion/chat/chatSchema';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 
 export type WorkbenchDeckMode = 'context' | 'control' | 'inspect';
@@ -71,7 +71,6 @@ type WorkbenchControlDeckProps = {
   onPackChange: (packId: string) => void;
   packOptions: OutcomePack[];
   connectorCredentials: ConnectorCredentialItem[];
-  runtimeApiKey: string;
   packPrimaryInput: string;
   onPackPrimaryInputChange: (value: string) => void;
   packSecondaryInput: string;
@@ -109,7 +108,6 @@ export function WorkbenchControlDeck({
   onPackChange,
   packOptions,
   connectorCredentials,
-  runtimeApiKey,
   packPrimaryInput,
   onPackPrimaryInputChange,
   packSecondaryInput,
@@ -272,11 +270,6 @@ export function WorkbenchControlDeck({
       : selectedPack.id === 'document-studio-v1'
       ? 'Use a local .docx/.pptx path or a OneDrive path. Example: onedrive:/Decks/q2-update.pptx'
       : 'Use the pack-specific fields below to shape the run instead of burying everything in one prompt.';
-  const buildDriveHeaders = () => {
-    const headers = new Headers();
-    if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-    return headers;
-  };
   const handleBrowseMicrosoftDrive = async (nextPath = '') => {
     if (!microsoftConnector) return;
     const targetPath = nextPath || 'onedrive:/';
@@ -288,10 +281,10 @@ export function WorkbenchControlDeck({
       error: '',
     }));
     try {
-      const url = new URL(`${ORION_API_URL}/connectors/vault/${encodeURIComponent(microsoftConnector.id)}/microsoft-drive`);
-      url.searchParams.set('workspace_id', 'default');
+      await ensureControlPlaneSession();
+      const url = new URL(`/api/connectors/${encodeURIComponent(microsoftConnector.id)}/microsoft-drive`, window.location.origin);
       if (targetPath !== 'onedrive:/') url.searchParams.set('path', targetPath);
-      const res = await fetch(url.toString(), { headers: buildDriveHeaders() });
+      const res = await fetch(url.toString(), { cache: 'no-store' });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
       if (!res.ok) throw new Error(String(body?.detail || body?.message || 'Failed to browse OneDrive.'));

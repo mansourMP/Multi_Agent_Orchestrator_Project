@@ -13,7 +13,7 @@ import {
   isAgentRoleId,
 } from './page.catalog';
 import { usePageState } from './page.state';
-import { ORION_API_URL, usePlatformApi } from './page.api';
+import { usePlatformApi } from './page.api';
 import { usePageActions } from './page.actions';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { EMPYRALIS_NEW_CHAT_EVENT } from '@/components/orion/PlatformTopBar';
@@ -56,6 +56,7 @@ import {
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { getExecutionTargetGuides, type ExecutionTarget } from '@/lib/executionTargets';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
@@ -874,7 +875,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setGuidedDefaultsEnabled,
     setupHydrated,
     viewportWidth, setViewportWidth,
-    runtimeApiKey,
     connectorCredentials,
     inboxInput,
     setInboxInput,
@@ -892,7 +892,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
   const {
     appendLog,
-    buildHeaders,
     closeStream,
     checkCompatibility,
     startAutopilot,
@@ -1077,12 +1076,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const loadSelectedAgentChannels = async () => {
       setSelectedAgentChannelsLoading(true);
       try {
-        const headers = new Headers();
-        if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
-        const res = await fetch(
-          `${ORION_API_URL}/agents/workspace/agents/${encodeURIComponent(selectedAgentRole)}?workspace_id=default&history_limit=1&file_limit=1&artifact_limit=1`,
-          { headers },
-        );
+        await ensureControlPlaneSession();
+        const res = await fetch(`/api/workbench/agents/${encodeURIComponent(selectedAgentRole)}/channels`, {
+          cache: 'no-store',
+        });
         if (!res.ok) {
           if (!cancelled) setSelectedAgentChannels([]);
           return;
@@ -1102,42 +1099,37 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       } catch {
         if (!cancelled) setSelectedAgentChannels([]);
       } finally {
-        if (!cancelled) setSelectedAgentChannelsLoading(false);
+      if (!cancelled) setSelectedAgentChannelsLoading(false);
       }
     };
     void loadSelectedAgentChannels();
     return () => {
       cancelled = true;
     };
-  }, [runtimeApiKey, selectedAgentRole]);
+  }, [selectedAgentRole]);
 
   const refreshControlCenter = useCallback(async () => {
     try {
-      const headers = buildHeaders(false);
-      const [snapshotRes, inboxRes] = await Promise.all([
-        fetch(
-          `${ORION_API_URL}/agents/workspace/snapshot?workspace_id=default&history_limit=12&audit_limit=16`,
-          { headers },
-        ),
-        fetch(
-          `${ORION_API_URL}/events/inbox?workspace_id=default&limit=12&include_sessions=1&session_limit=6`,
-          { headers },
-        ),
-      ]);
+      await ensureControlPlaneSession();
+      const snapshotRes = await fetch('/api/workbench/control-center', { cache: 'no-store' });
       if (!snapshotRes.ok) {
         const text = await snapshotRes.text().catch(() => '');
         throw new Error(text || 'Failed to load live workspace snapshot.');
       }
-      const payload = (await snapshotRes.json()) as HomeWorkspaceSnapshotPayload;
+      const payload = await snapshotRes.json() as {
+        snapshot?: HomeWorkspaceSnapshotPayload;
+        inbox?: { sessions?: HomeInboxSessionPayload[] } | null;
+      };
+      const snapshot = (payload?.snapshot || {}) as HomeWorkspaceSnapshotPayload;
 
-      const runtimeOk = Boolean(payload.runtime?.ok);
+      const runtimeOk = Boolean(snapshot.runtime?.ok);
       const authMode =
-        typeof payload.runtime?.auth_mode === 'string' && payload.runtime.auth_mode.trim()
-          ? payload.runtime.auth_mode.trim()
+        typeof snapshot.runtime?.auth_mode === 'string' && snapshot.runtime.auth_mode.trim()
+          ? snapshot.runtime.auth_mode.trim()
           : '-';
-      const homeOverview = buildHomeLiveOverview(payload);
+      const homeOverview = buildHomeLiveOverview(snapshot);
 
-      const historyItems = Array.isArray(payload.tasks?.recent_runs) ? payload.tasks?.recent_runs : [];
+      const historyItems = Array.isArray(snapshot.tasks?.recent_runs) ? snapshot.tasks?.recent_runs : [];
       const recentRuns: ControlCenterSnapshot['recentRuns'] = historyItems
         .slice(0, 10)
         .map((item) => ({
@@ -1159,12 +1151,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const latestRunStatus = latestRun?.status || null;
       const latestRunProvider = latestRun?.usage_provider || null;
       const latestRunSummary = latestRun?.result_summary || null;
-      const inboxPayload = inboxRes.ok ? await inboxRes.json().catch(() => null) : null;
+      const inboxPayload = payload?.inbox ?? null;
       const latestInboxSession = buildHomeInboxSessionPreview(
         Array.isArray(inboxPayload?.sessions) ? (inboxPayload.sessions as HomeInboxSessionPayload[]) : [],
       );
 
-      const pendingApprovalsRaw = Array.isArray(payload.approvals?.pending) ? payload.approvals?.pending : [];
+      const pendingApprovalsRaw = Array.isArray(snapshot.approvals?.pending) ? snapshot.approvals?.pending : [];
       const pendingApprovals: ControlCenterSnapshot['pendingApprovals'] = pendingApprovalsRaw
         .map((item) => {
           const runId = String(item?.run_id || '').trim();
@@ -1182,7 +1174,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         })
         .filter((item): item is NonNullable<typeof item> => item !== null);
 
-      const approvalAuditItemsRaw = Array.isArray(payload.approvals?.audit) ? payload.approvals?.audit : [];
+      const approvalAuditItemsRaw = Array.isArray(snapshot.approvals?.audit) ? snapshot.approvals?.audit : [];
       const approvalAudit: ControlCenterSnapshot['approvalAudit'] = approvalAuditItemsRaw
         .map((item: unknown) => {
           const record = item as Record<string, unknown>;
@@ -1264,7 +1256,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         updatedAt: new Date().toISOString(),
       }));
     }
-  }, [buildHeaders]);
+  }, []);
 
   useEffect(() => {
     if (selectedWorkbenchRunId && controlCenter.recentRuns.some((item) => item.run_id === selectedWorkbenchRunId)) {
@@ -1286,14 +1278,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const key = `${runId}:${approvalId}:${decision}`;
       setApprovalActionBusy((prev) => ({ ...prev, [key]: true }));
       try {
-        const res = await fetch(
-          `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/resolve`,
-          {
-            method: 'POST',
-            headers: buildHeaders(true),
-            body: JSON.stringify({ decision, note: `Resolved from ${BRAND.product} Admin` }),
-          },
-        );
+        await ensureControlPlaneSession();
+        const res = await fetch('/api/approvals/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId, approvalId, decision, note: `Resolved from ${BRAND.product} Admin` }),
+        });
         if (!res.ok) {
           const msg = await res.text().catch(() => '');
           throw new Error(msg || 'Failed to resolve approval.');
@@ -1312,7 +1302,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         });
       }
     },
-    [appendLog, buildHeaders, refreshControlCenter, setTopError],
+    [appendLog, refreshControlCenter, setTopError],
   );
 
   useEffect(() => {
@@ -2248,7 +2238,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             }}
             packOptions={OUTCOME_PACKS}
             connectorCredentials={connectorCredentials}
-            runtimeApiKey={runtimeApiKey}
             packPrimaryInput={inboxInput}
             onPackPrimaryInputChange={setInboxInput}
             packSecondaryInput={leadsInput}

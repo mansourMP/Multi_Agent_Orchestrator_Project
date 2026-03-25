@@ -6,6 +6,7 @@ import type { NextRequest } from 'next/server';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
+import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -409,6 +410,8 @@ export async function POST(request: NextRequest) {
   try {
     const rejection = enforceBffRouteGuard(request, { methods: ['POST'], requireLoopbackHost: true });
     if (rejection) return rejection;
+    const authFailure = await requireControlPlaneSession(request);
+    if (authFailure) return authFailure;
 
     const body = (await request.json().catch(() => ({}))) as LocalOpsBody;
     const action = body.action;

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
+from server_modules.auth import enforce_workspace_access
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
 
 
@@ -915,11 +916,12 @@ def register_agent_workspace_routes(app) -> None:
         workspace_id: Optional[str] = None,
         history_limit: int = 30,
         audit_limit: int = 80,
+        current_user=Depends(require_admin_api_key),
     ):
         _refresh_server_exports()
         safe_history_limit = max(1, min(int(history_limit), 200))
         safe_audit_limit = max(1, min(int(audit_limit), 300))
-        workspace_filter = _normalize_workspace_id(workspace_id) if workspace_id else None
+        workspace_filter = _normalize_workspace_id(enforce_workspace_access(current_user, workspace_id)) if workspace_id else None
 
         workers_payload = handle_get_local_workers_status()
         queue_payload = handle_get_local_run_queue(workspace_id=workspace_filter, limit=120)
@@ -1083,6 +1085,7 @@ def register_agent_workspace_routes(app) -> None:
         history_limit: int = 24,
         file_limit: int = 40,
         artifact_limit: int = 40,
+        current_user=Depends(require_admin_api_key),
     ):
         target_role = normalize_agent_role(agent_role)
         if not target_role:
@@ -1090,7 +1093,7 @@ def register_agent_workspace_routes(app) -> None:
         if ORION_SINGLE_AGENT_MODE and target_role != ORION_SINGLE_AGENT_ROLE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Only the orchestrator workspace is available.")
 
-        workspace_filter = _normalize_workspace_id(workspace_id) if workspace_id else None
+        workspace_filter = _normalize_workspace_id(enforce_workspace_access(current_user, workspace_id)) if workspace_id else None
         safe_history_limit = max(1, min(int(history_limit), 100))
         safe_file_limit = max(1, min(int(file_limit), 120))
         safe_artifact_limit = max(1, min(int(artifact_limit), 120))
@@ -1347,8 +1350,9 @@ def register_agent_workspace_routes(app) -> None:
         workspace_id: Optional[str] = None,
         history_limit: int = 80,
         limit: int = 120,
+        current_user=Depends(require_admin_api_key),
     ):
-        workspace_filter = _normalize_workspace_id(workspace_id) if workspace_id else None
+        workspace_filter = _normalize_workspace_id(enforce_workspace_access(current_user, workspace_id)) if workspace_id else None
         safe_history_limit = max(1, min(int(history_limit), 160))
         safe_limit = max(1, min(int(limit), 240))
 

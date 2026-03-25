@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 const STORAGE_KEY = 'empyralis_account_profile_v1';
 
@@ -37,11 +36,6 @@ function loadStoredProfile(): AccountProfile {
 export default function AccountPage() {
   const subscribe = () => () => {};
   const profile = useSyncExternalStore(subscribe, loadStoredProfile, () => DEFAULT_PROFILE);
-  const runtimeKeyPresent = useSyncExternalStore(
-    subscribe,
-    () => readRuntimeApiKeyFromStorage('')?.trim().length > 0,
-    () => false,
-  );
   const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
   const [draftDirty, setDraftDirty] = useState(false);
   const runtimeUrl = API_BASE;
@@ -83,7 +77,7 @@ export default function AccountPage() {
         items={[
           { label: 'Profile', value: profile.displayName },
           { label: 'Workspace', value: 'default' },
-          { label: 'Runtime key', value: runtimeKeyPresent ? 'Connected' : 'Missing' },
+          { label: 'Runtime', value: 'Control plane' },
         ]}
         minWidth={180}
       />

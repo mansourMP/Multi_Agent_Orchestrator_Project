@@ -15,6 +15,7 @@ import {
   NotebookPen,
   Search,
   ShieldCheck,
+  X,
 } from 'lucide-react';
 import {
   DEFAULT_PROVIDER_LABELS,
@@ -48,6 +49,7 @@ const EXAMPLE_PROMPTS = [
   'Summarize my emails every morning',
   'Follow up with new leads automatically',
   'Research competitors and send me a weekly report',
+  'Alert me on Telegram when a high-priority customer message arrives',
 ] as const;
 const TOTAL_STEPS = 5;
 const SETUP_STEP_META = [
@@ -451,6 +453,10 @@ export default function SetupPage() {
 
   const canSkipToolsStep = useMemo(
     () => tools.some((tool) => !isToolConnected(tool)) && tools.every((tool) => !tool.blocking || isToolConnected(tool)),
+    [isToolConnected, tools],
+  );
+  const hasOptionalToolsRemaining = useMemo(
+    () => tools.some((tool) => !tool.blocking && !isToolConnected(tool)),
     [isToolConnected, tools],
   );
 
@@ -937,31 +943,63 @@ export default function SetupPage() {
 
   return (
     <div className="orion-page-shell is-setup-flow orion-animate-in">
+      <div className="hekor-setup-shellbar">
+        <div className="hekor-setup-shellbar-leading">
+          {step > 1 ? (
+            <button type="button" className="btn-secondary hekor-setup-back" onClick={handleBack}>
+              <ArrowLeft size={14} />
+              Back
+            </button>
+          ) : (
+            <div className="hekor-setup-shellbar-note">Agent setup</div>
+          )}
+        </div>
+        <Link href="/home" className="orion-btn orion-btn-ghost hekor-setup-close" aria-label="Close setup">
+          <X size={14} />
+          Close
+        </Link>
+      </div>
+
       <PageHero
         kicker={`Setup · Step ${step} of ${TOTAL_STEPS}`}
         title={currentStepMeta.title}
         copy={currentStepMeta.copy}
         aside={
-          <>
-            <PageHeroCard label="Current task">
-              <div className="hekor-setup-hero-note">{setupTaskPreview}</div>
-            </PageHeroCard>
-            <PageHeroCard label="Run summary">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{connectedSummaryTools.length}</div>
-                  <div className="orion-home-side-note">Tools ready</div>
+          step === 1 ? (
+            <>
+              <PageHeroCard label="What happens next">
+                <div className="hekor-setup-hero-note">
+                  Hekor turns your task into a plan first. You review the plan, add AI access, connect only the needed tools, then start.
                 </div>
-                <div>
-                  <div className="orion-home-side-value">{activeProfile ? providerLabel(activeProfile.provider) : 'Need AI'}</div>
-                  <div className="orion-home-side-note">AI access</div>
+              </PageHeroCard>
+              <PageHeroCard label="Keep it concrete">
+                <div className="hekor-setup-hero-note">
+                  Mention the source, the job, and where the result should go. One clear sentence works better than a long brief.
                 </div>
-              </div>
-              <div className="orion-runs-overview-side-note">
-                {step >= 5 ? `Route: ${effectiveExecutionTargetLabel}` : `Next: ${step < TOTAL_STEPS ? `step ${step + 1}` : 'ready to run'}`}
-              </div>
-            </PageHeroCard>
-          </>
+              </PageHeroCard>
+            </>
+          ) : (
+            <>
+              <PageHeroCard label="Current task">
+                <div className="hekor-setup-hero-note">{setupTaskPreview}</div>
+              </PageHeroCard>
+              <PageHeroCard label="Run summary">
+                <div className="orion-home-side-stats">
+                  <div>
+                    <div className="orion-home-side-value">{connectedSummaryTools.length}</div>
+                    <div className="orion-home-side-note">Tools ready</div>
+                  </div>
+                  <div>
+                    <div className="orion-home-side-value">{activeProfile ? providerLabel(activeProfile.provider) : 'Need AI'}</div>
+                    <div className="orion-home-side-note">AI access</div>
+                  </div>
+                </div>
+                <div className="orion-runs-overview-side-note">
+                  {step >= 5 ? `Route: ${effectiveExecutionTargetLabel}` : `Next: ${step < TOTAL_STEPS ? `step ${step + 1}` : 'ready to run'}`}
+                </div>
+              </PageHeroCard>
+            </>
+          )
         }
         className="hekor-setup-hero"
       />
@@ -979,36 +1017,44 @@ export default function SetupPage() {
         })}
       </div>
 
-      {step > 1 ? (
-        <button type="button" className="btn-secondary hekor-setup-back" onClick={handleBack}>
-          <ArrowLeft size={14} />
-          Back
-        </button>
-      ) : null}
-
       {step === 1 ? (
-        <section className="hekor-setup-stage">
-          <div className="hekor-setup-composer">
-            <textarea
-              className="orion-input hekor-setup-textarea"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Example: Summarize my emails every morning and send the highlights to Slack"
-            />
-            <button type="button" className="btn-primary hekor-setup-submit" onClick={handleSubmitTask}>
-              Continue
-            </button>
+        <section className="hekor-setup-stage is-launch">
+          <div className="hekor-setup-launch-panel">
+            <div className="hekor-setup-launch-copy">
+              <div className="hekor-setup-launch-kicker">Start with one concrete task</div>
+              <div className="hekor-setup-launch-note">
+                Describe one thing the agent should do. Hekor will draft the plan before anything runs.
+              </div>
+            </div>
+
+            <div className="hekor-setup-composer">
+              <textarea
+                className="orion-input hekor-setup-textarea"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Example: Summarize my emails every morning and send the highlights to Slack"
+              />
+              <div className="hekor-setup-composer-footer">
+                <div className="hekor-setup-composer-note">
+                  Best results mention the source, the action, and where the result should go.
+                </div>
+                <button type="button" className="btn-primary hekor-setup-submit" onClick={handleSubmitTask}>
+                  Create plan
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="hekor-setup-chip-row">
+          <div className="hekor-setup-example-grid">
             {EXAMPLE_PROMPTS.map((item) => (
               <button
                 key={item}
                 type="button"
-                className="hekor-setup-chip"
+                className="hekor-setup-example-card"
                 onClick={() => setPrompt(item)}
               >
-                {item}
+                <span className="hekor-setup-example-title">{item}</span>
+                <span className="hekor-setup-example-meta">Use this as a starting point</span>
               </button>
             ))}
           </div>
@@ -1068,7 +1114,7 @@ export default function SetupPage() {
               Continue
             </button>
             <button type="button" className="btn-secondary" onClick={() => setStep(1)}>
-              Edit task
+              Change task
             </button>
           </div>
         </section>
@@ -1151,7 +1197,7 @@ export default function SetupPage() {
               </div>
               <div className="hekor-setup-actions">
                 <button type="button" className="btn-primary" onClick={handleCreditsContinue}>
-                  Use my own API key
+                  Continue with my own API key
                 </button>
               </div>
             </div>
@@ -1173,7 +1219,15 @@ export default function SetupPage() {
                         <Icon size={16} />
                       </span>
                       <div className="hekor-setup-tool-copy">
-                        <div className="hekor-setup-tool-title">{tool.label}</div>
+                        <div className="hekor-setup-tool-title-row">
+                          <span className="hekor-setup-tool-title">{tool.label}</span>
+                          <span className={`hekor-setup-tool-badge${tool.blocking ? ' is-required' : ''}`}>
+                            {tool.blocking ? 'Required' : 'Optional'}
+                          </span>
+                          {!tool.supported ? (
+                            <span className="hekor-setup-tool-badge is-muted">Open in Integrations</span>
+                          ) : null}
+                        </div>
                         <div className="hekor-setup-tool-note">{tool.reason}</div>
                       </div>
                     </div>
@@ -1185,7 +1239,7 @@ export default function SetupPage() {
                       </span>
                     ) : (
                       <Link className="btn-secondary" href={tool.connectHref}>
-                        Connect
+                        {tool.supported ? 'Connect now' : 'Open Integrations'}
                       </Link>
                     )}
                   </div>
@@ -1202,14 +1256,14 @@ export default function SetupPage() {
 
           <div className="hekor-setup-actions">
             <button type="button" className="btn-primary" onClick={handleContinueFromTools} disabled={unresolvedBlockingTools.length > 0}>
-              Continue
+              {hasOptionalToolsRemaining ? 'Continue without optional tools' : 'Continue'}
             </button>
-            {canSkipToolsStep ? (
-              <button type="button" className="btn-secondary" onClick={() => setStep(5)}>
-                Skip for now
-              </button>
-            ) : null}
           </div>
+          {canSkipToolsStep ? (
+            <div className="hekor-setup-action-note">
+              Optional tools can be added later from Integrations. Only the tools this task truly depends on need to be connected before it starts.
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -1222,17 +1276,17 @@ export default function SetupPage() {
                 <div className="hekor-setup-summary-value is-clamped">{buildTaskSummary(prompt, 140)}</div>
               </div>
               <div className="hekor-setup-summary-row">
-                <span>AI source</span>
+                <span>Model access</span>
                 <div className="hekor-setup-summary-value">
                   {activeProfile ? providerLabel(activeProfile.provider) : 'Use my own API key'}
                 </div>
               </div>
               <div className="hekor-setup-summary-row">
-                <span>Route</span>
+                <span>Where it runs</span>
                 <div className="hekor-setup-summary-value">{effectiveExecutionTargetLabel}</div>
               </div>
               <div className="hekor-setup-summary-row">
-                <span>Tools connected</span>
+                <span>Tools ready</span>
                 <div className="hekor-setup-icon-stack">
                   {connectedSummaryTools.length > 0 ? (
                     connectedSummaryTools.map((tool) => {
@@ -1252,7 +1306,7 @@ export default function SetupPage() {
 
             <div className="hekor-setup-trust">
               <ShieldCheck size={16} />
-              <span>You can review and approve before anything is sent.</span>
+              <span>Hekor will not send work blindly. You still get a chance to review and approve when needed.</span>
             </div>
 
             <div className="hekor-setup-advanced">
@@ -1261,12 +1315,12 @@ export default function SetupPage() {
                 className="btn-secondary hekor-setup-advanced-toggle"
                 onClick={() => setShowAdvancedRouteOptions((current) => !current)}
               >
-                {showAdvancedRouteOptions ? 'Hide route options' : 'Route options'}
+                {showAdvancedRouteOptions ? 'Hide run details' : 'Run details'}
               </button>
               {showRouteDetails ? (
                 <div className="hekor-setup-advanced-panel">
                   <div className="hekor-setup-targets">
-                    <div className="hekor-setup-tools-needed-title">Execution route</div>
+                    <div className="hekor-setup-tools-needed-title">Choose where this task runs</div>
                     <div className="hekor-setup-target-grid">
                       {executionTargetGuides.map((option) => (
                         <button
@@ -1299,10 +1353,10 @@ export default function SetupPage() {
                     <div className={`hekor-setup-route-decision${(precheckWaitingForRuntime || precheckWaitingForCapacity) ? ' is-warning' : ''}`}>
                       <div className="hekor-setup-route-decision-title">
                         {precheckWaitingForCapacity
-                          ? 'Waiting on machine capacity'
+                          ? 'Waiting for an available machine'
                           : precheckWaitingForRuntime
-                            ? 'Waiting on machine capabilities'
-                            : 'Routing decision'}
+                            ? 'Waiting for the right machine'
+                            : 'Run plan'}
                       </div>
                       <div className="hekor-setup-route-decision-copy">{routeDecisionSummary}</div>
                       {precheckRouteFallback ? (
@@ -1310,7 +1364,7 @@ export default function SetupPage() {
                       ) : null}
                       {precheckRequiredCapabilities.length > 0 ? (
                         <div className="hekor-setup-route-capability-group">
-                          <div className="hekor-setup-route-capability-title">Required</div>
+                          <div className="hekor-setup-route-capability-title">Needed for this task</div>
                           <div className="hekor-setup-chip-row">
                             {precheckRequiredCapabilities.map((item) => (
                               <span key={`required:${item}`} className="hekor-setup-chip is-static">
@@ -1322,7 +1376,7 @@ export default function SetupPage() {
                       ) : null}
                       {precheckMissingCapabilities.length > 0 ? (
                         <div className="hekor-setup-route-capability-group">
-                          <div className="hekor-setup-route-capability-title">Missing online now</div>
+                          <div className="hekor-setup-route-capability-title">Not available right now</div>
                           <div className="hekor-setup-chip-row">
                             {precheckMissingCapabilities.map((item) => (
                               <span key={`missing:${item}`} className="hekor-setup-chip is-static is-warning">
@@ -1334,7 +1388,7 @@ export default function SetupPage() {
                       ) : null}
                       {precheckWaitingForCapacity && (precheckBusyRuntimeLabels.length > 0 || precheckBusyRuntimeIds.length > 0) ? (
                         <div className="hekor-setup-route-capability-group">
-                          <div className="hekor-setup-route-capability-title">Busy machines</div>
+                          <div className="hekor-setup-route-capability-title">Machines already in use</div>
                           <div className="hekor-setup-chip-row">
                             {(precheckBusyRuntimeLabels.length > 0 ? precheckBusyRuntimeLabels : precheckBusyRuntimeIds).map((item) => (
                               <span key={`busy:${item}`} className="hekor-setup-chip is-static">
@@ -1346,7 +1400,7 @@ export default function SetupPage() {
                       ) : null}
                       {precheckWaitingForCapacity && (precheckQueuedAheadCount > 0 || precheckEstimatedWaitBand) ? (
                         <div className="hekor-setup-route-capability-group">
-                          <div className="hekor-setup-route-capability-title">Queue outlook</div>
+                          <div className="hekor-setup-route-capability-title">Wait estimate</div>
                           <div className="hekor-setup-route-decision-copy is-secondary">
                             {precheckQueuedAheadCount > 0
                               ? `${precheckQueuedAheadCount} similar local run${precheckQueuedAheadCount === 1 ? ' is' : 's are'} ahead.`
@@ -1377,12 +1431,15 @@ export default function SetupPage() {
                   {runBusy ? 'Starting…' : 'Checking…'}
                 </>
               ) : (
-                'Run task'
+                'Start agent'
               )}
             </button>
             <button type="button" className="btn-secondary" onClick={handleBack}>
-              Back
+              Edit setup
             </button>
+          </div>
+          <div className="hekor-setup-action-note">
+            This starts one task now. If it works well, you can save or turn it into a reusable workflow later.
           </div>
           <div className={`hekor-setup-action-note${runTargetBlocked || precheckWaitingForRuntime || precheckWaitingForCapacity ? ' is-warning' : ''}`.trim()}>
             {runTargetBlocked

@@ -62,6 +62,16 @@ const INITIAL_STATUS: PlatformShellStatus = {
   pendingApprovals: 0,
 };
 
+function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStatus): boolean {
+  return left.setupReady === right.setupReady
+    && left.setupProgressCount === right.setupProgressCount
+    && left.runtimeHealthy === right.runtimeHealthy
+    && left.onlineWorkers === right.onlineWorkers
+    && left.machineCount === right.machineCount
+    && left.localRuntimeOnline === right.localRuntimeOnline
+    && left.pendingApprovals === right.pendingApprovals;
+}
+
 export function PlatformShellProvider({ children }: { children: React.ReactNode }) {
   const [accessMode, setAccessMode] = useState<PlatformAccessMode>('default');
   const [status, setStatus] = useState<PlatformShellStatus>(INITIAL_STATUS);
@@ -77,11 +87,14 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     const refreshSetup = () => {
       const next = readSetupSnapshot();
-      setStatus((current) => ({
-        ...current,
-        setupReady: next.setupReady,
-        setupProgressCount: next.setupProgressCount,
-      }));
+      setStatus((current) => {
+        const updated = {
+          ...current,
+          setupReady: next.setupReady,
+          setupProgressCount: next.setupProgressCount,
+        };
+        return areShellStatusEqual(current, updated) ? current : updated;
+      });
     };
 
     const initialRefresh = window.setTimeout(refreshSetup, 0);
@@ -115,27 +128,33 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
         }
 
         if (alive) {
-          setStatus((current) => ({
-            ...current,
-            runtimeHealthy:
-              typeof payload?.runtimeHealthy === 'boolean'
-                ? payload.runtimeHealthy
-                : null,
-            onlineWorkers: Number(payload?.onlineWorkers || 0),
-            machineCount: Number(payload?.machineCount || 0),
-            localRuntimeOnline: Boolean(payload?.localRuntimeOnline),
-            pendingApprovals: Number(payload?.pendingApprovals || 0),
-          }));
+          setStatus((current) => {
+            const next = {
+              ...current,
+              runtimeHealthy:
+                typeof payload?.runtimeHealthy === 'boolean'
+                  ? payload.runtimeHealthy
+                  : null,
+              onlineWorkers: Number(payload?.onlineWorkers || 0),
+              machineCount: Number(payload?.machineCount || 0),
+              localRuntimeOnline: Boolean(payload?.localRuntimeOnline),
+              pendingApprovals: Number(payload?.pendingApprovals || 0),
+            };
+            return areShellStatusEqual(current, next) ? current : next;
+          });
         }
       } catch {
         if (alive) {
-          setStatus((current) => ({
-            ...current,
-            runtimeHealthy: null,
-            onlineWorkers: 0,
-            machineCount: 0,
-            localRuntimeOnline: false,
-          }));
+          setStatus((current) => {
+            const next = {
+              ...current,
+              runtimeHealthy: null,
+              onlineWorkers: 0,
+              machineCount: 0,
+              localRuntimeOnline: false,
+            };
+            return areShellStatusEqual(current, next) ? current : next;
+          });
         }
       }
     };

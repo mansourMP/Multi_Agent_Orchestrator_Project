@@ -54,7 +54,7 @@ export default function ArtifactsPage() {
   } = useArtifactsBrowser();
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div className="orion-page-shell is-static-entry">
       <OsPageHeader
         icon={<FileStack size={18} />}
         title="Assets"

@@ -41,7 +41,7 @@ export default function WorkflowsPage() {
   } = useWorkflowLibrary();
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div className="orion-page-shell is-static-entry">
       <OsPageHeader
         icon={<WorkflowIcon size={16} />}
         title="Workflows"

@@ -3443,14 +3443,34 @@ input:focus-visible {
   width: min(860px, calc(100vw - var(--sidebar-width) - 96px));
   margin: 0 auto 24px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-  padding: 0;
-  border: none;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 84%, transparent 16%);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent 6%);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.05);
   cursor: pointer;
   text-align: left;
-  background: transparent;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.orion-chat-v2-identity-bar:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--text-primary) 12%, var(--border-default) 88%);
+  box-shadow: 0 22px 50px rgba(15, 23, 42, 0.07);
+}
+
+.orion-chat-v2-identity-bar.is-empty {
+  margin-bottom: 28px;
+}
+
+.orion-chat-v2-identity-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .orion-chat-v2-route-guide {
@@ -3459,21 +3479,20 @@ input:focus-visible {
 }
 
 .orion-chat-v2-identity-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 74px;
+  padding: 14px 16px;
+  border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--bg-surface) 92%, transparent 8%);
+  background: color-mix(in srgb, #ffffff 92%, var(--bg-hover) 8%);
   color: var(--text-secondary);
 }
 
 .orion-chat-v2-identity-chip.is-priority {
-  padding-inline: 14px;
   border-width: 1.5px;
-  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
 .orion-chat-v2-identity-chip.is-success {
@@ -3489,8 +3508,8 @@ input:focus-visible {
 }
 
 .orion-chat-v2-identity-label {
-  font-size: 11px;
-  line-height: 1;
+  font-size: 10px;
+  line-height: 1.1;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -3498,19 +3517,25 @@ input:focus-visible {
 }
 
 .orion-chat-v2-identity-value {
-  font-size: 13px;
-  line-height: 1.2;
-  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 650;
   color: var(--text-primary);
 }
 
 .orion-chat-v2-identity-cta {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
+  justify-content: center;
+  align-self: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-hover) 78%, #ffffff 22%);
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
   font-size: 12px;
   font-weight: 700;
-  color: var(--primary-base);
+  color: var(--text-primary);
 }
 
 .orion-chat-v2.is-empty .orion-chat-v2-thread-shell {
@@ -3549,36 +3574,50 @@ input:focus-visible {
 
 .orion-chat-v2-premium-chips {
   width: min(720px, 100%);
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .orion-chat-v2-premium-chip {
-  min-height: var(--btn-height);
-  padding: var(--btn-padding);
-  border-radius: var(--btn-radius);
-  border: 1px solid var(--border);
-  background: transparent;
+  min-height: 88px;
+  padding: 16px 18px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: color-mix(in srgb, #ffffff 94%, var(--bg-hover) 6%);
   color: var(--text-primary);
-  font-size: var(--btn-font-size);
-  font-weight: 500;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
   text-align: left;
   transition:
     border-color 150ms ease,
     background 150ms ease,
-    color 150ms ease,
     transform 150ms ease,
     box-shadow 150ms ease;
 }
 
 .orion-chat-v2-premium-chip:hover {
-  border-color: var(--border);
-  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, var(--border-default) 86%);
+  background: #ffffff;
   transform: translateY(-1px);
-  box-shadow: none;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+}
+
+.orion-chat-v2-premium-chip-title {
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.orion-chat-v2-premium-chip-meta {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .orion-chat-v2-hero-ghost {
@@ -3788,23 +3827,28 @@ input:focus-visible {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warning-bg) 72%, #ffffff 28%);
+  border: 1px solid color-mix(in srgb, var(--warning-border) 76%, transparent 24%);
 }
 
 .orion-chat-v2-status-action {
-  min-height: var(--btn-height);
-  padding: var(--btn-padding);
-  border-radius: var(--btn-radius);
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--btn-font-size);
-  font-weight: 500;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warning-border) 74%, transparent 26%);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--warning-fg);
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
-  transition: transform var(--motion-fast) var(--easing-standard), background var(--motion-fast) var(--easing-standard);
+  transition: transform var(--motion-fast) var(--easing-standard), background var(--motion-fast) var(--easing-standard), border-color var(--motion-fast) var(--easing-standard);
 }
 
 .orion-chat-v2-status-action:hover {
-  background: var(--surface-hover);
+  background: rgba(255, 255, 255, 0.92);
   transform: translateY(-1px);
 }
 
@@ -4015,14 +4059,14 @@ input:focus-visible {
 
 .orion-chat-v2-composer {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 20px;
-  border: 1px solid rgba(17, 17, 17, 0.07);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 10px 22px rgba(17, 17, 17, 0.06);
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 40px rgba(17, 17, 17, 0.08);
 }
 
 [data-theme='dark'] .orion-chat-v2-composer {
@@ -4034,18 +4078,6 @@ input:focus-visible {
 .orion-chat-v2-composer:focus-within {
   border-color: color-mix(in srgb, var(--primary-base) 28%, rgba(17, 17, 17, 0.08));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-base) 18%, transparent 82%), 0 14px 30px rgba(17, 17, 17, 0.08);
-}
-
-.orion-chat-v2-plus {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--bg-element) 72%, transparent 28%);
-  color: var(--text-secondary);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
 }
 
 .orion-chat-v2-input {
@@ -4080,15 +4112,16 @@ input:focus-visible {
 }
 
 .orion-chat-v2-send {
-  width: 38px;
-  height: 38px;
-  min-height: 38px;
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--primary-base) 82%, transparent 18%);
   background: var(--primary-base);
   color: var(--primary-text);
-  font-size: 18px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   box-shadow: 0 8px 18px color-mix(in srgb, var(--primary-base) 22%, transparent 78%);
 }
@@ -4176,17 +4209,20 @@ input:focus-visible {
     width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
     margin-bottom: 18px;
     gap: 8px;
+    padding: 12px;
   }
 
   .orion-chat-v2-identity-cta {
     width: 100%;
-    justify-content: center;
-    min-height: 0;
+  }
+
+  .orion-chat-v2-identity-grid {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
   }
 
   .orion-chat-v2-identity-chip {
-    min-height: 32px;
-    padding: 0 10px;
+    min-height: 0;
   }
 
   .orion-chat-v2-thread {
@@ -4214,7 +4250,6 @@ input:focus-visible {
 
   .orion-chat-v2-premium-chip {
     width: 100%;
-    justify-content: flex-start;
   }
 
   .orion-chat-v2-user-bubble {
@@ -4251,7 +4286,6 @@ input:focus-visible {
     border-radius: 18px;
   }
 
-  .orion-chat-v2-plus,
   .orion-chat-v2-send {
     width: 36px;
     height: 36px;
@@ -4745,6 +4779,10 @@ a.orion-list-row {
   animation: orionFadeSlide 200ms ease-out both;
 }
 
+.orion-page-shell.is-static-entry {
+  animation: none;
+}
+
 .orion-surface-lift {
   transition:
     transform 150ms ease,
@@ -4907,6 +4945,20 @@ a.orion-list-row {
   z-index: 120;
 }
 
+.orion-modal-overlay.is-centered {
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+
+body.orion-modal-open .orion-main-shell,
+body.orion-modal-open .orion-main-stage,
+body.orion-modal-open .orion-page-shell {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
 .orion-modal {
   width: min(560px, 100%);
   border-radius: 12px;
@@ -4917,6 +4969,186 @@ a.orion-list-row {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.orion-credentials-modal {
+  width: min(680px, calc(100vw - 40px));
+  max-height: min(720px, calc(100dvh - 48px));
+  padding: 22px;
+  gap: 16px;
+  border-radius: 22px;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  box-shadow: 0 32px 90px rgba(15, 23, 42, 0.22);
+}
+
+.orion-modal-header.orion-credentials-modal-header {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 14px;
+  min-height: 52px;
+  padding-right: 56px;
+  margin-bottom: 0;
+}
+
+.orion-credentials-modal-title-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.orion-modal-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.18;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.orion-modal-copy {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.orion-credentials-modal-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.orion-credentials-modal-body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 2px;
+  padding-right: 2px;
+}
+
+.orion-credentials-modal-card {
+  display: grid;
+  gap: 10px;
+  border-radius: 18px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 80%, #ffffff 20%);
+  padding: 16px 18px;
+}
+
+.orion-credentials-modal-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.orion-credentials-modal-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-credentials-modal-step,
+.orion-credentials-modal-service-copy {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.orion-credentials-modal-step-title,
+.orion-credentials-modal-service-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-credentials-modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.orion-credentials-modal-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.orion-credentials-modal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.orion-credentials-modal-toggle-row {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-credentials-modal-toggle-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.orion-credentials-modal-toggle-btn:hover {
+  transform: translateY(-1px);
+}
+
+.orion-credentials-modal-toggle-btn.is-active {
+  border-color: color-mix(in srgb, var(--text-primary) 18%, var(--border-default) 82%);
+  background: color-mix(in srgb, var(--bg-hover) 72%, #ffffff 28%);
+  color: var(--text-primary);
+}
+
+.orion-credentials-modal-note {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.orion-credentials-modal-advanced-toggle {
+  justify-self: flex-start;
+}
+
+.orion-modal-footer.orion-credentials-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent 18%);
+}
+
+@media (max-width: 768px) {
+  .orion-credentials-modal {
+    width: min(100vw - 24px, 680px);
+    max-height: calc(100dvh - 24px);
+    padding: 18px;
+  }
+
+  .orion-credentials-modal-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .orion-connector-grid {
@@ -7455,23 +7687,48 @@ body.orion-setup-focus .orion-main-stage {
   height: 100dvh;
   padding: 28px 24px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   overflow-y: auto;
 }
 
 .orion-page-shell.is-setup-flow {
-  width: min(600px, 100%);
-  max-width: 600px;
-  min-height: 100%;
-  padding: 24px 0;
+  width: min(1120px, 100%);
+  max-width: 1120px;
+  min-height: auto;
+  padding: 8px 0 28px;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   display: grid;
-  align-content: center;
-  gap: 18px;
+  align-content: start;
+  gap: 20px;
+}
+
+.hekor-setup-shellbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hekor-setup-shellbar-leading {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.hekor-setup-shellbar-note {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.hekor-setup-close {
+  min-height: 36px;
 }
 
 .hekor-setup-hero-note {
@@ -7511,6 +7768,44 @@ body.orion-setup-focus .orion-main-stage {
 .hekor-setup-stage {
   display: grid;
   gap: 18px;
+  width: min(720px, 100%);
+}
+
+.hekor-setup-stage.is-launch {
+  width: min(860px, 100%);
+  gap: 16px;
+}
+
+.hekor-setup-launch-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 28px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent 22%);
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--bg-hover) 62%, #ffffff 38%) 0%, transparent 48%),
+    linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, var(--bg-shell) 76%, #ffffff 24%) 100%);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.06);
+}
+
+.hekor-setup-launch-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.hekor-setup-launch-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.hekor-setup-launch-note {
+  max-width: 56ch;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
 }
 
 .hekor-setup-copy {
@@ -7536,24 +7831,37 @@ body.orion-setup-focus .orion-main-stage {
 }
 
 .hekor-setup-composer {
-  position: relative;
   display: grid;
   gap: 14px;
 }
 
 .hekor-setup-textarea {
-  min-height: 188px;
-  padding: 18px 18px 70px;
-  border-radius: 24px;
-  font-size: 15px;
-  line-height: 1.6;
+  min-height: 168px;
+  padding: 18px 18px 18px;
+  border-radius: 22px;
+  font-size: 16px;
+  line-height: 1.65;
   resize: vertical;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.hekor-setup-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.hekor-setup-composer-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
 }
 
 .hekor-setup-submit {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
+  min-width: 150px;
 }
 
 .hekor-setup-chip-row {
@@ -7591,6 +7899,43 @@ body.orion-setup-focus .orion-main-stage {
   border-color: color-mix(in srgb, var(--warning-border) 82%, transparent 18%);
   background: color-mix(in srgb, var(--warning-bg) 74%, #ffffff 26%);
   color: var(--warning-fg);
+}
+
+.hekor-setup-example-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.hekor-setup-example-card {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent 22%);
+  background: rgba(255, 255, 255, 0.88);
+  text-align: left;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.hekor-setup-example-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, var(--border-default) 86%);
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.hekor-setup-example-title {
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hekor-setup-example-meta {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .hekor-setup-panel {
@@ -7945,10 +8290,40 @@ body.orion-setup-focus .orion-main-stage {
   gap: 4px;
 }
 
+.hekor-setup-tool-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .hekor-setup-tool-title {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.hekor-setup-tool-badge {
+  min-height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: color-mix(in srgb, var(--bg-hover) 72%, #ffffff 28%);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.hekor-setup-tool-badge.is-required {
+  border-color: color-mix(in srgb, var(--warning-border) 70%, var(--border-default) 30%);
+  background: color-mix(in srgb, var(--warning-bg) 64%, #ffffff 36%);
+  color: var(--warning-fg);
+}
+
+.hekor-setup-tool-badge.is-muted {
+  color: var(--text-tertiary);
 }
 
 .hekor-setup-tool-note,
@@ -8483,11 +8858,18 @@ body.orion-setup-focus .orion-main-stage {
   }
 
   .orion-page-shell.is-setup-flow {
+    width: 100%;
+    max-width: 100%;
     padding: 8px 0 20px;
+  }
+
+  .hekor-setup-shellbar {
+    align-items: flex-start;
   }
 
   .hekor-setup-source-grid,
   .hekor-setup-target-grid,
+  .hekor-setup-example-grid,
   .orion-route-guide,
   .hekor-setup-route-guide,
   .hekor-run-summary-grid,
@@ -8496,7 +8878,6 @@ body.orion-setup-focus .orion-main-stage {
   }
 
   .hekor-setup-submit {
-    position: static;
     width: 100%;
   }
 

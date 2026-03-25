@@ -699,12 +699,14 @@ function CredentialsPageContent() {
     const scrollbarCompensation = window.innerWidth - html.clientWidth;
 
     const previous = {
+      bodyClassName: body.className,
       bodyOverflow: body.style.overflow,
       bodyPaddingRight: body.style.paddingRight,
       htmlOverflow: html.style.overflow,
     };
 
     modalScrollLockRef.current = window.scrollY;
+    body.classList.add('orion-modal-open');
     html.style.overflow = 'hidden';
     body.style.overflow = 'hidden';
     if (scrollbarCompensation > 0) {
@@ -712,6 +714,7 @@ function CredentialsPageContent() {
     }
 
     return () => {
+      body.className = previous.bodyClassName;
       html.style.overflow = previous.htmlOverflow;
       body.style.overflow = previous.bodyOverflow;
       body.style.paddingRight = previous.bodyPaddingRight;
@@ -2074,18 +2077,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         </PageSection>
       ) : null}
       {showAddModal ? (
-        <div className="orion-modal-overlay" style={{ alignItems: 'flex-start', padding: '72px 16px 24px' }} onClick={resetModal}>
+        <div className="orion-modal-overlay is-centered" onClick={resetModal}>
           <div
-            className="orion-modal"
-            style={{
-              width: 'min(840px, calc(100vw - 40px))',
-              maxHeight: 'calc(100dvh - 48px)',
-              overflowY: 'auto',
-              borderRadius: 18,
-              padding: 24,
-              gap: 18,
-              margin: '0 auto',
-            }}
+            className="orion-modal orion-credentials-modal"
             onClick={(event) => event.stopPropagation()}
           >
             {(() => {
@@ -2099,45 +2093,36 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     : (modalEntry?.detail || 'Create a runtime connection for this service and assign it if needed.'))
                 : 'Create a runtime connection and optionally assign it to one worker.';
               return (
-            <div className="orion-modal-header">
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div className="orion-panel-header orion-modal-header orion-credentials-modal-header">
+              <div className="orion-credentials-modal-title-group">
                 <ConnectorMark visual={visual} size={52} />
                 <div>
                   <h2 className="orion-modal-title">{title}</h2>
                   <p className="orion-modal-copy">{copy}</p>
                 </div>
               </div>
-              <button className="orion-icon-btn" onClick={resetModal}>
+              <button className="orion-icon-btn orion-credentials-modal-close" onClick={resetModal} aria-label="Close connector dialog">
                 <X size={16} />
               </button>
             </div>
               );
             })()}
 
-            <div style={{ display: 'grid', gap: 12 }}>
+            <div className="orion-credentials-modal-body">
               {form.connector === 'telegram_bot' && onboardingMode ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 10,
-                    borderRadius: 14,
-                    border: '1px solid var(--border-default)',
-                    background: 'var(--bg-element)',
-                    padding: '14px 16px',
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                <div className="orion-credentials-modal-card is-telegram-onboarding">
+                  <div className="orion-credentials-modal-eyebrow">
                     Telegram setup
                   </div>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                  <div className="orion-credentials-modal-steps">
+                    <div className="orion-credentials-modal-step">
                       <strong>Step 1:</strong> Create a Telegram bot at <Link href="https://t.me/BotFather" target="_blank" rel="noreferrer" style={{ color: 'var(--primary-base)', textDecoration: 'underline' }}>t.me/BotFather</Link>
                     </div>
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Step 2: Paste your bot token here</span>
+                    <label className="orion-credentials-modal-field">
+                      <span className="orion-credentials-modal-step-title">Step 2: Paste your bot token here</span>
                       <input className="input" value={form.botToken} onChange={(event) => setForm((prev) => ({ ...prev, botToken: event.target.value }))} placeholder="123456:ABC..." />
                     </label>
-                    <div style={{ fontSize: 14, color: 'var(--text-primary)' }}>
+                    <div className="orion-credentials-modal-step">
                       <strong>Step 3:</strong> Send any message to your bot to activate
                     </div>
                   </div>
@@ -2145,25 +2130,16 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               ) : null}
 
               {modalLockedConnector ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 4,
-                    borderRadius: 12,
-                    border: '1px solid var(--border-default)',
-                    background: 'var(--bg-element)',
-                    padding: '12px 14px',
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Service</div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{connectorLabel(form.connector)}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                <div className="orion-credentials-modal-card is-service-summary">
+                  <div className="orion-credentials-modal-eyebrow">Service</div>
+                  <div className="orion-credentials-modal-service-title">{connectorLabel(form.connector)}</div>
+                  <div className="orion-credentials-modal-service-copy">
                     {catalogEntryForConnector(form.connector)?.note || 'Connector-specific setup'}
                   </div>
                 </div>
               ) : (
-                <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Service</span>
+                <label className="orion-credentials-modal-field">
+                  <span className="orion-credentials-modal-label">Service</span>
                   <select
                     className="input"
                     value={form.connector}
@@ -2182,14 +2158,14 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               )}
 
               {(form.connector !== 'telegram_bot' || !onboardingMode) ? (
-                <>
-                  <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label</span>
+                <div className="orion-credentials-modal-form-grid">
+                  <label className="orion-credentials-modal-field">
+                    <span className="orion-credentials-modal-label">Label</span>
                     <input className="input" value={form.label} onChange={(event) => setForm((prev) => ({ ...prev, label: event.target.value }))} placeholder={connectorLabel(form.connector)} />
                   </label>
 
-                  <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Assign to worker</span>
+                  <label className="orion-credentials-modal-field">
+                    <span className="orion-credentials-modal-label">Assign to worker</span>
                     <select className="input" value={form.agentRole} onChange={(event) => setForm((prev) => ({ ...prev, agentRole: (event.target.value || '') as '' | AgentRoleId }))}>
                       <option value="">Shared access</option>
                       {AGENT_ROLE_OPTIONS.map((role) => (
@@ -2197,7 +2173,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       ))}
                     </select>
                   </label>
-                </>
+                </div>
               ) : null}
 
               {form.connector === 'telegram_bot' ? (
@@ -2211,8 +2187,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
                   <button
                     type="button"
-                    className="orion-btn orion-btn-ghost"
-                    style={{ justifySelf: 'start' }}
+                    className="orion-btn orion-btn-ghost orion-credentials-modal-advanced-toggle"
                     onClick={() => setShowTelegramAdvanced((prev) => !prev)}
                   >
                     {showTelegramAdvanced ? 'Hide Advanced' : 'Advanced'}
@@ -2381,52 +2356,43 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
               {form.connector === 'google_workspace' ? (
                 <>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div className="orion-credentials-modal-card is-google-mode">
+                    <div className="orion-credentials-modal-eyebrow">Authentication mode</div>
+                    <div className="orion-credentials-modal-toggle-row">
                     <button
                       type="button"
-                      className="orion-btn orion-btn-ghost"
+                      className={`orion-credentials-modal-toggle-btn${form.googleUseLocalAuth ? ' is-active' : ''}`}
                       onClick={() => setForm((prev) => ({ ...prev, googleUseLocalAuth: true }))}
-                      style={{
-                        minHeight: 34,
-                        borderColor: form.googleUseLocalAuth ? 'var(--primary-base)' : 'var(--border-default)',
-                        color: form.googleUseLocalAuth ? 'var(--primary-base)' : 'var(--text-secondary)',
-                        background: form.googleUseLocalAuth ? 'var(--primary-soft)' : 'transparent',
-                      }}
                     >
                       Local gws auth
                     </button>
                     <button
                       type="button"
-                      className="orion-btn orion-btn-ghost"
+                      className={`orion-credentials-modal-toggle-btn${!form.googleUseLocalAuth ? ' is-active' : ''}`}
                       onClick={() => setForm((prev) => ({ ...prev, googleUseLocalAuth: false }))}
-                      style={{
-                        minHeight: 34,
-                        borderColor: !form.googleUseLocalAuth ? 'var(--primary-base)' : 'var(--border-default)',
-                        color: !form.googleUseLocalAuth ? 'var(--primary-base)' : 'var(--text-secondary)',
-                        background: !form.googleUseLocalAuth ? 'var(--primary-soft)' : 'transparent',
-                      }}
                     >
                       Pasted token
                     </button>
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    </div>
+                    <div className="orion-credentials-modal-note">
                     {form.googleUseLocalAuth
                       ? 'Use the authenticated Google Workspace CLI session stored in .gws-config on this machine.'
                       : 'Fallback mode for temporary raw Google access tokens.'}
+                    </div>
                   </div>
                   {!form.googleUseLocalAuth ? (
-                  <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Access token</span>
+                  <label className="orion-credentials-modal-field">
+                    <span className="orion-credentials-modal-label">Access token</span>
                     <textarea className="input" rows={4} value={form.accessToken} onChange={(event) => setForm((prev) => ({ ...prev, accessToken: event.target.value }))} placeholder="ya29.a0..." />
                   </label>
                   ) : null}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Calendar ID</span>
+                  <div className="orion-credentials-modal-form-grid">
+                    <label className="orion-credentials-modal-field">
+                      <span className="orion-credentials-modal-label">Calendar ID</span>
                       <input className="input" value={form.calendarId} onChange={(event) => setForm((prev) => ({ ...prev, calendarId: event.target.value }))} placeholder="primary" />
                     </label>
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Timezone</span>
+                    <label className="orion-credentials-modal-field">
+                      <span className="orion-credentials-modal-label">Timezone</span>
                       <input className="input" value={form.timezone} onChange={(event) => setForm((prev) => ({ ...prev, timezone: event.target.value }))} placeholder="UTC" />
                     </label>
                   </div>
@@ -2440,10 +2406,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               ) : null}
             </div>
 
-            <div className="orion-modal-footer">
+            <div className="orion-modal-footer orion-credentials-modal-footer">
               <button className="orion-btn orion-btn-ghost" onClick={resetModal}>Cancel</button>
               <button className="orion-btn orion-btn-primary" onClick={() => void handleCreateConnector()} disabled={createBusy}>
-                <Plus size={14} />
                 {createBusy ? 'Connecting…' : form.connector === 'telegram_bot' && onboardingMode ? 'Done' : 'Connect'}
               </button>
             </div>

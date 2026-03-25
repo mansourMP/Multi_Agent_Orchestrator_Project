@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useMemo, useState } from 'react';
 import type { AgentRoleId } from '@/app/page.catalog';
 import {
   artifactKindGroup,
@@ -24,12 +24,43 @@ type DesktopBridge = {
   desktop?: boolean;
 };
 
+const ARTIFACTS_BROWSER_CACHE_KEY = 'hekor.artifacts-browser.cache.v1';
+let artifactsBrowserCache: ArtifactPayload | null = null;
+let artifactsBrowserInFlight: Promise<ArtifactPayload> | null = null;
+
+function readArtifactsBrowserCache(): ArtifactPayload | null {
+  if (artifactsBrowserCache) return artifactsBrowserCache;
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(ARTIFACTS_BROWSER_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ArtifactPayload | null;
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.items)) return null;
+    artifactsBrowserCache = parsed;
+    return artifactsBrowserCache;
+  } catch {
+    return null;
+  }
+}
+
+function persistArtifactsBrowserCache(next: ArtifactPayload) {
+  artifactsBrowserCache = next;
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(ARTIFACTS_BROWSER_CACHE_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore cache errors.
+  }
+}
+
 function isHttpTarget(value?: string | null): boolean {
   return /^https?:\/\//i.test(String(value || '').trim());
 }
 
 export function useArtifactsBrowser() {
+  const initialPayload = useMemo(() => readArtifactsBrowserCache(), []);
   const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
   const [viewMode, setViewMode] = useState<ArtifactView>('deliverables');
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [agentFilter, setAgentFilter] = useState<'all' | AgentRoleId>('all');
@@ -41,16 +72,31 @@ export function useArtifactsBrowser() {
   }, []);
 
   const loadArtifacts = useCallback(async () => {
-    await ensureControlPlaneSession();
-    const response = await fetch(
-      '/api/artifacts/workspace?workspace_id=default&history_limit=80&limit=120',
-      { cache: 'no-store' },
-    );
-    if (!response.ok) {
-      throw new Error(`Failed to load artifacts (${response.status})`);
+    if (artifactsBrowserInFlight) return artifactsBrowserInFlight;
+
+    artifactsBrowserInFlight = (async () => {
+      await ensureControlPlaneSession();
+      const response = await fetch(
+        '/api/artifacts/workspace?workspace_id=default&history_limit=80&limit=120',
+        { cache: 'no-store' },
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to load artifacts (${response.status})`);
+      }
+      const next = (await response.json()) as ArtifactPayload;
+      persistArtifactsBrowserCache(next);
+      return next;
+    })();
+    try {
+      return await artifactsBrowserInFlight;
+    } finally {
+      artifactsBrowserInFlight = null;
     }
-    return (await response.json()) as ArtifactPayload;
   }, []);
+  const formatLoadError = useCallback(
+    (loadError: unknown) => normalizeArtifactsError(loadError instanceof Error ? loadError.message : 'Failed to load artifacts.'),
+    [],
+  );
 
   const {
     data: payload,
@@ -58,14 +104,15 @@ export function useArtifactsBrowser() {
     error,
     refresh,
   } = useAsyncPageResource<ArtifactPayload | null>({
-    initialData: null,
+    initialData: initialPayload,
     load: loadArtifacts,
-    formatError: (loadError) => normalizeArtifactsError(loadError instanceof Error ? loadError.message : 'Failed to load artifacts.'),
+    formatError: formatLoadError,
+    hasInitialData: Boolean(initialPayload),
   });
 
   const filteredItems = useMemo(
-    () => filterArtifacts(payload?.items || [], query, viewMode, kindFilter, agentFilter, channelFilter),
-    [agentFilter, channelFilter, kindFilter, payload, query, viewMode],
+    () => filterArtifacts(payload?.items || [], deferredQuery, viewMode, kindFilter, agentFilter, channelFilter),
+    [agentFilter, channelFilter, deferredQuery, kindFilter, payload, viewMode],
   );
 
   const browserView = useMemo(() => buildArtifactBrowserView(payload?.items || []), [payload]);

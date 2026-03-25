@@ -2,7 +2,7 @@
 
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { X } from 'lucide-react';
+import { ArrowUp, X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
 import { RUN_COMPLETED_STATUS_COPY } from '@/lib/runStartCopy';
 import type { ChatMessageRecord } from './chatSchema';
@@ -316,20 +316,22 @@ export function ChatSurface({
         {identityItems.length > 0 ? (
           <button
             type="button"
-            className="orion-chat-v2-identity-bar"
+            className={`orion-chat-v2-identity-bar${!hasMessages ? ' is-empty' : ''}`}
             aria-label="Review current task setup"
             aria-expanded={identityDrawerOpen}
             onClick={onToggleIdentityDrawer}
           >
-            {identityItems.map((item) => (
-              <div
-                key={`${item.label}:${item.value}`}
-                className={`orion-chat-v2-identity-chip${item.tone ? ` is-${item.tone}` : ''}${item.priority === 'high' ? ' is-priority' : ''}`}
-              >
-                <span className="orion-chat-v2-identity-label">{item.label}</span>
-                <span className="orion-chat-v2-identity-value">{item.value}</span>
-              </div>
-            ))}
+            <div className="orion-chat-v2-identity-grid">
+              {identityItems.map((item) => (
+                <div
+                  key={`${item.label}:${item.value}`}
+                  className={`orion-chat-v2-identity-chip${item.tone ? ` is-${item.tone}` : ''}${item.priority === 'high' ? ' is-priority' : ''}`}
+                >
+                  <span className="orion-chat-v2-identity-label">{item.label}</span>
+                  <span className="orion-chat-v2-identity-value">{item.value}</span>
+                </div>
+              ))}
+            </div>
             <span className="orion-chat-v2-identity-cta">{identityDrawerOpen ? 'Hide setup' : 'Review setup'}</span>
           </button>
         ) : null}
@@ -343,13 +345,14 @@ export function ChatSurface({
                 <button
                   key={task}
                   type="button"
-                  className="btn-secondary orion-chat-v2-premium-chip"
+                  className="orion-chat-v2-premium-chip"
                   onClick={() => {
                     setGoal(task);
                     requestAnimationFrame(() => primaryGoalRef.current?.focus());
                   }}
                 >
-                  {task}
+                  <span className="orion-chat-v2-premium-chip-title">{task}</span>
+                  <span className="orion-chat-v2-premium-chip-meta">Use this as a starting point</span>
                 </button>
               ))}
             </div>
@@ -424,9 +427,6 @@ export function ChatSurface({
             </div>
           ) : null}
           <div className="orion-chat-v2-composer">
-            <button type="button" className="orion-chat-v2-plus" aria-label="Add context">
-              +
-            </button>
             <textarea
               ref={primaryGoalRef}
               value={goal}
@@ -448,7 +448,7 @@ export function ChatSurface({
               className="orion-chat-v2-send"
               aria-label="Send"
             >
-              →
+              <ArrowUp size={16} />
             </button>
           </div>
           <div className="orion-chat-v2-footer">

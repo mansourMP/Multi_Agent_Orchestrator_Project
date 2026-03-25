@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type UseAsyncPageResourceOptions<T> = {
   initialData: T;
   load: () => Promise<T>;
   formatError?: (error: unknown) => string;
   enabled?: boolean;
+  hasInitialData?: boolean;
 };
 
 export function useAsyncPageResource<T>({
@@ -14,28 +15,46 @@ export function useAsyncPageResource<T>({
   load,
   formatError,
   enabled = true,
+  hasInitialData = false,
 }: UseAsyncPageResourceOptions<T>) {
-  const [data, setData] = useState<T>(initialData);
-  const [loading, setLoading] = useState(enabled);
+  const loadRef = useRef(load);
+  const formatErrorRef = useRef(formatError);
+  const initialDataRef = useRef(initialData);
+  const hasInitialDataRef = useRef(hasInitialData);
+  const [data, setData] = useState<T>(() => initialData);
+  const [loading, setLoading] = useState(enabled && !hasInitialData);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    loadRef.current = load;
+    formatErrorRef.current = formatError;
+    initialDataRef.current = initialData;
+    hasInitialDataRef.current = hasInitialData;
+  }, [formatError, hasInitialData, initialData, load]);
+
   const refresh = useCallback(async () => {
-    if (!enabled) return initialData;
+    if (!enabled) return initialDataRef.current;
 
     try {
       setLoading(true);
       setError('');
-      const nextData = await load();
+      const nextData = await loadRef.current();
       setData(nextData);
       return nextData;
     } catch (loadError) {
-      setData(initialData);
-      setError(formatError ? formatError(loadError) : loadError instanceof Error ? loadError.message : 'Something went wrong.');
+      setData(initialDataRef.current);
+      setError(
+        formatErrorRef.current
+          ? formatErrorRef.current(loadError)
+          : loadError instanceof Error
+            ? loadError.message
+            : 'Something went wrong.',
+      );
       throw loadError;
     } finally {
       setLoading(false);
     }
-  }, [enabled, formatError, initialData, load]);
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -43,15 +62,21 @@ export function useAsyncPageResource<T>({
 
     const run = async () => {
       try {
-        setLoading(true);
+        if (!hasInitialDataRef.current) setLoading(true);
         setError('');
-        const nextData = await load();
+        const nextData = await loadRef.current();
         if (!alive) return;
         setData(nextData);
       } catch (loadError) {
         if (!alive) return;
-        setData(initialData);
-        setError(formatError ? formatError(loadError) : loadError instanceof Error ? loadError.message : 'Something went wrong.');
+        setData(initialDataRef.current);
+        setError(
+          formatErrorRef.current
+            ? formatErrorRef.current(loadError)
+            : loadError instanceof Error
+              ? loadError.message
+              : 'Something went wrong.',
+        );
       } finally {
         if (alive) setLoading(false);
       }
@@ -61,7 +86,7 @@ export function useAsyncPageResource<T>({
     return () => {
       alive = false;
     };
-  }, [enabled, formatError, initialData, load]);
+  }, [enabled]);
 
   return {
     data,

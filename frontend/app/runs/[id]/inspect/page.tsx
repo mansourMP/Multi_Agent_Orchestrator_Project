@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { useParams, useSearchParams } from 'next/navigation';
 import {
   Activity,
@@ -16,9 +15,15 @@ import {
   Route,
 } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
+import {
+  AUTH_STREAM_CLOSED,
+  openAuthenticatedEventStream,
+  type AuthenticatedEventStreamConnection,
+} from '@/lib/authenticatedEventStream';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
+import { fetchRuntimeArtifactBlob } from '@/lib/runtimeArtifacts';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
@@ -358,14 +363,6 @@ function formatConnectorBindingLabel(binding?: {
   return parts.length ? parts.join(' · ') : '--';
 }
 
-function buildArtifactFileSrc(path: string, runtimeKey: string): string {
-  const normalized = String(path || '').trim();
-  if (!normalized) return '';
-  if (/^https?:\/\//i.test(normalized)) return normalized;
-  const base = `${ORION_API_URL}/artifacts/file?path=${encodeURIComponent(normalized)}`;
-  return runtimeKey.trim() ? `${base}&api_key=${encodeURIComponent(runtimeKey.trim())}` : base;
-}
-
 function isHttpTarget(value?: string | null): boolean {
   return /^https?:\/\//i.test(String(value || '').trim());
 }
@@ -376,6 +373,63 @@ function isLocalFileTarget(value?: string | null): boolean {
   if (normalized.startsWith('/') || /^[A-Za-z]:[\\/]/.test(normalized)) return true;
   if (normalized.startsWith('./') || normalized.startsWith('../') || normalized.startsWith('.orion-artifacts/')) return true;
   return !/^[a-z]+:/i.test(normalized);
+}
+
+function ArtifactImagePreview({ path, runtimeKey, alt }: { path: string; runtimeKey: string; alt: string }) {
+  const [objectUrl, setObjectUrl] = useState('');
+
+  useEffect(() => {
+    const normalized = String(path || '').trim();
+    if (!normalized) {
+      setObjectUrl('');
+      return;
+    }
+    if (isHttpTarget(normalized)) {
+      setObjectUrl(normalized);
+      return;
+    }
+    let active = true;
+    let nextObjectUrl = '';
+    setObjectUrl('');
+    void fetchRuntimeArtifactBlob(ORION_API_URL, normalized, runtimeKey)
+      .then((blob) => {
+        nextObjectUrl = URL.createObjectURL(blob);
+        if (active) setObjectUrl(nextObjectUrl);
+        else URL.revokeObjectURL(nextObjectUrl);
+      })
+      .catch(() => {
+        if (active) setObjectUrl('');
+      });
+    return () => {
+      active = false;
+      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
+    };
+  }, [path, runtimeKey]);
+
+  if (!objectUrl) {
+    return (
+      <div
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          width: '100%',
+          height: '100%',
+          color: 'var(--text-secondary)',
+          fontSize: 12,
+        }}
+      >
+        Preview unavailable
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={objectUrl}
+      alt={alt}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+    />
+  );
 }
 
 function extractRunMetadata(
@@ -544,7 +598,7 @@ export default function RunInspectPage() {
   const [retryingDelegation, setRetryingDelegation] = useState(false);
   const [delegateError, setDelegateError] = useState<string | null>(null);
   const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const approvalsSectionRef = useRef<HTMLElement | null>(null);
   const screenshotsSectionRef = useRef<HTMLElement | null>(null);
@@ -694,71 +748,73 @@ export default function RunInspectPage() {
       return;
     }
     const key = getRuntimeApiKey();
-    const streamUrl = key
-      ? `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream?api_key=${encodeURIComponent(key)}`
-      : `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
+    const streamUrl = `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
     setStreamState('connecting');
     setStreamError(null);
 
-    const source = new EventSource(streamUrl);
-    streamRef.current = source;
-
-    source.onopen = () => {
-      setStreamState('connected');
-      setStreamError(null);
-    };
-
-    source.addEventListener('log', (event: MessageEvent) => {
-      const parsed = parseEventJson(String(event.data || ''));
-      if (!parsed) return;
-      setLiveEvents((prev) => {
-        const eventId = String(parsed.event_id || '').trim();
-        if (eventId && prev.some((item) => String(item.event_id || '').trim() === eventId)) return prev;
-        const next = [...prev, parsed];
-        if (next.length > 800) return next.slice(next.length - 800);
-        return next;
-      });
-      const eventName = String(parsed.event || '').toLowerCase();
-      if (
-        eventName === 'run_complete' ||
-        eventName === 'run_error' ||
-        eventName === 'run_stopped' ||
-        eventName === 'timeout' ||
-        eventName.startsWith('approval_')
-      ) {
+    const source = openAuthenticatedEventStream({
+      url: streamUrl,
+      apiKey: key,
+      onOpen: () => {
+        setStreamState('connected');
+        setStreamError(null);
+      },
+      onEvent: (event) => {
+        if (event.event === 'pause') {
+          void refreshRunState();
+          return;
+        }
+        if (event.event !== 'log') return;
+        const parsed = parseEventJson(String(event.data || ''));
+        if (!parsed) return;
+        setLiveEvents((prev) => {
+          const eventId = String(parsed.event_id || '').trim();
+          if (eventId && prev.some((item) => String(item.event_id || '').trim() === eventId)) return prev;
+          const next = [...prev, parsed];
+          if (next.length > 800) return next.slice(next.length - 800);
+          return next;
+        });
+        const eventName = String(parsed.event || '').toLowerCase();
         if (
           eventName === 'run_complete' ||
           eventName === 'run_error' ||
           eventName === 'run_stopped' ||
-          eventName === 'timeout'
+          eventName === 'timeout' ||
+          eventName.startsWith('approval_')
         ) {
+          if (
+            eventName === 'run_complete' ||
+            eventName === 'run_error' ||
+            eventName === 'run_stopped' ||
+            eventName === 'timeout'
+          ) {
+            source.close();
+            if (streamRef.current === source) streamRef.current = null;
+            setStreamState('closed');
+            setStreamError(null);
+          }
+          void refreshRunState();
+        }
+      },
+      onError: () => {
+        const latestStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
+        if (TERMINAL_RUN_STATUSES.has(latestStatus) || source.readyState === AUTH_STREAM_CLOSED) {
           source.close();
           if (streamRef.current === source) streamRef.current = null;
           setStreamState('closed');
           setStreamError(null);
+          void refreshRunState();
+          return;
         }
         void refreshRunState();
-      }
-    });
-
-    source.addEventListener('pause', () => {
-      void refreshRunState();
-    });
-
-    source.onerror = () => {
-      const latestStatus = String(historyItem?.status || runDetail?.status || '').toLowerCase();
-      if (TERMINAL_RUN_STATUSES.has(latestStatus) || source.readyState === EventSource.CLOSED) {
-        source.close();
+        setStreamState('disconnected');
+        setStreamError('Live stream disconnected. Waiting for reconnect...');
+      },
+      onClose: () => {
         if (streamRef.current === source) streamRef.current = null;
-        setStreamState('closed');
-        setStreamError(null);
-        void refreshRunState();
-        return;
-      }
-      void refreshRunState();
-      setStreamState('disconnected');
-      setStreamError('Live stream disconnected. Waiting for reconnect...');
-    };
+      },
+    });
+    streamRef.current = source;
 
     return () => {
       source.close();
@@ -991,8 +1047,25 @@ export default function RunInspectPage() {
       }
     }
 
-    const fileHref = isHttpTarget(normalized) ? normalized : buildArtifactFileSrc(normalized, runtimeApiKey);
-    window.open(fileHref, '_blank', 'noopener,noreferrer');
+    try {
+      if (isHttpTarget(normalized)) {
+        window.open(normalized, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      const blob = await fetchRuntimeArtifactBlob(ORION_API_URL, normalized, runtimeApiKey);
+      const objectUrl = URL.createObjectURL(blob);
+      const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = formatArtifactLabel(normalized);
+        anchor.rel = 'noopener noreferrer';
+        anchor.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      setStreamError(error instanceof Error ? error.message : 'Could not open artifact preview.');
+    }
   }, [desktopBridge, runtimeApiKey]);
   const revealArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
@@ -2163,13 +2236,7 @@ export default function RunInspectPage() {
                           background: 'var(--bg-panel)',
                         }}
                       >
-                        <Image
-                          src={buildArtifactFileSrc(item, runtimeApiKey)}
-                          alt={item}
-                          fill
-                          unoptimized
-                          style={{ objectFit: 'cover' }}
-                        />
+                        <ArtifactImagePreview path={item} runtimeKey={runtimeApiKey} alt={item} />
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>{item}</div>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

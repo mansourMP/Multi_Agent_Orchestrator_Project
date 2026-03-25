@@ -1,9 +1,5 @@
 import { collectPriorityFixes, type DoctorCheckRecord, type PriorityFix } from '@/lib/doctorChecks';
-import { API_BASE } from '@/lib/config';
 import { type ExecutionTarget, formatExecutionTargetLabel } from '@/lib/executionTargets';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
-
-const ORION_API_URL = process.env.NEXT_PUBLIC_ORION_API_URL ?? API_BASE;
 
 type DoctorOverview = {
   status: 'pass' | 'warn' | 'fail';
@@ -61,15 +57,6 @@ function normalizeDoctorStatus(value: unknown): 'pass' | 'warn' | 'fail' {
   return 'fail';
 }
 
-function buildDoctorHeaders(headers?: HeadersInit): Headers {
-  const merged = new Headers(headers || {});
-  const runtimeApiKey = readRuntimeApiKeyFromStorage('');
-  if (runtimeApiKey && !merged.has('X-API-Key')) {
-    merged.set('X-API-Key', runtimeApiKey);
-  }
-  return merged;
-}
-
 function buildUnavailableReport(detail: string): DoctorPreflightReport {
   return {
     available: false,
@@ -90,10 +77,10 @@ function firstCheckByStatus(checks: DoctorCheckRecord[], status: 'warn' | 'fail'
 }
 
 export async function fetchDoctorPreflight(headers?: HeadersInit): Promise<DoctorPreflightReport> {
+  void headers;
   let response: Response;
   try {
-    response = await fetch(`${ORION_API_URL}/doctor`, {
-      headers: buildDoctorHeaders(headers),
+    response = await fetch('/api/doctor/preflight', {
       cache: 'no-store',
     });
   } catch {

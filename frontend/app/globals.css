@@ -4449,6 +4449,12 @@ input:focus-visible {
   padding: 2px 0;
 }
 
+.orion-metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--orion-metric-min-width, 180px), 1fr));
+  gap: 10px;
+}
+
 .orion-toolbar-group {
   display: inline-flex;
   align-items: center;
@@ -8612,6 +8618,103 @@ select:focus-visible {
 
 .orion-panel-shell-body {
   padding: 0 12px 10px;
+}
+
+.orion-page-section-body {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-page-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.orion-page-filter-bar {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-page-filter-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.orion-page-filter-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.orion-page-filter-body {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-page-state-title {
+  margin-bottom: 0;
+}
+
+.orion-page-state-copy {
+  margin: 0;
+  max-width: 520px;
+  line-height: 1.6;
+}
+
+.orion-page-dialog-header {
+  margin-bottom: 0;
+}
+
+.orion-page-dialog-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.orion-page-dialog-body {
+  display: grid;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.orion-page-dialog-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+}
+
+.orion-page-filter-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-page-filter-grid.is-search-and-supporting {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+}
+
+.orion-page-filter-grid.is-toolbar {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .orion-page-filter-header,
+  .orion-page-filter-grid.is-search-and-supporting {
+    grid-template-columns: 1fr;
+  }
+
+  .orion-page-filter-summary {
+    justify-content: flex-start;
+  }
 }
 
 .orion-toolbar-grid {

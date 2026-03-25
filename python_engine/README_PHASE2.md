@@ -8,7 +8,7 @@
 
 ## 🎯 Overview
 
-Phase 2 replaces the MockLLM with **real hierarchical intelligence** using LiteLLM. The system now features:
+Phase 2 replaces the MockLLM with **real hierarchical intelligence** using direct provider adapters. The system now features:
 
 - **Cheap Model** (Gemini Flash) for fast research and drafting
 - **Smart Model** (Claude Sonnet) for complex critique and decisions
@@ -23,7 +23,7 @@ Phase 2 replaces the MockLLM with **real hierarchical intelligence** using LiteL
 
 | File | Purpose |
 |------|---------|
-| `llm_core.py` | Core LLM integration with LiteLLM |
+| `llm_core.py` | Core LLM integration with direct provider adapters |
 | `agency_logic.py` | Main orchestration logic (updated) |
 | `requirements.txt` | Python dependencies |
 | `.env.example` | Configuration template |
@@ -381,7 +381,7 @@ The system gracefully handles:
 - **Database**: Auto-created on first run
 - **Logs**: All logs go to STDERR (STDOUT is JSON only)
 - **Execution ID**: Required for tracking, auto-generated if missing
-- **Cost Tracking**: Automatic via LiteLLM (may be null for some providers)
+- **Cost Tracking**: Estimated from direct provider usage and local pricing tables
 
 ---
 

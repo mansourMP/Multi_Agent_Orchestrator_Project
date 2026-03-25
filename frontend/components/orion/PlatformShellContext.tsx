@@ -2,9 +2,6 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
-import { API_BASE } from '@/lib/config';
-import { hasOnlineLocalRuntime } from '@/lib/executionTargets';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 export type PlatformAccessMode = 'default' | 'full';
 
@@ -105,48 +102,27 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
 
     const refreshRemote = async () => {
       try {
-        const headers = new Headers();
-        const runtimeKey = readRuntimeApiKeyFromStorage('');
-        if (runtimeKey) {
-          headers.set('X-API-Key', runtimeKey);
+        const res = await fetch('/api/platform/shell-status', { cache: 'no-store' });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(
+            payload && typeof payload.detail === 'string' && payload.detail.trim()
+              ? payload.detail.trim()
+              : 'Platform shell status is unavailable.',
+          );
         }
-        const [healthRes, runtimesRes, historyRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/health`, { headers }),
-          fetch(`${API_BASE}/runtime/runtimes/status`, { headers }),
-          fetch(`${API_BASE}/history/runs?limit=40&workspace_id=default`, { headers }),
-        ]);
-
-        const runtimeHealthy =
-          healthRes.status === 'fulfilled'
-            ? healthRes.value.ok
-            : null;
-
-        const runtimesPayload =
-          runtimesRes.status === 'fulfilled' && runtimesRes.value.ok
-            ? await runtimesRes.value.json().catch(() => null)
-            : null;
-        const onlineWorkers = Number(runtimesPayload?.summary?.online || 0);
-        const machineCount = Number(runtimesPayload?.summary?.known || 0);
-        const localRuntimeOnline = hasOnlineLocalRuntime(runtimesPayload);
-
-        const historyPayload =
-          historyRes.status === 'fulfilled' && historyRes.value.ok
-            ? await historyRes.value.json().catch(() => null)
-            : null;
-        const historyItems = Array.isArray(historyPayload?.items) ? historyPayload.items : [];
-        const pendingApprovals = historyItems.filter((item: unknown) => {
-          const record = item as Record<string, unknown>;
-          return String(record?.status || '').toLowerCase() === 'waiting_for_input';
-        }).length;
 
         if (alive) {
           setStatus((current) => ({
             ...current,
-            runtimeHealthy,
-            onlineWorkers,
-            machineCount,
-            localRuntimeOnline,
-            pendingApprovals,
+            runtimeHealthy:
+              typeof payload?.runtimeHealthy === 'boolean'
+                ? payload.runtimeHealthy
+                : null,
+            onlineWorkers: Number(payload?.onlineWorkers || 0),
+            machineCount: Number(payload?.machineCount || 0),
+            localRuntimeOnline: Boolean(payload?.localRuntimeOnline),
+            pendingApprovals: Number(payload?.pendingApprovals || 0),
           }));
         }
       } catch {

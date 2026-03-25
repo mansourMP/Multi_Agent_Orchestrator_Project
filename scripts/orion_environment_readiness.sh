@@ -44,7 +44,7 @@ mark() {
 }
 
 HEALTH_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/health" 2>/dev/null || echo '{}')"
-WORKER_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/local/workers/status" 2>/dev/null || echo '{}')"
+WORKER_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/runtime/runtimes/status" 2>/dev/null || echo '{}')"
 CONNECTORS_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/connectors/vault?workspace_id=${WORKSPACE_ID}" 2>/dev/null || echo '{"items":[]}' )"
 TG_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/channels/telegram/autopilot/status" 2>/dev/null || echo '{}')"
 WA_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY}" "${API_URL}/channels/whatsapp/autopilot/status" 2>/dev/null || echo '{}')"

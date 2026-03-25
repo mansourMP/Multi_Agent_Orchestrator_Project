@@ -3,27 +3,23 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
-
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-import litellm
-from litellm import acompletion, completion
+from urllib.parse import quote_plus
 
 from server_modules.provider_profiles import (
     PROVIDER_CATALOG,
     _build_provider_credential_candidates,
     _openai_bearer_from_credentials,
+    http_json_request,
     normalize_provider_id,
     resolve_provider_adapter,
 )
 from server_modules.shared import PROFILES_LOCK, PROVIDER_PROFILES
 
 
-litellm.set_verbose = False
-if hasattr(litellm, "telemetry"):
-    litellm.telemetry = False
-
-
 DEFAULT_MODEL = "gpt-4o-mini"
+OPENAI_CHAT_COMPLETIONS_URL = os.getenv("OPENAI_CHAT_COMPLETIONS_URL", "https://api.openai.com/v1/chat/completions")
+ANTHROPIC_MESSAGES_URL = os.getenv("ANTHROPIC_MESSAGES_URL", "https://api.anthropic.com/v1/messages")
+OPENAI_EMBEDDINGS_URL = os.getenv("OPENAI_EMBEDDINGS_URL", "https://api.openai.com/v1/embeddings")
 MODEL_ALIASES = {
     "gpt-4o": "gpt-4o",
     "gpt-4o-mini": "gpt-4o-mini",
@@ -292,8 +288,240 @@ def _provider_kwargs(provider: str, credentials: Optional[Dict[str, Any]]) -> Di
             raise RuntimeError("Gemini credential requires api_key.")
         return {"api_key": key}
     if provider == "vertex":
-        raise RuntimeError("Vertex model routing is not wired through LiteLLM yet.")
+        raise RuntimeError("Vertex model routing requires a direct Vertex credential payload.")
     raise RuntimeError(f"Unsupported provider '{provider}'.")
+
+
+def _error_detail(payload: Dict[str, Any]) -> str:
+    body = payload.get("json")
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+          message = error.get("message")
+          if isinstance(message, str) and message.strip():
+              return message.strip()
+        detail = body.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    text = str(payload.get("text") or "").strip()
+    return text[:500] if text else ""
+
+
+def _raise_provider_error(provider: str, model: str, response: Dict[str, Any]) -> None:
+    status = int(response.get("status") or 500)
+    detail = _error_detail(response)
+    if status in {401, 403}:
+        raise ValueError(f"Invalid or missing credential for provider '{provider}'. {detail}".strip())
+    if status == 429:
+        raise ValueError(f"Rate limit reached for '{model}'. Try again shortly or switch models.")
+    if status == 400:
+        raise ValueError(f"Bad request to '{model}'. {detail}".strip())
+    raise RuntimeError(f"Model call failed [{model}] ({status}). {detail}".strip())
+
+
+def _normalize_usage_from_dict(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    usage = usage or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or usage.get("promptTokenCount") or usage.get("inputTokenCount") or 0)
+    completion_tokens = int(
+        usage.get("completion_tokens")
+        or usage.get("output_tokens")
+        or usage.get("candidatesTokenCount")
+        or usage.get("completionTokenCount")
+        or 0
+    )
+    total_tokens = int(
+        usage.get("total_tokens")
+        or usage.get("totalTokenCount")
+        or prompt_tokens + completion_tokens
+        or 0
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _anthropic_text_from_body(body: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for item in body.get("content", []) if isinstance(body.get("content"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("type") or "").strip().lower() != "text":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return "".join(parts).strip()
+
+
+def _gemini_text_from_body(body: Dict[str, Any]) -> str:
+    candidates = body.get("candidates")
+    parts: List[str] = []
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts", []) if isinstance(content.get("parts"), list) else []:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+def _provider_messages_for_openai(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return normalize_messages(messages)
+
+
+def _provider_messages_for_anthropic(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+    normalized = normalize_messages(messages)
+    system_parts: List[str] = []
+    provider_messages: List[Dict[str, Any]] = []
+    for message in normalized:
+        role = str(message.get("role") or "user").strip().lower()
+        content = message.get("content", "")
+        if role == "system":
+            text = _normalize_text_content(content)
+            if text:
+                system_parts.append(text)
+            continue
+        anthropic_role = "assistant" if role == "assistant" else "user"
+        provider_messages.append({"role": anthropic_role, "content": content})
+    if not provider_messages:
+        provider_messages.append({"role": "user", "content": ""})
+    return "\n\n".join(system_parts).strip(), provider_messages
+
+
+def _provider_messages_for_gemini(messages: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    normalized = normalize_messages(messages)
+    system_parts: List[str] = []
+    contents: List[Dict[str, Any]] = []
+    for message in normalized:
+        role = str(message.get("role") or "user").strip().lower()
+        text = _normalize_text_content(message.get("content"))
+        if role == "system":
+            if text:
+                system_parts.append(text)
+            continue
+        parts = []
+        if text:
+            parts.append({"text": text})
+        contents.append({"role": "model" if role == "assistant" else "user", "parts": parts or [{"text": ""}]})
+    system_instruction = None
+    if system_parts:
+        system_instruction = {"parts": [{"text": "\n\n".join(system_parts).strip()}]}
+    if not contents:
+        contents.append({"role": "user", "parts": [{"text": ""}]})
+    return system_instruction, contents
+
+
+def _sync_provider_completion(
+    *,
+    resolved_provider: str,
+    resolved_model: str,
+    messages: List[Any],
+    credentials: Optional[Dict[str, Any]],
+    max_tokens: int,
+    temperature: float,
+) -> Dict[str, Any]:
+    normalized = normalize_messages(messages)
+    if resolved_provider == "openai":
+        kwargs = _provider_kwargs(resolved_provider, credentials)
+        headers = {
+            "Authorization": f"Bearer {kwargs['api_key']}",
+            "Content-Type": "application/json",
+        }
+        for key, value in (kwargs.get("extra_headers") or {}).items():
+            headers[str(key)] = str(value)
+        payload = {
+            "model": resolved_model,
+            "messages": _provider_messages_for_openai(normalized),
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+        response = http_json_request(OPENAI_CHAT_COMPLETIONS_URL, headers=headers, payload=payload, timeout=60)
+        if int(response.get("status") or 500) >= 400:
+            _raise_provider_error(resolved_provider, resolved_model, response)
+        body = response.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Model call failed [{resolved_model}]: OpenAI returned invalid JSON.")
+        return {
+            "content": _extract_text(body),
+            "model": resolved_model,
+            "provider": resolved_provider,
+            "usage": _normalize_usage_from_dict(body.get("usage") if isinstance(body.get("usage"), dict) else {}),
+        }
+
+    if resolved_provider == "anthropic":
+        kwargs = _provider_kwargs(resolved_provider, credentials)
+        system_prompt, provider_messages = _provider_messages_for_anthropic(normalized)
+        payload = {
+            "model": resolved_model.split("/", 1)[1] if "/" in resolved_model else resolved_model,
+            "messages": provider_messages,
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+        response = http_json_request(
+            ANTHROPIC_MESSAGES_URL,
+            headers={
+                "x-api-key": kwargs["api_key"],
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            payload=payload,
+            timeout=60,
+        )
+        if int(response.get("status") or 500) >= 400:
+            _raise_provider_error(resolved_provider, resolved_model, response)
+        body = response.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Model call failed [{resolved_model}]: Anthropic returned invalid JSON.")
+        return {
+            "content": _anthropic_text_from_body(body),
+            "model": resolved_model,
+            "provider": resolved_provider,
+            "usage": _normalize_usage_from_dict(body.get("usage") if isinstance(body.get("usage"), dict) else {}),
+        }
+
+    if resolved_provider == "gemini":
+        kwargs = _provider_kwargs(resolved_provider, credentials)
+        model_id = resolved_model.split("/", 1)[1] if "/" in resolved_model else resolved_model
+        system_instruction, contents = _provider_messages_for_gemini(normalized)
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": float(temperature),
+                "maxOutputTokens": int(max_tokens),
+            },
+        }
+        if system_instruction:
+            payload["systemInstruction"] = system_instruction
+        response = http_json_request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(model_id)}:generateContent?key={quote_plus(kwargs['api_key'])}",
+            headers={"Content-Type": "application/json"},
+            payload=payload,
+            timeout=60,
+        )
+        if int(response.get("status") or 500) >= 400:
+            _raise_provider_error(resolved_provider, resolved_model, response)
+        body = response.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Model call failed [{resolved_model}]: Gemini returned invalid JSON.")
+        return {
+            "content": _gemini_text_from_body(body),
+            "model": resolved_model,
+            "provider": resolved_provider,
+            "usage": _normalize_usage_from_dict(body.get("usageMetadata") if isinstance(body.get("usageMetadata"), dict) else {}),
+        }
+
+    raise RuntimeError(f"Unsupported provider '{resolved_provider}'.")
 
 
 def _base_completion_kwargs(
@@ -325,6 +553,11 @@ async def _stream_text(stream: Any) -> AsyncGenerator[str, None]:
             yield text
 
 
+async def _yield_text_once(text: str) -> AsyncGenerator[str, None]:
+    if text:
+        yield text
+
+
 async def call_model(
     messages: List[Any],
     *,
@@ -348,7 +581,8 @@ async def call_model(
             model=resolved_model,
             credentials=credentials,
         )
-    resolved_provider, resolved_model, kwargs = _base_completion_kwargs(
+    result = await asyncio.to_thread(
+        call_model_sync,
         messages=messages,
         model=model,
         provider=provider,
@@ -357,25 +591,9 @@ async def call_model(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    try:
-        if stream:
-            stream_response = await acompletion(stream=True, **kwargs)
-            return _stream_text(stream_response)
-        response = await acompletion(stream=False, **kwargs)
-        return {
-            "content": _extract_text(response),
-            "model": resolved_model,
-            "provider": resolved_provider,
-            "usage": _normalize_usage(response),
-        }
-    except litellm.AuthenticationError as exc:
-        raise ValueError(f"Invalid or missing credential for provider '{resolved_provider}'.") from exc
-    except litellm.RateLimitError as exc:
-        raise ValueError(f"Rate limit reached for '{resolved_model}'. Try again shortly or switch models.") from exc
-    except litellm.BadRequestError as exc:
-        raise ValueError(f"Bad request to '{resolved_model}': {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Model call failed [{resolved_model}]: {exc}") from exc
+    if stream:
+        return _yield_text_once(str(result.get("content") or ""))
+    return result
 
 
 def call_model_sync(
@@ -397,28 +615,11 @@ def call_model_sync(
             model=resolved_model,
             credentials=credentials,
         )
-    resolved_provider, resolved_model, kwargs = _base_completion_kwargs(
+    return _sync_provider_completion(
+        resolved_provider=resolved_provider,
+        resolved_model=resolved_model,
         messages=messages,
-        model=model,
-        provider=provider,
-        profile_id=profile_id,
         credentials=credentials,
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    try:
-        response = completion(stream=False, **kwargs)
-        return {
-            "content": _extract_text(response),
-            "model": resolved_model,
-            "provider": resolved_provider,
-            "usage": _normalize_usage(response),
-        }
-    except litellm.AuthenticationError as exc:
-        raise ValueError(f"Invalid or missing credential for provider '{resolved_provider}'.") from exc
-    except litellm.RateLimitError as exc:
-        raise ValueError(f"Rate limit reached for '{resolved_model}'. Try again shortly or switch models.") from exc
-    except litellm.BadRequestError as exc:
-        raise ValueError(f"Bad request to '{resolved_model}': {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Model call failed [{resolved_model}]: {exc}") from exc

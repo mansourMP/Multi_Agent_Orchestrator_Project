@@ -133,7 +133,7 @@ export default function ApprovalsPage() {
   const [agentFilter, setAgentFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('all');
 
-  const headers = useMemo<HeadersInit>(() => {
+  const mutationHeaders = useMemo<HeadersInit>(() => {
     const next = new Headers();
     next.set('Content-Type', 'application/json');
     if (runtimeKey) next.set('X-API-Key', runtimeKey);
@@ -144,15 +144,27 @@ export default function ApprovalsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [pendingRes, historyRes, auditRes] = await Promise.all([
-        fetch(`${ORION_API_URL}/approvals?limit=40&workspace_id=default`, { headers }),
-        fetch(`${ORION_API_URL}/history/runs?limit=40&workspace_id=default`, { headers }),
-        fetch(`${ORION_API_URL}/approvals/audit?limit=30`, { headers }),
-      ]);
+      const overviewRes = await fetch('/api/approvals/overview', { cache: 'no-store' });
+      const overviewPayload = await overviewRes.json().catch(() => null);
+      if (!overviewRes.ok) {
+        const detail =
+          overviewPayload && typeof overviewPayload.detail === 'string' && overviewPayload.detail.trim()
+            ? overviewPayload.detail.trim()
+            : 'Failed to load approvals.';
+        throw new Error(detail);
+      }
 
-      const pendingPayload = pendingRes.ok ? await pendingRes.json() : null;
-      const historyPayload = historyRes.ok ? await historyRes.json() : null;
-      const auditPayload = auditRes.ok ? await auditRes.json() : null;
+      const overviewRecord =
+        overviewPayload && typeof overviewPayload === 'object'
+          ? (overviewPayload as {
+              pending?: { items?: unknown[] } | null;
+              history?: { items?: unknown[] } | null;
+              audit?: { items?: unknown[] } | null;
+            })
+          : {};
+      const pendingPayload = overviewRecord.pending ?? null;
+      const historyPayload = overviewRecord.history ?? null;
+      const auditPayload = overviewRecord.audit ?? null;
 
       const historyItems = Array.isArray(historyPayload?.items) ? (historyPayload.items as HistoryRunItem[]) : [];
       const historyByRunId = historyItems.reduce<Record<string, HistoryRunItem>>((acc, item) => {
@@ -229,7 +241,7 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [headers]);
+  }, []);
 
   const resolveApproval = useCallback(
     async (row: PendingApproval, decision: 'Proceed' | 'Hold') => {
@@ -240,7 +252,7 @@ export default function ApprovalsPage() {
           `${ORION_API_URL}/runs/${encodeURIComponent(row.runId)}/approvals/${encodeURIComponent(row.approvalId)}/resolve`,
           {
             method: 'POST',
-            headers,
+            headers: mutationHeaders,
             body: JSON.stringify({ decision, note: 'Resolved from approvals inbox' }),
           },
         );
@@ -260,7 +272,7 @@ export default function ApprovalsPage() {
         });
       }
     },
-    [headers, refresh],
+    [mutationHeaders, refresh],
   );
 
   useEffect(() => {

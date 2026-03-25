@@ -34,6 +34,7 @@ import {
 } from '@/components/orion/chat/chatSchema';
 import { WorkbenchShell } from '../components/orion/workbench/WorkbenchShell';
 import { WorkbenchActivityRail } from '../components/orion/workbench/WorkbenchActivityRail';
+import { type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import {
   WorkbenchCenterPanel,
   type HomeLiveAgentCard,
@@ -836,7 +837,7 @@ type AutopilotWorkspaceProps = {
 };
 
 export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
   const {

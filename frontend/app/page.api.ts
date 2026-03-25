@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, MutableRefObject } from 'react';
+import { openAuthenticatedEventStream, type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import {
   DEFAULT_CONNECTOR_LABELS,
   DEFAULT_MODEL_ALIAS_OPTIONS,
@@ -124,7 +125,7 @@ function describeLocalExecutionOperation(operation: LocalExecutionDraft['operati
   return path ? `write ${path}` : 'write file';
 }
 
-export function usePlatformApi(state: PageState, streamRef: MutableRefObject<EventSource | null>) {
+export function usePlatformApi(state: PageState, streamRef: MutableRefObject<AuthenticatedEventStreamConnection | null>) {
   const {
     runtimeApiKey,
     setLogs,
@@ -382,11 +383,44 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
   const fetchLocalWorkerStatus = useCallback(async (silent = false) => {
     if (!silent) setWorkersLoading(true);
     try {
-      const res = await fetch(`${ORION_API_URL}/local/workers/status`, { headers: buildHeaders(false) });
+      const res = await fetch(`/api/runtime/machines`, { cache: 'no-store' });
       if (!res.ok) return;
       const payload = await res.json();
       if (payload && typeof payload === 'object') {
-        setLocalWorkerStatus(payload as LocalWorkerStatus);
+        const runtimePayload = payload as {
+          summary?: LocalWorkerStatus['summary'];
+          items?: Array<{
+            runtime_id?: string;
+            status?: string;
+            online?: boolean;
+            current_task_id?: string | null;
+            last_seen_at?: string | null;
+            note?: string | null;
+          }>;
+        };
+        setLocalWorkerStatus({
+          enabled: true,
+          lease_seconds: 0,
+          summary: runtimePayload.summary || {
+            known: 0,
+            online: 0,
+            busy: 0,
+            idle: 0,
+            offline: 0,
+            pending_runs: 0,
+            claimed_runs: 0,
+          },
+          items: Array.isArray(runtimePayload.items)
+            ? runtimePayload.items.map((item) => ({
+                worker_id: String(item.runtime_id || '').trim(),
+                status: String(item.status || 'offline').trim() || 'offline',
+                online: Boolean(item.online),
+                current_run_id: typeof item.current_task_id === 'string' ? item.current_task_id : null,
+                last_seen_at: typeof item.last_seen_at === 'string' ? item.last_seen_at : null,
+                note: typeof item.note === 'string' ? item.note : null,
+              }))
+            : [],
+        });
       }
     } catch {
       // Ignore transient worker-status failures.
@@ -1913,62 +1947,72 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
       state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
 
       const effectiveRuntimeApiKey = state.runtimeApiKey || readRuntimeApiKeyFromStorage('');
-      const streamUrl = effectiveRuntimeApiKey
-        ? `${ORION_API_URL}/runs/${nextRunId}/stream?api_key=${encodeURIComponent(effectiveRuntimeApiKey)}`
-        : `${ORION_API_URL}/runs/${nextRunId}/stream`;
-      const source = new EventSource(streamUrl);
-      streamRef.current = source;
-
-      source.addEventListener('log', (event: MessageEvent) => {
-        const parsed = parseJson(event.data) as {
-          event?: string;
-          message?: string;
-          level?: LogLevel;
-          data?: { node_id?: string; approval_id?: string; pack_id?: string };
-        } | null;
-        if (parsed && typeof parsed === 'object') {
-          const evt = parsed.event || '';
-          const msg = evt === 'run_error' ? humanizeError(parsed.message || '') : parsed.message || event.data;
-          const level = (parsed.level as LogLevel) || 'info';
-          if (evt === 'local_queued') { state.setStatus('queued_local'); void fetchLocalWorkerStatus(true); }
-          if (evt === 'local_claimed') { state.setStatus('running'); void fetchLocalWorkerStatus(true); }
-          if (evt === 'approval_requested' || evt === 'approval_waiting') {
-            const approvalId = parsed.data?.approval_id;
-            if (approvalId) state.setPendingApprovalId(approvalId);
+      const streamUrl = `${ORION_API_URL}/runs/${nextRunId}/stream`;
+      const source = openAuthenticatedEventStream({
+        url: streamUrl,
+        apiKey: effectiveRuntimeApiKey,
+        onEvent: (event) => {
+          if (event.event === 'pause') {
             state.setStatus('waiting');
+            appendLog(RUN_WAITING_STATUS_COPY, 'warn');
+            return;
           }
-          if (evt === 'approval_required') state.setStatus('waiting');
-          if (['approval_received', 'approval_resolved', 'approval_skipped'].includes(evt)) state.setPendingApprovalId(null);
-          if (evt === 'approval_timeout') { state.setPendingApprovalId(null); state.setStatus('error'); }
-          if (evt === 'pack_summary' && parsed.data?.pack_id) {
-            state.setPackResult(parsed.data as unknown as PackResult);
+          if (event.event !== 'log') {
+            appendLog(String(event.data || ''), 'info', event.event || 'stream_raw');
+            return;
           }
-          appendLog(msg, level, evt || undefined, parsed.data?.node_id);
-          if (evt === 'run_complete') {
-            state.setStatus('completed'); state.setPendingApprovalId(null);
-            void fetchLocalWorkerStatus(true); void fetchRunResult(nextRunId);
+          const parsed = parseJson(event.data) as {
+            event?: string;
+            message?: string;
+            level?: LogLevel;
+            data?: { node_id?: string; approval_id?: string; pack_id?: string };
+          } | null;
+          if (parsed && typeof parsed === 'object') {
+            const evt = parsed.event || '';
+            const msg = evt === 'run_error' ? humanizeError(parsed.message || '') : parsed.message || event.data;
+            const level = (parsed.level as LogLevel) || 'info';
+            if (evt === 'local_queued') { state.setStatus('queued_local'); void fetchLocalWorkerStatus(true); }
+            if (evt === 'local_claimed') { state.setStatus('running'); void fetchLocalWorkerStatus(true); }
+            if (evt === 'approval_requested' || evt === 'approval_waiting') {
+              const approvalId = parsed.data?.approval_id;
+              if (approvalId) state.setPendingApprovalId(approvalId);
+              state.setStatus('waiting');
+            }
+            if (evt === 'approval_required') state.setStatus('waiting');
+            if (['approval_received', 'approval_resolved', 'approval_skipped'].includes(evt)) state.setPendingApprovalId(null);
+            if (evt === 'approval_timeout') { state.setPendingApprovalId(null); state.setStatus('error'); }
+            if (evt === 'pack_summary' && parsed.data?.pack_id) {
+              state.setPackResult(parsed.data as unknown as PackResult);
+            }
+            appendLog(msg, level, evt || undefined, parsed.data?.node_id);
+            if (evt === 'run_complete') {
+              state.setStatus('completed'); state.setPendingApprovalId(null);
+              void fetchLocalWorkerStatus(true); void fetchRunResult(nextRunId);
+            }
+            if (evt === 'run_error') {
+              state.setStatus('error'); state.setPendingApprovalId(null);
+              void fetchLocalWorkerStatus(true);
+              if (msg.toLowerCase().includes('key')) { state.setSetupStatus(p => ({ ...p, connectionTested: false })); state.setShowSetupWizard(true); }
+            }
+            return;
           }
-          if (evt === 'run_error') {
-            state.setStatus('error'); state.setPendingApprovalId(null);
-            void fetchLocalWorkerStatus(true);
-            if (msg.toLowerCase().includes('key')) { state.setSetupStatus(p => ({ ...p, connectionTested: false })); state.setShowSetupWizard(true); }
-          }
-          return;
-        }
-        appendLog(String(event.data), 'info', 'stream_raw');
+          appendLog(String(event.data), 'info', 'stream_raw');
+        },
+        onError: () => {
+          if (streamRef.current === source) streamRef.current = null;
+          appendLog('Stream disconnected. Syncing...', 'warn');
+          void fetchLocalWorkerStatus(true);
+          void (async () => {
+            const synced = await fetchRunResult(nextRunId);
+            if (synced) state.setStatus(synced as RunStatus);
+            else state.setStatus(p => p === 'running' ? 'error' : p);
+          })();
+        },
+        onClose: () => {
+          if (streamRef.current === source) streamRef.current = null;
+        },
       });
-
-      source.addEventListener('pause', () => { state.setStatus('waiting'); appendLog(RUN_WAITING_STATUS_COPY, 'warn'); });
-      source.onerror = () => {
-        source.close(); streamRef.current = null;
-        appendLog('Stream disconnected. Syncing...', 'warn');
-        void fetchLocalWorkerStatus(true);
-        void (async () => {
-          const synced = await fetchRunResult(nextRunId);
-          if (synced) state.setStatus(synced as RunStatus);
-          else state.setStatus(p => p === 'running' ? 'error' : p);
-        })();
-      };
+      streamRef.current = source;
     } catch (error: unknown) {
       const message = humanizeError(error instanceof Error ? error.message : 'Autopilot failed.');
       state.setStatus('error'); state.setTopError(message); appendLog(message, 'error'); state.setShowSetupWizard(true);

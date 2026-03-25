@@ -49,7 +49,7 @@ fetch_json() {
 }
 
 HEALTH_JSON="$(fetch_json "/health")"
-WORKERS_JSON="$(fetch_json "/local/workers/status")"
+WORKERS_JSON="$(fetch_json "/runtime/runtimes/status")"
 TG_JSON="$(fetch_json "/channels/telegram/autopilot/status")"
 WA_JSON="$(fetch_json "/channels/whatsapp/autopilot/status")"
 HISTORY_JSON="$(fetch_json "/history/runs?limit=1")"

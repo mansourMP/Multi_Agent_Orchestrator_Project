@@ -18,6 +18,7 @@ import {
     type ModelAliasOption,
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
+import { openAuthenticatedEventStream, type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import { API_BASE } from '@/lib/config';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
 import {
@@ -597,7 +598,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const { addToast } = useToast();
     const router = useRouter();
     const searchParams = useSearchParams();
-    const streamRef = useRef<EventSource | null>(null);
+    const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
     const flowInstanceRef = useRef<ReactFlowInstance<CanvasWorkflowNode, Edge> | null>(null);
     const canvasHostRef = useRef<HTMLDivElement | null>(null);
     const canvasSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1817,58 +1818,64 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             setRunId(nextRunId);
             appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
 
-            const streamUrl = runtimeApiKey
-                ? `${ORION_API_URL}/runs/${nextRunId}/stream?api_key=${encodeURIComponent(runtimeApiKey)}`
-                : `${ORION_API_URL}/runs/${nextRunId}/stream`;
-            const eventSource = new EventSource(streamUrl);
-            streamRef.current = eventSource;
-
-            eventSource.addEventListener('log', (event: MessageEvent) => {
-                const parsed = parseJson(event.data);
-                if (isStreamPayload(parsed)) {
-                    const evt = String(parsed.event || '');
-                    const rawMessage = String(parsed.message || event.data);
-                    const prettyMessage = evt === 'run_error' ? humanizeRuntimeError(rawMessage) : rawMessage;
-                    appendLog(prettyMessage, (parsed.level as LogLevel) || 'info');
-                    if (evt === 'run_complete') setRunStatus('completed');
-                    if (evt === 'run_error') setRunStatus('error');
-                    if (evt === 'usage_masked' && parsed.data && typeof parsed.data === 'object') {
-                        const usage = parsed.data as Partial<MaskedUsageTelemetry>;
-                        if (
-                            typeof usage.provider === 'string' &&
-                            typeof usage.model === 'string' &&
-                            typeof usage.input_tokens_est === 'number' &&
-                            typeof usage.output_tokens_est === 'number' &&
-                            typeof usage.total_tokens_est === 'number' &&
-                            typeof usage.cost_est_usd === 'number' &&
-                            typeof usage.cost_band === 'string'
-                        ) {
-                            setUsageTelemetry({
-                                provider: usage.provider,
-                                model: usage.model,
-                                input_tokens_est: usage.input_tokens_est,
-                                output_tokens_est: usage.output_tokens_est,
-                                total_tokens_est: usage.total_tokens_est,
-                                cost_est_usd: usage.cost_est_usd,
-                                cost_band: usage.cost_band,
-                            });
-                        }
+            const streamUrl = `${ORION_API_URL}/runs/${nextRunId}/stream`;
+            const eventSource = openAuthenticatedEventStream({
+                url: streamUrl,
+                apiKey: runtimeApiKey,
+                onEvent: (event) => {
+                    if (event.event === 'pause') {
+                        setRunStatus('waiting');
+                        appendLog(RUN_WAITING_STATUS_COPY, 'warn');
+                        return;
                     }
-                    return;
-                }
-                appendLog(String(event.data));
+                    if (event.event !== 'log') {
+                        appendLog(String(event.data || ''));
+                        return;
+                    }
+                    const parsed = parseJson(event.data);
+                    if (isStreamPayload(parsed)) {
+                        const evt = String(parsed.event || '');
+                        const rawMessage = String(parsed.message || event.data);
+                        const prettyMessage = evt === 'run_error' ? humanizeRuntimeError(rawMessage) : rawMessage;
+                        appendLog(prettyMessage, (parsed.level as LogLevel) || 'info');
+                        if (evt === 'run_complete') setRunStatus('completed');
+                        if (evt === 'run_error') setRunStatus('error');
+                        if (evt === 'usage_masked' && parsed.data && typeof parsed.data === 'object') {
+                            const usage = parsed.data as Partial<MaskedUsageTelemetry>;
+                            if (
+                                typeof usage.provider === 'string' &&
+                                typeof usage.model === 'string' &&
+                                typeof usage.input_tokens_est === 'number' &&
+                                typeof usage.output_tokens_est === 'number' &&
+                                typeof usage.total_tokens_est === 'number' &&
+                                typeof usage.cost_est_usd === 'number' &&
+                                typeof usage.cost_band === 'string'
+                            ) {
+                                setUsageTelemetry({
+                                    provider: usage.provider,
+                                    model: usage.model,
+                                    input_tokens_est: usage.input_tokens_est,
+                                    output_tokens_est: usage.output_tokens_est,
+                                    total_tokens_est: usage.total_tokens_est,
+                                    cost_est_usd: usage.cost_est_usd,
+                                    cost_band: usage.cost_band,
+                                });
+                            }
+                        }
+                        return;
+                    }
+                    appendLog(String(event.data));
+                },
+                onError: () => {
+                    eventSource.close();
+                    if (streamRef.current === eventSource) streamRef.current = null;
+                    setRunStatus((prev) => (prev === 'running' ? 'completed' : prev));
+                },
+                onClose: () => {
+                    if (streamRef.current === eventSource) streamRef.current = null;
+                },
             });
-
-            eventSource.addEventListener('pause', () => {
-                setRunStatus('waiting');
-                appendLog(RUN_WAITING_STATUS_COPY, 'warn');
-            });
-
-            eventSource.onerror = () => {
-                eventSource.close();
-                streamRef.current = null;
-                setRunStatus((prev) => (prev === 'running' ? 'completed' : prev));
-            };
+            streamRef.current = eventSource;
         } catch (error: unknown) {
             setRunStatus('error');
             const message = humanizeRuntimeError(getErrorMessage(error, 'Run failed to start.'));

@@ -16,6 +16,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
+import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 
 type NavItem = {
   label: string;
@@ -63,9 +64,7 @@ function isActivePath(pathname: string, href: string): boolean {
 export default function Sidebar() {
   const pathname = usePathname() ?? '/';
   const router = useRouter();
-  const isBuilderEditorRoute = pathname.startsWith('/builder/');
-  const isSetupRoute = pathname.startsWith('/setup');
-  const hideShellChrome = isBuilderEditorRoute || isSetupRoute;
+  const { hideShellChrome } = useShellChromeVisibility(pathname);
   const pendingApprovalsCount = 0;
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
 

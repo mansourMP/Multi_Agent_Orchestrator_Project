@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ChevronDown, Laptop, Server, Settings, TriangleAlert, UserRound, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
+import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 
@@ -15,9 +16,7 @@ const PwaInstallControl = dynamic(() => import('@/components/orion/PwaInstallCon
 
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
-  const isBuilderEditorRoute = pathname.startsWith('/builder/');
-  const isSetupRoute = pathname.startsWith('/setup');
-  const hideShellChrome = isBuilderEditorRoute || isSetupRoute;
+  const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { status } = usePlatformShell();
 
   useEffect(() => {

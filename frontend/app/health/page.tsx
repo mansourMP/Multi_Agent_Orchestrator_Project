@@ -24,10 +24,6 @@ import {
   groupDoctorChecks,
   PriorityFix,
 } from '@/lib/doctorChecks';
-import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
-
-const BACKEND_API_URL = API_BASE;
-const ORION_API_URL = API_BASE;
 
 type CardStatus = 'loading' | 'ok' | 'warn' | 'error';
 
@@ -224,6 +220,25 @@ type HistoryRunsPayload = {
   }>;
 };
 
+type HealthOverviewEntry = {
+  status: number;
+  latency: number;
+  payload: unknown;
+};
+
+type HealthOverviewPayload = {
+  backend: HealthOverviewEntry;
+  runtime: HealthOverviewEntry;
+  doctor: HealthOverviewEntry;
+  doctorHistory: HealthOverviewEntry;
+  metrics: HealthOverviewEntry;
+  profiles: HealthOverviewEntry;
+  validation: HealthOverviewEntry;
+  validationHistory: HealthOverviewEntry;
+  workers: HealthOverviewEntry;
+  desktopHistory: HealthOverviewEntry;
+};
+
 function statusMeta(status: CardStatus): {
   iconColor: string;
   textColor: string;
@@ -287,15 +302,6 @@ function checkBadgeColor(status: string): { bg: string; text: string; border: st
     text: 'var(--error-fg)',
     border: '1px solid var(--error-border)',
   };
-}
-
-async function timedFetch(
-  input: string,
-  init?: RequestInit,
-): Promise<{ response: Response; latency: number }> {
-  const started = Date.now();
-  const response = await fetch(input, init);
-  return { response, latency: Date.now() - started };
 }
 
 export default function HealthPage() {
@@ -555,7 +561,7 @@ export default function HealthPage() {
       return {
         tone: 'warn' as const,
         icon: AlertTriangle,
-        message: 'Protected diagnostics require the same runtime key used by runtime.',
+        message: 'Protected diagnostics require server-side runtime access.',
       };
     }
     if (doctorCard.status === 'ok' && runtime.status === 'ok') {
@@ -584,11 +590,6 @@ export default function HealthPage() {
     });
   }, [doctorHistory]);
 
-  const resolveRuntimeKey = useCallback((): string => {
-    const key = readRuntimeApiKeyFromStorage('');
-    return String(key || '').replace(/\s+/g, '');
-  }, []);
-
   const updateOpsDaemonFromPayload = useCallback((payload: unknown) => {
     const record = payload as Record<string, unknown>;
     const watchdog = (record?.watchdog ?? null) as Record<string, unknown> | null;
@@ -601,23 +602,15 @@ export default function HealthPage() {
         watchdog && typeof watchdog.healthy === 'boolean'
           ? watchdog.healthy
           : null,
-    });
+      });
   }, []);
-
-  const runtimeHeaders = useCallback(() => {
-    const headers = new Headers();
-    const key = resolveRuntimeKey();
-    if (key) headers.set('X-API-Key', key);
-    return headers;
-  }, [resolveRuntimeKey]);
 
   const runLocalOpsAction = useCallback(
     async (action: LocalOpsAction): Promise<Record<string, unknown>> => {
-      const runtimeKey = resolveRuntimeKey();
       const res = await fetch('/api/local-ops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, runtimeKey }),
+        body: JSON.stringify({ action }),
       });
       const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
@@ -629,7 +622,7 @@ export default function HealthPage() {
       }
       return payload;
     },
-    [resolveRuntimeKey],
+    [],
   );
 
   const formatLocalOpsOutput = useCallback((payload: Record<string, unknown>): string => {
@@ -656,7 +649,7 @@ export default function HealthPage() {
       timedFetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=default`, { headers: runtimeHeaders() }),
       timedFetch(`${ORION_API_URL}/validation/latest`, { headers: runtimeHeaders() }),
       timedFetch(`${ORION_API_URL}/validation/history?limit=6`, { headers: runtimeHeaders() }),
-      timedFetch(`${ORION_API_URL}/local/workers/status`, { headers: runtimeHeaders() }),
+      timedFetch(`/api/runtime/machines`),
       timedFetch(`${ORION_API_URL}/history/runs?limit=20&status=failed&pack_id=local-execution-v1`, { headers: runtimeHeaders() }),
     ]);
 
@@ -853,7 +846,40 @@ export default function HealthPage() {
 
     if (workersRes.status === 'fulfilled') {
       if (workersRes.value.response.ok) {
-        const payload = (await workersRes.value.response.json()) as LocalWorkersPayload;
+        const runtimePayload = (await workersRes.value.response.json()) as {
+          summary?: LocalWorkersPayload['summary'];
+          items?: Array<{
+            runtime_id?: string;
+            status?: string;
+            online?: boolean;
+            current_task_id?: string | null;
+            last_seen_at?: string | null;
+            note?: string | null;
+          }>;
+        };
+        const payload: LocalWorkersPayload = {
+          enabled: true,
+          lease_seconds: 0,
+          summary: runtimePayload.summary || {
+            known: 0,
+            online: 0,
+            busy: 0,
+            idle: 0,
+            offline: 0,
+            pending_runs: 0,
+            claimed_runs: 0,
+          },
+          items: Array.isArray(runtimePayload.items)
+            ? runtimePayload.items.map((item) => ({
+                worker_id: String(item.runtime_id || '').trim(),
+                status: String(item.status || 'offline').trim() || 'offline',
+                online: Boolean(item.online),
+                current_run_id: typeof item.current_task_id === 'string' ? item.current_task_id : null,
+                last_seen_at: typeof item.last_seen_at === 'string' ? item.last_seen_at : null,
+                note: typeof item.note === 'string' ? item.note : null,
+              }))
+            : [],
+        };
         setWorkers(payload);
         const status: CardStatus =
           !payload.enabled
@@ -888,7 +914,7 @@ export default function HealthPage() {
       }
     } else {
       setWorkers(null);
-      setWorkersCard({ status: 'error', detail: 'Cannot reach /local/workers/status endpoint.' });
+      setWorkersCard({ status: 'error', detail: 'Cannot reach runtime machine status endpoint.' });
     }
 
     if (desktopHistoryRes.status === 'fulfilled' && desktopHistoryRes.value.response.ok) {

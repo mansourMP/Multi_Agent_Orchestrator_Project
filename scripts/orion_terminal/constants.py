@@ -132,7 +132,6 @@ ORION_SETUP_PROVIDER_GROUPS: List[Choice] = [
     Choice("together", "Together AI", "API key"),
     Choice("huggingface", "Hugging Face", "Inference API token"),
     Choice("venice", "Venice AI", "Privacy-focused"),
-    Choice("litellm", "LiteLLM", "Unified LLM gateway"),
     Choice("cloudflare-ai-gateway", "Cloudflare AI Gateway", "Account + Gateway + API key"),
     Choice("custom", "Custom Provider", "OpenAI/Anthropic compatible endpoint"),
     Choice("skip", "Skip for now", "Continue without provider override"),

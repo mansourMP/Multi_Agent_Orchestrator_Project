@@ -346,6 +346,7 @@ ORION_AUTH_REQUIRED = (_ORION_AUTH_REQUIRED_RAW != "0") if _ORION_AUTH_REQUIRED_
 if ORION_DEV_INSECURE_NO_AUTH:
     ORION_AUTH_REQUIRED = False
     print("[WARN] ORION_DEV_INSECURE_NO_AUTH=1 set; runtime API auth is disabled for this process.")
+ORION_ENABLE_LEGACY_LOCAL_ROUTES = str(os.getenv("ORION_ENABLE_LEGACY_LOCAL_ROUTES", "0")).strip().lower() in {"1", "true", "yes", "on"}
 ORION_ALLOW_SYSTEM_PROXY = os.getenv("ORION_ALLOW_SYSTEM_PROXY", "0") == "1"
 ORION_RUN_TIMEOUT_SECONDS = int(os.getenv("ORION_RUN_TIMEOUT_SECONDS", "300"))
 ORION_MAX_RETRIES = int(os.getenv("ORION_MAX_RETRIES", "2"))

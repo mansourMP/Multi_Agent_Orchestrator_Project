@@ -24,6 +24,9 @@ LOGIN_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 USER_RATE_LIMIT_LOCK = threading.Lock()
 USER_RATE_LIMIT_BUCKETS: Dict[str, list[float]] = {}
 JWT_EXP_SECONDS = int(os.getenv("ORION_JWT_EXP_SECONDS", "3600"))
+ORION_PUBLIC_REGISTRATION_ENABLED = str(os.getenv("ORION_PUBLIC_REGISTRATION_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+ORION_ADMIN_USER_IDS = {item.strip() for item in str(os.getenv("ORION_ADMIN_USER_IDS", "")).split(",") if item.strip()}
+ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMIN_EMAILS", "")).split(",") if item.strip()}
 
 
 def _jwt_secret() -> str:
@@ -105,7 +108,7 @@ def issue_token(user_id: str, *, email: Optional[str] = None) -> str:
     return f"{header_segment}.{payload_segment}.{_b64url_encode(signature)}"
 
 
-def verify_token(token: str) -> str:
+def _decode_token_payload(token: str) -> Dict[str, Any]:
     try:
         header_segment, payload_segment, signature_segment = str(token or "").split(".", 2)
     except ValueError as exc:
@@ -121,6 +124,11 @@ def verify_token(token: str) -> str:
         raise HTTPException(status_code=401, detail="Invalid bearer token payload.") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=401, detail="Invalid bearer token payload.")
+    return payload
+
+
+def verify_token(token: str) -> str:
+    payload = _decode_token_payload(token)
     user_id = str(payload.get("sub") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Bearer token subject is missing.")
@@ -235,14 +243,21 @@ def get_current_user(
 
     auth_header = str(authorization or "").strip()
     if auth_header.lower().startswith("bearer "):
-        user_id = verify_token(auth_header[7:].strip())
+        payload = _decode_token_payload(auth_header[7:].strip())
+        user_id = str(payload.get("sub") or "").strip()
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Bearer token subject is missing.")
+        exp = int(payload.get("exp") or 0)
+        if exp and exp < int(time.time()):
+            raise HTTPException(status_code=401, detail="Bearer token has expired.")
+        email = str(payload.get("email") or "").strip().lower() or None
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
             lock=USER_RATE_LIMIT_LOCK,
             key=f"user:{user_id}",
             limit=60,
         )
-        return {"user_id": user_id, "auth_type": "bearer"}
+        return {"user_id": user_id, "auth_type": "bearer", "email": email}
 
     expected_api_key = str(ORION_API_KEY or "").strip()
     provided_api_key = str(x_api_key or "").strip()
@@ -253,6 +268,39 @@ def get_current_user(
             key="user:service",
             limit=60,
         )
-        return {"user_id": "service", "auth_type": "api_key"}
+        return {"user_id": "service", "auth_type": "api_key", "email": None}
 
     raise HTTPException(status_code=401, detail="Authentication required.")
+
+
+def ensure_public_registration_enabled() -> bool:
+    if not ORION_PUBLIC_REGISTRATION_ENABLED:
+        raise HTTPException(status_code=404, detail="Public registration is disabled.")
+    return True
+
+
+def require_admin_access(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> Dict[str, Any]:
+    user = get_current_user(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
+    if not ORION_AUTH_REQUIRED:
+        user["is_admin"] = True
+        return user
+    if str(user.get("auth_type") or "").strip() == "api_key":
+        user["is_admin"] = True
+        return user
+    user_id = str(user.get("user_id") or "").strip()
+    email = str(user.get("email") or "").strip().lower()
+    if user_id and user_id in ORION_ADMIN_USER_IDS:
+        user["is_admin"] = True
+        return user
+    if email and email in ORION_ADMIN_EMAILS:
+        user["is_admin"] = True
+        return user
+    raise HTTPException(status_code=403, detail="Admin access required.")

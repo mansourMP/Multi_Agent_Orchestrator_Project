@@ -79,7 +79,7 @@ echo "== Empyralis Go Checks =="
 
 HEALTH_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/health")"
 AUTO_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/channels/telegram/autopilot/status")"
-WORKER_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/local/workers/status")"
+WORKER_JSON="$(curl -fsS -H "X-API-Key: ${RUNTIME_KEY_VALUE}" "${API_URL}/runtime/runtimes/status")"
 OPS_HEALTH_JSON="$(curl -fsS "${OPS_DAEMON_URL}/health" 2>/dev/null || echo '{}')"
 
 echo "${HEALTH_JSON}" | jq -r '

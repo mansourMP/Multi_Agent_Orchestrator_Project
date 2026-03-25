@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 
 type MetricStripItem = {
   label: string;
@@ -54,11 +54,7 @@ export function MetricStrip({ items, minWidth = 180 }: MetricStripProps) {
   return (
     <section
       className="orion-metric-strip orion-stagger-grid"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(auto-fit, minmax(${minWidth}px, 1fr))`,
-        gap: 10,
-      }}
+      style={{ '--orion-metric-min-width': `${minWidth}px` } as CSSProperties}
     >
       {items.map((item) => (
         <section key={item.label} className="orion-stat-card">

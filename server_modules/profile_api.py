@@ -436,7 +436,7 @@ def register_profile_routes(app) -> None:
         if key not in module_globals:
             module_globals[key] = value
 
-    @app.get("/profiles", dependencies=[Depends(require_api_key)])
+    @app.get("/profiles", dependencies=[Depends(require_admin_api_key)])
     async def list_profiles(workspace_id: Optional[str] = None):
         workspace_token = _normalize_workspace(workspace_id)
         items = [_serialize_profile(profile_id, workspace_token, include_content=False) for profile_id in _list_profile_ids(workspace_token)]
@@ -446,7 +446,7 @@ def register_profile_routes(app) -> None:
             "workspace_id": workspace_token,
         }
 
-    @app.get("/profiles/{profile_id}", dependencies=[Depends(require_api_key)])
+    @app.get("/profiles/{profile_id}", dependencies=[Depends(require_admin_api_key)])
     async def get_profile(profile_id: str, workspace_id: Optional[str] = None):
         workspace_token = _normalize_workspace(workspace_id)
         token = _slugify_profile_token(profile_id)
@@ -457,7 +457,7 @@ def register_profile_routes(app) -> None:
             "default_profile_id": _get_default_profile_id(workspace_token),
         }
 
-    @app.post("/profiles", dependencies=[Depends(require_api_key)])
+    @app.post("/profiles", dependencies=[Depends(require_admin_api_key)])
     async def create_profile(body: ProfileCreateRequest):
         body.validate_fields()
         workspace_token = _normalize_workspace(body.workspace_id)
@@ -496,7 +496,7 @@ def register_profile_routes(app) -> None:
             _write_json(_profile_allowlist_path(profile_id, workspace_token), allowlist)
         return {"item": _serialize_profile(str(metadata["id"]), workspace_token, include_content=True)}
 
-    @app.patch("/profiles/{profile_id}", dependencies=[Depends(require_api_key)])
+    @app.patch("/profiles/{profile_id}", dependencies=[Depends(require_admin_api_key)])
     async def patch_profile(profile_id: str, body: ProfilePatchRequest, workspace_id: Optional[str] = None):
         body.validate_fields()
         workspace_token = _normalize_workspace(workspace_id)
@@ -535,7 +535,7 @@ def register_profile_routes(app) -> None:
             _write_json(_profile_allowlist_path(token, workspace_token), allowlist)
         return {"item": _serialize_profile(token, workspace_token, include_content=True)}
 
-    @app.post("/profiles/{profile_id}/set-default", dependencies=[Depends(require_api_key)])
+    @app.post("/profiles/{profile_id}/set-default", dependencies=[Depends(require_admin_api_key)])
     async def set_default_profile(profile_id: str, workspace_id: Optional[str] = None):
         workspace_token = _normalize_workspace(workspace_id)
         token = _slugify_profile_token(profile_id)
@@ -544,7 +544,7 @@ def register_profile_routes(app) -> None:
         default_profile_id = _set_default_profile_id(workspace_token, token)
         return {"ok": True, "default_profile_id": default_profile_id, "workspace_id": workspace_token}
 
-    @app.post("/profiles/{profile_id}/reset", dependencies=[Depends(require_api_key)])
+    @app.post("/profiles/{profile_id}/reset", dependencies=[Depends(require_admin_api_key)])
     async def reset_profile(profile_id: str, workspace_id: Optional[str] = None):
         workspace_token = _normalize_workspace(workspace_id)
         token = _slugify_profile_token(profile_id)
@@ -578,7 +578,7 @@ def register_profile_routes(app) -> None:
                 shutil.rmtree(item, ignore_errors=True)
         return {"item": _serialize_profile(token, workspace_token, include_content=True)}
 
-    @app.post("/profiles/{profile_id}/test", dependencies=[Depends(require_api_key)])
+    @app.post("/profiles/{profile_id}/test", dependencies=[Depends(require_admin_api_key)])
     async def test_profile(profile_id: str, workspace_id: Optional[str] = None):
         workspace_token = _normalize_workspace(workspace_id)
         token = _slugify_profile_token(profile_id)

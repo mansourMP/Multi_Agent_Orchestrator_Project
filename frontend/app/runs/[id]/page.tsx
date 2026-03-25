@@ -13,6 +13,11 @@ import {
   Search,
   ShieldCheck,
 } from 'lucide-react';
+import {
+  AUTH_STREAM_CLOSED,
+  openAuthenticatedEventStream,
+  type AuthenticatedEventStreamConnection,
+} from '@/lib/authenticatedEventStream';
 import { API_BASE } from '@/lib/config';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
@@ -250,7 +255,7 @@ function formatStatusLabel(
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
   const runId = String(params?.id || '').trim();
-  const streamRef = useRef<EventSource | null>(null);
+  const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [historyItem, setHistoryItem] = useState<HistoryItem | null>(null);
@@ -315,38 +320,40 @@ export default function RunDetailPage() {
     }
 
     const runtimeKey = getRuntimeKey();
-    const url = runtimeKey
-      ? `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream?api_key=${encodeURIComponent(runtimeKey)}`
-      : `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
-    const source = new EventSource(url);
-    streamRef.current = source;
-
-    source.addEventListener('log', (event: MessageEvent) => {
-      try {
-        const parsed = JSON.parse(String(event.data || '{}')) as ReplayEvent;
-        setLiveEvents((prev) => [...prev.slice(-19), parsed]);
-        const eventName = String(parsed.event || '').toLowerCase();
-        if (
-          eventName === 'run_complete'
-          || eventName === 'run_error'
-          || eventName === 'run_stopped'
-          || eventName === 'timeout'
-          || eventName.startsWith('approval_')
-        ) {
-          void load();
+    const url = `${ORION_API_URL}/runs/${encodeURIComponent(runId)}/stream`;
+    const source = openAuthenticatedEventStream({
+      url,
+      apiKey: runtimeKey,
+      onEvent: (event) => {
+        if (event.event !== 'log') return;
+        try {
+          const parsed = JSON.parse(String(event.data || '{}')) as ReplayEvent;
+          setLiveEvents((prev) => [...prev.slice(-19), parsed]);
+          const eventName = String(parsed.event || '').toLowerCase();
+          if (
+            eventName === 'run_complete'
+            || eventName === 'run_error'
+            || eventName === 'run_stopped'
+            || eventName === 'timeout'
+            || eventName.startsWith('approval_')
+          ) {
+            void load();
+          }
+        } catch {
+          // Ignore malformed live events on the simplified view.
         }
-      } catch {
-        // Ignore malformed live events on the simplified view.
-      }
-    });
-
-    source.onerror = () => {
-      if (source.readyState === EventSource.CLOSED) {
-        source.close();
+      },
+      onError: () => {
+        if (source.readyState === AUTH_STREAM_CLOSED && streamRef.current === source) {
+          streamRef.current = null;
+        }
+        void load();
+      },
+      onClose: () => {
         if (streamRef.current === source) streamRef.current = null;
-      }
-      void load();
-    };
+      },
+    });
+    streamRef.current = source;
 
     return () => {
       source.close();

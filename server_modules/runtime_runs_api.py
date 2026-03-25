@@ -16,6 +16,42 @@ def _refresh_server_exports():
     return _server
 
 
+def _can_view_sensitive_run_payload(user: Optional[dict]) -> bool:
+    if not isinstance(user, dict):
+        return False
+    if bool(user.get("is_admin")):
+        return True
+    return str(user.get("auth_type") or "").strip() == "api_key"
+
+
+def _limited_run_context_view(context: dict) -> dict:
+    if not isinstance(context, dict):
+        return {}
+    return {
+        "workspace_id": context.get("workspace_id"),
+        "workflow_id": context.get("workflow_id"),
+        "user_goal": context.get("user_goal"),
+        "business_plan": context.get("business_plan"),
+    }
+
+
+def _limited_result_data_view(result_data: Any) -> Optional[dict]:
+    if not isinstance(result_data, dict):
+        return None
+    execution_summary = result_data.get("execution_summary") if isinstance(result_data.get("execution_summary"), dict) else {}
+    return {
+        "summary": result_data.get("summary"),
+        "pack_id": result_data.get("pack_id"),
+        "execution_summary": {
+            "risk_level": execution_summary.get("risk_level"),
+            "next_action": execution_summary.get("next_action"),
+            "approval_required": execution_summary.get("approval_required"),
+            "approval_reason": execution_summary.get("approval_reason"),
+            "estimated_time_saved_minutes": execution_summary.get("estimated_time_saved_minutes"),
+        },
+    }
+
+
 def _resolve_local_execution_start_approval(
     run_id_str: str,
     run: dict,
@@ -427,13 +463,14 @@ def register_run_routes(app) -> None:
             "doctor_preflight": doctor_preflight,
         }
 
-    @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
-    async def get_run(run_id: uuid.UUID):
+    @app.get("/runs/{run_id}")
+    async def get_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         from server_modules.runs_delegation import _build_delegation_summary, _find_run_relationships
         from server_modules.runs_output import _get_replay_payload, _resolve_run_connector_binding, _serialize_run_snapshot, redact_sensitive
         from server_modules.runtime_memory import _trim_memory_trace
         run_id_str = str(run_id)
+        include_sensitive = _can_view_sensitive_run_payload(current_user)
         run = runs.get(run_id_str)
         archived = False
 
@@ -447,6 +484,7 @@ def register_run_routes(app) -> None:
             metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
             parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
             delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
+            safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
             return {
                 "run_id": run_id_str,
                 "engine": snapshot.get("engine", "orion"),
@@ -463,7 +501,7 @@ def register_run_routes(app) -> None:
                 "active_profile_model": snapshot.get("active_profile_model"),
                 "active_adapter": snapshot.get("active_adapter"),
                 "result": snapshot.get("result_summary"),
-                "result_data": snapshot.get("result_data"),
+                "result_data": snapshot.get("result_data") if include_sensitive else _limited_result_data_view(snapshot.get("result_data")),
                 "agent_role": metadata.get("agent_role"),
                 "agent_role_source": metadata.get("agent_role_source"),
                 "parent_run_id": snapshot.get("parent_run_id"),
@@ -475,12 +513,12 @@ def register_run_routes(app) -> None:
                 "child_runs": child_runs,
                 "delegation_summary": delegation_summary,
                 "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
-                "tool_policy_precheck": snapshot.get("tool_policy_precheck"),
-                "tool_policy_audit": snapshot.get("tool_policy_audit"),
-                "memory_trace": snapshot.get("memory_trace"),
+                "tool_policy_precheck": snapshot.get("tool_policy_precheck") if include_sensitive else None,
+                "tool_policy_audit": snapshot.get("tool_policy_audit") if include_sensitive else [],
+                "memory_trace": snapshot.get("memory_trace") if include_sensitive else {},
                 "pending_approval": None,
-                "dag": snapshot.get("dag"),
-                "context": redact_sensitive(context),
+                "dag": snapshot.get("dag") if include_sensitive else None,
+                "context": safe_context,
                 "execution_target_requested": snapshot.get("execution_target_requested"),
                 "execution_target_selected": snapshot.get("execution_target_selected"),
                 "execution_target_reason": snapshot.get("execution_target_reason"),
@@ -525,6 +563,7 @@ def register_run_routes(app) -> None:
         snapshot = _serialize_run_snapshot(run_id_str, run)
         parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
         delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
+        safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
         return {
             "run_id": run_id_str,
             "engine": run.get("engine", "orion"),
@@ -541,7 +580,7 @@ def register_run_routes(app) -> None:
             "active_profile_model": snapshot.get("active_profile_model"),
             "active_adapter": snapshot.get("active_adapter"),
             "result": run.get("result"),
-            "result_data": run.get("result_data"),
+            "result_data": run.get("result_data") if include_sensitive else _limited_result_data_view(run.get("result_data")),
             "agent_role": metadata.get("agent_role"),
             "agent_role_source": metadata.get("agent_role_source"),
             "parent_run_id": metadata.get("parent_run_id"),
@@ -553,12 +592,12 @@ def register_run_routes(app) -> None:
             "child_runs": child_runs,
             "delegation_summary": delegation_summary,
             "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
-            "tool_policy_precheck": metadata.get("tool_policy_precheck"),
-            "tool_policy_audit": run.get("tool_policy_audit") if isinstance(run.get("tool_policy_audit"), list) else [],
-            "memory_trace": _trim_memory_trace(run.get("memory_trace") if isinstance(run.get("memory_trace"), dict) else {}),
+            "tool_policy_precheck": metadata.get("tool_policy_precheck") if include_sensitive else None,
+            "tool_policy_audit": run.get("tool_policy_audit") if include_sensitive and isinstance(run.get("tool_policy_audit"), list) else [],
+            "memory_trace": _trim_memory_trace(run.get("memory_trace") if include_sensitive and isinstance(run.get("memory_trace"), dict) else {}),
             "pending_approval": run.get("pending_approval"),
-            "dag": run.get("dag"),
-            "context": redact_sensitive(context),
+            "dag": run.get("dag") if include_sensitive else None,
+            "context": safe_context,
             "execution_target_requested": metadata.get("execution_target_requested"),
             "execution_target_selected": metadata.get("execution_target_selected"),
             "execution_target_reason": metadata.get("execution_target_reason"),
@@ -598,7 +637,7 @@ def register_run_routes(app) -> None:
             "archived": archived,
         }
 
-    @app.get("/history/runs", dependencies=[Depends(require_api_key)])
+    @app.get("/history/runs", dependencies=[Depends(require_admin_api_key)])
     async def get_runs_history(limit: int = 30, workspace_id: Optional[str] = None, status: Optional[str] = None, pack_id: Optional[str] = None):
         _refresh_server_exports()
         safe_limit = max(1, min(limit, 200))
@@ -622,13 +661,13 @@ def register_run_routes(app) -> None:
             "total": len(filtered),
         }
 
-    @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_api_key)])
+    @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def get_run_replay(run_id: uuid.UUID):
         _refresh_server_exports()
         item = _get_replay_payload(str(run_id))
         return {"item": item}
 
-    @app.post("/runs/{run_id}/replay", dependencies=[Depends(require_api_key)])
+    @app.post("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def replay_run(run_id: uuid.UUID):
         _refresh_server_exports()
         item = _get_replay_payload(str(run_id))

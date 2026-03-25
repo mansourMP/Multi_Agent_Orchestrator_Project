@@ -152,10 +152,10 @@
 ## Runtime / model architecture
 
 ### High-level decision
-- LiteLLM was introduced, but **not as a replacement for the existing provider/profile system**.
+- Direct provider adapters remain the architecture.
 - Chosen architecture:
-  - LiteLLM is infrastructure behind the existing runtime/profile/vault model
   - existing provider/profile resolution remains top-level authority
+  - model calls go through the internal runtime router with direct provider integrations
   - BYOK should come from the existing encrypted credential vault / provider profiles, not a new raw per-request secret flow
 
 ### Implemented backend pieces
@@ -166,7 +166,7 @@
 - Registered backend route in:
   - `server.py`
 - Moved OpenAI / Anthropic / Gemini generation behind the unified router through provider/profile paths
-- Vertex is handled through a compatibility fallback because current credential shape does not map cleanly to native LiteLLM Vertex usage
+- Vertex is handled through a compatibility fallback because current credential shape still needs a direct credential payload
 
 ### Builder generation move
 - Direct frontend OpenAI Builder call was removed

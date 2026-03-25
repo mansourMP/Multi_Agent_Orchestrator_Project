@@ -910,7 +910,7 @@ def register_agent_workspace_routes(app) -> None:
         if key not in module_globals:
             module_globals[key] = value
 
-    @app.get("/agents/workspace/snapshot", dependencies=[Depends(require_api_key)])
+    @app.get("/agents/workspace/snapshot", dependencies=[Depends(require_admin_api_key)])
     async def get_agents_workspace_snapshot(
         workspace_id: Optional[str] = None,
         history_limit: int = 30,
@@ -1076,7 +1076,7 @@ def register_agent_workspace_routes(app) -> None:
             },
         }
 
-    @app.get("/agents/workspace/agents/{agent_role}", dependencies=[Depends(require_api_key)])
+    @app.get("/agents/workspace/agents/{agent_role}", dependencies=[Depends(require_admin_api_key)])
     async def get_agent_workspace_detail(
         agent_role: str,
         workspace_id: Optional[str] = None,
@@ -1342,7 +1342,7 @@ def register_agent_workspace_routes(app) -> None:
             },
         }
 
-    @app.get("/artifacts/workspace", dependencies=[Depends(require_api_key)])
+    @app.get("/artifacts/workspace", dependencies=[Depends(require_admin_api_key)])
     async def get_workspace_artifacts(
         workspace_id: Optional[str] = None,
         history_limit: int = 80,
@@ -1484,7 +1484,7 @@ def register_agent_workspace_routes(app) -> None:
             "items": combined_items,
         }
 
-    @app.get("/artifacts/preview", dependencies=[Depends(require_api_key)])
+    @app.get("/artifacts/preview", dependencies=[Depends(require_admin_api_key)])
     async def get_artifact_preview(
         path: str,
     ):
@@ -1534,7 +1534,7 @@ def register_agent_workspace_routes(app) -> None:
             ),
         }
 
-    @app.get("/artifacts/file", dependencies=[Depends(require_api_key)])
+    @app.get("/artifacts/file", dependencies=[Depends(require_admin_api_key)])
     async def get_artifact_file(
         path: str,
     ):
@@ -1551,7 +1551,7 @@ def register_agent_workspace_routes(app) -> None:
         media_type = mimetypes.guess_type(str(target.name))[0] or "application/octet-stream"
         return FileResponse(path=str(target), media_type=media_type, filename=target.name)
 
-    @app.get("/agents/workspace/file-diff", dependencies=[Depends(require_api_key)])
+    @app.get("/agents/workspace/file-diff", dependencies=[Depends(require_admin_api_key)])
     async def get_agent_workspace_file_diff(
         path: str,
         run_id: Optional[str] = None,
@@ -1703,7 +1703,7 @@ def register_agent_workspace_routes(app) -> None:
                 return True
         return False
 
-    @app.get("/files/list", dependencies=[Depends(require_api_key)])
+    @app.get("/files/list", dependencies=[Depends(require_admin_api_key)])
     async def list_workspace_files(
         path: Optional[str] = None,
         limit: int = 200,
@@ -1735,7 +1735,7 @@ def register_agent_workspace_routes(app) -> None:
             "items": rows,
         }
 
-    @app.get("/files/read", dependencies=[Depends(require_api_key)])
+    @app.get("/files/read", dependencies=[Depends(require_admin_api_key)])
     async def read_workspace_file(
         path: str,
         max_bytes: int = 120000,
@@ -1752,7 +1752,7 @@ def register_agent_workspace_routes(app) -> None:
             "truncated": len(content) >= safe_limit,
         }
 
-    @app.post("/files/write", dependencies=[Depends(require_api_key)])
+    @app.post("/files/write", dependencies=[Depends(require_admin_api_key)])
     async def write_workspace_file(body: WorkspaceFileWriteRequest):
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         path = str(payload.get("path") or "").strip()
@@ -1792,7 +1792,7 @@ def register_agent_workspace_routes(app) -> None:
         created = _create_run_from_request(req)
         return {"ok": True, **created}
 
-    @app.post("/files/delete_request", dependencies=[Depends(require_api_key)])
+    @app.post("/files/delete_request", dependencies=[Depends(require_admin_api_key)])
     async def delete_workspace_file_request(body: WorkspaceFileDeleteRequest):
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         path = str(payload.get("path") or "").strip()
@@ -1830,7 +1830,7 @@ def register_agent_workspace_routes(app) -> None:
 
     DEVICE_ACTIONS = supported_device_actions()
 
-    @app.post("/device/execute", dependencies=[Depends(require_api_key)])
+    @app.post("/device/execute", dependencies=[Depends(require_admin_api_key)])
     async def execute_device_action(body: DeviceExecuteRequest):
         payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
         action = str(payload.get("action") or "").strip().lower()

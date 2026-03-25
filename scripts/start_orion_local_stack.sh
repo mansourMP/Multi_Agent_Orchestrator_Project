@@ -679,7 +679,7 @@ fi
 echo
 echo "Health checks:"
 echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" ${ORION_API_URL}/health"
-echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" \"${ORION_API_URL}/local/workers/status\""
+echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" \"${ORION_API_URL}/runtime/runtimes/status\""
 echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" \"${ORION_API_URL}/connectors/vault?workspace_id=default\""
 echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" \"${ORION_API_URL}/channels/telegram/autopilot/status\""
 echo "  curl -s -H \"X-API-Key: ${RUNTIME_KEY}\" \"${ORION_API_URL}/channels/whatsapp/autopilot/status\""

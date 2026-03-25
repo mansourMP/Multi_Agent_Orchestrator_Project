@@ -389,7 +389,7 @@ def _watchdog_probe(runtime_key: str, runtime_url: str) -> Dict[str, Any]:
     else:
         worker_status, worker_payload = _runtime_request(
             runtime_key,
-            "/local/workers/status",
+            "/runtime/runtimes/status",
             runtime_url=runtime_url,
         )
         worker_online = int(_safe_status(_safe_status(worker_payload, "summary", {}), "online", 0) or 0)

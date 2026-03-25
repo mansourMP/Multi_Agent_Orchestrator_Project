@@ -130,7 +130,7 @@ class RuntimeClient:
         return payload
 
     def get_workers_status(self) -> Dict[str, Any]:
-        return self._call("/local/workers/status")
+        return self._call("/runtime/runtimes/status")
 
     def get_metrics(self) -> Dict[str, Any]:
         return self._call("/metrics")

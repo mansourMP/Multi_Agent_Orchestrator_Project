@@ -88,7 +88,7 @@ echo "api: ${API_URL}"
 echo
 
 HEALTH_JSON="$(fetch_json "${API_URL}/health")"
-WORKERS_JSON="$(fetch_json "${API_URL}/local/workers/status")"
+WORKERS_JSON="$(fetch_json "${API_URL}/runtime/runtimes/status")"
 TG_JSON="$(fetch_json "${API_URL}/channels/telegram/autopilot/status")"
 WA_JSON="$(fetch_json "${API_URL}/channels/whatsapp/autopilot/status")"
 CONNECTORS_JSON="$(fetch_json "${API_URL}/connectors/vault?workspace_id=default")"

@@ -9,8 +9,15 @@ export function readRuntimeApiKeyFromStorage(defaultValue = ''): string {
   if (typeof window === 'undefined') return defaultValue;
   for (const key of RUNTIME_KEY_STORAGE_CANDIDATES) {
     try {
-      const stored = window.localStorage.getItem(key);
-      if (stored && stored.trim()) return stored.trim();
+      const sessionValue = window.sessionStorage.getItem(key);
+      if (sessionValue && sessionValue.trim()) return sessionValue.trim();
+      const legacyValue = window.localStorage.getItem(key);
+      if (legacyValue && legacyValue.trim()) {
+        const normalized = legacyValue.trim();
+        window.sessionStorage.setItem(key, normalized);
+        window.localStorage.removeItem(key);
+        return normalized;
+      }
     } catch {
       // Ignore storage access errors.
     }
@@ -23,8 +30,9 @@ export function writeRuntimeApiKeyToStorage(value: string | null | undefined): v
   const normalized = String(value || '').trim();
   for (const key of RUNTIME_KEY_STORAGE_CANDIDATES) {
     try {
-      if (normalized) window.localStorage.setItem(key, normalized);
-      else window.localStorage.removeItem(key);
+      if (normalized) window.sessionStorage.setItem(key, normalized);
+      else window.sessionStorage.removeItem(key);
+      window.localStorage.removeItem(key);
     } catch {
       // Ignore storage access errors.
     }

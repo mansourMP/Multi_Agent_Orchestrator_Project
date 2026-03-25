@@ -2,8 +2,10 @@ import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { promisify } from 'util';
+import type { NextRequest } from 'next/server';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +35,6 @@ type LocalOpsAction =
 
 type LocalOpsBody = {
   action?: LocalOpsAction;
-  runtimeKey?: string;
   botToken?: string;
   chatId?: string;
   allowAnyChat?: boolean;
@@ -404,12 +405,15 @@ function trimOutput(raw: string, maxChars = 4000): string {
   return `${s.slice(0, maxChars)}\n...truncated...`;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const rejection = enforceBffRouteGuard(request, { methods: ['POST'], requireLoopbackHost: true });
+    if (rejection) return rejection;
+
     const body = (await request.json().catch(() => ({}))) as LocalOpsBody;
     const action = body.action;
     const root = await resolveProjectRoot();
-    const runtimeKey = normalizeRuntimeKey(body.runtimeKey) || (await readRuntimeKey(root)) || '';
+    const runtimeKey = (await readRuntimeKey(root)) || '';
     const env = { ...process.env, RUNTIME_KEY: runtimeKey };
 
     if (!action) {

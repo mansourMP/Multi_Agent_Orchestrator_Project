@@ -66,9 +66,6 @@ def _extract_request_api_key(request: Request) -> str:
     auth = request.headers.get("authorization") or ""
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    qp = request.query_params.get("api_key")
-    if isinstance(qp, str) and qp.strip():
-        return qp.strip()
     return ""
 
 
@@ -96,8 +93,8 @@ def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
     if not _is_control_plane_mutation(request):
         return None
     request_path = str(request.url.path or "")
-    if request_path.startswith("/local/runs/") or request_path.startswith("/local/workers/"):
-        # Local companion loops (claim/heartbeat/complete/fail) are chatty by design.
+    if request_path.startswith("/runtime/runtimes/") or request_path.startswith("/runtime/tasks/"):
+        # Runtime registration, claims, heartbeats, and task completion are chatty by design.
         # Keep control-plane limits focused on user-facing mutation APIs.
         return None
     now = time.time()
@@ -186,6 +183,20 @@ def require_api_key(
     from server_modules.auth import get_current_user
 
     return get_current_user(
+        request=request,
+        authorization=authorization,
+        x_api_key=x_api_key,
+    )
+
+
+def require_admin_api_key(
+    request: Request,
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+):
+    from server_modules.auth import require_admin_access
+
+    return require_admin_access(
         request=request,
         authorization=authorization,
         x_api_key=x_api_key,

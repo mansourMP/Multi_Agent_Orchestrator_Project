@@ -4,29 +4,6 @@ from unittest.mock import patch
 from server_modules import model_router
 
 
-class _FakeMessage:
-    def __init__(self, content: str):
-        self.content = content
-
-
-class _FakeChoice:
-    def __init__(self, content: str):
-        self.message = _FakeMessage(content)
-
-
-class _FakeUsage:
-    def __init__(self, prompt_tokens: int, completion_tokens: int):
-        self.prompt_tokens = prompt_tokens
-        self.completion_tokens = completion_tokens
-        self.total_tokens = prompt_tokens + completion_tokens
-
-
-class _FakeResponse:
-    def __init__(self, content: str, prompt_tokens: int = 3, completion_tokens: int = 5):
-        self.choices = [_FakeChoice(content)]
-        self.usage = _FakeUsage(prompt_tokens, completion_tokens)
-
-
 class ModelRouterTests(unittest.TestCase):
     def test_resolve_model_aliases(self):
         self.assertEqual(model_router.resolve_model("claude-sonnet"), "anthropic/claude-3-5-sonnet-20241022")
@@ -72,9 +49,17 @@ class ModelRouterTests(unittest.TestCase):
         self.assertTrue(by_alias["vertex-gemini-flash"]["is_provider_default"])
         self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
 
-    @patch("server_modules.model_router.completion")
-    def test_call_model_sync_returns_normalized_shape(self, completion_mock):
-        completion_mock.return_value = _FakeResponse("hello")
+    @patch("server_modules.model_router.http_json_request")
+    def test_call_model_sync_returns_normalized_shape(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+            },
+            "text": "",
+            "headers": {},
+        }
 
         result = model_router.call_model_sync(
             messages=[{"role": "user", "content": "Say hello"}],
@@ -92,10 +77,10 @@ class ModelRouterTests(unittest.TestCase):
             result["usage"],
             {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
         )
-        _, kwargs = completion_mock.call_args
-        self.assertEqual(kwargs["model"], "gpt-4o-mini")
-        self.assertEqual(kwargs["api_key"], "test-key")
-        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "Say hello"}])
+        _, kwargs = http_json_request_mock.call_args
+        self.assertEqual(kwargs["payload"]["model"], "gpt-4o-mini")
+        self.assertEqual(kwargs["payload"]["messages"], [{"role": "user", "content": "Say hello"}])
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-key")
 
     @patch("server_modules.model_router.resolve_provider_adapter")
     def test_vertex_current_credential_shape_uses_compatibility_fallback(self, resolve_provider_adapter_mock):

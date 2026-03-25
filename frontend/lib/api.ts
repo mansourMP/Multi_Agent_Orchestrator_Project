@@ -22,37 +22,57 @@ export class ApiError extends Error {
     }
 }
 
-async function apiFetch(endpoint: string, options: RequestInit = {}) {
+async function parseApiError(res: Response): Promise<string> {
+    let errorMsg = `API Error: ${res.status} ${res.statusText}`;
+    try {
+        const body = await res.json();
+        if (body && typeof body.detail === 'string' && body.detail.trim()) {
+            errorMsg = body.detail.trim();
+        } else if (body && typeof body.error === 'string' && body.error.trim()) {
+            errorMsg = body.error.trim();
+        } else if (body && body.message) {
+            errorMsg = Array.isArray(body.message) ? body.message.join(', ') : body.message;
+        }
+    } catch {
+        // No JSON body, use default status text
+    }
+    return errorMsg;
+}
+
+async function jsonFetch(url: string, options: RequestInit = {}, connectionError: string) {
+    let res: Response;
+    try {
+        res = await fetch(url, options);
+    } catch {
+        throw new ApiError(connectionError, 0);
+    }
+
+    if (!res.ok) {
+        throw new ApiError(await parseApiError(res), res.status);
+    }
+
+    return res.json();
+}
+
+async function runtimeApiFetch(endpoint: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers || {});
     const runtimeApiKey = readRuntimeApiKeyFromStorage('');
     if (runtimeApiKey && !headers.has('X-API-Key')) {
         headers.set('X-API-Key', runtimeApiKey);
     }
 
-    let res: Response;
-    try {
-        res = await fetch(`${ORION_API_URL}${endpoint}`, {
+    return jsonFetch(
+        `${ORION_API_URL}${endpoint}`,
+        {
             ...options,
             headers,
-        });
-    } catch {
-        throw new ApiError(`Cannot reach the backend API on ${ORION_API_URL}.`, 0);
-    }
+        },
+        `Cannot reach the backend API on ${ORION_API_URL}.`,
+    );
+}
 
-    if (!res.ok) {
-        let errorMsg = `API Error: ${res.status} ${res.statusText}`;
-        try {
-            const body = await res.json();
-            if (body && body.message) {
-                errorMsg = Array.isArray(body.message) ? body.message.join(', ') : body.message;
-            }
-        } catch {
-            // No JSON body, use default status text
-        }
-        throw new ApiError(errorMsg, res.status);
-    }
-
-    return res.json();
+async function internalApiFetch(endpoint: string, options: RequestInit = {}) {
+    return jsonFetch(endpoint, options, `Cannot reach the internal API route on ${endpoint}.`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,7 +151,7 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
 }
 
 export async function fetchWorkflows(workspaceId: string = 'default') {
-    return apiFetch(`/workflows?workspaceId=${workspaceId}`);
+    return runtimeApiFetch(`/workflows?workspaceId=${workspaceId}`);
 }
 
 export async function createWorkflow(
@@ -140,7 +160,7 @@ export async function createWorkflow(
     workspaceId: string = 'default',
     definition: unknown = { nodes: [], edges: [] }
 ) {
-    return apiFetch(`/workflows?workspaceId=${workspaceId}`, {
+    return runtimeApiFetch(`/workflows?workspaceId=${workspaceId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -152,11 +172,11 @@ export async function createWorkflow(
 }
 
 export async function getWorkflow(id: string) {
-    return apiFetch(`/workflows/${id}`);
+    return runtimeApiFetch(`/workflows/${id}`);
 }
 
 export async function updateWorkflow(id: string, definition: unknown) {
-    return apiFetch(`/workflows/${id}`, {
+    return runtimeApiFetch(`/workflows/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ definition }),
@@ -245,7 +265,7 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
 }
 
 export async function resumeWorkflow(executionId: string, data: unknown = {}) {
-    return apiFetch(`/executions/${executionId}/resume`, {
+    return runtimeApiFetch(`/executions/${executionId}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -253,30 +273,38 @@ export async function resumeWorkflow(executionId: string, data: unknown = {}) {
 }
 
 export async function publishWorkflow(id: string) {
-    return apiFetch(`/workflows/${id}/publish`, {
+    return runtimeApiFetch(`/workflows/${id}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
     });
 }
 
 export async function deleteWorkflow(id: string) {
-    return apiFetch(`/workflows/${id}`, {
+    return runtimeApiFetch(`/workflows/${id}`, {
         method: 'DELETE',
     });
 }
 
 export async function fetchExecutions() {
-    return apiFetch(`/executions`);
+    return internalApiFetch('/api/executions/list');
+}
+
+export async function fetchExecutionHistory(limit: number = 200, workspaceId: string = 'default') {
+    const query = new URLSearchParams({
+        limit: String(limit),
+        workspace_id: workspaceId,
+    });
+    return internalApiFetch(`/api/executions/history?${query.toString()}`);
 }
 
 export async function fetchRuntimeMachines() {
-    return apiFetch(`/runtime/runtimes/status`);
+    return internalApiFetch('/api/runtime/machines', { cache: 'no-store' });
 }
 
 export async function fetchExecution(id: string) {
-    return apiFetch(`/executions/${id}`);
+    return internalApiFetch(`/api/executions/${encodeURIComponent(id)}`);
 }
 
 export async function fetchAgents() {
-    return apiFetch(`/agents`);
+    return runtimeApiFetch(`/agents`);
 }

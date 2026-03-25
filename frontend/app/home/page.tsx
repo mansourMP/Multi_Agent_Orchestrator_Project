@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, GitBranch, KeyRound, PlayCircle } from 'lucide-react';
+import { ArrowRight, PlayCircle } from 'lucide-react';
 import { fetchWorkflows } from '@/lib/api';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
@@ -90,38 +90,38 @@ export default function HomePage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
+        <OsPageHeader
         icon={null}
         title="Home"
-        subtitle="What would you like to do today?"
+        subtitle="Start one task, review recent work, or open a reusable workflow."
       />
 
       <section className="orion-panel orion-home-overview">
         <div className="orion-home-overview-main">
-          <div className="orion-home-overview-kicker">Start work</div>
-          <div className="orion-home-overview-title">Build a workflow, launch a run, or connect a system.</div>
+          <div className="orion-home-overview-kicker">Start with one task</div>
+          <div className="orion-home-overview-title">Describe the work you want done and let Hekor handle the setup.</div>
           <div className="orion-home-overview-copy">
-            Keep the first decision simple. Create a reusable workflow, inspect active runs, or add the integrations your team needs before execution.
+            The fastest path is a single task. Review the plan, connect what is needed, and run it. Reusable workflows are still here when you want to save a playbook.
           </div>
           <div className="orion-home-overview-actions">
-            <Link href="/builder/new" className="btn-primary">
-              <GitBranch size={14} />
-              Create workflow
+            <Link href="/setup" className="btn-primary">
+              <PlayCircle size={14} />
+              New Task
             </Link>
             <Link href="/executions" className="btn-secondary">
               <PlayCircle size={14} />
               View Runs
             </Link>
-            <Link href="/credentials" className="btn-secondary">
-              <KeyRound size={14} />
-              Add Integration
+            <Link href="/workflows" className="btn-secondary">
+              <ArrowRight size={14} />
+              Reusable workflows
             </Link>
           </div>
         </div>
 
         <aside className="orion-home-overview-side">
           <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Continue from recent</div>
+            <div className="orion-home-side-label">Continue recent work</div>
             {loading ? (
               <div className="orion-home-side-empty">Loading workflows…</div>
             ) : error ? (
@@ -141,15 +141,15 @@ export default function HomePage() {
           </div>
 
           <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Library snapshot</div>
+            <div className="orion-home-side-label">Reusable workflows</div>
             <div className="orion-home-side-stats">
               <div>
                 <div className="orion-home-side-value">{workflows.length}</div>
-                <div className="orion-home-side-note">Saved workflows</div>
+                <div className="orion-home-side-note">Saved playbooks</div>
               </div>
               <div>
                 <div className="orion-home-side-value">{recentWorkflows.length}</div>
-                <div className="orion-home-side-note">Recent items</div>
+                <div className="orion-home-side-note">Recently edited</div>
               </div>
             </div>
             {supportingWorkflows.length > 0 ? (
@@ -169,8 +169,8 @@ export default function HomePage() {
       <section className="orion-panel orion-home-list-panel">
         <div className="orion-panel-header">
           <div>
-            <div className="orion-panel-title">Recent workflows</div>
-            <div className="orion-panel-copy">Recent playbooks you can open, refine, and run again.</div>
+            <div className="orion-panel-title">Reusable workflows</div>
+            <div className="orion-panel-copy">Saved playbooks you can open, refine, and run again.</div>
           </div>
           <Link href="/workflows" className="orion-control-link">
             Open Workflows
@@ -189,7 +189,7 @@ export default function HomePage() {
         ) : recentWorkflows.length === 0 ? (
           <div className="orion-empty orion-loading-panel">
             <div className="orion-empty-title">No workflows yet</div>
-            <div className="orion-empty-copy">Create your first workflow to give the platform a reusable way to execute work.</div>
+            <div className="orion-empty-copy">Start with a task. Save it as a workflow later if it works well.</div>
           </div>
         ) : (
           <div className="orion-list">
@@ -210,7 +210,6 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="orion-home-list-meta">
-                  {runtimeProfileLabel(workflow) ? <span>Runtime {runtimeProfileLabel(workflow)}</span> : null}
                   <span>Updated {formatDate(workflow.updatedAt || workflow.updated_at)}</span>
                 </div>
               </Link>

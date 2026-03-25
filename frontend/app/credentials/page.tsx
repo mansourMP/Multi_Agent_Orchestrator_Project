@@ -157,8 +157,8 @@ const EMPTY_FORM: ConnectModalState = {
   timezone: 'UTC',
 };
 
-const ASSET_TILE_BG = 'color-mix(in srgb, var(--bg-element) 95%, white 5%)';
-const ASSET_TILE_BORDER = 'var(--border-default)';
+const ASSET_TILE_BG = 'rgba(255, 255, 255, 0.94)';
+const ASSET_TILE_BORDER = 'rgba(10, 10, 10, 0.12)';
 
 const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   google_workspace: {
@@ -497,21 +497,33 @@ function connectorRoadmapTier(entry: ConnectorCatalogEntry): ConnectorRoadmapTie
   return 'later';
 }
 
+const CONNECTOR_CHIP_STYLE_NEUTRAL: React.CSSProperties = {
+  color: 'rgba(10, 10, 10, 0.72)',
+  border: '1px solid rgba(10, 10, 10, 0.08)',
+  background: 'rgba(255, 255, 255, 0.92)',
+};
+
+const CONNECTOR_CHIP_STYLE_SUBTLE: React.CSSProperties = {
+  color: 'rgba(10, 10, 10, 0.56)',
+  border: '1px solid rgba(10, 10, 10, 0.08)',
+  background: 'var(--bg-element)',
+};
+
 const ROADMAP_TIER_META: Record<ConnectorRoadmapTier, { label: string; description: string; style: React.CSSProperties }> = {
   core: {
-    label: 'Core',
-    description: 'First-class connectors that define the platform.',
-    style: { color: 'var(--primary-base)', border: '1px solid var(--primary-border-soft)', background: 'var(--primary-soft)' },
+    label: 'Direct support',
+    description: 'Managed directly in Hekor.',
+    style: CONNECTOR_CHIP_STYLE_NEUTRAL,
   },
   next: {
-    label: 'Next',
-    description: 'Good additions after the core suite feels excellent.',
-    style: { color: 'var(--warning-fg)', border: '1px solid var(--warning-border)', background: 'var(--warning-bg)' },
+    label: 'Planned next',
+    description: 'Prioritized after the core set.',
+    style: CONNECTOR_CHIP_STYLE_SUBTLE,
   },
   later: {
-    label: 'Later',
-    description: 'Long-tail expansion once demand is proven.',
-    style: { color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-element)' },
+    label: 'Long-tail',
+    description: 'Added when demand is proven.',
+    style: CONNECTOR_CHIP_STYLE_SUBTLE,
   },
 };
 
@@ -535,50 +547,38 @@ function buildPackLaunchHref(args: {
 
 const CONNECTOR_CATALOG_BADGES: Record<ConnectorCatalogStatus, { label: string; style: React.CSSProperties }> = {
   native_now: {
-    label: 'Available now',
-    style: {
-      color: 'var(--success-fg)',
-      border: '1px solid var(--success-border)',
-      background: 'var(--success-bg)',
-    },
+    label: 'Ready now',
+    style: CONNECTOR_CHIP_STYLE_NEUTRAL,
   },
   provider_next: {
-    label: 'Provider-backed next',
-    style: {
-      color: 'var(--text-secondary)',
-      border: '1px solid var(--border-default)',
-      background: 'var(--bg-element)',
-    },
+    label: 'Planned',
+    style: CONNECTOR_CHIP_STYLE_SUBTLE,
   },
   custom_build: {
-    label: 'Custom build',
-    style: {
-      color: 'var(--warning-fg)',
-      border: '1px solid var(--warning-border)',
-      background: 'var(--warning-bg)',
-    },
+    label: 'Custom',
+    style: CONNECTOR_CHIP_STYLE_SUBTLE,
   },
 };
 
 const CONNECTOR_DIRECTORY_STATUS_META: Record<ConnectorCatalogStatus, { label: string; note: string }> = {
   native_now: {
-    label: 'Available',
-    note: 'Ready to connect now',
+    label: 'Ready now',
+    note: 'Can be connected now',
   },
   provider_next: {
-    label: 'Coming next',
-    note: 'Provider-backed path first',
+    label: 'Planned',
+    note: 'Will follow after core coverage',
   },
   custom_build: {
     label: 'Custom',
-    note: 'Needs a custom connection flow',
+    note: 'Needs a tailored connection flow',
   },
 };
 
 function connectorTierLabel(tier: ConnectorRoadmapTier): string {
-  if (tier === 'core') return 'Core system';
-  if (tier === 'next') return 'Expansion';
-  return 'Later';
+  if (tier === 'core') return 'Direct support';
+  if (tier === 'next') return 'Planned next';
+  return 'Long-tail';
 }
 
 function CredentialsPageContent() {
@@ -605,6 +605,7 @@ function CredentialsPageContent() {
   const onboardingModalOpenedRef = useRef(false);
   const onboardingMode = searchParams.get('onboarding') === '1';
   const requestedConnector = String(searchParams.get('connector') || '').trim();
+  const returnTo = String(searchParams.get('return_to') || '/setup').trim() || '/setup';
   const desktopBridge = useMemo(() => {
     if (typeof window === 'undefined') return null;
     const scopedWindow = window as typeof window & { orionDesktop?: DesktopBridge; empyralisDesktop?: DesktopBridge };
@@ -721,9 +722,10 @@ function CredentialsPageContent() {
   }, [showAddModal]);
 
   useEffect(() => {
-    if (requestedConnector !== 'telegram_bot' || onboardingModalOpenedRef.current) return;
+    if (!requestedConnector || onboardingModalOpenedRef.current) return;
+    if (!isConnectorId(requestedConnector)) return;
     onboardingModalOpenedRef.current = true;
-    openCreateModal('telegram_bot', 'Telegram');
+    openCreateModal(requestedConnector, DEFAULT_CONNECTOR_LABELS[requestedConnector]);
   }, [requestedConnector]);
 
   const connectedConnectorIds = useMemo(() => new Set(connectors.map((row) => row.connector)), [connectors]);
@@ -1233,38 +1235,46 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
   }
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div className="orion-page-shell is-integrations-page orion-animate-in">
       <OsPageHeader
         icon={null}
         title="Integrations"
-        subtitle="Connect business systems, channels, and AI providers."
+        subtitle="Connect the tools Hekor needs for real work."
         meta={
           summary.total > 0 ? (
             <>
               <span>{summary.active} connected</span>
-              <span>{directoryCounts.available} available</span>
+              <span>{directoryCounts.available} ready to connect</span>
             </>
           ) : undefined
         }
         actions={
-          <button className="btn-secondary" onClick={() => void loadConnectors()}>
-            <RefreshCw size={14} />
-            Refresh
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {onboardingMode ? (
+              <Link href={returnTo} className="btn-secondary">
+                <ChevronLeft size={14} />
+                Return to setup
+              </Link>
+            ) : null}
+            <button className="btn-secondary" onClick={() => void loadConnectors()}>
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
       <section className="orion-panel orion-home-overview">
         <div className="orion-home-overview-main">
-          <div className="orion-home-overview-kicker">System access</div>
-          <div className="orion-home-overview-title">Give agents the systems they need before you ask them to operate.</div>
+          <div className="orion-home-overview-kicker">Connect only what the task needs</div>
+          <div className="orion-home-overview-title">Start with one or two tools, not the whole directory.</div>
           <div className="orion-home-overview-copy">
-            Start with the systems your workflows depend on most. Connect business tools, confirm access, and set runtime defaults before execution begins.
+            Most teams start with Google Workspace, Microsoft 365, or Telegram. Add more tools later when a task actually depends on them.
           </div>
           <div className="orion-home-overview-actions">
             <button className="btn-primary" onClick={openGenericCreateModal}>
               <Plus size={14} />
-              Add system
+              Add tool
             </button>
             <button className="btn-secondary" onClick={() => void loadConnectors()}>
               <RefreshCw size={14} />
@@ -1274,15 +1284,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         </div>
         <aside className="orion-home-overview-side">
           <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Current state</div>
+            <div className="orion-home-side-label">Current access</div>
             <div className="orion-home-side-stats">
               <div>
                 <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
-                <div className="orion-home-side-note">Active systems</div>
+                <div className="orion-home-side-note">Connected tools</div>
               </div>
               <div>
                 <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
-                <div className="orion-home-side-note">Available in directory</div>
+                <div className="orion-home-side-note">Ready to connect</div>
               </div>
             </div>
             <div className="orion-runs-overview-side-note">
@@ -1292,7 +1302,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </div>
           </div>
           <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Recommended first</div>
+            <div className="orion-home-side-label">Best first tools</div>
             <div className="orion-home-mini-list">
               <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
                 <span>Google Workspace</span>
@@ -1322,9 +1332,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           }}
         >
             <div style={{ display: 'grid', gap: 2 }}>
-              <div className="orion-panel-title">System access</div>
+              <div className="orion-panel-title">Tool directory</div>
               <div className="orion-panel-copy">
-                Choose which systems agents can read from, write to, and operate.
+                Choose the tools Hekor can use. Connect a tool only when a task depends on it.
               </div>
             </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1335,7 +1345,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
             <button className="btn-primary" style={{ minHeight: 34, paddingInline: 12 }} onClick={openGenericCreateModal}>
               <Plus size={13} />
-              Add system
+              Add tool
             </button>
           </div>
         </div>
@@ -1344,7 +1354,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           {[
             ['all', 'All', directoryCounts.all],
             ['connected', 'Connected', directoryCounts.connected],
-            ['available', 'Available', directoryCounts.available],
+            ['available', 'Ready to connect', directoryCounts.available],
           ].map(([value, label, count]) => {
             const active = catalogViewFilter === value;
             return (
@@ -1362,9 +1372,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
         {filteredDirectoryItems.length === 0 ? (
           <section className="orion-empty" style={{ minHeight: 220 }}>
-            <div className="orion-empty-title">No integrations match</div>
+            <div className="orion-empty-title">No tools match this filter</div>
             <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-              Try another filter or switch back to all connectors.
+              Try another filter or switch back to the full directory.
             </div>
             <button
               className="orion-btn orion-btn-ghost"
@@ -1387,6 +1397,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               const isFocused = focusedCatalogEntry?.id === item.id;
               const isConnected = cardConnectorId ? connectedConnectorIds.has(cardConnectorId) : false;
               const visual = connectorVisual(item.id);
+              const cardMetaCopy = isConnected ? 'Connected in this workspace' : statusMeta.note;
               return (
                 <article
                   key={item.id}
@@ -1403,17 +1414,40 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 >
                   <div className="orion-integration-card-head">
                     <div className="orion-integration-card-main">
-                      <ConnectorMark visual={visual} size={40} />
+                      <ConnectorMark visual={visual} size={52} />
                       <div className="orion-integration-card-copy">
                         <div className="orion-integration-card-kicker">{connectorTierLabel(tier)}</div>
                         <div className="orion-integration-card-title">{item.label}</div>
                         <div className="orion-integration-card-note">{item.note}</div>
                       </div>
                     </div>
-                    <div className="orion-integration-card-action">
+                  </div>
+
+                  <div className="orion-integration-card-foot">
+                    <div className="orion-integration-card-meta">
+                      <span className="orion-integration-card-meta-note">{cardMetaCopy}</span>
+                    </div>
+                    <div className="orion-integration-card-actions">
+                      {isConnected ? (
+                        <span
+                          className="orion-chip"
+                          style={{
+                            minHeight: 24,
+                            color: 'rgba(10, 10, 10, 0.82)',
+                            border: '1px solid rgba(10, 10, 10, 0.08)',
+                            background: 'rgba(255, 255, 255, 0.92)',
+                          }}
+                        >
+                          Connected
+                        </span>
+                      ) : (
+                        <span className="orion-chip" style={{ ...badge.style, minHeight: 24 }}>
+                          {statusMeta.label}
+                        </span>
+                      )}
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 30, paddingInline: 10 }}
+                        style={{ minHeight: 32, paddingInline: 12 }}
                         onClick={(event) => {
                           event.stopPropagation();
                           if (!canCreateFromCard) {
@@ -1426,39 +1460,12 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             openCreateModal(cardConnectorId!, item.label);
                           }
                         }}
-                        title={isConnected ? `Open ${item.label}` : `Connect ${item.label}`}
+                        title={isConnected ? `Manage ${item.label}` : `Connect ${item.label}`}
                       >
                         {isConnected ? <ArrowUpRight size={14} /> : <Plus size={14} />}
-                        {isConnected ? 'Open' : 'Connect'}
+                        {isConnected ? 'Manage' : 'Connect'}
                       </button>
                     </div>
-                  </div>
-
-                  <div className="orion-integration-card-foot">
-                    <div className="orion-integration-card-meta">
-                      <span className="orion-integration-card-meta-label">{tierMeta.description}</span>
-                      <span className="orion-integration-card-meta-sep" aria-hidden="true">•</span>
-                      <span className="orion-integration-card-meta-note">
-                        {isConnected ? 'Already connected in this workspace' : statusMeta.note}
-                      </span>
-                    </div>
-                    {isConnected ? (
-                      <span
-                        className="orion-chip"
-                        style={{
-                          minHeight: 24,
-                          color: 'var(--success-fg)',
-                          border: '1px solid var(--success-border)',
-                          background: 'var(--success-bg)',
-                        }}
-                      >
-                        Connected
-                      </span>
-                    ) : (
-                      <span className="orion-chip" style={{ ...badge.style, minHeight: 24 }}>
-                        {statusMeta.label}
-                      </span>
-                    )}
                   </div>
                 </article>
               );
@@ -1504,15 +1511,15 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 <div className="orion-focus-panel-body">{focusedCatalogEntry.detail}</div>
 
                 <div className="orion-focus-callout">
-                  <div className="orion-focus-callout-label">Access model</div>
+                  <div className="orion-focus-callout-label">When to connect this</div>
                   <div className="orion-focus-callout-copy">
                     {focusedCatalogEntry.status === 'provider_next' && focusedConnectorId
-                      ? 'You can connect this here today. Deeper app-specific actions can be added later without changing the overall platform model.'
+                      ? 'You can connect this here today. Deeper tool-specific actions can be added later if real usage proves they matter.'
                       : focusedCatalogEntry.status === 'provider_next'
                         ? 'Keep this as a near-term integration. Add it natively only when real usage proves it matters.'
                         : focusedCatalogEntry.status === 'custom_build'
                           ? 'This needs a custom connection flow with its own setup and approval rules.'
-                          : 'This integration is ready now. You can connect it, test access, pause it, and remove it from this page.'}
+                          : 'This tool is ready now. You can connect it, test access, pause it, and remove it from this page.'}
                   </div>
                 </div>
 
@@ -1647,12 +1654,12 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 </div>
                 {focusedCatalogEntry.id === 'google_workspace' && !googleSuiteRow ? (
                   <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                    Connect Google Workspace first, then this detail will light up with Drive, Docs, Sheets, and capability checks for the connected account.
+                    Connect Google Workspace first, then this detail will light up with Drive, Docs, Sheets, and account checks.
                   </div>
                 ) : null}
                 {focusedCatalogEntry.id === 'microsoft_365' && !microsoftSuiteRow ? (
                   <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                    Connect Microsoft 365 first, then this detail will light up with OneDrive, Word, PowerPoint, Excel, and real suite capability status.
+                    Connect Microsoft 365 first, then this detail will light up with OneDrive, Word, PowerPoint, Excel, and account checks.
                   </div>
                 ) : null}
               </div>
@@ -1665,7 +1672,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         <div className="orion-panel-header">
           <div>
             <div className="orion-panel-title">AI providers</div>
-            <div className="orion-panel-copy">Manage saved AI accounts, runtime defaults, and fallback order in one place.</div>
+            <div className="orion-panel-copy">Manage saved AI accounts and choose what Hekor should use by default.</div>
           </div>
         </div>
         <AiAccountsPanel apiUrl={ORION_API_URL} workspaceId={WORKSPACE_ID} runtimeApiKey={runtimeApiKey} />
@@ -1698,9 +1705,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         </section>
       ) : connectors.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">No integrations yet</div>
+          <div className="orion-empty-title">No tools connected yet</div>
           <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-            Connect business systems to give agents real access to the tools they need.
+            Start with one tool your first task depends on. You can add more later.
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 10 }}>
             <button className="btn-primary" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
@@ -1713,19 +1720,19 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
             <button className="btn-secondary" onClick={openGenericCreateModal}>
               <Plus size={14} />
-              Browse all integrations
+              Browse all tools
             </button>
           </div>
           <div className="orion-empty-copy" style={{ maxWidth: 560, margin: '0 auto' }}>
-            Recommended starting point: Google Workspace for documents and calendar, or Telegram if you want alerts and chat first.
+            Recommended starting point: Google Workspace for documents and calendar, or Telegram if you want alerts first.
           </div>
         </section>
       ) : selectedConnectorRow ? (
         <section className="orion-panel" style={{ display: 'grid', gap: 12 }}>
           <div className="orion-panel-header" style={{ marginBottom: 0 }}>
             <div>
-              <div className="orion-panel-title">Connected system</div>
-              <div className="orion-panel-copy">Test access, pause it, or update how agents should use it.</div>
+              <div className="orion-panel-title">Connected tool</div>
+              <div className="orion-panel-copy">Test access, pause it, or update how Hekor should use it.</div>
             </div>
           </div>
           <section className="orion-list">

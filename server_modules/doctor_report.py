@@ -7,15 +7,193 @@ from typing import Any, Dict, List
 
 import certifi
 
+CHECK_CATEGORIES: Dict[str, Dict[str, str]] = {
+    "runtime": {
+        "title": "Runtime & execution",
+        "description": "Contract health, execution routing, memory, and run safety.",
+    },
+    "auth": {
+        "title": "Auth & provider access",
+        "description": "Provider credentials, sign-in mode, and runtime auth boundaries.",
+    },
+    "network": {
+        "title": "Network & control plane",
+        "description": "Origins, rate limits, TLS, and cross-surface trust boundaries.",
+    },
+    "automation": {
+        "title": "Automation & channels",
+        "description": "Schedulers and channel autopilots that keep business work moving.",
+    },
+    "storage": {
+        "title": "Storage & persistence",
+        "description": "Writable paths for vault, provider, setup, and idempotency state.",
+    },
+    "general": {
+        "title": "General",
+        "description": "Checks that do not fit a more specific category yet.",
+    },
+}
+
+CHECK_TITLES: Dict[str, str] = {
+    "runtime_contract": "Runtime contract",
+    "openai_credentials": "OpenAI credentials",
+    "openai_connectivity": "OpenAI connectivity",
+    "codex_signin_mode": "Codex sign-in mode",
+    "runtime_validation": "Runtime validation",
+    "auth_policy": "Runtime auth policy",
+    "cors_origins": "Frontend origins",
+    "control_plane_origins": "Control-plane origins",
+    "control_plane_rate_limit": "Control-plane rate limit",
+    "run_timeout": "Run timeout",
+    "retry_policy": "Retry policy",
+    "scheduler": "Scheduler",
+    "scheduler_poll": "Scheduler polling",
+    "telegram_autopilot": "Telegram autopilot",
+    "telegram_autopilot_runtime": "Telegram autopilot runtime",
+    "telegram_autopilot_connectors": "Telegram autopilot connectors",
+    "telegram_autopilot_errors": "Telegram autopilot errors",
+    "whatsapp_autopilot": "WhatsApp autopilot",
+    "whatsapp_autopilot_runtime": "WhatsApp autopilot runtime",
+    "whatsapp_autopilot_connectors": "WhatsApp autopilot connectors",
+    "whatsapp_autopilot_errors": "WhatsApp autopilot errors",
+    "execution_routing": "Execution routing",
+    "memory_runtime": "Memory runtime",
+    "vault_storage": "Vault storage",
+    "setup_sessions_storage": "Setup session storage",
+    "provider_profiles_storage": "Provider profile storage",
+    "idempotency_storage": "Idempotency storage",
+    "tls_bundle": "TLS bundle",
+}
+
+
+def _normalize_status(status: str) -> str:
+    value = str(status or "").strip().lower()
+    if value in {"pass", "ok"}:
+        return "pass"
+    if value in {"warn", "warning"}:
+        return "warn"
+    return "fail"
+
+
+def _status_rank(status: str) -> int:
+    normalized = _normalize_status(status)
+    if normalized == "fail":
+        return 0
+    if normalized == "warn":
+        return 1
+    return 2
+
+
+def _human_check_title(name: str) -> str:
+    if name in CHECK_TITLES:
+        return CHECK_TITLES[name]
+    return str(name or "").replace("_", " ").title()
+
+
+def _check_category(name: str) -> str:
+    if name.startswith("telegram_") or name.startswith("whatsapp_") or name.startswith("scheduler"):
+        return "automation"
+    if name in {"runtime_contract", "runtime_validation", "execution_routing", "memory_runtime", "run_timeout", "retry_policy"}:
+        return "runtime"
+    if name in {"openai_credentials", "openai_connectivity", "codex_signin_mode", "auth_policy"}:
+        return "auth"
+    if name in {"cors_origins", "control_plane_origins", "control_plane_rate_limit", "tls_bundle"}:
+        return "network"
+    if name in {"vault_storage", "setup_sessions_storage", "provider_profiles_storage", "idempotency_storage"}:
+        return "storage"
+    return "general"
+
+
+def _summarize_checks(checks: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "pass": len([c for c in checks if _normalize_status(c.get("status", "")) == "pass"]),
+        "warn": len([c for c in checks if _normalize_status(c.get("status", "")) == "warn"]),
+        "fail": len([c for c in checks if _normalize_status(c.get("status", "")) == "fail"]),
+    }
+
+
+def _group_checks(checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for check in checks:
+        category = str(check.get("category") or "general")
+        grouped.setdefault(category, []).append(check)
+
+    groups: List[Dict[str, Any]] = []
+    for category, items in grouped.items():
+        ordered = sorted(items, key=lambda item: (_status_rank(str(item.get("status") or "")), str(item.get("title") or "")))
+        groups.append(
+            {
+                "id": category,
+                "title": CHECK_CATEGORIES.get(category, CHECK_CATEGORIES["general"])["title"],
+                "description": CHECK_CATEGORIES.get(category, CHECK_CATEGORIES["general"])["description"],
+                "summary": _summarize_checks(ordered),
+                "checks": ordered,
+            }
+        )
+
+    return sorted(
+        groups,
+        key=lambda group: (
+            -int(group["summary"]["fail"]),
+            -int(group["summary"]["warn"]),
+            group["title"],
+        ),
+    )
+
+
+def _priority_fixes(checks: List[Dict[str, Any]], limit: int = 6) -> List[Dict[str, Any]]:
+    ranked = sorted(
+        [check for check in checks if _normalize_status(check.get("status", "")) != "pass"],
+        key=lambda item: (_status_rank(str(item.get("status") or "")), str(item.get("title") or "")),
+    )
+    fixes: List[Dict[str, Any]] = []
+    for check in ranked[:limit]:
+        category = str(check.get("category") or "general")
+        fixes.append(
+            {
+                "id": check.get("name"),
+                "status": _normalize_status(str(check.get("status") or "")),
+                "title": check.get("title"),
+                "category": CHECK_CATEGORIES.get(category, CHECK_CATEGORIES["general"])["title"],
+                "detail": check.get("detail") or "No detail provided.",
+                "recommendation": check.get("recommendation") or "Review configuration and rerun checks.",
+            }
+        )
+    return fixes
+
+
+def _overview_status(summary: Dict[str, int]) -> Dict[str, str]:
+    if int(summary.get("fail") or 0) > 0:
+        return {
+            "status": "fail",
+            "title": "Critical gaps found",
+            "detail": "Resolve failed checks before treating this runtime as production ready.",
+        }
+    if int(summary.get("warn") or 0) > 0:
+        return {
+            "status": "warn",
+            "title": "Needs attention",
+            "detail": "Core services are reachable, but warnings still weaken trust and runtime safety.",
+        }
+    return {
+        "status": "pass",
+        "title": "Doctor healthy",
+        "detail": "The runtime, policies, and storage layers are aligned for normal operation.",
+    }
+
 
 def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
 
     def add_check(name: str, status: str, detail: str, recommendation: str = ""):
+        category = _check_category(name)
         checks.append(
             {
                 "name": name,
-                "status": status,  # pass | warn | fail
+                "title": _human_check_title(name),
+                "category": category,
+                "category_title": CHECK_CATEGORIES.get(category, CHECK_CATEGORIES["general"])["title"],
+                "status": _normalize_status(status),  # pass | warn | fail
                 "detail": detail,
                 "recommendation": recommendation,
             }
@@ -386,16 +564,19 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
             "Install/repair certifi bundle for outbound HTTPS calls.",
         )
 
+    summary = _summarize_checks(checks)
     fails = [c for c in checks if c["status"] == "fail"]
     warns = [c for c in checks if c["status"] == "warn"]
+    groups = _group_checks(checks)
+    priority_fixes = _priority_fixes(checks)
+    overview = _overview_status(summary)
 
     return {
         "ok": len(fails) == 0,
-        "summary": {
-            "pass": len([c for c in checks if c["status"] == "pass"]),
-            "warn": len(warns),
-            "fail": len(fails),
-        },
+        "overview": overview,
+        "summary": summary,
+        "groups": groups,
+        "priority_fixes": priority_fixes,
         "checks": checks,
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }

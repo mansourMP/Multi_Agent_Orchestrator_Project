@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
 import { API_BASE } from '@/lib/config';
+import { hasOnlineLocalRuntime } from '@/lib/executionTargets';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 export type PlatformAccessMode = 'default' | 'full';
@@ -12,6 +13,8 @@ type PlatformShellStatus = {
   setupProgressCount: number;
   runtimeHealthy: boolean | null;
   onlineWorkers: number;
+  machineCount: number;
+  localRuntimeOnline: boolean;
   pendingApprovals: number;
 };
 
@@ -56,6 +59,8 @@ const INITIAL_STATUS: PlatformShellStatus = {
   setupProgressCount: 0,
   runtimeHealthy: null,
   onlineWorkers: 0,
+  machineCount: 0,
+  localRuntimeOnline: false,
   pendingApprovals: 0,
 };
 
@@ -105,9 +110,9 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
         if (runtimeKey) {
           headers.set('X-API-Key', runtimeKey);
         }
-        const [healthRes, workersRes, historyRes] = await Promise.allSettled([
+        const [healthRes, runtimesRes, historyRes] = await Promise.allSettled([
           fetch(`${API_BASE}/health`, { headers }),
-          fetch(`${API_BASE}/local/workers/status`, { headers }),
+          fetch(`${API_BASE}/runtime/runtimes/status`, { headers }),
           fetch(`${API_BASE}/history/runs?limit=40&workspace_id=default`, { headers }),
         ]);
 
@@ -116,11 +121,13 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
             ? healthRes.value.ok
             : null;
 
-        const workersPayload =
-          workersRes.status === 'fulfilled' && workersRes.value.ok
-            ? await workersRes.value.json().catch(() => null)
+        const runtimesPayload =
+          runtimesRes.status === 'fulfilled' && runtimesRes.value.ok
+            ? await runtimesRes.value.json().catch(() => null)
             : null;
-        const onlineWorkers = Number(workersPayload?.summary?.online || 0);
+        const onlineWorkers = Number(runtimesPayload?.summary?.online || 0);
+        const machineCount = Number(runtimesPayload?.summary?.known || 0);
+        const localRuntimeOnline = hasOnlineLocalRuntime(runtimesPayload);
 
         const historyPayload =
           historyRes.status === 'fulfilled' && historyRes.value.ok
@@ -137,6 +144,8 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
             ...current,
             runtimeHealthy,
             onlineWorkers,
+            machineCount,
+            localRuntimeOnline,
             pendingApprovals,
           }));
         }
@@ -145,6 +154,9 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
           setStatus((current) => ({
             ...current,
             runtimeHealthy: null,
+            onlineWorkers: 0,
+            machineCount: 0,
+            localRuntimeOnline: false,
           }));
         }
       }

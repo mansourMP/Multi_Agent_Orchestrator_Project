@@ -19,9 +19,19 @@ import {
 } from '@/app/page.catalog';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
+import {
+    type ExecutionTarget,
+    describeExecutionTarget,
+    formatExecutionTargetLabel,
+    hasOnlineLocalRuntime,
+    normalizeExecutionTarget,
+} from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { readRuntimeApiKeyFromStorage, writeRuntimeApiKeyToStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
+import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
 import AgentNode from '@/components/nodes/AgentNode';
 import TriggerNode from '@/components/nodes/TriggerNode';
 import ActionNode from '@/components/nodes/ActionNode';
@@ -127,13 +137,6 @@ interface MaskedUsageTelemetry {
     total_tokens_est: number;
     cost_est_usd: number;
     cost_band: string;
-}
-
-interface DoctorCheck {
-    name: string;
-    status: 'pass' | 'warn' | 'fail' | string;
-    detail?: string;
-    recommendation?: string;
 }
 
 interface AutopilotPack {
@@ -586,6 +589,10 @@ function sortRuntimeProfiles(items: RuntimeProfileRow[]): RuntimeProfileRow[] {
     });
 }
 
+function formatConnectionModeLabel(mode: ConnectionMode): string {
+    return mode === 'managed' ? 'Hekor-managed access' : 'Your API key';
+}
+
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
     const router = useRouter();
@@ -630,6 +637,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [trustMode, setTrustMode] = useState<TrustMode>('ask');
     const [isPreflightChecking, setIsPreflightChecking] = useState(false);
+    const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
 
     const [providers, setProviders] = useState<ProviderInfo[]>([]);
     const [credentials, setCredentials] = useState<VaultCredentialItem[]>([]);
@@ -637,6 +645,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [models, setModels] = useState<string[]>([]);
     const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfileRow[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
+    const [executionTarget, setExecutionTarget] = useState<ExecutionTarget>('auto');
+    const [hasLocalRuntime, setHasLocalRuntime] = useState(false);
     const [providersLoading, setProvidersLoading] = useState(false);
     const [credentialsLoading, setCredentialsLoading] = useState(false);
     const [modelsLoading, setModelsLoading] = useState(false);
@@ -786,6 +796,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             meta: {
                 ...baseMeta,
                 mode: 'simple_operator',
+                execution_target: executionTarget,
                 runtime_profile_id: selectedProfileId || undefined,
                 runtime_profile_label: selectedRuntimeProfile?.label || undefined,
                 runtime_profile_provider: selectedRuntimeProfile?.provider || undefined,
@@ -804,7 +815,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 },
             },
         };
-    }, [selectedProfileId, selectedRuntimeProfile]);
+    }, [executionTarget, selectedProfileId, selectedRuntimeProfile]);
 
     const buildCanvasDefinition = useCallback((baseDefinition: WorkflowShape['definition'], nextNodes: CanvasWorkflowNode[], nextEdges: CanvasWorkflowEdge[]) => {
         const baseMeta = baseDefinition?.meta || {};
@@ -820,13 +831,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             meta: {
                 ...baseMeta,
                 mode: 'visual_builder',
+                execution_target: executionTarget,
                 runtime_profile_id: selectedProfileId || undefined,
                 runtime_profile_label: selectedRuntimeProfile?.label || undefined,
                 runtime_profile_provider: selectedRuntimeProfile?.provider || undefined,
                 runtime_profile_model: selectedRuntimeProfile?.model || undefined,
             },
         };
-    }, [selectedProfileId, selectedRuntimeProfile]);
+    }, [executionTarget, selectedProfileId, selectedRuntimeProfile]);
 
     const fetchProviders = useCallback(async () => {
         setProvidersLoading(true);
@@ -988,6 +1000,51 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
     }, [buildHeaders, workspaceId]);
 
+    const fetchRuntimeMachinesState = useCallback(async () => {
+        if (!runtimeApiKey) {
+            setHasLocalRuntime(false);
+            return;
+        }
+        try {
+            const res = await fetch(`${ORION_API_URL}/runtime/runtimes/status`, {
+                headers: buildHeaders(false),
+            });
+            if (!res.ok) {
+                setHasLocalRuntime(false);
+                return;
+            }
+            const payload = await res.json().catch(() => ({ items: [] }));
+            setHasLocalRuntime(hasOnlineLocalRuntime(payload));
+        } catch {
+            setHasLocalRuntime(false);
+        }
+    }, [buildHeaders, runtimeApiKey]);
+
+    const loadDoctorDecision = useCallback(async (silent = false) => {
+        if (!runtimeApiKey) {
+            setDoctorDecision(null);
+            if (!silent) setIsPreflightChecking(false);
+            return null;
+        }
+
+        const runtimeProvider = String(selectedRuntimeProfile?.provider || connection.provider).trim() || 'openai';
+        if (!silent) setIsPreflightChecking(true);
+        try {
+            const nextDecision = await fetchDoctorRunGate(
+                {
+                    executionTarget,
+                    runtimeProvider,
+                    usesManagedOpenAi: runtimeProvider === 'openai' && !selectedProfileId && connection.mode === 'managed',
+                },
+                buildHeaders(false),
+            );
+            setDoctorDecision(nextDecision);
+            return nextDecision;
+        } finally {
+            if (!silent) setIsPreflightChecking(false);
+        }
+    }, [buildHeaders, connection.mode, connection.provider, executionTarget, runtimeApiKey, selectedProfileId, selectedRuntimeProfile]);
+
     const fetchModels = useCallback(async (provider: ProviderId, credentialId?: string, suppressToast?: boolean) => {
         setModelsLoading(true);
         try {
@@ -1061,6 +1118,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 credentialId: typeof connectionStored?.credentialId === 'string' ? connectionStored.credentialId : '',
             });
             setSelectedProfileId(typeof wf?.definition?.meta?.runtime_profile_id === 'string' ? wf.definition.meta.runtime_profile_id : '');
+            setExecutionTarget(normalizeExecutionTarget(wf?.definition?.meta?.execution_target));
             const parsedNodes = parseCanvasNodes(wf?.definition?.nodes);
             const nextNodes = parsedNodes.length > 0 ? parsedNodes : buildDefaultCanvasNodes();
             setCanvasNodes(nextNodes);
@@ -1080,11 +1138,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         fetchProviders();
         fetchCredentials();
         fetchRuntimeProfiles();
+        fetchRuntimeMachinesState();
         fetchConnectedChannels();
         return () => {
             if (streamRef.current) streamRef.current.close();
         };
-    }, [fetchConnectedChannels, fetchCredentials, fetchModelAliases, fetchProviders, fetchRuntimeProfiles, loadWorkflow]);
+    }, [fetchConnectedChannels, fetchCredentials, fetchModelAliases, fetchProviders, fetchRuntimeMachinesState, fetchRuntimeProfiles, loadWorkflow]);
+
+    useEffect(() => {
+        void loadDoctorDecision(true);
+    }, [loadDoctorDecision]);
 
     useEffect(() => {
         if (connection.mode === 'managed') {
@@ -1147,6 +1210,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         }
         return '○ Not active — turn on to start receiving alerts';
     }, [channelConnected, isWorkflowActive, statusChannel.label, triggerSummary]);
+    const routeBlocked = executionTarget === 'local_companion' && !hasLocalRuntime;
+    const doctorBlocked = Boolean(doctorDecision?.blocking);
 
     const selectedNode = useMemo(
         () => canvasNodes.find((node) => node.id === selectedNodeId) || null,
@@ -1642,6 +1707,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             addToast({ type: 'error', title: 'Credential Required', message: 'Connect a key before running.' });
             return;
         }
+        if (executionTarget === 'local_companion' && !hasLocalRuntime) {
+            addToast({
+                type: 'error',
+                title: 'Local Machine Unavailable',
+                message: 'No local machine is online. Choose Automatic or Cloud runtime, or connect a local runtime first.',
+            });
+            return;
+        }
         if (!operator.modelId.trim()) {
             addToast({ type: 'error', title: 'Model Required', message: 'Pick a model before running.' });
             return;
@@ -1656,26 +1729,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const runtimeProvider = String(selectedRuntimeProfile?.provider || connection.provider).trim() || 'openai';
             const runtimeModel = String(selectedRuntimeProfile?.model || operator.modelId).trim() || 'gpt-4o-mini';
             const runtimeCredentialId = selectedProfileId ? undefined : connection.mode === 'byok' ? connection.credentialId : undefined;
-            setIsPreflightChecking(true);
-            const doctorRes = await fetch(`${ORION_API_URL}/doctor`, { headers: buildHeaders(false) });
-            if (doctorRes.ok) {
-                const doctorPayload = await doctorRes.json();
-                const checks = Array.isArray(doctorPayload?.checks) ? (doctorPayload.checks as DoctorCheck[]) : [];
-                const failing = checks.find((check) => check.status === 'fail');
-                if (failing) {
-                    const guidance = [failing.detail || 'System preflight failed.', failing.recommendation || '']
-                        .filter(Boolean)
-                        .join(' ');
-                    throw new Error(guidance);
-                }
-                const openaiWarn = checks.find(
-                    (check) => check.name === 'openai_connectivity' && check.status === 'warn',
-                );
-                if (openaiWarn && runtimeProvider === 'openai' && !selectedProfileId && connection.mode === 'managed') {
-                    throw new Error(
-                        'OpenAI connection is not ready. Open advanced setup and reconnect your OpenAI account.',
-                    );
-                }
+            const doctorGate = await loadDoctorDecision();
+            if (doctorGate?.blocking) {
+                throw new Error(doctorGate.detail);
             }
 
             const businessPlan = [
@@ -1684,6 +1740,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 `Agent Role: ${operator.agentRole}`,
                 `Duty: ${operator.duty.trim()}`,
                 `Prompt: ${operator.systemPrompt.trim()}`,
+                `Execution Route: ${formatExecutionTargetLabel(executionTarget)}`,
                 `Provider: ${runtimeProvider}`,
                 `Mode: ${selectedProfileId ? 'runtime_profile' : connection.mode}`,
                 `Model: ${runtimeModel}`,
@@ -1716,6 +1773,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         agent_role: operator.agentRole,
                         provider: runtimeProvider,
                         model: runtimeModel,
+                        execution_target: executionTarget,
+                        execution_target_requested: executionTarget,
                         mode: selectedProfileId ? 'runtime_profile' : connection.mode,
                         profile_id: selectedProfileId || undefined,
                         runtime_profile_id: selectedProfileId || undefined,
@@ -1750,6 +1809,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : runtimeProvider,
                 active_profile_model:
                     typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : runtimeModel,
+                execution_target_selected:
+                    typeof payload?.execution_target_selected === 'string'
+                        ? payload.execution_target_selected
+                        : executionTarget,
             });
             setRunId(nextRunId);
             appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
@@ -1814,7 +1877,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsPreflightChecking(false);
         }
-    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, runtimeApiKey, buildHeaders, closeStream, appendLog, addToast, selectedProfileId, selectedRuntimeProfile]);
+    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, runtimeApiKey, buildHeaders, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, selectedProfileId, selectedRuntimeProfile]);
 
     const runBadge = useMemo(() => {
         if (runStatus === 'running') return { label: 'Running', color: 'var(--success-fg)', bg: 'var(--success-bg)', border: 'var(--success-border)' };
@@ -1883,7 +1946,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </button>
                             <button
                                 onClick={startRun}
-                                disabled={runStatus === 'running' || isPreflightChecking}
+                                disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked}
                                 className="orion-btn orion-btn-ghost"
                             >
                                 <Play size={14} />
@@ -1931,6 +1994,21 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     )}
                 </div>
             </div>
+            <div className={`workflow-pro-toolbar-note${routeBlocked ? ' is-warning' : ''}`.trim()}>
+                Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
+            </div>
+            <div style={{ padding: '0 12px' }}>
+                <DoctorPreflightNotice decision={doctorDecision} />
+            </div>
+            {routeBlocked ? (
+                <div style={{ padding: '0 12px 12px' }}>
+                    <LocalRuntimeRecoveryCard
+                        title="Local machine required"
+                        copy="Start the local runtime on this device, then return here and test the workflow locally."
+                        onStatusRefresh={fetchRuntimeMachinesState}
+                    />
+                </div>
+            ) : null}
 
             {searchParams.get('onboarding') === 'activate-telegram' ? (
                 <div
@@ -2364,9 +2442,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                         <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            AI: {selectedRuntimeProfile
+                            AI: {formatExecutionTargetLabel(executionTarget)} · {selectedRuntimeProfile
                                 ? `${selectedRuntimeProfile.label} · ${String(selectedRuntimeProfile.model || operator.modelId).trim() || operator.modelId}`
-                                : `${connection.provider.toUpperCase()} · ${connection.mode === 'managed' ? 'Managed' : 'Your Key'} · ${operator.modelId}`} · {AGENT_ROLE_OPTIONS.find((item) => item.id === operator.agentRole)?.label || operator.agentRole}
+                                : `${connection.provider.toUpperCase()} · ${formatConnectionModeLabel(connection.mode)} · ${operator.modelId}`} · {AGENT_ROLE_OPTIONS.find((item) => item.id === operator.agentRole)?.label || operator.agentRole}
                         </div>
                         <button
                             type="button"
@@ -2399,8 +2477,23 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </select>
                             <div style={{ ...workflowMutedCopyStyle, marginTop: 6 }}>
                                 {selectedRuntimeProfile
-                                    ? `Runs use ${selectedRuntimeProfile.label}. Manual provider and BYOK fields stay saved, but execution follows the selected profile.`
+                                    ? `Runs use ${selectedRuntimeProfile.label} for provider routing. The execution route below decides where the run happens.`
                                     : 'Choose a saved runtime profile to control provider routing and fallback for this workflow.'}
+                            </div>
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Execution Route</label>
+                            <select
+                                value={executionTarget}
+                                onChange={(e) => setExecutionTarget(normalizeExecutionTarget(e.target.value))}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="auto">Automatic</option>
+                                <option value="local_companion" disabled={!hasLocalRuntime}>Local machine</option>
+                                <option value="cloud">Cloud runtime</option>
+                            </select>
+                            <div style={{ ...workflowMutedCopyStyle, marginTop: 6 }}>
+                                {describeExecutionTarget(executionTarget, hasLocalRuntime)}
                             </div>
                         </div>
                         <div>
@@ -2434,7 +2527,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </select>
                         </div>
                         <div>
-                            <label style={workflowLabelStyle}>Connection Mode</label>
+                            <label style={workflowLabelStyle}>AI Access</label>
                             <select
                                 value={connection.mode}
                                 onChange={(e) => setConnection((prev) => ({
@@ -2443,7 +2536,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 }))}
                                 style={workflowInputSurfaceStyle}
                             >
-                                <option value="managed">Managed by platform</option>
+                                <option value="managed">Hekor-managed access</option>
                                 <option value="byok">Use my own API key</option>
                             </select>
                         </div>
@@ -2698,9 +2791,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             <option value="ask">Ask me before risky actions</option>
                             <option value="auto">Auto-run low-risk actions</option>
                         </select>
-                        <button
-                            onClick={startRun}
-                            disabled={runStatus === 'running' || isPreflightChecking}
+                            <button
+                                onClick={startRun}
+                            disabled={runStatus === 'running' || isPreflightChecking || doctorBlocked}
                             className="orion-btn orion-btn-primary"
                             style={{
                                 minHeight: 40,

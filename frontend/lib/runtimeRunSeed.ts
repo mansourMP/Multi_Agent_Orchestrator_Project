@@ -16,6 +16,7 @@ export type RuntimeRunSeed = {
   active_profile_label?: string | null;
   active_profile_provider?: string | null;
   active_profile_model?: string | null;
+  execution_target_selected?: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,6 +40,7 @@ function normalizeSeed(raw: unknown): RuntimeRunSeed | null {
     active_profile_label: String(raw.active_profile_label || '').trim() || null,
     active_profile_provider: String(raw.active_profile_provider || '').trim() || null,
     active_profile_model: String(raw.active_profile_model || '').trim() || null,
+    execution_target_selected: String(raw.execution_target_selected || '').trim() || null,
   };
 }
 

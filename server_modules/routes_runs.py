@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from server_modules.runtime_events_api import register_inbox_routes
 from server_modules.runtime_runs_api import register_run_routes
+from server_modules.runtime_runtime_api import register_runtime_routes
 from server_modules.runtime_common import require_api_key
 from server_modules import runs_core as core
 from server_modules import runs_history as history
@@ -9,6 +10,7 @@ router = APIRouter()
 
 register_run_routes(router)
 register_inbox_routes(router)
+register_runtime_routes(router)
 
 router.add_api_route("/cognitive/approvals", history.list_cognitive_approvals, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/cognitive/approvals/{event_id}/resolve", history.resolve_cognitive_approval, methods=['POST'], dependencies=[Depends(require_api_key)])

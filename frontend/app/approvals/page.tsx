@@ -16,10 +16,15 @@ type PendingApproval = {
   approvalId: string;
   prompt: string;
   status: string;
+  requestedAt: string | null;
   expiresAt: string | null;
+  correlationId: string | null;
+  labels: string[];
+  capabilities: string[];
   agentRole?: string | null;
   agentLabel?: string | null;
   connectorText?: string;
+  taskSummary?: string | null;
 };
 
 type ApprovalAudit = {
@@ -39,6 +44,7 @@ type HistoryRunItem = {
   run_id: string;
   status?: string;
   agent_role?: string | null;
+  user_goal?: string | null;
   connector_binding?: {
     channel?: string | null;
     label?: string | null;
@@ -104,6 +110,18 @@ function toneForLabel(value?: string | null): { color: string; border: string; b
   return { color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-element)' };
 }
 
+function approvalSensitivitySignal(row: PendingApproval): { label: string; tone: 'default' | 'warning' } | null {
+  const signals = [...row.labels, ...row.capabilities]
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+  if (signals.length === 0) return null;
+  const joined = signals.join(' ');
+  if (/(send|outbound|calendar|crm|email|message|follow|booking|publish|write)/.test(joined)) {
+    return { label: 'Sensitivity signal: Elevated', tone: 'warning' };
+  }
+  return { label: 'Sensitivity signal: Review', tone: 'default' };
+}
+
 export default function ApprovalsPage() {
   const router = useRouter();
   const [runtimeKey, setRuntimeKey] = useState('');
@@ -112,7 +130,6 @@ export default function ApprovalsPage() {
   const [audit, setAudit] = useState<ApprovalAudit[]>([]);
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'pending' | 'audit'>('pending');
   const [agentFilter, setAgentFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('all');
 
@@ -127,11 +144,13 @@ export default function ApprovalsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [historyRes, auditRes] = await Promise.all([
+      const [pendingRes, historyRes, auditRes] = await Promise.all([
+        fetch(`${ORION_API_URL}/approvals?limit=40&workspace_id=default`, { headers }),
         fetch(`${ORION_API_URL}/history/runs?limit=40&workspace_id=default`, { headers }),
         fetch(`${ORION_API_URL}/approvals/audit?limit=30`, { headers }),
       ]);
 
+      const pendingPayload = pendingRes.ok ? await pendingRes.json() : null;
       const historyPayload = historyRes.ok ? await historyRes.json() : null;
       const auditPayload = auditRes.ok ? await auditRes.json() : null;
 
@@ -141,42 +160,38 @@ export default function ApprovalsPage() {
         if (runId) acc[runId] = item;
         return acc;
       }, {});
-      const waitingRunIds = historyItems
-        .filter((item: unknown) => String((item as Record<string, unknown>)?.status || '').toLowerCase() === 'waiting_for_input')
-        .map((item: unknown) => String((item as Record<string, unknown>)?.run_id || '').trim())
-        .filter(Boolean)
-        .slice(0, 24);
+      const pendingItemsRaw: unknown[] = Array.isArray((pendingPayload as { items?: unknown[] } | null)?.items)
+        ? ((pendingPayload as { items: unknown[] }).items)
+        : [];
+      const nextPending = pendingItemsRaw.reduce<PendingApproval[]>((acc, item: unknown) => {
+        const record = item as Record<string, unknown>;
+        const runId = String(record?.run_id || '').trim();
+        const approvalId = String(record?.approval_id || '').trim();
+        if (!runId || !approvalId) return acc;
+        const historyItem = historyByRunId[runId];
+        const agentRole = String(record?.agent_role || historyItem?.agent_role || '').trim() || null;
+        acc.push({
+          runId,
+          approvalId,
+          prompt: String(record?.prompt || 'Approval requested.').trim() || 'Approval requested.',
+          status: String(record?.status || 'waiting'),
+          requestedAt: String(record?.requested_at || '').trim() || null,
+          expiresAt: String(record?.expires_at || '').trim() || null,
+          correlationId: String(record?.correlation_id || '').trim() || null,
+          labels: Array.isArray(record?.labels)
+            ? record.labels.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            : [],
+          capabilities: Array.isArray(record?.capabilities)
+            ? record.capabilities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            : [],
+          agentRole,
+          agentLabel: agentRoleLabel(agentRole),
+          connectorText: connectorBindingText(historyItem?.connector_binding || null),
+          taskSummary: String(historyItem?.user_goal || '').trim() || null,
+        });
+        return acc;
+      }, []);
 
-      const pendingRows = await Promise.all(
-        waitingRunIds.map(async (runId: string) => {
-          try {
-            const runRes = await fetch(`${ORION_API_URL}/runs/${encodeURIComponent(runId)}`, { headers });
-            if (!runRes.ok) return null;
-            const runPayload = await runRes.json().catch(() => null);
-            const pendingApproval = runPayload?.pending_approval;
-            if (!pendingApproval || typeof pendingApproval !== 'object') return null;
-            const approvalId = String((pendingApproval as { approval_id?: unknown }).approval_id || '').trim();
-            if (!approvalId) return null;
-            const historyItem = historyByRunId[runId];
-            return {
-              runId,
-              approvalId,
-              prompt: String((pendingApproval as { prompt?: unknown }).prompt || 'Approval requested.').trim() || 'Approval requested.',
-              status: String((pendingApproval as { status?: unknown }).status || 'waiting'),
-              expiresAt: String((pendingApproval as { expires_at?: unknown }).expires_at || '').trim() || null,
-              agentRole: String(runPayload?.agent_role || historyItem?.agent_role || '').trim() || null,
-              agentLabel: agentRoleLabel(String(runPayload?.agent_role || historyItem?.agent_role || '').trim() || null),
-              connectorText: connectorBindingText(
-                (runPayload?.connector_binding as HistoryRunItem['connector_binding']) || historyItem?.connector_binding || null,
-              ),
-            } as PendingApproval;
-          } catch {
-            return null;
-          }
-        }),
-      );
-
-      const nextPending = pendingRows.filter((item): item is PendingApproval => item !== null);
       setPending(nextPending);
 
       const auditItemsRaw = Array.isArray(auditPayload?.items) ? auditPayload.items : [];
@@ -297,24 +312,159 @@ export default function ApprovalsPage() {
     [filteredAudit],
   );
   const leadPending = filteredPending[0] ?? null;
-  const latestDecision = filteredAudit[0] ?? null;
-  const pendingByAgent = useMemo(() => {
-    const counts = filteredPending.reduce<Record<string, number>>((acc, row) => {
-      const key = row.agentLabel && row.agentLabel !== '--' ? row.agentLabel : 'Unassigned';
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-  }, [filteredPending]);
+
+  const renderPendingCard = (row: PendingApproval, featured = false) => {
+    const approveKey = `${row.runId}:${row.approvalId}:Proceed`;
+    const holdKey = `${row.runId}:${row.approvalId}:Hold`;
+    const busy = Boolean(actionBusy[approveKey] || actionBusy[holdKey]);
+    const tone = toneForLabel(row.status);
+    const sensitivity = approvalSensitivitySignal(row);
+
+    return (
+      <article
+        key={`${row.runId}:${row.approvalId}${featured ? ':featured' : ''}`}
+        className={`orion-panel hekor-approval-card${featured ? ' is-featured' : ''}`.trim()}
+      >
+        <div className="hekor-approval-card-head">
+          <div className="hekor-approval-card-copy">
+            <div className="hekor-approval-card-kicker">Approval needed</div>
+            <div className="hekor-approval-card-title">{compactText(row.prompt, 'Approval requested.', featured ? 260 : 220)}</div>
+            {row.taskSummary ? (
+              <div className="hekor-approval-card-summary">Task: {compactText(row.taskSummary, row.taskSummary, 180)}</div>
+            ) : null}
+          </div>
+          <div className="hekor-approval-card-badges">
+            <span
+              className="hekor-approval-badge"
+              style={{ color: tone.color, border: tone.border, background: tone.background }}
+            >
+              {formatDecisionLabel(row.status)}
+            </span>
+            {sensitivity ? (
+              <span className={`hekor-approval-badge${sensitivity.tone === 'warning' ? ' is-warning' : ''}`.trim()}>
+                {sensitivity.label}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="hekor-approval-card-grid">
+          <div className="hekor-approval-detail">
+            <span>Tool and account</span>
+            <strong>{row.connectorText || 'No tool or account is recorded yet.'}</strong>
+          </div>
+          <div className="hekor-approval-detail">
+            <span>Requested</span>
+            <strong>{fmtTime(row.requestedAt)}</strong>
+          </div>
+          <div className="hekor-approval-detail">
+            <span>Expires</span>
+            <strong>{fmtTime(row.expiresAt)}</strong>
+          </div>
+          <div className="hekor-approval-detail">
+            <span>Audit trail</span>
+            <strong>
+              run {row.runId.slice(0, 8)} · approval {row.approvalId.slice(0, 8)}
+            </strong>
+          </div>
+        </div>
+
+        <div className="hekor-approval-card-chip-row">
+          {row.agentLabel && row.agentLabel !== '--' ? <span className="orion-chip">{row.agentLabel}</span> : null}
+          {row.connectorText ? <span className="orion-chip">{row.connectorText}</span> : null}
+          {row.correlationId ? <span className="orion-chip">Trace {row.correlationId}</span> : null}
+        </div>
+
+        {/* The current approval payload does not include a structured change preview or
+            authoritative risk field, so this card stays within prompt, tool context,
+            and conservative review signals derived from labels/capabilities. */}
+        {row.labels.length > 0 || row.capabilities.length > 0 ? (
+          <div className="hekor-approval-signals">
+            <div className="hekor-approval-signals-title">Review signals</div>
+            <div className="hekor-approval-card-chip-row">
+              {row.labels.map((item) => (
+                <span key={`${row.approvalId}:label:${item}`} className="orion-chip">{item}</span>
+              ))}
+              {row.capabilities.map((item) => (
+                <span key={`${row.approvalId}:capability:${item}`} className="orion-chip">{item}</span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="hekor-approval-card-actions">
+          <button
+            className="btn-primary"
+            disabled={busy}
+            onClick={() => void resolveApproval(row, 'Proceed')}
+          >
+            <Check size={12} />
+            Approve
+          </button>
+          <button
+            className="btn-secondary"
+            disabled={busy}
+            onClick={() => void resolveApproval(row, 'Hold')}
+          >
+            Hold
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => router.push(`/runs/${encodeURIComponent(row.runId)}`)}
+          >
+            <ExternalLink size={12} />
+            Review full context
+          </button>
+        </div>
+      </article>
+    );
+  };
+
+  const renderAuditCard = (item: ApprovalAudit) => {
+    const tone = toneForLabel(item.decision);
+    return (
+      <article key={item.id} className="orion-panel hekor-approval-audit-card">
+        <div className="hekor-approval-audit-head">
+          <div>
+            <div className="hekor-approval-audit-title">{item.stage || 'Approval stage'}</div>
+            <div className="hekor-approval-audit-meta">{fmtTime(item.ts)} · {item.actor || 'system'}</div>
+          </div>
+          <span
+            className="hekor-approval-badge"
+            style={{ color: tone.color, border: tone.border, background: tone.background }}
+          >
+            {formatDecisionLabel(item.decision)}
+          </span>
+        </div>
+
+        <div className="hekor-approval-card-chip-row">
+          {item.agentLabel && item.agentLabel !== '--' ? <span className="orion-chip">{item.agentLabel}</span> : null}
+          {item.connectorText ? <span className="orion-chip">{item.connectorText}</span> : null}
+          {item.runId ? <span className="orion-chip">Run {item.runId.slice(0, 8)}</span> : null}
+        </div>
+
+        <div className="hekor-approval-audit-note">{compactText(item.note || 'No note recorded.', 'No note recorded.', 200)}</div>
+
+        <div className="hekor-approval-card-actions">
+          {item.runId ? (
+            <button
+              className="btn-secondary"
+              onClick={() => router.push(`/runs/${encodeURIComponent(item.runId || '')}`)}
+            >
+              Review run
+            </button>
+          ) : null}
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<ClipboardCheck size={18} />}
         title="Approvals"
-        subtitle="Needs permission."
+        subtitle="Review actions before Hekor continues."
         meta={
           <>
             <span>{filteredPending.length} pending</span>
@@ -345,137 +495,14 @@ export default function ApprovalsPage() {
         </section>
       ) : null}
 
-      <section className="orion-grid-2">
-        <article className="orion-panel">
-          <div className="orion-panel-title">Next Decision</div>
-          {leadPending ? (
-            <div style={{ display: 'grid', gap: 12, marginTop: 10 }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {leadPending.agentLabel && leadPending.agentLabel !== '--' ? <span className="orion-chip">{leadPending.agentLabel}</span> : null}
-                {leadPending.connectorText ? <span className="orion-chip">Channel {leadPending.connectorText}</span> : null}
-                <span className="orion-chip">Run {leadPending.runId.slice(0, 8)}</span>
-              </div>
-              <div style={{ fontSize: 16, lineHeight: 1.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                {compactText(leadPending.prompt, 'Approval requested.', 220)}
-              </div>
-              <div style={{ display: 'grid', gap: 4, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                <div>Status {formatDecisionLabel(leadPending.status)}</div>
-                <div>Expires {fmtTime(leadPending.expiresAt)}</div>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  className="orion-btn orion-btn-success"
-                  style={{ minHeight: 32, padding: '0 12px' }}
-                  disabled={Boolean(actionBusy[`${leadPending.runId}:${leadPending.approvalId}:Proceed`]) || Boolean(actionBusy[`${leadPending.runId}:${leadPending.approvalId}:Hold`])}
-                  onClick={() => void resolveApproval(leadPending, 'Proceed')}
-                >
-                  <Check size={12} />
-                  Proceed
-                </button>
-                <button
-                  className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, padding: '0 12px' }}
-                  disabled={Boolean(actionBusy[`${leadPending.runId}:${leadPending.approvalId}:Proceed`]) || Boolean(actionBusy[`${leadPending.runId}:${leadPending.approvalId}:Hold`])}
-                  onClick={() => void resolveApproval(leadPending, 'Hold')}
-                >
-                  Hold
-                </button>
-                <button
-                  className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, padding: '0 12px' }}
-                  onClick={() => router.push(`/runs/${encodeURIComponent(leadPending.runId)}/inspect?focus=approvals`)}
-                >
-                  <ExternalLink size={12} />
-                  Open run
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>No decisions waiting</div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                Nothing is blocked on human approval right now.
-              </div>
-            </div>
-          )}
-        </article>
-
-        <article className="orion-panel">
-          <div className="orion-panel-title">Queue Snapshot</div>
-          <div style={{ marginTop: 10, display: 'grid', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <span className="orion-chip">{filteredPending.length} waiting</span>
-              <span className="orion-chip">{approvalsNeedingAttention} held</span>
-              <span className="orion-chip">{filteredAudit.length} in history</span>
-            </div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Most affected lanes
-              </div>
-              {pendingByAgent.length > 0 ? pendingByAgent.map(([label, count]) => (
-                <div
-                  key={label}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    padding: '10px 12px',
-                    borderRadius: 12,
-                    border: '1px solid var(--border-default)',
-                    background: 'var(--bg-element)',
-                    fontSize: 12,
-                  }}
-                >
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{label}</span>
-                  <span style={{ color: 'var(--text-tertiary)' }}>{count} waiting</span>
-                </div>
-              )) : (
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>No lanes are currently blocked.</div>
-              )}
-            </div>
-            <div style={{ display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Latest recorded decision
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 700 }}>
-                {latestDecision ? `${formatDecisionLabel(latestDecision.decision)} · ${latestDecision.stage || 'Approval stage'}` : 'No history yet'}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {latestDecision
-                  ? `${fmtTime(latestDecision.ts)} · ${compactText(latestDecision.note || latestDecision.actor || 'Decision recorded.', 'Decision recorded.', 120)}`
-                  : 'Approved and held decisions will appear here after the first run pauses.'}
-              </div>
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
+      <section className="orion-panel muted hekor-approvals-filters">
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Review decisions</div>
-            <div className="orion-panel-copy">Switch between pending approvals and history, then narrow the list by worker or channel.</div>
+            <div className="orion-panel-title">Filter approvals</div>
+            <div className="orion-panel-copy">Narrow the list by worker or channel, then review the actions that are waiting.</div>
           </div>
         </div>
         <div className="orion-toolbar">
-          <div className="orion-toolbar-group">
-            <button
-              className={activeTab === 'pending' ? 'orion-btn orion-btn-primary' : 'orion-btn orion-btn-ghost'}
-              onClick={() => setActiveTab('pending')}
-              style={{ minHeight: 38 }}
-            >
-              Pending
-              <span className="orion-chip" style={{ marginLeft: 4 }}>{filteredPending.length}</span>
-            </button>
-            <button
-              className={activeTab === 'audit' ? 'orion-btn orion-btn-primary' : 'orion-btn orion-btn-ghost'}
-              onClick={() => setActiveTab('audit')}
-              style={{ minHeight: 38 }}
-            >
-              History
-              <span className="orion-chip" style={{ marginLeft: 4 }}>{filteredAudit.length}</span>
-            </button>
-          </div>
           <div className="orion-toolbar-group">
             <select
               className="input"
@@ -508,213 +535,50 @@ export default function ApprovalsPage() {
         </div>
       </section>
 
-      {activeTab === 'pending' ? (
-        <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
-          <div
-            className="orion-panel-header"
-            style={{
-              marginBottom: 0,
-              padding: '16px 18px 12px',
-              borderBottom: '1px solid var(--border-subtle)',
-            }}
-          >
-            <div>
-              <div className="orion-panel-title">Pending approvals</div>
-              <div className="orion-panel-copy">These runs are waiting for a human decision before they continue.</div>
-            </div>
-          </div>
-          {filteredPending.length === 0 ? (
-            <div style={{ padding: '16px 14px', display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 700 }}>
-                {pending.length === 0 ? 'Nothing needs permission right now.' : 'No approvals match these filters.'}
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                {pending.length === 0
-                  ? `${filteredAudit.length} past decision${filteredAudit.length === 1 ? '' : 's'} available in History.`
-                  : 'Change the filters or switch to History.'}
-              </div>
-            </div>
-          ) : (
-            <div>
-              {filteredPending.map((row) => {
-                const approveKey = `${row.runId}:${row.approvalId}:Proceed`;
-                const holdKey = `${row.runId}:${row.approvalId}:Hold`;
-                const busy = Boolean(actionBusy[approveKey] || actionBusy[holdKey]);
-                const tone = toneForLabel(row.status);
-                return (
-                  <article
-                    key={`${row.runId}:${row.approvalId}`}
-                    className="orion-list-row"
-                    style={{ padding: '14px 16px', alignItems: 'start', gap: 14, flexWrap: 'wrap' }}
-                  >
-                    <div style={{ minWidth: 0, flex: '1 1 460px', display: 'grid', gap: 6 }}>
-                      <div>
-                        <div
-                          style={{
-                            fontSize: 14,
-                            fontWeight: 800,
-                            color: 'var(--text-primary)',
-                            lineHeight: 1.45,
-                          }}
-                          title={row.prompt}
-                        >
-                          {compactText(row.prompt, 'Approval requested.', 220)}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-                          run {row.runId.slice(0, 8)} · approval {row.approvalId.slice(0, 8)}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {row.agentLabel && row.agentLabel !== '--' ? <span className="orion-chip">{row.agentLabel}</span> : null}
-                        {row.connectorText ? <span className="orion-chip">Channel {row.connectorText}</span> : null}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gap: 10, justifyItems: 'end', flex: '0 1 360px', minWidth: 280 }}>
-                      <div style={{ display: 'grid', gap: 8, width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              minHeight: 24,
-                              padding: '0 9px',
-                              borderRadius: 999,
-                              fontSize: 11,
-                              fontWeight: 700,
-                              color: tone.color,
-                              border: tone.border,
-                              background: tone.background,
-                            }}
-                          >
-                            {formatDecisionLabel(row.status)}
-                          </span>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
-                          <div style={{ display: 'grid', gap: 3, justifyItems: 'end' }}>
-                            <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Expires</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>{fmtTime(row.expiresAt)}</div>
-                          </div>
-                          <div style={{ display: 'grid', gap: 3, justifyItems: 'end' }}>
-                            <div style={{ fontSize: 10.5, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Action</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>Human review</div>
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <button
-                          className="orion-btn orion-btn-success"
-                          style={{ minHeight: 30, padding: '0 10px' }}
-                          disabled={busy}
-                          onClick={() => void resolveApproval(row, 'Proceed')}
-                        >
-                          <Check size={12} />
-                          Approve
-                        </button>
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, padding: '0 10px' }}
-                          disabled={busy}
-                          onClick={() => void resolveApproval(row, 'Hold')}
-                        >
-                          Hold
-                        </button>
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, padding: '0 10px' }}
-                          onClick={() => router.push(`/runs/${encodeURIComponent(row.runId)}/inspect?focus=approvals`)}
-                        >
-                          <ExternalLink size={12} />
-                          Inspect
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
+      {leadPending ? (
+        <section className="hekor-approval-section">
+          <div className="orion-panel-title">Needs review now</div>
+          <div className="orion-panel-copy">This is the next approval blocking work.</div>
+          {renderPendingCard(leadPending, true)}
         </section>
       ) : (
-        <section className="orion-panel" style={{ padding: 0, overflow: 'hidden' }}>
-          <div
-            className="orion-panel-header"
-            style={{
-              marginBottom: 0,
-              padding: '16px 18px 12px',
-              borderBottom: '1px solid var(--border-subtle)',
-            }}
-          >
-            <div>
-              <div className="orion-panel-title">Approval history</div>
-              <div className="orion-panel-copy">Review past decisions and reopen the related run when you need more context.</div>
-            </div>
+        <section className="orion-panel">
+          <div className="orion-panel-title">
+            {pending.length === 0 ? 'Nothing needs approval right now' : 'No approvals match these filters'}
           </div>
-          {filteredAudit.length === 0 ? (
-            <div style={{ padding: '16px 14px', fontSize: 13, color: 'var(--text-secondary)' }}>
-              {audit.length === 0 ? 'No approvals recorded yet.' : 'No approval history items match these filters.'}
-            </div>
-          ) : (
-            <div>
-              {filteredAudit.slice(0, 40).map((item) => {
-                const tone = toneForLabel(item.decision);
-                return (
-                  <article
-                    key={item.id}
-                    className="orion-list-row"
-                    style={{ padding: '14px 16px', alignItems: 'start', gap: 14, flexWrap: 'wrap' }}
-                  >
-                    <div style={{ minWidth: 0, flex: '1 1 460px', display: 'grid', gap: 6 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{item.stage || 'Approval stage'}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                          {fmtTime(item.ts)} · {item.actor || 'system'}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {item.agentLabel && item.agentLabel !== '--' ? <span className="orion-chip">{item.agentLabel}</span> : null}
-                        {item.connectorText ? <span className="orion-chip">Channel {item.connectorText}</span> : null}
-                        {item.runId ? <span className="orion-chip">Run {item.runId.slice(0, 8)}</span> : null}
-                      </div>
-                      <div style={{ fontSize: 12, color: item.note ? 'var(--text-secondary)' : 'var(--text-tertiary)' }} title={item.note || ''}>
-                        {compactText(item.note || 'No note recorded.', 'No note recorded.', 180)}
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gap: 10, justifyItems: 'end', flex: '0 1 240px', minWidth: 220 }}>
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            minHeight: 24,
-                            padding: '0 9px',
-                            borderRadius: 999,
-                            fontSize: 11,
-                            fontWeight: 700,
-                            color: tone.color,
-                            border: tone.border,
-                            background: tone.background,
-                          }}
-                        >
-                          {formatDecisionLabel(item.decision)}
-                        </span>
-                      </div>
-                      {item.runId ? (
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, padding: '0 10px' }}
-                          onClick={() => router.push(`/runs/${encodeURIComponent(item.runId || '')}/inspect?focus=approvals`)}
-                        >
-                          Inspect
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
+          <div className="orion-panel-copy">
+            {pending.length === 0
+              ? 'New approval requests will appear here when a run pauses for review.'
+              : 'Change the filters to see the approvals that match this view.'}
+          </div>
         </section>
       )}
+
+      {filteredPending.length > 1 ? (
+        <section className="hekor-approval-section">
+          <div className="orion-panel-title">More approvals waiting</div>
+          <div className="orion-panel-copy">Review these after the current top request.</div>
+          <div className="hekor-approval-card-list">
+            {filteredPending.slice(1).map((row) => renderPendingCard(row))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="hekor-approval-section">
+        <div className="orion-panel-title">Recent decisions</div>
+        <div className="orion-panel-copy">Audit trail for approved and held actions.</div>
+        {filteredAudit.length === 0 ? (
+          <section className="orion-panel">
+            <div className="orion-panel-copy">
+              {audit.length === 0 ? 'No approval history is recorded yet.' : 'No history items match these filters.'}
+            </div>
+          </section>
+        ) : (
+          <div className="hekor-approval-audit-list">
+            {filteredAudit.slice(0, 40).map((item) => renderAuditCard(item))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

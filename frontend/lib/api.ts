@@ -1,4 +1,5 @@
 import { API_BASE } from '@/lib/config';
+import { formatExecutionTargetLabel, normalizeExecutionTarget } from '@/lib/executionTargets';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
@@ -81,6 +82,7 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         ? agentNodes[0].data
         : {};
     const runtimeProfileId = String(meta.runtime_profile_id || '').trim();
+    const executionTarget = normalizeExecutionTarget(meta.execution_target);
     const provider = String(
         firstAgentData.provider || connection.provider || meta.provider || 'openai',
     ).trim() || 'openai';
@@ -110,6 +112,7 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         `Provider: ${provider}`,
         `Model: ${model}`,
         runtimeProfileId ? `Runtime Profile: ${runtimeProfileId}` : '',
+        `Execution route: ${formatExecutionTargetLabel(executionTarget)}`,
         `Agents: ${agents.length || 1}`,
     ].filter(Boolean).join('\n');
 
@@ -121,6 +124,7 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         agentRole,
         credentialId,
         runtimeProfileId,
+        executionTarget,
         businessPlan,
         agents,
     };
@@ -193,6 +197,8 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
                 agent_role: config.agentRole,
                 provider: config.provider,
                 model: config.model,
+                execution_target: config.executionTarget,
+                execution_target_requested: config.executionTarget,
                 profile_id: config.runtimeProfileId || undefined,
                 runtime_profile_id: config.runtimeProfileId || undefined,
             },
@@ -228,6 +234,10 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
                 typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : config.provider,
             active_profile_model:
                 typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : config.model,
+            execution_target_selected:
+                typeof payload?.execution_target_selected === 'string'
+                    ? payload.execution_target_selected
+                    : config.executionTarget,
         });
     }
 
@@ -257,6 +267,10 @@ export async function deleteWorkflow(id: string) {
 
 export async function fetchExecutions() {
     return apiFetch(`/executions`);
+}
+
+export async function fetchRuntimeMachines() {
+    return apiFetch(`/runtime/runtimes/status`);
 }
 
 export async function fetchExecution(id: string) {

@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Download,
   Eye,
+  PlayCircle,
   RefreshCw,
   Search,
 } from 'lucide-react';
@@ -301,6 +302,36 @@ function isRecentExecution(execution: ExecutionRecord): boolean {
   return Date.now() - ts <= 24 * 60 * 60 * 1000;
 }
 
+function executionTaskSummary(execution: ExecutionRecord): string {
+  const goal = String(execution.userGoal || '').replace(/\s+/g, ' ').trim();
+  if (goal) return goal;
+  const workflowName = String(execution.workflow?.name || '').replace(/\s+/g, ' ').trim();
+  if (workflowName && workflowName.toLowerCase() !== 'untitled run') return workflowName;
+  return 'No task description recorded for this run.';
+}
+
+function executionStateNote(execution: ExecutionRecord): string {
+  const status = String(execution.status || '').trim().toLowerCase();
+  if (status === 'failed' || status === 'error') {
+    return 'Review what blocked this task and decide the next step.';
+  }
+  if (status === 'running') {
+    return 'Hekor is still working on this task.';
+  }
+  if (status === 'success' || status === 'completed') {
+    return 'Completed. Open the run to review the result.';
+  }
+  return 'Open the run to review the latest activity.';
+}
+
+function startedFromLabel(execution: ExecutionRecord, meta?: RuntimeRunMeta | null): string {
+  const channel = connectorChannelValue(meta);
+  if (channel) return titleCaseWords(channel);
+  const triggeredBy = String(execution.triggeredBy || '').trim();
+  if (!triggeredBy || triggeredBy.toLowerCase() === 'direct') return 'Manual';
+  return titleCaseWords(triggeredBy);
+}
+
 export default function ExecutionsPage() {
   const router = useRouter();
   const [focusedRunId, setFocusedRunId] = useState('');
@@ -544,25 +575,25 @@ export default function ExecutionsPage() {
   const activeSummary = useMemo(() => {
     if (runSummary.failed > 0) {
       return {
-        title: `${runSummary.failed} run${runSummary.failed === 1 ? '' : 's'} need review`,
-        note: 'Start with failed runs or blocked work before launching anything new.',
+        title: `${runSummary.failed} task${runSummary.failed === 1 ? '' : 's'} need attention`,
+        note: 'Start with blocked or failed work before launching anything new.',
       };
     }
     if (runSummary.running > 0) {
       return {
-        title: `${runSummary.running} run${runSummary.running === 1 ? '' : 's'} in progress`,
-        note: 'Live execution is active now. Open the queue below to inspect current progress.',
+        title: `${runSummary.running} task${runSummary.running === 1 ? '' : 's'} in progress`,
+        note: 'Live work is active now. Open a run below to review progress and results.',
       };
     }
     if (runSummary.recent > 0) {
       return {
-        title: `${runSummary.recent} run${runSummary.recent === 1 ? '' : 's'} in the last 24 hours`,
-        note: 'Recent execution history is available below, with profile and routing details.',
+        title: `${runSummary.recent} task${runSummary.recent === 1 ? '' : 's'} ran in the last 24 hours`,
+        note: 'Recent work is ready to review below, with the result and timeline one click away.',
       };
     }
     return {
-      title: 'No recent run pressure',
-      note: 'The queue is quiet. Use filters below when you want to inspect historical execution.',
+      title: 'No active work right now',
+      note: 'The queue is quiet. Start a task or use the filters below to review past runs.',
     };
   }, [runSummary]);
 
@@ -621,7 +652,7 @@ export default function ExecutionsPage() {
       <OsPageHeader
         icon={<Activity size={18} />}
         title="Runs"
-        subtitle="Monitor live execution, completed work, and anything that needs your attention."
+        subtitle="Review active work, completed tasks, and anything that needs your attention."
         actions={
           <button className="orion-btn orion-btn-ghost" onClick={() => void loadExecutions()}>
             <RefreshCw size={14} />
@@ -632,9 +663,22 @@ export default function ExecutionsPage() {
 
       <section className="orion-panel orion-runs-overview">
         <div className="orion-runs-overview-main">
-          <div className="orion-home-overview-kicker">Operations overview</div>
+          <div className="orion-home-overview-kicker">Run overview</div>
           <div className="orion-runs-overview-title">{activeSummary.title}</div>
           <div className="orion-runs-overview-copy">{activeSummary.note}</div>
+          <div className="orion-home-overview-actions">
+            <Link href="/setup" className="btn-primary">
+              <PlayCircle size={14} />
+              New Task
+            </Link>
+            <Link href="/approvals" className="btn-secondary">
+              <Eye size={14} />
+              Approvals
+            </Link>
+            <Link href="/workflows" className="btn-secondary">
+              Reusable workflows
+            </Link>
+          </div>
           <MetricStrip
             minWidth={142}
             items={[
@@ -648,7 +692,7 @@ export default function ExecutionsPage() {
         </div>
         <aside className="orion-runs-overview-side">
           <div className="orion-home-side-card">
-            <div className="orion-home-side-label">Queue state</div>
+            <div className="orion-home-side-label">At a glance</div>
             <div className="orion-home-side-stats">
               <div>
                 <div className="orion-home-side-value">{filteredExecutions.length}</div>
@@ -656,13 +700,13 @@ export default function ExecutionsPage() {
               </div>
               <div>
                 <div className="orion-home-side-value">{channelOptions.length}</div>
-                <div className="orion-home-side-note">Channels in use</div>
+                <div className="orion-home-side-note">Tools in use</div>
               </div>
             </div>
             <div className="orion-runs-overview-side-note">
               {runSummary.failed > 0
-                ? 'Failed runs stay at the top of the queue so review starts where it matters.'
-                : 'Use the filters below to isolate one owner, channel, or run state.'}
+                ? 'Runs that need attention stay at the top so review starts where it matters.'
+                : 'Use the filters below to isolate one task, assistant, tool, or run state.'}
             </div>
           </div>
         </aside>
@@ -671,8 +715,8 @@ export default function ExecutionsPage() {
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Operations view</div>
-            <div className="orion-panel-copy">Search by goal or run ID, then narrow by status, handler, or channel.</div>
+            <div className="orion-panel-title">Find a run</div>
+            <div className="orion-panel-copy">Search by task or run ID, then narrow by state, assistant, or tool.</div>
           </div>
         </div>
         <div className="orion-toolbar-grid">
@@ -682,7 +726,7 @@ export default function ExecutionsPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="input"
-              placeholder="Search by goal, workflow name, or run ID..."
+              placeholder="Search by task, workflow name, or run ID..."
               style={{ paddingLeft: 36 }}
             />
           </div>
@@ -706,7 +750,7 @@ export default function ExecutionsPage() {
             onChange={(event) => setAgentFilter(event.target.value)}
             style={{ minWidth: 0, width: '100%' }}
           >
-            <option value="all">All handlers</option>
+            <option value="all">All assistants</option>
             {AGENT_ROLE_OPTIONS.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.label}
@@ -720,7 +764,7 @@ export default function ExecutionsPage() {
             onChange={(event) => setChannelFilter(event.target.value)}
             style={{ minWidth: 0, width: '100%' }}
           >
-            <option value="all">All channels</option>
+            <option value="all">All tools</option>
             {channelOptions.map((channel) => (
               <option key={channel} value={channel}>
                 {channel}
@@ -764,16 +808,16 @@ export default function ExecutionsPage() {
         </section>
       ) : filteredExecutions.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">{executions.length === 0 ? 'No runs yet' : 'No runs match these filters'}</div>
+          <div className="orion-empty-title">{executions.length === 0 ? 'No work has run yet' : 'No runs match these filters'}</div>
           <div className="orion-empty-copy orion-empty-copy-spaced">
             {executions.length === 0
-              ? 'Run a workflow to see execution history, approvals, and outcomes here.'
+              ? 'Start one task to see progress, approvals, and outcomes here.'
               : 'Try another search or clear the current filters to see more runs.'}
           </div>
           <div className="orion-inline-actions">
             {executions.length === 0 ? (
-              <Link href="/" className="btn-secondary">
-                Open Chat
+              <Link href="/setup" className="btn-primary">
+                Start a task
               </Link>
             ) : (
               <button type="button" className="btn-secondary" onClick={clearFilters}>
@@ -786,14 +830,16 @@ export default function ExecutionsPage() {
         <section className="orion-panel orion-panel-shell">
           <div className="orion-panel-header orion-panel-shell-header">
             <div>
-              <div className="orion-panel-title">Execution queue</div>
-              <div className="orion-panel-copy">Open any run to review results, inspect the full timeline, and decide the next action.</div>
+              <div className="orion-panel-title">Recent and active runs</div>
+              <div className="orion-panel-copy">Open any run to review the result, inspect the timeline, and decide what to do next.</div>
             </div>
           </div>
           {filteredExecutions.map((execution) => {
             const workflowName = execution.workflow?.name || execution.userGoal || 'Untitled Run';
             const status = statusMeta(execution.status);
             const runMeta = runtimeRunMeta[execution.id];
+            const taskSummary = executionTaskSummary(execution);
+            const stateNote = executionStateNote(execution);
             const bindingText = connectorBindingText(runMeta);
             const parentRunId = String(runMeta?.parent_run_id || '').trim();
             const childRunCount = Number(runMeta?.child_run_count || 0);
@@ -803,11 +849,10 @@ export default function ExecutionsPage() {
             const runtimeProfile = runtimeProfileText(runMeta);
             const isOrchestrator = String(execution.workflow?.definition?.meta?.operator?.agentRole || '').trim() === 'orchestrator';
             const isRecent = isRecentExecution(execution);
-            const routeLabel = execution.triggeredBy || 'Direct';
+            const routeLabel = startedFromLabel(execution, runMeta);
             const runChips = [
               isOrchestrator ? 'Coordinated' : null,
               isRecent ? 'Recent' : null,
-              bindingText ? `Channel ${bindingText}` : null,
             ].filter(Boolean);
 
             return (
@@ -817,7 +862,7 @@ export default function ExecutionsPage() {
               >
                 <button
                   className="orion-btn orion-btn-ghost orion-run-row-trigger"
-                  onClick={() => void openExecutionDetail(execution.id)}
+                  onClick={() => router.push(`/runs/${encodeURIComponent(execution.id)}`)}
                 >
                   <div className="orion-run-row-body">
                     <div>
@@ -826,6 +871,7 @@ export default function ExecutionsPage() {
                         {execution.id}
                       </div>
                     </div>
+                    <div className="orion-run-summary">{taskSummary}</div>
                     {runChips.length > 0 ? (
                       <div className="orion-run-chip-row">
                         {runChips.map((chip) => (
@@ -846,11 +892,13 @@ export default function ExecutionsPage() {
                       </div>
                     ) : null}
                     <div className="orion-run-meta">
-                      <span>Owner {executionAgentRoleLabel(execution)}</span>
-                      {runtimeProfile ? <span>Profile {runtimeProfile}</span> : null}
+                      <span>Assistant {executionAgentRoleLabel(execution)}</span>
+                      {bindingText ? <span>Tool {bindingText}</span> : null}
+                      {runtimeProfile ? <span>AI {runtimeProfile}</span> : null}
                       {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
                       {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>
+                    <div className="orion-run-note">{stateNote}</div>
                     {!parentRunId && delegationNextAction ? (
                       <div className="orion-run-note">
                         Next step: {titleCaseWords(delegationNextAction)}
@@ -901,20 +949,26 @@ export default function ExecutionsPage() {
                         <div className="orion-run-stat-value">{toDurationLabel(execution.durationMs)}</div>
                       </div>
                       <div className="orion-run-stat">
-                        <div className="orion-run-stat-label">Route</div>
+                        <div className="orion-run-stat-label">Started from</div>
                         <div className="orion-run-stat-value">{routeLabel}</div>
                       </div>
                     </div>
                   </div>
 
                   <div className="orion-run-actions">
+                    <Link
+                      className="orion-btn orion-btn-secondary orion-run-action-btn"
+                      href={`/runs/${encodeURIComponent(execution.id)}`}
+                    >
+                      Open run
+                    </Link>
                     {execution.source === 'runtime' ? null : (
                       <button
                         className="orion-btn orion-btn-ghost orion-run-action-btn"
                         onClick={() => void openExecutionDetail(execution.id)}
                       >
                         <Eye size={12} />
-                        Details
+                        Quick view
                       </button>
                     )}
                     <Link
@@ -933,23 +987,25 @@ export default function ExecutionsPage() {
 
       {selectedExecution && (
         <div className="orion-modal-overlay" onClick={() => setSelectedExecution(null)}>
-          <section className="orion-modal" onClick={(event) => event.stopPropagation()}>
-            <header className="orion-panel-header" style={{ marginBottom: 0 }}>
-              <div>
-                <h2 style={{ fontSize: 17, fontWeight: 800 }}>Run detail</h2>
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                  {selectedExecution.workflow?.name || 'Untitled Workflow'}
+          <section className="orion-modal orion-execution-modal" onClick={(event) => event.stopPropagation()}>
+            <header className="orion-panel-header orion-execution-modal-header" style={{ marginBottom: 0 }}>
+              <div className="orion-execution-modal-title-wrap">
+                <div className="orion-execution-modal-kicker">Quick view</div>
+                <h2 className="orion-execution-modal-title">{selectedExecution.workflow?.name || 'Untitled Workflow'}</h2>
+                <div className="orion-execution-modal-meta">
+                  <span>Assistant {executionAgentRoleLabel(selectedExecution)}</span>
+                  {connectorBindingText(runtimeRunMeta[selectedExecution.id]) ? (
+                    <span>Tool {connectorBindingText(runtimeRunMeta[selectedExecution.id])}</span>
+                  ) : null}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                  Handled by {executionAgentRoleLabel(selectedExecution)}
-                </div>
-                {connectorBindingText(runtimeRunMeta[selectedExecution.id]) ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
-                    Channel {connectorBindingText(runtimeRunMeta[selectedExecution.id])}
-                  </div>
-                ) : null}
+                <p className="orion-execution-modal-copy">
+                  This is a technical preview of the recorded steps. Open the full run for the user-facing result and current status.
+                </p>
               </div>
-              <div style={{ display: 'inline-flex', gap: 8 }}>
+              <div className="orion-execution-modal-actions">
+                <Link className="orion-btn orion-btn-secondary" href={`/runs/${encodeURIComponent(selectedExecution.id)}`}>
+                  Open run
+                </Link>
                 <button className="orion-btn orion-btn-ghost" onClick={exportExecution}>
                   <Download size={14} />
                   Export
@@ -964,52 +1020,23 @@ export default function ExecutionsPage() {
             </header>
 
             {detailLoading ? (
-              <div style={{ color: 'var(--text-tertiary)' }}>Loading execution detail…</div>
+              <div className="orion-execution-modal-loading">Loading run detail…</div>
             ) : (
               <>
                 {tokenSummary > 0 && (
-                  <div
-                    className="orion-chip"
-                    style={{
-                      width: 'fit-content',
-                      border: '1px solid var(--primary-border-soft)',
-                      background: 'var(--primary-soft)',
-                      color: 'var(--primary-base)',
-                    }}
-                  >
+                  <div className="orion-chip orion-execution-modal-token-chip">
                     Token total: {tokenSummary}
                   </div>
                 )}
 
-                <div style={{ maxHeight: 440, overflow: 'auto', paddingRight: 4 }}>
+                <div className="orion-execution-modal-body">
                   {replayRows.length === 0 ? (
                     <div className="orion-empty" style={{ padding: 24 }}>
                       <div className="orion-empty-title">No run steps recorded</div>
                     </div>
                   ) : (
-                    <div
-                      style={{
-                        borderRadius: 10,
-                        border: '1px solid var(--border-default)',
-                        background: 'var(--bg-panel)',
-                        overflowX: 'auto',
-                      }}
-                    >
-                      <div
-                        style={{
-                          minWidth: 780,
-                          display: 'grid',
-                          gridTemplateColumns: 'minmax(180px,1.3fr) 110px minmax(140px,0.9fr) minmax(280px,2fr)',
-                          gap: 10,
-                          padding: '8px 10px',
-                          borderBottom: '1px solid var(--border-default)',
-                          fontSize: 10,
-                          color: 'var(--text-tertiary)',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                          fontWeight: 800,
-                        }}
-                      >
+                    <div className="orion-execution-modal-table">
+                      <div className="orion-execution-modal-table-head">
                         <span>Step</span>
                         <span>Status</span>
                         <span>Tools</span>
@@ -1018,18 +1045,9 @@ export default function ExecutionsPage() {
                       {replayRows.map((step, index) => (
                         <div
                           key={`${step.id}:${index}`}
-                          className="orion-log-entry"
-                          style={{
-                            minWidth: 780,
-                            display: 'grid',
-                            gridTemplateColumns: 'minmax(180px,1.3fr) 110px minmax(140px,0.9fr) minmax(280px,2fr)',
-                            gap: 10,
-                            padding: '9px 10px',
-                            borderBottom: '1px solid var(--border-default)',
-                            alignItems: 'start',
-                          }}
+                          className="orion-log-entry orion-execution-modal-table-row"
                         >
-                          <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 700 }}>{step.title}</span>
+                          <span className="orion-execution-modal-step-title">{step.title}</span>
                           <span
                             className="orion-chip"
                             style={{
@@ -1041,8 +1059,8 @@ export default function ExecutionsPage() {
                           >
                             {step.status.label}
                           </span>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{step.tools}</span>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap' }}>
+                          <span className="orion-execution-modal-step-meta">{step.tools}</span>
+                          <span className="orion-execution-modal-step-output">
                             {step.output}
                           </span>
                         </div>

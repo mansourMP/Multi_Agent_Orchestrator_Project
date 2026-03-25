@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Database,
+  Laptop,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -16,6 +17,13 @@ import {
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
+import {
+  collectPriorityFixes,
+  DoctorCheckGroup,
+  formatDoctorCheckTitle,
+  groupDoctorChecks,
+  PriorityFix,
+} from '@/lib/doctorChecks';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 
 const BACKEND_API_URL = API_BASE;
@@ -38,13 +46,39 @@ type DoctorCheck = {
 
 type DoctorPayload = {
   ok: boolean;
+  overview?: {
+    status: 'pass' | 'warn' | 'fail' | string;
+    title: string;
+    detail: string;
+  };
   summary: {
     pass: number;
     warn: number;
     fail: number;
   };
+  groups?: DoctorCheckGroup[];
+  priority_fixes?: PriorityFix[];
   checks: DoctorCheck[];
   generated_at?: string;
+};
+
+type DoctorHistoryPayload = {
+  items: Array<{
+    generated_at?: string | null;
+    ok: boolean;
+    overview: {
+      status: 'pass' | 'warn' | 'fail' | string;
+      title: string;
+      detail: string;
+    };
+    summary: {
+      pass: number;
+      warn: number;
+      fail: number;
+    };
+  }>;
+  count: number;
+  updated_at?: string | null;
 };
 
 type MetricsPayload = {
@@ -274,6 +308,7 @@ export default function HealthPage() {
   const [validationCard, setValidationCard] = useState<StatusCardData>({ status: 'loading' });
   const [workersCard, setWorkersCard] = useState<StatusCardData>({ status: 'loading' });
   const [doctor, setDoctor] = useState<DoctorPayload | null>(null);
+  const [doctorHistory, setDoctorHistory] = useState<DoctorHistoryPayload | null>(null);
   const [metrics, setMetrics] = useState<MetricsPayload | null>(null);
   const [profilesHealth, setProfilesHealth] = useState<ProviderProfilesHealthPayload | null>(null);
   const [validation, setValidation] = useState<ValidationPayload | null>(null);
@@ -461,6 +496,53 @@ export default function HealthPage() {
     });
   }, [doctorChecksOrdered, showPassChecks]);
 
+  const doctorGroups = useMemo(
+    () => (doctor?.groups?.length ? doctor.groups : groupDoctorChecks(doctorChecksVisible)),
+    [doctor?.groups, doctorChecksVisible],
+  );
+
+  const priorityFixes = useMemo(
+    () => (doctor?.priority_fixes?.length ? doctor.priority_fixes : collectPriorityFixes(doctorChecksOrdered, 6)),
+    [doctor?.priority_fixes, doctorChecksOrdered],
+  );
+
+  const doctorOverview = useMemo(() => {
+    if (doctor?.overview) {
+      const status = String(doctor.overview.status || '').toLowerCase();
+      return {
+        tone: status === 'fail' ? ('error' as const) : status === 'warn' ? ('warn' as const) : ('ok' as const),
+        title: doctor.overview.title,
+        detail: doctor.overview.detail,
+      };
+    }
+    if (!doctor) {
+      return {
+        tone: 'warn' as const,
+        title: 'Doctor not ready',
+        detail: 'Run the doctor checks and confirm the runtime key is accepted before trusting machine or cloud execution.',
+      };
+    }
+    if (backend.status === 'error' || runtime.status === 'error' || doctor.summary.fail > 0) {
+      return {
+        tone: 'error' as const,
+        title: 'Critical gaps found',
+        detail: 'Resolve failed checks before treating this runtime as production ready.',
+      };
+    }
+    if (backend.status === 'warn' || runtime.status === 'warn' || doctor.summary.warn > 0) {
+      return {
+        tone: 'warn' as const,
+        title: 'Needs attention',
+        detail: 'Core services are reachable, but warnings still weaken trust and runtime safety.',
+      };
+    }
+    return {
+      tone: 'ok' as const,
+      title: 'Doctor healthy',
+      detail: 'The runtime, policies, and storage layers are aligned for normal operation.',
+    };
+  }, [backend.status, doctor, runtime.status]);
+
   const footerBanner = useMemo(() => {
     if (backend.status === 'error' || runtime.status === 'error') {
       return {
@@ -485,6 +567,22 @@ export default function HealthPage() {
     }
     return null;
   }, [backend.status, doctorCard.status, runtime.status]);
+
+  const doctorTrendItems = useMemo(() => {
+    if (!doctorHistory?.items?.length) return [];
+    return doctorHistory.items.slice(0, 6).map((item, index) => {
+      const currentScore = item.summary.fail * 100 + item.summary.warn * 10;
+      const previous = doctorHistory.items[index + 1];
+      const previousScore = previous ? previous.summary.fail * 100 + previous.summary.warn * 10 : currentScore;
+      let trend: 'improved' | 'regressed' | 'stable' = 'stable';
+      if (currentScore < previousScore) trend = 'improved';
+      else if (currentScore > previousScore) trend = 'regressed';
+      return {
+        ...item,
+        trend,
+      };
+    });
+  }, [doctorHistory]);
 
   const resolveRuntimeKey = useCallback((): string => {
     const key = readRuntimeApiKeyFromStorage('');
@@ -549,10 +647,11 @@ export default function HealthPage() {
   const checkAll = useCallback(async () => {
     setIsRefreshing(true);
 
-    const [backendRes, runtimeRes, doctorRes, metricsRes, profilesRes, validationRes, validationHistoryRes, workersRes, desktopHistoryRes] = await Promise.allSettled([
+    const [backendRes, runtimeRes, doctorRes, doctorHistoryRes, metricsRes, profilesRes, validationRes, validationHistoryRes, workersRes, desktopHistoryRes] = await Promise.allSettled([
       timedFetch(`${BACKEND_API_URL}/health`),
       timedFetch(`${ORION_API_URL}/health`),
       timedFetch(`${ORION_API_URL}/doctor`, { headers: runtimeHeaders() }),
+      timedFetch(`${ORION_API_URL}/doctor/history?limit=8`, { headers: runtimeHeaders() }),
       timedFetch(`${ORION_API_URL}/metrics`, { headers: runtimeHeaders() }),
       timedFetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=default`, { headers: runtimeHeaders() }),
       timedFetch(`${ORION_API_URL}/validation/latest`, { headers: runtimeHeaders() }),
@@ -633,6 +732,13 @@ export default function HealthPage() {
     } else {
       setDoctor(null);
       setDoctorCard({ status: 'error', detail: 'Cannot reach /doctor endpoint.' });
+    }
+
+    if (doctorHistoryRes.status === 'fulfilled' && doctorHistoryRes.value.response.ok) {
+      const payload = (await doctorHistoryRes.value.response.json()) as DoctorHistoryPayload;
+      setDoctorHistory(payload);
+    } else {
+      setDoctorHistory(null);
     }
 
     if (metricsRes.status === 'fulfilled') {
@@ -947,6 +1053,13 @@ export default function HealthPage() {
     );
   };
 
+  const localRuntimeOnline = Boolean(workers?.summary?.online && workers.summary.online > 0);
+  const showLocalRuntimeGuide = !localRuntimeOnline;
+  const localRuntimeGuideTitle = opsDaemon.running ? 'Bring a local machine online' : 'Start a local runtime';
+  const localRuntimeGuideCopy = opsDaemon.running
+    ? 'The platform runtime is reachable, but no local machine is online yet. Start the local companion on this device and confirm it appears below.'
+    : 'Hekor is ready for a local runtime, but the local companion is not running yet. Start it here, then confirm the machine appears online.';
+
   return (
     <div className="orion-page-shell orion-animate-in" style={{ maxWidth: 1320 }}>
       <OsPageHeader
@@ -972,6 +1085,140 @@ export default function HealthPage() {
           </>
         }
       />
+
+      {showLocalRuntimeGuide ? (
+        <section className="orion-panel muted orion-health-runtime-guide">
+          <div className="orion-health-runtime-guide-header">
+            <div className="orion-state-icon" aria-hidden="true">
+              <Laptop size={18} />
+            </div>
+            <div>
+              <div className="orion-panel-title">{localRuntimeGuideTitle}</div>
+              <div className="orion-panel-copy">{localRuntimeGuideCopy}</div>
+            </div>
+          </div>
+
+          <div className="orion-health-runtime-guide-steps">
+            <div className="orion-health-runtime-guide-step">
+              <div className="orion-health-runtime-guide-step-index">1</div>
+              <div>
+                <div className="orion-health-runtime-guide-step-title">Start the local stack</div>
+                <div className="orion-health-runtime-guide-step-copy">Launch the local runtime and services on this device.</div>
+              </div>
+            </div>
+            <div className="orion-health-runtime-guide-step">
+              <div className="orion-health-runtime-guide-step-index">2</div>
+              <div>
+                <div className="orion-health-runtime-guide-step-title">Check readiness</div>
+                <div className="orion-health-runtime-guide-step-copy">Verify the environment is healthy and the runtime key is accepted.</div>
+              </div>
+            </div>
+            <div className="orion-health-runtime-guide-step">
+              <div className="orion-health-runtime-guide-step-index">3</div>
+              <div>
+                <div className="orion-health-runtime-guide-step-title">Confirm the machine is online</div>
+                <div className="orion-health-runtime-guide-step-copy">Open Machines and make sure the device appears before running tasks locally.</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="orion-state-actions">
+            <button
+              type="button"
+              onClick={() => void runOps('start_services')}
+              disabled={Boolean(opsBusy)}
+              className="btn-primary"
+            >
+              {opsBusy === 'start_services' ? 'Starting...' : 'Start local runtime'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runOps('readiness')}
+              disabled={Boolean(opsBusy)}
+              className="btn-secondary"
+            >
+              {opsBusy === 'readiness' ? 'Checking...' : 'Check readiness'}
+            </button>
+            <Link href="/machines" className="btn-secondary">
+              Open Machines
+            </Link>
+          </div>
+
+          {opsReport ? <div className="orion-health-runtime-guide-report">{opsReport}</div> : null}
+        </section>
+      ) : null}
+
+      <section className="orion-panel orion-health-doctor-overview">
+        <div className="orion-health-doctor-overview-header">
+          <div>
+            <div className="orion-panel-title">Doctor overview</div>
+            <div className="orion-panel-copy">
+              One place to verify runtime trust, execution safety, storage, and machine readiness.
+            </div>
+          </div>
+          <div
+            className={`orion-health-doctor-overview-badge is-${doctorOverview.tone}`}
+          >
+            {doctorOverview.title}
+          </div>
+        </div>
+
+        <div className="orion-health-doctor-overview-copy">{doctorOverview.detail}</div>
+
+        <div className="orion-health-doctor-summary-grid">
+          <div className="orion-health-doctor-summary-card">
+            <div className="orion-health-doctor-summary-label">Passing</div>
+            <div className="orion-health-doctor-summary-value">{doctor?.summary.pass ?? 0}</div>
+          </div>
+          <div className="orion-health-doctor-summary-card">
+            <div className="orion-health-doctor-summary-label">Warnings</div>
+            <div className="orion-health-doctor-summary-value">{doctor?.summary.warn ?? 0}</div>
+          </div>
+          <div className="orion-health-doctor-summary-card">
+            <div className="orion-health-doctor-summary-label">Failing</div>
+            <div className="orion-health-doctor-summary-value">{doctor?.summary.fail ?? 0}</div>
+          </div>
+          <div className="orion-health-doctor-summary-card">
+            <div className="orion-health-doctor-summary-label">Generated</div>
+            <div className="orion-health-doctor-summary-value is-small">
+              {formatDisplayDate(doctor?.generated_at, 'Not yet')}
+            </div>
+          </div>
+        </div>
+
+        <div className="orion-health-doctor-priority">
+          <div className="orion-health-doctor-priority-header">
+            <div className="orion-panel-title">Priority fixes</div>
+            <button
+              onClick={() => setShowPassChecks((prev) => !prev)}
+              className="orion-btn orion-btn-ghost"
+              style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+            >
+              {showPassChecks ? 'Hide pass' : 'Show pass'}
+            </button>
+          </div>
+
+          {priorityFixes.length === 0 ? (
+            <div className="orion-health-doctor-priority-empty">
+              No failing or warning checks right now.
+            </div>
+          ) : (
+            <div className="orion-health-doctor-fixes">
+              {priorityFixes.map((fix) => (
+                <div key={fix.id} className="orion-health-doctor-fix">
+                  <div className="orion-health-doctor-fix-topline">
+                    <span className={`orion-health-doctor-fix-badge is-${fix.status}`}>{fix.status}</span>
+                    <span className="orion-health-doctor-fix-category">{fix.category}</span>
+                  </div>
+                  <div className="orion-health-doctor-fix-title">{fix.title}</div>
+                  <div className="orion-health-doctor-fix-detail">{fix.detail}</div>
+                  <div className="orion-health-doctor-fix-recommendation">{fix.recommendation}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       <section className="orion-panel" style={{ display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
@@ -1523,85 +1770,60 @@ export default function HealthPage() {
           )}
 
           {doctor && (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                  Showing {doctorChecksVisible.length} of {doctorChecksOrdered.length} checks
-                </div>
-                <button
-                  onClick={() => setShowPassChecks((prev) => !prev)}
-                  className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
-                >
-                  {showPassChecks ? 'Hide pass' : 'Show pass'}
-                </button>
+            <div className="orion-health-doctor-groups">
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                Showing {doctorChecksVisible.length} of {doctorChecksOrdered.length} checks
               </div>
-              <div style={{ borderTop: '1px solid var(--border-default)', borderBottom: '1px solid var(--border-default)', overflowX: 'auto' }}>
-                <div
-                  style={{
-                    minWidth: 640,
-                    display: 'grid',
-                    gridTemplateColumns: '84px 180px 1fr 1fr',
-                    gap: 8,
-                    padding: '8px 10px',
-                    borderBottom: '1px solid var(--border-default)',
-                    fontSize: 10,
-                    color: 'var(--text-tertiary)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    fontWeight: 800,
-                  }}
-                >
-                  <span>Status</span>
-                  <span>Check</span>
-                  <span>Detail</span>
-                  <span>Recommendation</span>
-                </div>
-                {doctorChecksVisible.length === 0 ? (
-                  <div style={{ minWidth: 640, padding: '10px 10px', fontSize: 12, color: 'var(--text-secondary)' }}>
-                    No warning/error checks.
-                  </div>
-                ) : (
-                  doctorChecksVisible.map((check) => {
-                    const badge = checkBadgeColor(check.status);
-                    return (
-                      <div
-                        key={check.name}
-                        style={{
-                          minWidth: 640,
-                          display: 'grid',
-                          gridTemplateColumns: '84px 180px 1fr 1fr',
-                          gap: 8,
-                          padding: '9px 10px',
-                          borderBottom: '1px solid var(--border-default)',
-                          alignItems: 'start',
-                        }}
-                      >
-                        <span
-                          style={{
-                            borderRadius: 999,
-                            padding: '2px 8px',
-                            fontSize: 10,
-                            fontWeight: 800,
-                            textTransform: 'uppercase',
-                            background: badge.bg,
-                            color: badge.text,
-                            border: badge.border,
-                            width: 'fit-content',
-                          }}
-                        >
-                          {check.status}
-                        </span>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{check.name}</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{check.detail || 'No detail provided.'}</span>
-                        <span style={{ fontSize: 12, color: check.recommendation ? 'var(--warning-fg)' : 'var(--text-tertiary)' }}>
-                          {check.recommendation || '—'}
-                        </span>
+              {doctorGroups.length === 0 ? (
+                <div className="orion-health-doctor-priority-empty">No warning or failing checks in the current view.</div>
+              ) : (
+                doctorGroups.map((group) => (
+                  <div key={group.id} className="orion-health-doctor-group">
+                    <div className="orion-health-doctor-group-header">
+                      <div>
+                        <div className="orion-health-doctor-group-title">{group.title}</div>
+                        <div className="orion-health-doctor-group-copy">{group.description}</div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                      <div className="orion-health-doctor-group-counts">
+                        <span>{group.summary.fail} fail</span>
+                        <span>{group.summary.warn} warn</span>
+                        <span>{group.summary.pass} pass</span>
+                      </div>
+                    </div>
+                    <div className="orion-health-doctor-checks">
+                      {group.checks.map((check) => {
+                        const badge = checkBadgeColor(check.status);
+                        return (
+                          <div key={check.name} className="orion-health-doctor-check">
+                            <span
+                              style={{
+                                borderRadius: 999,
+                                padding: '2px 8px',
+                                fontSize: 10,
+                                fontWeight: 800,
+                                textTransform: 'uppercase',
+                                background: badge.bg,
+                                color: badge.text,
+                                border: badge.border,
+                                width: 'fit-content',
+                              }}
+                            >
+                              {check.status}
+                            </span>
+                            <div className="orion-health-doctor-check-body">
+                              <div className="orion-health-doctor-check-title">{formatDoctorCheckTitle(check.name)}</div>
+                              <div className="orion-health-doctor-check-detail">{check.detail || 'No detail provided.'}</div>
+                              <div className="orion-health-doctor-check-recommendation">
+                                {check.recommendation || 'No recommendation required.'}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </section>
@@ -1679,6 +1901,45 @@ export default function HealthPage() {
           )}
         </section>
       </div>
+
+      <section className="orion-panel">
+        <div className="orion-panel-header" style={{ marginBottom: 12 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Activity size={16} color="var(--primary-base)" />
+            <h2 style={{ fontSize: 14, fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>Doctor history</h2>
+          </div>
+        </div>
+
+        {!doctorHistory || doctorTrendItems.length === 0 ? (
+          <div className="orion-health-doctor-priority-empty">
+            No doctor history yet. Run checks a few times to build a trust timeline.
+          </div>
+        ) : (
+          <div className="orion-health-doctor-history">
+            {doctorTrendItems.map((item, index) => (
+              <div key={`${item.generated_at || index}`} className="orion-health-doctor-history-item">
+                <div className="orion-health-doctor-history-topline">
+                  <span className={`orion-health-doctor-fix-badge is-${String(item.overview.status || '').toLowerCase() === 'fail' ? 'fail' : String(item.overview.status || '').toLowerCase() === 'warn' ? 'warn' : 'ok'}`}>
+                    {item.overview.title || 'Snapshot'}
+                  </span>
+                  <span className={`orion-health-doctor-history-trend is-${item.trend}`}>
+                    {item.trend}
+                  </span>
+                </div>
+                <div className="orion-health-doctor-history-time">
+                  {formatDisplayDate(item.generated_at, 'Unknown time')}
+                </div>
+                <div className="orion-health-doctor-history-detail">{item.overview.detail}</div>
+                <div className="orion-health-doctor-history-summary">
+                  <span>{item.summary.fail} fail</span>
+                  <span>{item.summary.warn} warn</span>
+                  <span>{item.summary.pass} pass</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {footerBanner ? (
         <div

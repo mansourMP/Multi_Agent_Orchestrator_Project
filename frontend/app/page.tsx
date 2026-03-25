@@ -55,6 +55,7 @@ import {
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
+import { getExecutionTargetGuides, type ExecutionTarget } from '@/lib/executionTargets';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
 const WORKBENCH_AGENT_CHAT_STORAGE_KEY = 'orion.workbench.agent.chat.v1';
@@ -667,11 +668,25 @@ function formatChatExecutionLabel(
   const mode = String(connectionMode || '').trim().toLowerCase();
   const target = String(recentExecutionTarget || '').trim().toLowerCase();
   if (pack === 'local-execution-v1' || target === 'local_companion' || mode === 'local_companion') {
-    return 'Local companion';
+    return 'Local machine';
   }
   if (target === 'browser') return 'Browser';
   if (target === 'desktop') return 'Desktop';
-  return 'Cloud runtime';
+  if (target === 'cloud') return 'Cloud runtime';
+  if (target === 'auto') return 'Automatic';
+  return 'Automatic';
+}
+
+function formatPreferredExecutionLabel(
+  packId: string | null | undefined,
+  connectionMode: string | null | undefined,
+): string {
+  const pack = String(packId || '').trim().toLowerCase();
+  const mode = String(connectionMode || '').trim().toLowerCase();
+  if (pack === 'local-execution-v1' || mode === 'local_companion') {
+    return 'Local machine';
+  }
+  return 'Automatic';
 }
 
 type ChatNextRecommendation = {
@@ -689,16 +704,8 @@ function resolveChatNextRecommendation(args: {
   executionLabel: string;
 }): ChatNextRecommendation {
   if (!args.setupReady) {
-    if (args.connectedTools === 0) {
-      return {
-        chipText: 'Connect Telegram to activate alerts',
-        chipTone: 'warning',
-        actionLabel: 'Connect Telegram',
-        href: '/credentials?connector=telegram_bot&onboarding=1',
-      };
-    }
     return {
-      chipText: 'Finish setup to run workflows',
+      chipText: 'Finish setup before your first task',
       chipTone: 'warning',
       actionLabel: 'Open Setup',
       href: '/setup',
@@ -722,17 +729,17 @@ function resolveChatNextRecommendation(args: {
   }
   if (args.connectedTools === 0) {
     return {
-      chipText: 'No tools connected — add one',
+      chipText: 'No tools connected yet',
       chipTone: 'warning',
       actionLabel: 'Open Integrations',
       href: '/credentials',
     };
   }
   return {
-    chipText: `${args.executionLabel} ready`,
+    chipText: 'Ready for a new task',
     chipTone: 'success',
-    actionLabel: 'Open Workflows',
-    href: '/workflows',
+    actionLabel: 'Open Runs',
+    href: '/executions',
   };
 }
 
@@ -832,7 +839,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   const streamRef = useRef<EventSource | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
-  const { accessMode } = usePlatformShell();
+  const {
+    accessMode,
+    status: shellStatus,
+  } = usePlatformShell();
   const singleAgentMode = SINGLE_AGENT_MODE;
 
   const pageState = usePageState();
@@ -853,6 +863,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     status,
     logs,
     runId,
+    lastRouteInfo,
     packResult,
     lastRunPayload,
     topError, setTopError,
@@ -1535,8 +1546,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     [provider, providerOptions],
   );
   const sessionNextRecommendation = useMemo(() => {
-    const effectiveExecutionTarget = controlCenter.recentRuns[0]?.execution_target_selected || null;
-    const executionLabel = formatChatExecutionLabel(selectedPack.id, connectionMode, effectiveExecutionTarget);
+    const executionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
     return resolveChatNextRecommendation({
       setupReady,
       runtimeOk: controlCenter.runtimeOk,
@@ -1554,24 +1564,26 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setupReady,
   ]);
   const sessionIdentityItems = useMemo<ChatIdentityItem[]>(() => {
-    const readinessLabel = setupReady ? 'Ready' : 'Needs setup';
-    const hasTools = connectorCredentials.length > 0;
-    const toolsLabel = hasTools ? `${connectorCredentials.length} connected` : 'Connect one';
+    const readinessLabel = setupReady ? 'Ready' : 'Finish setup';
+    const aiAccessLabel = setupStatus?.accountConnected ? (activeProviderOption?.label || homeTitleCase(provider)) : 'Needs API key';
+    const toolLabel = connectorCredentials.length > 0 ? `${connectorCredentials.length} connected` : 'Connect tools';
     return [
       { label: 'Status', value: readinessLabel, tone: setupReady ? 'success' : 'warning' },
-      { label: 'Channels', value: toolsLabel, tone: hasTools ? 'success' : 'warning' },
-      { label: 'Next step', value: sessionNextRecommendation.actionLabel, tone: sessionNextRecommendation.chipTone },
+      { label: 'AI', value: aiAccessLabel, tone: setupStatus?.accountConnected ? 'neutral' : 'warning' },
+      { label: 'Tools', value: toolLabel, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
     ];
   }, [
+    activeProviderOption,
     connectorCredentials.length,
-    sessionNextRecommendation.actionLabel,
-    sessionNextRecommendation.chipTone,
+    provider,
+    setupStatus?.accountConnected,
     setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
     const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
     const effectiveModel = controlCenter.recentRuns[0]?.usage_model || model || 'Unknown';
-    const effectiveExecutionTarget = controlCenter.recentRuns[0]?.execution_target_selected || null;
+    const effectiveExecutionTarget = lastRouteInfo?.selected || controlCenter.recentRuns[0]?.execution_target_selected || null;
+    const preferredExecutionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
     const executionLabel = formatChatExecutionLabel(selectedPack.id, connectionMode, effectiveExecutionTarget);
     const latestRun = controlCenter.recentRuns[0] || null;
     const connectedToolsValue =
@@ -1585,31 +1597,32 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
     return [
       {
-        title: 'Status',
-        note: 'This is the quickest summary of what you can do next.',
+        title: 'Before you run',
+        note: 'This is the quickest summary of what still needs attention.',
         items: [
-          { label: 'Status', value: setupReady ? 'Ready to run' : 'One step left', tone: setupReady ? 'success' : 'warning' },
-          { label: 'Channels', value: connectedToolsValue, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
+          { label: 'Status', value: setupReady ? 'Ready to run' : 'Finish setup', tone: setupReady ? 'success' : 'warning' },
+          { label: 'Route', value: preferredExecutionLabel, tone: preferredExecutionLabel === 'Local machine' ? 'success' : 'neutral' },
+          { label: 'Tools', value: connectedToolsValue, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
           { label: 'Next step', value: sessionNextRecommendation.actionLabel, tone: sessionNextRecommendation.chipTone },
         ],
       },
       {
-        title: 'Assistant',
-        note: 'This is who is helping with the current conversation.',
+        title: 'AI access',
+        note: 'This is the AI source backing the current task.',
         items: [
           { label: 'Profile', value: defaultAssistantProfile.label },
           { label: 'Provider', value: providerLabel },
           { label: 'Model', value: effectiveModel },
-          { label: 'Style', value: defaultAssistantProfile.subtitle },
+          { label: 'Role', value: defaultAssistantProfile.subtitle },
         ],
       },
       {
-        title: 'Recent runs',
-        note: 'This shows the latest result and where it went.',
+        title: 'Latest result',
+        note: 'This shows the latest outcome and where Hekor ran it.',
         items: [
-          { label: 'Delivery path', value: executionLabel },
-          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No runs yet' },
           { label: 'Latest result', value: latestRun?.result_summary || 'Nothing has run yet' },
+          { label: 'Latest route', value: executionLabel },
+          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No runs yet' },
           { label: 'Latest provider', value: latestRun?.usage_provider || providerLabel },
         ],
       },
@@ -1620,6 +1633,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     connectorCredentials,
     controlCenter.recentRuns,
     defaultAssistantProfile,
+    lastRouteInfo?.selected,
     model,
     provider,
     selectedPack.id,
@@ -1627,6 +1641,16 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     sessionNextRecommendation.chipTone,
     setupReady,
   ]);
+  const chatRouteGuideTarget = useMemo<ExecutionTarget>(() => {
+    const preferredExecutionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
+    if (preferredExecutionLabel === 'Local machine') return 'local_companion';
+    if (preferredExecutionLabel === 'Cloud runtime') return 'cloud';
+    return 'auto';
+  }, [connectionMode, selectedPack.id]);
+  const chatRouteGuides = useMemo(
+    () => getExecutionTargetGuides(shellStatus.localRuntimeOnline),
+    [shellStatus.localRuntimeOnline],
+  );
   const sessionIdentityActions = useMemo<ChatIdentityAction[]>(
     () => {
       const createAction = (label: string, href: string, priority: 'primary' | 'default' = 'default'): ChatIdentityAction => ({
@@ -2106,6 +2130,19 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             identityDrawerOpen={chatIdentityDrawerOpen}
             onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
             onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
+            identityGuide={chatIdentityDrawerOpen ? (
+              <div className="orion-route-guide" aria-label="Execution route guide">
+                {chatRouteGuides.map((guide) => (
+                  <div
+                    key={guide.value}
+                    className={`orion-route-guide-item${guide.value === chatRouteGuideTarget ? ' is-selected' : ''}`.trim()}
+                  >
+                    <div className="orion-route-guide-title">{guide.label}</div>
+                    <div className="orion-route-guide-copy">{guide.hint}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             identitySections={sessionIdentitySections}
             identityActions={sessionIdentityActions}
           />

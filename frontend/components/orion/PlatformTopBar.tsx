@@ -1,35 +1,78 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Settings, UserRound } from 'lucide-react';
+import { ChevronDown, Laptop, Server, Settings, TriangleAlert, UserRound, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
-import PwaInstallControl from '@/components/orion/PwaInstallControl';
 import { safeNavigate } from '@/lib/safeNavigate';
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
 
+const PwaInstallControl = dynamic(() => import('@/components/orion/PwaInstallControl'), {
+  ssr: false,
+});
+
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
   const isBuilderEditorRoute = pathname.startsWith('/builder/');
+  const isSetupRoute = pathname.startsWith('/setup');
+  const hideShellChrome = isBuilderEditorRoute || isSetupRoute;
   const { status } = usePlatformShell();
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--topbar-height', isBuilderEditorRoute ? '0px' : '48px');
+    document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '48px');
     return () => {
       document.documentElement.style.setProperty('--topbar-height', '48px');
     };
-  }, [isBuilderEditorRoute]);
+  }, [hideShellChrome]);
 
-  const isOffline = useMemo(() => {
-    if (status.runtimeHealthy === false) return true;
-    if (status.runtimeHealthy === true && status.onlineWorkers <= 0) return true;
-    return false;
-  }, [status.onlineWorkers, status.runtimeHealthy]);
+  const runtimeStatus = useMemo(() => {
+    if (status.runtimeHealthy === false) {
+      return {
+        label: 'Fix runtime',
+        href: '/health',
+        tone: 'warn' as const,
+        icon: Wrench,
+      };
+    }
+    if (status.localRuntimeOnline) {
+      return {
+        label: 'Local machine online',
+        href: '/machines',
+        tone: 'ok' as const,
+        icon: Laptop,
+      };
+    }
+    if (status.onlineWorkers > 0) {
+      return {
+        label: 'Cloud runtime online',
+        href: '/machines',
+        tone: 'neutral' as const,
+        icon: Server,
+      };
+    }
+    if (status.machineCount > 0) {
+      return {
+        label: 'Bring machine online',
+        href: '/machines',
+        tone: 'warn' as const,
+        icon: TriangleAlert,
+      };
+    }
+    return {
+      label: 'Connect local machine',
+      href: '/machines',
+      tone: 'accent' as const,
+      icon: Laptop,
+    };
+  }, [status.localRuntimeOnline, status.machineCount, status.onlineWorkers, status.runtimeHealthy]);
 
-  if (isBuilderEditorRoute) {
+  if (hideShellChrome) {
     return null;
   }
+
+  const RuntimeStatusIcon = runtimeStatus.icon;
 
   return (
     <header className="orion-shellbar">
@@ -43,12 +86,14 @@ export default function PlatformTopBar() {
       <div className="orion-shellbar-section orion-shellbar-section-center" />
 
       <div className="orion-shellbar-section orion-shellbar-section-right">
-        {isOffline ? (
-          <button type="button" className="orion-shellbar-status-inline" onClick={() => safeNavigate('/health')}>
-            <span className="orion-shellbar-status-dot" aria-hidden />
-            <span>Offline</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className={`orion-shellbar-status-inline is-runtime is-${runtimeStatus.tone}`}
+          onClick={() => safeNavigate(runtimeStatus.href)}
+        >
+          <RuntimeStatusIcon size={13} />
+          <span>{runtimeStatus.label}</span>
+        </button>
         <PwaInstallControl />
         <button
           type="button"

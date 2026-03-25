@@ -1,1076 +1,1417 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, CheckCircle2, ShieldCheck } from 'lucide-react';
-import { UI, fmtTime } from '../page.catalog';
-import { usePageState } from '../page.state';
-import { ORION_API_URL, usePlatformApi } from '../page.api';
-import { usePageActions } from '../page.actions';
-import { SetupWizard } from '../../components/orion/SetupWizard';
+import { useRouter } from 'next/navigation';
+import {
+  ArrowLeft,
+  Bot,
+  BriefcaseBusiness,
+  CalendarDays,
+  Check,
+  Loader2,
+  Mail,
+  MessageSquare,
+  NotebookPen,
+  Search,
+  ShieldCheck,
+} from 'lucide-react';
+import {
+  DEFAULT_PROVIDER_LABELS,
+  DEFAULT_PROVIDER_OPTIONS,
+  normalizeProviderId,
+  type ConnectorId,
+  type ProviderId,
+} from '@/app/page.catalog';
+import { useToast } from '@/components/Toast';
+import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
+import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
+import { API_BASE } from '@/lib/config';
+import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
+import { getExecutionTargetGuides } from '@/lib/executionTargets';
+import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
+import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import {
+  buildFallbackPlan,
+  buildTaskSummary,
+  inferRequiredTools,
+  type SetupPlanStep,
+  type SetupTool,
+  type SetupToolId,
+  workflowToPlainSteps,
+} from '@/lib/setupFlow';
 
-type DaemonSnapshot = {
-  running: boolean;
-  url: string;
-  pid: string | null;
-  transport: string;
-  watchdog: {
-    enabled: boolean;
-    healthy: boolean | null;
-    consecutiveFailures: number;
-    recoveriesTotal: number;
-    recoveriesLastHour: number;
-    lastRecoveryAt: number | null;
-    lastProbeAt: number | null;
-    lastUnhealthyReason: string | null;
-  };
-};
+const ORION_API_URL = API_BASE;
+const WORKSPACE_ID = 'default';
+const SETUP_FLOW_STORAGE_KEY = 'hekor.setup-flow.v1';
+const EXAMPLE_PROMPTS = [
+  'Summarize my emails every morning',
+  'Follow up with new leads automatically',
+  'Research competitors and send me a weekly report',
+] as const;
+const TOTAL_STEPS = 5;
 
-type DaemonEvent = {
+type SetupProviderId = 'openai' | 'anthropic' | 'gemini';
+type SetupSourceMode = 'credits' | 'byok';
+type SetupExecutionTarget = 'auto' | 'local_companion' | 'cloud';
+
+type RuntimeProfile = {
   id: string;
-  ts: string;
-  level: 'info' | 'warn' | 'error' | 'ok';
-  message: string;
+  provider: SetupProviderId;
+  label: string;
+  model: string;
+  enabled: boolean;
+  health: string | null;
+  priority: number;
+  credentialId: string;
 };
 
-type ChannelSnapshot = {
-  updatedAt: string | null;
-  telegram: {
-    enabled: boolean;
-    active: boolean;
-    threadAlive: boolean;
-    processed: number;
-    runs: number;
-    connectorsSeen: number;
-    droppedSenderCount: number;
-    lastError: string | null;
-    lastErrorAt: string | null;
-    lastPollAt: string | null;
-    connectorLabel: string | null;
-    connectorLastAction: string | null;
-    connectorLastRunId: string | null;
-    connectorLastError: string | null;
-    connectorChatId: string | null;
-  };
-  whatsapp: {
-    enabled: boolean;
-    active: boolean;
-    threadAlive: boolean;
-    processed: number;
-    runs: number;
-    connectorsSeen: number;
-    lastError: string | null;
-    lastErrorAt: string | null;
-    lastInboundAt: string | null;
-    connectorLabel: string | null;
-    connectorLastAction: string | null;
-    connectorLastRunId: string | null;
-    connectorLastError: string | null;
-  };
+type ConnectorRow = {
+  id: string;
+  connector: ConnectorId;
+  label: string;
 };
 
-type TelegramMediaSnapshot = {
-  updatedAt: string | null;
-  configuredDir: string;
-  resolvedDir: string;
-  exists: boolean;
-  filesTotal: number;
-  bytesTotal: number;
-  truncated: boolean;
-  recent: Array<{
-    path: string;
-    bytes: number;
-    mtime: string;
+type PersistedSetupState = {
+  step: number;
+  prompt: string;
+  planSteps: SetupPlanStep[];
+  tools: SetupTool[];
+  sourceMode: SetupSourceMode;
+  provider: SetupProviderId;
+  selectedProfileId: string;
+  executionTarget: SetupExecutionTarget;
+};
+
+type RuntimeMachinesPayload = {
+  items?: Array<{
+    runtime_type?: string | null;
+    online?: boolean | null;
+    execution_targets?: string[] | null;
   }>;
 };
 
-export default function SetupPage() {
-  const streamRef = useRef<EventSource | null>(null);
-  const daemonSnapshotRef = useRef<DaemonSnapshot | null>(null);
-  const pageState = usePageState();
+type RunPrecheckPayload = {
+  route?: {
+    requested?: string | null;
+    selected?: string | null;
+    reason?: string | null;
+    fallback?: string | null;
+    required_capabilities?: string[] | null;
+    missing_capabilities?: string[] | null;
+    matching_runtime_ids?: string[] | null;
+    available_runtime_ids?: string[] | null;
+    busy_runtime_ids?: string[] | null;
+    busy_runtime_labels?: string[] | null;
+    queued_ahead_count?: number | null;
+    estimated_wait_band?: string | null;
+    waiting_for_runtime?: boolean | null;
+    waiting_for_capacity?: boolean | null;
+  } | null;
+  doctor_preflight?: DoctorRunGateDecision | null;
+};
 
-  const {
-    runtimeApiKey,
-    setRuntimeApiKey,
-    connectionMode,
-    setConnectionMode,
-    setSetupStatus,
-    provider,
-    setProvider,
-    providerAuthMode,
-    setProviderAuthMode,
-    model,
-    setModel,
-    modelsLoading,
-    modelOptions,
-    credentialId,
-    setCredentialId,
-    credentialLabel,
-    setCredentialLabel,
-    openaiKeyInput,
-    setOpenaiKeyInput,
-    connectorCredentialId,
-    setConnectorCredentialId,
-    connectorCredentials,
-    setConnectorType,
-    connectorType,
-    connectorLabel,
-    setConnectorLabel,
-    googleUseLocalAuth,
-    setGoogleUseLocalAuth,
-    googleConnectorToken,
-    setGoogleConnectorToken,
-    googleCalendarId,
-    setGoogleCalendarId,
-    googleTimezone,
-    setGoogleTimezone,
-    microsoftAccessToken,
-    setMicrosoftAccessToken,
-    telegramBotToken,
-    setTelegramBotToken,
-    telegramChatId,
-    setTelegramChatId,
-    discordBotToken,
-    setDiscordBotToken,
-    discordChannelId,
-    setDiscordChannelId,
-    discordGuildId,
-    setDiscordGuildId,
-    instagramAccessToken,
-    setInstagramAccessToken,
-    instagramAccountId,
-    setInstagramAccountId,
-    instagramPageId,
-    setInstagramPageId,
-    twilioAccountSid,
-    setTwilioAccountSid,
-    twilioAuthToken,
-    setTwilioAuthToken,
-    twilioFromNumber,
-    setTwilioFromNumber,
-    twilioToNumber,
-    setTwilioToNumber,
-    isCredentialsLoading,
-    isConnectorsLoading,
-    setupBusy,
-    isChecking,
-    showSetupWizard,
-    setShowSetupWizard,
-    setupSession,
-    setupSessionBusy,
-    setupStatus,
-    providerOptions,
-    viewportWidth,
-    setViewportWidth,
-  } = pageState;
+function normalizeSetupProvider(value: unknown): SetupProviderId {
+  const provider = normalizeProviderId(value);
+  if (provider === 'anthropic') return 'anthropic';
+  if (provider === 'gemini') return 'gemini';
+  return 'openai';
+}
 
-  const api = usePlatformApi(pageState, streamRef);
-  const {
-    runRuntimeCheck,
-    continueGuidedSetup,
-    getOpsDaemonStatusFromWeb,
-    getTelegramMediaStatusFromWeb,
-    resumeSetupSession,
-    cancelSetupSession,
-    setupAction,
-    saveByokCredential,
-    refreshCredentials,
-    saveConnector,
-    refreshConnectors,
-    testConnector,
-    testConnection,
-    closeStream,
-  } = api;
+function providerLabel(provider: SetupProviderId): string {
+  if (provider === 'anthropic') return 'Anthropic';
+  if (provider === 'gemini') return 'Google';
+  return 'OpenAI';
+}
 
-  const {
-    setupReady,
-    setupProgressCount,
-    setupSteps,
-    nextSetupStep,
-    onboardingNextStep,
-    selectedProviderOption,
-    providerCredentialOptions,
-  } = usePageActions(pageState, api);
+function defaultProviderModel(provider: SetupProviderId): string {
+  return DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === provider)?.defaultModel || 'gpt-4.1';
+}
 
-  const [daemonSnapshot, setDaemonSnapshot] = useState<DaemonSnapshot | null>(null);
-  const [daemonEvents, setDaemonEvents] = useState<DaemonEvent[]>([]);
-  const [daemonLastPollAt, setDaemonLastPollAt] = useState<string | null>(null);
-  const [daemonPollError, setDaemonPollError] = useState<string | null>(null);
-  const [channelSnapshot, setChannelSnapshot] = useState<ChannelSnapshot | null>(null);
-  const [channelPollError, setChannelPollError] = useState<string | null>(null);
-  const [mediaSnapshot, setMediaSnapshot] = useState<TelegramMediaSnapshot | null>(null);
-  const [mediaPollError, setMediaPollError] = useState<string | null>(null);
+function parseProfiles(payload: unknown): RuntimeProfile[] {
+  const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+    ? ((payload as { items: unknown[] }).items)
+    : [];
 
-  const addDaemonEvent = useCallback((level: DaemonEvent['level'], message: string) => {
-    const now = new Date().toISOString();
-    setDaemonEvents((prev) => {
-      const last = prev[0];
-      if (last && last.level === level && last.message === message) {
-        return prev;
-      }
-      const next: DaemonEvent = {
-        id: `${now}:${Math.random().toString(36).slice(2, 8)}`,
-        ts: now,
-        level,
-        message,
-      };
-      return [next, ...prev].slice(0, 40);
+  return items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const id = String(record.id || '').trim();
+      const provider = normalizeSetupProvider(record.provider);
+      if (!id) return null;
+      return {
+        id,
+        provider,
+        label: String(record.label || providerLabel(provider)).trim() || providerLabel(provider),
+        model: String(record.model || defaultProviderModel(provider)).trim() || defaultProviderModel(provider),
+        enabled: record.enabled !== false,
+        health: typeof record.health === 'string' ? record.health : null,
+        priority: typeof record.priority === 'number' ? record.priority : 100,
+        credentialId: String(record.credential_id || '').trim(),
+      } satisfies RuntimeProfile;
+    })
+    .filter((item): item is RuntimeProfile => item !== null)
+    .sort((left, right) => {
+      if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+      if (left.priority !== right.priority) return left.priority - right.priority;
+      return left.label.localeCompare(right.label);
     });
-  }, []);
+}
 
-  const pollDaemonStatus = useCallback(
-    async (source: 'auto' | 'manual' = 'auto') => {
-      try {
-        const snapshot = await getOpsDaemonStatusFromWeb();
-        const prev = daemonSnapshotRef.current;
-        daemonSnapshotRef.current = snapshot;
-        setDaemonSnapshot(snapshot);
-        setDaemonLastPollAt(new Date().toISOString());
-        setDaemonPollError(null);
+function parseConnectors(payload: unknown): ConnectorRow[] {
+  const items = Array.isArray((payload as { items?: unknown[] } | null | undefined)?.items)
+    ? ((payload as { items: unknown[] }).items)
+    : [];
 
-        if (!prev) {
-          if (snapshot.running) {
-            addDaemonEvent('ok', 'Daemon is online.');
-          } else {
-            addDaemonEvent('error', 'Daemon is offline.');
-          }
-          return;
-        }
+  return items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const id = String(record.id || '').trim();
+      const connector = String(record.connector || '').trim() as ConnectorId;
+      if (!id || !connector) return null;
+      return {
+        id,
+        connector,
+        label: String(record.label || connector).trim() || connector,
+      } satisfies ConnectorRow;
+    })
+    .filter((item): item is ConnectorRow => item !== null);
+}
 
-        if (!prev.running && snapshot.running) {
-          addDaemonEvent('ok', 'Daemon recovered and is running.');
-        } else if (prev.running && !snapshot.running) {
-          addDaemonEvent('error', 'Daemon stopped.');
-        }
+function readSetupState(): PersistedSetupState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(SETUP_FLOW_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedSetupState> | null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      step: typeof parsed.step === 'number' ? Math.min(Math.max(parsed.step, 1), TOTAL_STEPS) : 1,
+      prompt: String(parsed.prompt || '').trim(),
+      planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps.filter(Boolean) as SetupPlanStep[] : [],
+      tools: Array.isArray(parsed.tools) ? parsed.tools.filter(Boolean) as SetupTool[] : [],
+      sourceMode: parsed.sourceMode === 'byok' ? 'byok' : 'credits',
+      provider: normalizeSetupProvider(parsed.provider),
+      selectedProfileId: String(parsed.selectedProfileId || '').trim(),
+      executionTarget:
+        parsed.executionTarget === 'cloud' || parsed.executionTarget === 'local_companion'
+          ? parsed.executionTarget
+          : 'auto',
+    };
+  } catch {
+    return null;
+  }
+}
 
-        if (prev.watchdog.healthy === false && snapshot.watchdog.healthy === true) {
-          addDaemonEvent('ok', 'Watchdog is healthy again.');
-        } else if (prev.watchdog.healthy !== false && snapshot.watchdog.healthy === false) {
-          addDaemonEvent(
-            'warn',
-            snapshot.watchdog.lastUnhealthyReason
-              ? `Watchdog unhealthy: ${snapshot.watchdog.lastUnhealthyReason}`
-              : 'Watchdog unhealthy.',
-          );
-        }
+function persistSetupState(state: PersistedSetupState): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(SETUP_FLOW_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore storage errors.
+  }
+}
 
-        if (snapshot.watchdog.recoveriesTotal > prev.watchdog.recoveriesTotal) {
-          addDaemonEvent('info', `Automatic recovery attempt count: ${snapshot.watchdog.recoveriesTotal}.`);
-        }
+function clearSetupState(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(SETUP_FLOW_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors.
+  }
+}
 
-        if (source === 'manual') {
-          addDaemonEvent('info', 'Daemon status refreshed.');
-        }
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Failed to load daemon status.';
-        setDaemonPollError(message);
-        addDaemonEvent('error', `Daemon status error: ${message}`);
-      }
-    },
-    [addDaemonEvent, getOpsDaemonStatusFromWeb],
-  );
+function hasOnlineLocalRuntime(payload: unknown): boolean {
+  const items = Array.isArray((payload as RuntimeMachinesPayload | null | undefined)?.items)
+    ? (payload as RuntimeMachinesPayload).items || []
+    : [];
 
-  const pollChannelStatus = useCallback(async () => {
-    try {
-      const headers: Record<string, string> = {};
-      if (runtimeApiKey.trim()) {
-        headers['X-API-Key'] = runtimeApiKey.trim();
-      }
+  return items.some((item) => {
+    const runtimeType = String(item?.runtime_type || '').trim().toLowerCase();
+    const executionTargets = Array.isArray(item?.execution_targets) ? item.execution_targets : [];
+    return Boolean(item?.online)
+      && (
+        runtimeType === 'local'
+        || executionTargets.includes('local')
+        || executionTargets.includes('local_companion')
+      );
+  });
+}
 
-      const fetchJson = async (path: string): Promise<Record<string, unknown>> => {
-        const response = await fetch(`${ORION_API_URL}${path}`, { headers, cache: 'no-store' });
-        if (!response.ok) {
-          throw new Error(`${path} HTTP ${response.status}`);
-        }
-        const payload = (await response.json()) as unknown;
-        if (!payload || typeof payload !== 'object') return {};
-        return payload as Record<string, unknown>;
-      };
+function formatExecutionTargetLabel(target: string | null | undefined): string {
+  if (target === 'local_companion' || target === 'local') return 'Local machine';
+  if (target === 'cloud') return 'Cloud runtime';
+  return 'Automatic';
+}
 
-      const [healthResult, telegramResult, whatsappResult] = await Promise.allSettled([
-        fetchJson('/health'),
-        fetchJson('/channels/telegram/autopilot/status'),
-        fetchJson('/channels/whatsapp/autopilot/status'),
-      ]);
+function executionTargetDescription(target: SetupExecutionTarget, hasLocalRuntime: boolean): string {
+  if (target === 'local_companion') {
+    return hasLocalRuntime
+      ? 'Run this on an available local machine.'
+      : 'No local machine is online right now.';
+  }
+  if (target === 'cloud') return 'Run this in Hekor cloud mode.';
+  return hasLocalRuntime
+    ? 'Prefer a local machine, then fall back to cloud if needed.'
+    : 'No local machine is online, so this will run in cloud mode.';
+}
 
-      const health =
-        healthResult.status === 'fulfilled'
-          ? healthResult.value
-          : {};
-      const telegramStatus =
-        telegramResult.status === 'fulfilled'
-          ? telegramResult.value
-          : {};
-      const whatsappStatus =
-        whatsappResult.status === 'fulfilled'
-          ? whatsappResult.value
-          : {};
+function statusIconForTool(toolId: SetupToolId | null) {
+  if (toolId === 'gmail') return Mail;
+  if (toolId === 'slack') return MessageSquare;
+  if (toolId === 'notion') return NotebookPen;
+  if (toolId === 'calendar') return CalendarDays;
+  if (toolId === 'hubspot') return BriefcaseBusiness;
+  return Bot;
+}
 
-      if (healthResult.status === 'rejected' && telegramResult.status === 'rejected' && whatsappResult.status === 'rejected') {
-        throw new Error('Runtime status endpoints are unavailable.');
-      }
+export default function SetupPage() {
+  const router = useRouter();
+  const { addToast } = useToast();
+  const [runtimeApiKey] = useState(() => readRuntimeApiKeyFromStorage(''));
+  const [hydrated, setHydrated] = useState(false);
+  const [step, setStep] = useState(1);
+  const [prompt, setPrompt] = useState('');
+  const [planSteps, setPlanSteps] = useState<SetupPlanStep[]>([]);
+  const [tools, setTools] = useState<SetupTool[]>([]);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState('');
+  const [profiles, setProfiles] = useState<RuntimeProfile[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(true);
+  const [selectedSourceMode, setSelectedSourceMode] = useState<SetupSourceMode>('byok');
+  const [selectedProvider, setSelectedProvider] = useState<SetupProviderId>('openai');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [sourceError, setSourceError] = useState('');
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+  const [connectorsLoading, setConnectorsLoading] = useState(true);
+  const [runBusy, setRunBusy] = useState(false);
+  const [runError, setRunError] = useState('');
+  const [hasLocalRuntime, setHasLocalRuntime] = useState(false);
+  const [selectedExecutionTarget, setSelectedExecutionTarget] = useState<SetupExecutionTarget>('auto');
+  const [doctorChecking, setDoctorChecking] = useState(false);
+  const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
+  const [runPrecheck, setRunPrecheck] = useState<RunPrecheckPayload | null>(null);
+  const [showAdvancedRouteOptions, setShowAdvancedRouteOptions] = useState(false);
 
-      const telegramAutopilot =
-        telegramStatus.autopilot && typeof telegramStatus.autopilot === 'object'
-          ? (telegramStatus.autopilot as Record<string, unknown>)
-          : {};
-      const whatsappAutopilot =
-        whatsappStatus.autopilot && typeof whatsappStatus.autopilot === 'object'
-          ? (whatsappStatus.autopilot as Record<string, unknown>)
-          : {};
-
-      const telegramConnectors = Array.isArray(telegramStatus.connectors)
-        ? (telegramStatus.connectors as Array<Record<string, unknown>>)
-        : [];
-      const whatsappConnectors = Array.isArray(whatsappStatus.connectors)
-        ? (whatsappStatus.connectors as Array<Record<string, unknown>>)
-        : [];
-      const telegramConnector = telegramConnectors[0] || {};
-      const whatsappConnector = whatsappConnectors[0] || {};
-
-      const snapshot: ChannelSnapshot = {
-        updatedAt: new Date().toISOString(),
-        telegram: {
-          enabled: Boolean(
-            telegramAutopilot.enabled ?? health.telegram_autopilot_enabled,
-          ),
-          active: Boolean(
-            telegramAutopilot.active ?? health.telegram_autopilot_active,
-          ),
-          threadAlive: Boolean(
-            telegramAutopilot.thread_alive ?? health.telegram_autopilot_thread_alive,
-          ),
-          processed: Number(
-            telegramAutopilot.processed_updates ?? health.telegram_autopilot_processed_updates ?? 0,
-          ),
-          runs: Number(
-            telegramAutopilot.runs_started ?? health.telegram_autopilot_runs_started ?? 0,
-          ),
-          connectorsSeen: Number(
-            telegramAutopilot.connectors_seen ?? health.telegram_autopilot_connectors_seen ?? telegramConnectors.length,
-          ),
-          droppedSenderCount: Number(
-            telegramAutopilot.dropped_sender_count ?? 0,
-          ),
-          lastError:
-            typeof (telegramAutopilot.last_error ?? health.telegram_autopilot_last_error) === 'string' &&
-            String(telegramAutopilot.last_error ?? health.telegram_autopilot_last_error).trim()
-              ? String(telegramAutopilot.last_error ?? health.telegram_autopilot_last_error)
-              : null,
-          lastErrorAt:
-            typeof telegramAutopilot.last_error_at === 'string' && String(telegramAutopilot.last_error_at).trim()
-              ? String(telegramAutopilot.last_error_at)
-              : null,
-          lastPollAt:
-            typeof (telegramAutopilot.last_poll_at ?? health.telegram_autopilot_last_poll_at) === 'string' &&
-            String(telegramAutopilot.last_poll_at ?? health.telegram_autopilot_last_poll_at).trim()
-              ? String(telegramAutopilot.last_poll_at ?? health.telegram_autopilot_last_poll_at)
-              : null,
-          connectorLabel:
-            typeof telegramConnector.label === 'string' && telegramConnector.label.trim()
-              ? telegramConnector.label
-              : null,
-          connectorLastAction:
-            typeof telegramConnector.last_action === 'string' && telegramConnector.last_action.trim()
-              ? telegramConnector.last_action
-              : null,
-          connectorLastRunId:
-            typeof telegramConnector.last_run_id === 'string' && telegramConnector.last_run_id.trim()
-              ? telegramConnector.last_run_id
-              : null,
-          connectorLastError:
-            typeof telegramConnector.last_error === 'string' && telegramConnector.last_error.trim()
-              ? telegramConnector.last_error
-              : null,
-          connectorChatId:
-            typeof telegramConnector.last_chat_id === 'string' && telegramConnector.last_chat_id.trim()
-              ? telegramConnector.last_chat_id
-              : null,
-        },
-        whatsapp: {
-          enabled: Boolean(
-            whatsappAutopilot.enabled ?? health.whatsapp_autopilot_enabled,
-          ),
-          active: Boolean(
-            whatsappAutopilot.active ?? health.whatsapp_autopilot_active,
-          ),
-          threadAlive: Boolean(
-            whatsappAutopilot.thread_alive ?? health.whatsapp_autopilot_thread_alive,
-          ),
-          processed: Number(
-            whatsappAutopilot.processed_messages ?? health.whatsapp_autopilot_processed_messages ?? 0,
-          ),
-          runs: Number(
-            whatsappAutopilot.runs_started ?? health.whatsapp_autopilot_runs_started ?? 0,
-          ),
-          connectorsSeen: Number(
-            whatsappAutopilot.connectors_seen ?? health.whatsapp_autopilot_connectors_seen ?? whatsappConnectors.length,
-          ),
-          lastError:
-            typeof (whatsappAutopilot.last_error ?? health.whatsapp_autopilot_last_error) === 'string' &&
-            String(whatsappAutopilot.last_error ?? health.whatsapp_autopilot_last_error).trim()
-              ? String(whatsappAutopilot.last_error ?? health.whatsapp_autopilot_last_error)
-              : null,
-          lastErrorAt:
-            typeof whatsappAutopilot.last_error_at === 'string' && String(whatsappAutopilot.last_error_at).trim()
-              ? String(whatsappAutopilot.last_error_at)
-              : null,
-          lastInboundAt:
-            typeof (whatsappAutopilot.last_inbound_at ?? health.whatsapp_autopilot_last_inbound_at) === 'string' &&
-            String(whatsappAutopilot.last_inbound_at ?? health.whatsapp_autopilot_last_inbound_at).trim()
-              ? String(whatsappAutopilot.last_inbound_at ?? health.whatsapp_autopilot_last_inbound_at)
-              : null,
-          connectorLabel:
-            typeof whatsappConnector.label === 'string' && whatsappConnector.label.trim()
-              ? whatsappConnector.label
-              : null,
-          connectorLastAction:
-            typeof whatsappConnector.last_action === 'string' && whatsappConnector.last_action.trim()
-              ? whatsappConnector.last_action
-              : null,
-          connectorLastRunId:
-            typeof whatsappConnector.last_run_id === 'string' && whatsappConnector.last_run_id.trim()
-              ? whatsappConnector.last_run_id
-              : null,
-          connectorLastError:
-            typeof whatsappConnector.last_error === 'string' && whatsappConnector.last_error.trim()
-              ? whatsappConnector.last_error
-              : null,
-        },
-      };
-      setChannelSnapshot(snapshot);
-      setChannelPollError(null);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to load channel status.';
-      setChannelPollError(message);
-    }
+  const buildHeaders = useCallback((withJson = false): HeadersInit => {
+    const headers = new Headers();
+    if (withJson) headers.set('Content-Type', 'application/json');
+    if (runtimeApiKey) headers.set('X-API-Key', runtimeApiKey);
+    return headers;
   }, [runtimeApiKey]);
 
-  const pollMediaStatus = useCallback(async () => {
-    try {
-      const payload = await getTelegramMediaStatusFromWeb();
-      const snapshot: TelegramMediaSnapshot = {
-        updatedAt: new Date().toISOString(),
-        configuredDir: payload.configuredDir,
-        resolvedDir: payload.resolvedDir,
-        exists: Boolean(payload.exists),
-        filesTotal: Number(payload.filesTotal || 0),
-        bytesTotal: Number(payload.bytesTotal || 0),
-        truncated: Boolean(payload.truncated),
-        recent: Array.isArray(payload.recent)
-          ? payload.recent.map((item) => ({
-              path: String(item.path || ''),
-              bytes: Number(item.bytes || 0),
-              mtime: String(item.mtime || ''),
-            }))
-          : [],
-      };
-      setMediaSnapshot(snapshot);
-      setMediaPollError(null);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to load Telegram media status.';
-      setMediaPollError(message);
+  const loadRuntimeState = useCallback(async () => {
+    if (!runtimeApiKey) {
+      setProfiles([]);
+      setConnectors([]);
+      setProfilesLoading(false);
+      setConnectorsLoading(false);
+      setHasLocalRuntime(false);
+      return;
     }
-  }, [getTelegramMediaStatusFromWeb]);
+
+    setProfilesLoading(true);
+    setConnectorsLoading(true);
+    try {
+      const [profilesRes, connectorsRes, machinesRes] = await Promise.all([
+        fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+          headers: buildHeaders(false),
+        }),
+        fetch(`${ORION_API_URL}/connectors/vault?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`, {
+          headers: buildHeaders(false),
+        }),
+        fetch(`${ORION_API_URL}/runtime/runtimes/status`, {
+          headers: buildHeaders(false),
+        }),
+      ]);
+
+      const profilesPayload = profilesRes.ok ? await profilesRes.json().catch(() => ({ items: [] })) : { items: [] };
+      const connectorsPayload = connectorsRes.ok ? await connectorsRes.json().catch(() => ({ items: [] })) : { items: [] };
+      const machinesPayload = machinesRes.ok ? await machinesRes.json().catch(() => ({ items: [] })) : { items: [] };
+      setProfiles(parseProfiles(profilesPayload));
+      setConnectors(parseConnectors(connectorsPayload));
+      setHasLocalRuntime(hasOnlineLocalRuntime(machinesPayload));
+    } catch {
+      setProfiles([]);
+      setConnectors([]);
+      setHasLocalRuntime(false);
+    } finally {
+      setProfilesLoading(false);
+      setConnectorsLoading(false);
+    }
+  }, [buildHeaders, runtimeApiKey]);
 
   useEffect(() => {
-    const apply = () => setViewportWidth(window.innerWidth);
-    apply();
-    window.addEventListener('resize', apply);
-    return () => window.removeEventListener('resize', apply);
-  }, [setViewportWidth]);
-
-  useEffect(() => {
-    setShowSetupWizard(true);
-  }, [setShowSetupWizard]);
-
-  useEffect(() => {
-    return () => closeStream();
-  }, [closeStream]);
-
-  useEffect(() => {
-    const kick = window.setTimeout(() => {
-      void pollDaemonStatus('manual');
-    }, 0);
-    const timer = window.setInterval(() => {
-      void pollDaemonStatus('auto');
-    }, 15000);
+    document.body.classList.add('orion-setup-focus');
     return () => {
-      window.clearTimeout(kick);
-      window.clearInterval(timer);
+      document.body.classList.remove('orion-setup-focus');
     };
-  }, [pollDaemonStatus]);
+  }, []);
 
   useEffect(() => {
-    const kick = window.setTimeout(() => {
-      void pollChannelStatus();
-    }, 0);
-    const timer = window.setInterval(() => {
-      void pollChannelStatus();
-    }, 15000);
-    return () => {
-      window.clearTimeout(kick);
-      window.clearInterval(timer);
-    };
-  }, [pollChannelStatus]);
+    const restored = readSetupState();
+    if (restored) {
+      setStep(restored.step);
+      setPrompt(restored.prompt);
+      setPlanSteps(restored.planSteps);
+      setTools(restored.tools);
+      setSelectedSourceMode(restored.sourceMode);
+      setSelectedProvider(restored.provider);
+      setSelectedProfileId(restored.selectedProfileId);
+      setSelectedExecutionTarget(restored.executionTarget);
+    }
+    setHydrated(true);
+  }, []);
 
   useEffect(() => {
-    const kick = window.setTimeout(() => {
-      void pollMediaStatus();
-    }, 0);
-    const timer = window.setInterval(() => {
-      void pollMediaStatus();
-    }, 20000);
-    return () => {
-      window.clearTimeout(kick);
-      window.clearInterval(timer);
-    };
-  }, [pollMediaStatus]);
+    if (!hydrated) return;
+    persistSetupState({
+      step,
+      prompt,
+      planSteps,
+      tools,
+      sourceMode: selectedSourceMode,
+      provider: selectedProvider,
+      selectedProfileId,
+      executionTarget: selectedExecutionTarget,
+    });
+  }, [hydrated, planSteps, prompt, selectedExecutionTarget, selectedProfileId, selectedProvider, selectedSourceMode, step, tools]);
 
-  const isMobile = viewportWidth < 860;
-  const telegramHealthy = Boolean(
-    channelSnapshot?.telegram.enabled &&
-      channelSnapshot.telegram.active &&
-      channelSnapshot.telegram.threadAlive &&
-      !channelSnapshot.telegram.lastError &&
-      !channelSnapshot.telegram.connectorLastError,
+  useEffect(() => {
+    void loadRuntimeState();
+  }, [loadRuntimeState]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      void loadRuntimeState();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [loadRuntimeState]);
+
+  const enabledProfiles = useMemo(
+    () => profiles.filter((item) => item.enabled),
+    [profiles],
   );
-  const whatsappHealthy = Boolean(
-    channelSnapshot?.whatsapp.enabled &&
-      channelSnapshot.whatsapp.active &&
-      channelSnapshot.whatsapp.threadAlive &&
-      !channelSnapshot.whatsapp.lastError &&
-      !channelSnapshot.whatsapp.connectorLastError,
+  const hasSavedAiSource = enabledProfiles.length > 0;
+  const showSourceStep = !hasSavedAiSource;
+  const showToolsStep = tools.length > 0;
+  const activeProfile = useMemo(
+    () => enabledProfiles.find((item) => item.id === selectedProfileId) || enabledProfiles[0] || null,
+    [enabledProfiles, selectedProfileId],
   );
-  const hasConnectedTools = connectorCredentials.length > 0;
-  const launchAssistantSteps = [
-    {
-      id: 'access',
-      label: 'Step 1',
-      title: 'Confirm workspace access',
-      copy: 'Make sure the assistant can reach the runtime and local workspace before anything else.',
-      state: setupStatus.runtimeReady ? 'Done' : onboardingNextStep === 'runtime' ? 'Now' : 'Pending',
-      actionLabel: setupStatus.runtimeReady ? 'Re-check workspace' : 'Check workspace',
-      action: () => {
-        void runRuntimeCheck();
+  const connectedConnectorIds = useMemo(
+    () => new Set(connectors.map((item) => item.connector)),
+    [connectors],
+  );
+
+  useEffect(() => {
+    if (!enabledProfiles.length) return;
+    if (selectedProfileId && enabledProfiles.some((item) => item.id === selectedProfileId)) return;
+    setSelectedProfileId(enabledProfiles[0].id);
+  }, [enabledProfiles, selectedProfileId]);
+
+  useEffect(() => {
+    if (step === 3 && !showSourceStep) {
+      setStep(showToolsStep ? 4 : 5);
+      return;
+    }
+    if (step === 4 && !showToolsStep) {
+      setStep(5);
+    }
+  }, [showSourceStep, showToolsStep, step]);
+
+  const isToolConnected = useCallback(
+    (tool: SetupTool) => (tool.connectorId ? connectedConnectorIds.has(tool.connectorId) : false),
+    [connectedConnectorIds],
+  );
+
+  const unresolvedBlockingTools = useMemo(
+    () => tools.filter((tool) => tool.blocking && !isToolConnected(tool)),
+    [isToolConnected, tools],
+  );
+
+  const canSkipToolsStep = useMemo(
+    () => tools.some((tool) => !isToolConnected(tool)) && tools.every((tool) => !tool.blocking || isToolConnected(tool)),
+    [isToolConnected, tools],
+  );
+
+  const connectedSummaryTools = useMemo(
+    () => tools.filter((tool) => isToolConnected(tool)),
+    [isToolConnected, tools],
+  );
+  const selectedExecutionTargetLabel = useMemo(
+    () => formatExecutionTargetLabel(selectedExecutionTarget),
+    [selectedExecutionTarget],
+  );
+  const selectedExecutionTargetDescription = useMemo(
+    () => executionTargetDescription(selectedExecutionTarget, hasLocalRuntime),
+    [hasLocalRuntime, selectedExecutionTarget],
+  );
+  const executionTargetGuides = useMemo(
+    () => getExecutionTargetGuides(hasLocalRuntime),
+    [hasLocalRuntime],
+  );
+  const runTargetBlocked = selectedExecutionTarget === 'local_companion' && !hasLocalRuntime;
+  const doctorRunBlocked = Boolean(doctorDecision?.blocking);
+  const currentProvider = activeProfile?.provider || null;
+  const precheckRouteRequested = useMemo(
+    () => String(runPrecheck?.route?.requested || '').trim() || null,
+    [runPrecheck?.route?.requested],
+  );
+  const precheckRouteSelected = useMemo(
+    () => String(runPrecheck?.route?.selected || '').trim() || null,
+    [runPrecheck?.route?.selected],
+  );
+  const effectiveExecutionTargetLabel = useMemo(
+    () => formatExecutionTargetLabel(precheckRouteSelected || selectedExecutionTarget),
+    [precheckRouteSelected, selectedExecutionTarget],
+  );
+  const precheckRouteReason = useMemo(
+    () => String(runPrecheck?.route?.reason || '').trim(),
+    [runPrecheck?.route?.reason],
+  );
+  const precheckRouteFallback = useMemo(
+    () => String(runPrecheck?.route?.fallback || '').trim(),
+    [runPrecheck?.route?.fallback],
+  );
+  const precheckWaitingForRuntime = useMemo(
+    () => Boolean(runPrecheck?.route?.waiting_for_runtime),
+    [runPrecheck?.route?.waiting_for_runtime],
+  );
+  const precheckWaitingForCapacity = useMemo(
+    () => Boolean(runPrecheck?.route?.waiting_for_capacity),
+    [runPrecheck?.route?.waiting_for_capacity],
+  );
+  const precheckRequiredCapabilities = useMemo(() => {
+    const value = runPrecheck?.route?.required_capabilities;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  }, [runPrecheck?.route?.required_capabilities]);
+  const precheckMissingCapabilities = useMemo(() => {
+    const value = runPrecheck?.route?.missing_capabilities;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  }, [runPrecheck?.route?.missing_capabilities]);
+  const precheckBusyRuntimeIds = useMemo(() => {
+    const value = runPrecheck?.route?.busy_runtime_ids;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  }, [runPrecheck?.route?.busy_runtime_ids]);
+  const precheckBusyRuntimeLabels = useMemo(() => {
+    const value = runPrecheck?.route?.busy_runtime_labels;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  }, [runPrecheck?.route?.busy_runtime_labels]);
+  const precheckQueuedAheadCount = useMemo(
+    () => Math.max(0, Number(runPrecheck?.route?.queued_ahead_count || 0)),
+    [runPrecheck?.route?.queued_ahead_count],
+  );
+  const precheckEstimatedWaitBand = useMemo(() => {
+    const value = String(runPrecheck?.route?.estimated_wait_band || '').trim().toLowerCase();
+    if (value === 'short' || value === 'moderate' || value === 'long') return value;
+    return null;
+  }, [runPrecheck?.route?.estimated_wait_band]);
+  const routeDecisionSummary = useMemo(() => {
+    if (precheckRouteReason) return precheckRouteReason;
+    if (precheckRouteSelected && precheckRouteRequested && precheckRouteSelected !== precheckRouteRequested) {
+      return `Requested ${selectedExecutionTargetLabel}. Hekor will use ${effectiveExecutionTargetLabel}.`;
+    }
+    return `Hekor will use ${effectiveExecutionTargetLabel}.`;
+  }, [
+    effectiveExecutionTargetLabel,
+    precheckRouteReason,
+    precheckRouteRequested,
+    precheckRouteSelected,
+    selectedExecutionTargetLabel,
+  ]);
+  const routeDecisionNeedsAttention = useMemo(
+    () =>
+      runTargetBlocked
+      || precheckWaitingForRuntime
+      || precheckWaitingForCapacity
+      || Boolean(precheckRouteFallback)
+      || Boolean(precheckRouteReason && precheckRouteSelected && precheckRouteRequested && precheckRouteSelected !== precheckRouteRequested),
+    [
+      precheckRouteFallback,
+      precheckRouteReason,
+      precheckRouteRequested,
+      precheckRouteSelected,
+      precheckWaitingForCapacity,
+      precheckWaitingForRuntime,
+      runTargetBlocked,
+    ],
+  );
+  const showRouteDetails = showAdvancedRouteOptions || routeDecisionNeedsAttention;
+
+  const goToPlan = useCallback(() => {
+    setStep(2);
+  }, []);
+
+  const proceedAfterPlan = useCallback(() => {
+    if (showSourceStep) {
+      setStep(3);
+      return;
+    }
+    if (showToolsStep) {
+      setStep(4);
+      return;
+    }
+    setStep(5);
+  }, [showSourceStep, showToolsStep]);
+
+  const proceedAfterSource = useCallback(() => {
+    if (showToolsStep) {
+      setStep(4);
+      return;
+    }
+    setStep(5);
+  }, [showToolsStep]);
+
+  const handleBack = useCallback(() => {
+    if (step <= 1) return;
+    if (step === 2) {
+      setStep(1);
+      return;
+    }
+    if (step === 3) {
+      setStep(2);
+      return;
+    }
+    if (step === 4) {
+      setStep(showSourceStep ? 3 : 2);
+      return;
+    }
+    if (step === 5) {
+      if (showToolsStep) {
+        setStep(4);
+      } else if (showSourceStep) {
+        setStep(3);
+      } else {
+        setStep(2);
+      }
+    }
+  }, [showSourceStep, showToolsStep, step]);
+
+  const generatePlan = useCallback(async (nextPrompt: string, preferredProfileId = '') => {
+    const trimmed = nextPrompt.trim();
+    const inferredTools = inferRequiredTools(trimmed);
+    setTools(inferredTools);
+    setPlanLoading(true);
+    setPlanError('');
+    setRunError('');
+
+    if (!runtimeApiKey) {
+      setPlanSteps(buildFallbackPlan(trimmed, inferredTools));
+      setPlanError('Connect the runtime first to generate a detailed plan. You can still continue with a draft plan.');
+      setPlanLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/builder/generate', {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify({
+          prompt: trimmed,
+          workspace_id: WORKSPACE_ID,
+          profile_id: preferredProfileId || activeProfile?.id || undefined,
+          model: activeProfile?.model || undefined,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!response.ok) {
+        throw new Error(String(payload?.error || payload?.detail || 'Unable to generate the plan.'));
+      }
+
+      const steps = workflowToPlainSteps(payload, trimmed, inferredTools);
+      const mergedTools = inferRequiredTools(`${trimmed} ${steps.map((item) => `${item.title} ${item.description}`).join(' ')}`);
+      setPlanSteps(steps);
+      setTools(mergedTools);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to generate the plan.';
+      setPlanSteps(buildFallbackPlan(trimmed, inferredTools));
+      setPlanError(message);
+    } finally {
+      setPlanLoading(false);
+    }
+  }, [activeProfile?.id, activeProfile?.model, buildHeaders, runtimeApiKey]);
+
+  const handleSubmitTask = useCallback(() => {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      addToast({
+        type: 'error',
+        title: 'Describe the task',
+        message: 'Enter the task in plain language first.',
+      });
+      return;
+    }
+    goToPlan();
+    void generatePlan(trimmed);
+  }, [addToast, generatePlan, goToPlan, prompt]);
+
+  const buildRunStartPayload = useCallback((profile: RuntimeProfile | null) => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt || !profile) return null;
+
+    const connectedRows = connectors.filter((row) => tools.some((tool) => tool.connectorId === row.connector));
+    const businessPlan = [
+      `Goal: ${trimmedPrompt}`,
+      'Plan:',
+      ...planSteps.map((item, index) => `${index + 1}. ${item.description}`),
+    ].join('\n');
+
+    return {
+      engine: 'orion',
+      workspace_id: WORKSPACE_ID,
+      user_goal: trimmedPrompt,
+      business_plan: businessPlan,
+      agent_role: 'assistant',
+      provider: profile.provider,
+      model: profile.model,
+      credential_id: profile.credentialId || undefined,
+      metadata: {
+        workspace_id: WORKSPACE_ID,
+        origin: 'setup_onboarding',
+        profile_id: profile.id,
+        runtime_profile_id: profile.id,
+        provider: profile.provider,
+        model: profile.model,
+        execution_target: selectedExecutionTarget,
+        required_tools: tools.map((tool) => tool.id),
+        connector_credential_id: connectedRows[0]?.id || undefined,
+        connected_connector_ids: connectedRows.map((row) => row.id),
       },
-      emphasized: !setupStatus.runtimeReady,
-    },
-    {
-      id: 'account',
-      label: 'Step 2',
-      title: 'Choose the AI account',
-      copy: 'Pick managed access, your own key, or a local companion so the assistant can run with the right model access.',
-      state: setupStatus.accountConnected ? 'Done' : onboardingNextStep === 'account' ? 'Now' : 'Pending',
-      actionLabel: setupStatus.accountConnected ? 'Review account step' : 'Open account step',
-      action: () => {
-        void continueGuidedSetup();
-      },
-      emphasized: onboardingNextStep === 'account',
-    },
-    {
-      id: 'connections',
-      label: 'Step 3',
-      title: 'Connect one live tool or channel',
-      copy: 'Use Integrations for Google, Microsoft 365, Telegram, WhatsApp, and the rest. That page is already the dedicated place to link tools.',
-      state: hasConnectedTools ? 'Connected' : 'Optional',
-      actionLabel: 'Open Integrations',
-      href: '/credentials',
-      emphasized: !hasConnectedTools && setupReady,
-    },
-    {
-      id: 'launch',
-      label: 'Step 4',
-      title: 'Start the first task',
-      copy: 'Go back to Home and give the assistant one concrete outcome. Keep the first task narrow and easy to verify.',
-      state: setupReady ? 'Ready' : 'Blocked',
-      actionLabel: 'Open Home',
-      href: '/',
-      emphasized: setupReady,
-    },
-  ] as const;
+      agents: [
+        {
+          role: 'Operator',
+          modelId: profile.model,
+          provider: profile.provider,
+          duty: planSteps.map((item) => item.description).join(' '),
+        },
+      ],
+    };
+  }, [connectors, planSteps, prompt, selectedExecutionTarget, tools]);
+
+  const loadRunPrecheck = useCallback(async () => {
+    if (!runtimeApiKey) {
+      setRunPrecheck(null);
+      setDoctorDecision(null);
+      setDoctorChecking(false);
+      return null;
+    }
+
+    const payload = buildRunStartPayload(activeProfile);
+    if (!payload) {
+      setRunPrecheck(null);
+      setDoctorDecision(null);
+      setDoctorChecking(false);
+      return null;
+    }
+
+    setDoctorChecking(true);
+    try {
+      const response = await fetch(`${ORION_API_URL}/runs/precheck`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify(payload),
+      });
+      const nextBody = (await response.json().catch(() => null)) as RunPrecheckPayload | null;
+      if (!response.ok) {
+        throw new Error('Failed to check where this task will run.');
+      }
+      const nextDecision = nextBody?.doctor_preflight || null;
+      setRunPrecheck(nextBody);
+      setDoctorDecision(nextDecision);
+      return nextBody;
+    } catch {
+      const fallbackDecision = await fetchDoctorRunGate(
+        {
+          executionTarget: selectedExecutionTarget,
+          runtimeProvider: currentProvider,
+          usesManagedOpenAi: false,
+        },
+        buildHeaders(false),
+      );
+      setRunPrecheck(null);
+      setDoctorDecision(fallbackDecision);
+      return { doctor_preflight: fallbackDecision } satisfies RunPrecheckPayload;
+    } finally {
+      setDoctorChecking(false);
+    }
+  }, [activeProfile, buildHeaders, buildRunStartPayload, currentProvider, runtimeApiKey, selectedExecutionTarget]);
+
+  const handleSelectCredits = useCallback(() => {
+    setSelectedSourceMode('credits');
+    setSourceError('');
+  }, []);
+
+  const handleSelectByok = useCallback(() => {
+    setSelectedSourceMode('byok');
+    setSourceError('');
+  }, []);
+
+  const handleCreditsContinue = useCallback(() => {
+    addToast({
+      type: 'info',
+      title: 'Coming soon',
+      message: 'Add your own API key for now.',
+    });
+    setSelectedSourceMode('byok');
+  }, [addToast]);
+
+  const handleSaveApiKey = useCallback(async () => {
+    if (!runtimeApiKey) {
+      setSourceError('Add the runtime access key first, then save your AI source.');
+      return;
+    }
+    if (!apiKeyInput.trim()) {
+      setSourceError('Enter your API key to continue.');
+      return;
+    }
+
+    setSourceBusy(true);
+    setSourceError('');
+    try {
+      const provider = selectedProvider;
+      const model = defaultProviderModel(provider);
+      const authMode = 'api_key';
+      const secret = apiKeyInput.trim();
+      const credentials =
+        provider === 'anthropic' || provider === 'gemini'
+          ? { api_key: secret, auth_mode: authMode }
+          : { api_key: secret, access_token: secret, oauth_token: secret, auth_mode: authMode };
+
+      const credentialRes = await fetch(`${ORION_API_URL}/credentials/vault`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify({
+          label: DEFAULT_PROVIDER_LABELS[provider] || `${providerLabel(provider)} Key`,
+          provider,
+          workspace_id: WORKSPACE_ID,
+          mode: 'byok',
+          credentials,
+        }),
+      });
+      const credentialBody = (await credentialRes.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!credentialRes.ok) {
+        throw new Error(String(credentialBody?.detail || credentialBody?.message || 'Failed to save the API key.'));
+      }
+
+      const credentialId = String(credentialBody?.id || '').trim();
+      const profileRes = await fetch(`${ORION_API_URL}/providers/profiles`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify({
+          provider,
+          label: DEFAULT_PROVIDER_LABELS[provider] || `${providerLabel(provider)} Key`,
+          credential_id: credentialId || undefined,
+          auth_mode: authMode,
+          workspace_id: WORKSPACE_ID,
+          priority: 100,
+          enabled: true,
+          model,
+        }),
+      });
+      const profileBody = (await profileRes.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!profileRes.ok) {
+        throw new Error(String(profileBody?.detail || profileBody?.message || 'Failed to save the runtime profile.'));
+      }
+
+      const nextProfileId = String(profileBody?.id || '').trim();
+      setApiKeyInput('');
+      await loadRuntimeState();
+      if (nextProfileId) setSelectedProfileId(nextProfileId);
+      addToast({
+        type: 'success',
+        title: 'API key saved',
+        message: 'Your AI source is ready.',
+      });
+      if (prompt.trim()) {
+        await generatePlan(prompt.trim(), nextProfileId);
+      }
+      proceedAfterSource();
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : 'Failed to save the API key.');
+    } finally {
+      setSourceBusy(false);
+    }
+  }, [
+    addToast,
+    apiKeyInput,
+    buildHeaders,
+    generatePlan,
+    loadRuntimeState,
+    proceedAfterSource,
+    prompt,
+    runtimeApiKey,
+    selectedProvider,
+  ]);
+
+  const handleContinueFromTools = useCallback(() => {
+    if (unresolvedBlockingTools.length > 0) return;
+    setStep(5);
+  }, [unresolvedBlockingTools.length]);
+
+  const handleRunTask = useCallback(async () => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      setRunError('Describe the task first.');
+      setStep(1);
+      return;
+    }
+    if (!runtimeApiKey) {
+      setRunError('Add the runtime access key before running a task.');
+      return;
+    }
+    const profile = activeProfile;
+    if (!profile) {
+      setRunError('Add an AI source before running this task.');
+      if (showSourceStep) setStep(3);
+      return;
+    }
+    const precheck = await loadRunPrecheck();
+    const doctorGate = precheck?.doctor_preflight || null;
+    if (doctorGate?.blocking) {
+      setRunError(doctorGate.detail);
+      return;
+    }
+
+    setRunBusy(true);
+    setRunError('');
+    try {
+      const payload = buildRunStartPayload(profile);
+      if (!payload) {
+        throw new Error('The task is missing information needed to start.');
+      }
+
+      const response = await fetch(`${ORION_API_URL}/runs/start`, {
+        method: 'POST',
+        headers: buildHeaders(true),
+        body: JSON.stringify(payload),
+      });
+      const responseBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!response.ok) {
+        throw new Error(String(responseBody?.detail || responseBody?.error || 'Failed to start the task.'));
+      }
+
+      const runId = String(responseBody?.run_id || '').trim();
+      if (!runId) {
+        throw new Error('The run started but no run ID was returned.');
+      }
+
+      upsertSeededRuntimeRun({
+        run_id: runId,
+        status: 'running',
+        workflow_name: 'New task',
+        user_goal: trimmedPrompt,
+        created_at: new Date().toISOString(),
+        agent_role: 'assistant',
+        triggered_by: 'Setup',
+        active_profile_id: profile.id,
+        active_profile_label: profile.label,
+        active_profile_provider: profile.provider,
+        active_profile_model: profile.model,
+        execution_target_selected: selectedExecutionTarget,
+      });
+      clearSetupState();
+      router.push(`/runs/${runId}`);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : 'Failed to start the task.');
+    } finally {
+      setRunBusy(false);
+    }
+  }, [activeProfile, buildHeaders, buildRunStartPayload, loadRunPrecheck, prompt, router, runtimeApiKey, showSourceStep]);
+
+  useEffect(() => {
+    if (!hydrated || step !== 5) return;
+    void loadRunPrecheck();
+  }, [hydrated, loadRunPrecheck, step]);
+
+  if (!hydrated) {
+    return <div className="orion-page-shell is-setup-flow" />;
+  }
 
   return (
-    <div
-      className="orion-page-shell orion-animate-in"
-      style={{
-        maxWidth: 1080,
-        margin: '0 auto',
-        padding: isMobile ? '14px' : '22px',
-        display: 'grid',
-        gap: 14,
-      }}
-    >
-      <header className="orion-page-header">
-        <div className="orion-page-title-wrap">
-          <div className="orion-page-icon">
-            <ShieldCheck size={18} />
-          </div>
-          <div>
-            <h1 className="orion-page-title">Setup</h1>
-            <p className="orion-page-subtitle">Launch the assistant with workspace access, one AI account, optional integrations, and a clear first task.</p>
-          </div>
-        </div>
-        <div className="orion-page-actions">
-          <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 36 }}>
-            Open Integrations
-          </Link>
-          <Link className="orion-btn orion-btn-ghost" href="/" style={{ minHeight: 36 }}>
-            Open Home
-          </Link>
-        </div>
-      </header>
+    <div className="orion-page-shell is-setup-flow orion-animate-in">
+      <div className="hekor-setup-progress" aria-label={`Step ${step} of ${TOTAL_STEPS}`}>
+        {Array.from({ length: TOTAL_STEPS }).map((_, index) => {
+          const value = index + 1;
+          return (
+            <span
+              key={value}
+              className={`hekor-setup-progress-dot${value === step ? ' is-active' : value < step ? ' is-complete' : ''}`}
+              aria-hidden
+            />
+          );
+        })}
+      </div>
 
-      <section
-        className="orion-panel muted"
-        style={{
-          padding: isMobile ? 12 : 16,
-          display: 'grid',
-          gap: 12,
-        }}
-      >
-        <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-          <div>
-            <div className="orion-panel-title">Launch Assistant</div>
-            <div className="orion-panel-copy">Use Setup for readiness and AI access. Use Integrations for channels and tools. Then go back to Home and start the first task.</div>
+      {step > 1 ? (
+        <button type="button" className="btn-secondary hekor-setup-back" onClick={handleBack}>
+          <ArrowLeft size={14} />
+          Back
+        </button>
+      ) : null}
+
+      {step === 1 ? (
+        <section className="hekor-setup-stage">
+          <div className="hekor-setup-copy">
+            <h1>What do you want done?</h1>
+            <p>Describe the task in plain language.</p>
           </div>
-        </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'repeat(4, minmax(0, 1fr))',
-            gap: 10,
-          }}
-        >
-          {launchAssistantSteps.map((item) => (
-            <div
-              key={item.title}
-              style={{
-                borderRadius: 10,
-                border: item.emphasized ? `1px solid ${UI.accentBorder}` : `1px solid ${UI.borderSoft}`,
-                background: item.emphasized
-                  ? `linear-gradient(180deg, color-mix(in srgb, ${UI.accentSoft} 20%, ${UI.surfaceAlt} 80%) 0%, ${UI.surfaceAlt} 100%)`
-                  : UI.surfaceAlt,
-                padding: '12px 14px',
-                display: 'grid',
-                gap: 8,
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                <div style={{ fontSize: 10.5, color: UI.textMuted, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                  {item.label}
-                </div>
-                <span
-                  style={{
-                    borderRadius: 999,
-                    border: `1px solid ${item.state === 'Done' || item.state === 'Ready' || item.state === 'Connected' ? UI.successBorder : item.state === 'Now' ? UI.accentBorder : UI.border}`,
-                    background: item.state === 'Done' || item.state === 'Ready' || item.state === 'Connected' ? UI.successBg : item.state === 'Now' ? UI.accentSoft : UI.shell,
-                    color: item.state === 'Done' || item.state === 'Ready' || item.state === 'Connected' ? UI.successFg : item.state === 'Now' ? UI.accent : UI.textMuted,
-                    padding: '2px 8px',
-                    fontSize: 10.5,
-                    fontWeight: 700,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {item.state}
-                </span>
+
+          <div className="hekor-setup-composer">
+            <textarea
+              className="orion-input hekor-setup-textarea"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Example: Summarize my emails every morning and send the highlights to Slack"
+            />
+            <button type="button" className="btn-primary hekor-setup-submit" onClick={handleSubmitTask}>
+              Try a task
+            </button>
+          </div>
+
+          <div className="hekor-setup-chip-row">
+            {EXAMPLE_PROMPTS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className="hekor-setup-chip"
+                onClick={() => setPrompt(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {step === 2 ? (
+        <section className="hekor-setup-stage">
+          <div className="hekor-setup-copy">
+            <h1>Here&apos;s how Hekor will handle it</h1>
+            <p>Review the steps before the task starts.</p>
+          </div>
+
+          <div className="orion-panel hekor-setup-panel">
+            {planLoading ? (
+              <div className="hekor-setup-loading">
+                <Loader2 size={18} className="hekor-spin" />
+                <span>Generating the plan…</span>
               </div>
-              <div style={{ fontSize: 13.5, color: UI.textSoft, fontWeight: 700 }}>{item.title}</div>
-              <div style={{ fontSize: 12, color: UI.textMuted, lineHeight: 1.45 }}>{item.copy}</div>
-              {'href' in item ? (
-                <Link className="orion-btn orion-btn-ghost" href={item.href} style={{ minHeight: 32, width: 'fit-content', paddingInline: 10, fontSize: 11.5 }}>
-                  {item.actionLabel}
-                </Link>
+            ) : (
+              <ol className="hekor-setup-plan-list">
+                {planSteps.map((item, index) => {
+                  const Icon = statusIconForTool(item.tool);
+                  return (
+                    <li key={item.id || `${item.type}:${index}`} className="hekor-setup-plan-step">
+                      <div className="hekor-setup-step-index">{index + 1}</div>
+                      <div className="hekor-setup-step-main">
+                        <div className="hekor-setup-step-title-row">
+                          <span className="hekor-setup-step-title">{item.title}</span>
+                          <span className="hekor-setup-step-icon">
+                            <Icon size={14} />
+                          </span>
+                        </div>
+                        <div className="hekor-setup-step-copy">{item.description}</div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+
+            <div className="hekor-setup-tools-needed">
+              <div className="hekor-setup-tools-needed-title">Tools this task may use</div>
+              {tools.length > 0 ? (
+                <div className="hekor-setup-chip-row">
+                  {tools.map((tool) => (
+                    <span key={tool.id} className="hekor-setup-chip is-static">
+                      {tool.label}
+                    </span>
+                  ))}
+                </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={item.action}
-                  className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, width: 'fit-content', paddingInline: 10, fontSize: 11.5 }}
-                >
-                  {item.actionLabel}
-                </button>
+                <div className="hekor-setup-muted">This task can start without external tools.</div>
               )}
             </div>
-          ))}
-        </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${setupReady ? UI.successBorder : UI.border}`,
-              background: setupReady ? UI.successBg : UI.shell,
-              color: setupReady ? UI.successFg : UI.textMuted,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            {setupReady ? 'Ready' : `Progress ${setupProgressCount}/3`}
-          </span>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${UI.border}`,
-              background: UI.shell,
-              color: UI.textSoft,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            Account mode: {connectionMode === 'local_companion' ? 'Local Companion' : connectionMode === 'byok' ? 'Use My Own Key' : 'Managed Access'}
-          </span>
-          {setupSession?.next_step ? (
-            <span
-              style={{
-                borderRadius: 10,
-                border: `1px solid ${UI.border}`,
-                background: UI.shell,
-                color: UI.textSoft,
-                padding: '4px 10px',
-                fontSize: 11,
-                fontWeight: 700,
-              }}
-            >
-              Next: {setupSession.next_step}
-            </span>
-          ) : null}
-          {setupSession?.updated_at ? (
-            <span
-              style={{
-                borderRadius: 10,
-                border: `1px solid ${UI.border}`,
-                background: UI.shell,
-                color: UI.textMuted,
-                padding: '4px 10px',
-                fontSize: 11,
-                fontWeight: 700,
-              }}
-            >
-              Updated {fmtTime(setupSession.updated_at)}
-            </span>
-          ) : null}
-        </div>
+            {planError ? <div className="hekor-setup-inline-note">{planError}</div> : null}
+          </div>
 
-        {!setupReady ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              onClick={() => {
-                void continueGuidedSetup();
-              }}
-              disabled={setupBusy !== null || isChecking}
-              className="orion-btn orion-btn-primary"
-              style={{ minHeight: 34, fontSize: 12, opacity: setupBusy !== null || isChecking ? 0.75 : 1 }}
-            >
-              {onboardingNextStep === 'runtime'
-                ? 'Start step 1'
-                : onboardingNextStep === 'account'
-                ? 'Open step 2'
-                : onboardingNextStep === 'connection'
-                ? 'Open step 3'
-                : 'Continue onboarding'}
+          <div className="hekor-setup-actions">
+            <button type="button" className="btn-primary" onClick={proceedAfterPlan} disabled={planLoading || planSteps.length === 0}>
+              Continue
             </button>
-            <button
-              onClick={() => {
-                void runRuntimeCheck();
-              }}
-              disabled={setupBusy !== null || isChecking}
-              className="orion-btn orion-btn-ghost"
-              style={{ minHeight: 34, fontSize: 12, background: UI.shell, opacity: setupBusy !== null || isChecking ? 0.75 : 1 }}
-            >
-              Check workspace
+            <button type="button" className="btn-secondary" onClick={() => setStep(1)}>
+              Edit task
             </button>
-            <Link className="orion-btn orion-btn-ghost" href="/credentials" style={{ minHeight: 34, fontSize: 12, background: UI.shell }}>
-              Open Integrations
-            </Link>
           </div>
-        ) : (
-          <div
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${UI.successBorder}`,
-              background: UI.successBg,
-              color: UI.successFg,
-              padding: '9px 10px',
-              fontSize: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 7,
-            }}
-          >
-            <CheckCircle2 size={14} color={UI.successFg} />
-            Setup is complete. Integrations stays available for channels and tools, and you can start work from Home.
+        </section>
+      ) : null}
+
+      {step === 3 ? (
+        <section className="hekor-setup-stage">
+          <div className="hekor-setup-copy">
+            <h1>Choose AI access</h1>
+            <p>Pick the AI source for this task.</p>
           </div>
-        )}
 
-        {nextSetupStep?.blocked ? (
-          <div
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${UI.warningBorder}`,
-              background: UI.warningBg,
-              color: UI.warningFg,
-              padding: '9px 10px',
-              fontSize: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 7,
-            }}
-          >
-            <AlertTriangle size={14} color={UI.warningFg} />
-            {nextSetupStep.label}
-          </div>
-        ) : null}
-      </section>
-
-      <section
-        className="orion-panel"
-        style={{
-          padding: isMobile ? 12 : 16,
-        }}
-      >
-        <SetupWizard
-          showSetupWizard={showSetupWizard}
-          setShowSetupWizard={setShowSetupWizard}
-          setupReady={setupReady}
-          setupSteps={setupSteps}
-          setupSession={setupSession}
-          setupSessionBusy={setupSessionBusy}
-          resumeSetupSession={resumeSetupSession}
-          cancelSetupSession={cancelSetupSession}
-          nextSetupStep={nextSetupStep}
-          setupBusy={setupBusy}
-          isChecking={isChecking}
-          runRuntimeCheck={runRuntimeCheck}
-          runtimeApiKey={runtimeApiKey}
-          setRuntimeApiKey={setRuntimeApiKey}
-          connectionMode={connectionMode}
-          setConnectionMode={setConnectionMode}
-          setSetupStatus={setSetupStatus}
-          provider={provider}
-          setProvider={setProvider}
-          providerAuthMode={providerAuthMode}
-          setProviderAuthMode={setProviderAuthMode}
-          setupAction={setupAction}
-          providerOptions={providerOptions}
-          model={model}
-          setModel={setModel}
-          modelsLoading={modelsLoading}
-          modelOptions={modelOptions}
-          selectedProviderOption={selectedProviderOption}
-          credentialId={credentialId}
-          setCredentialId={setCredentialId}
-          providerCredentialOptions={providerCredentialOptions}
-          credentialLabel={credentialLabel}
-          setCredentialLabel={setCredentialLabel}
-          openaiKeyInput={openaiKeyInput}
-          setOpenaiKeyInput={setOpenaiKeyInput}
-          saveByokCredential={saveByokCredential}
-          refreshCredentials={refreshCredentials}
-          isCredentialsLoading={isCredentialsLoading}
-          connectorCredentialId={connectorCredentialId}
-          setConnectorCredentialId={setConnectorCredentialId}
-          connectorCredentials={connectorCredentials}
-          setConnectorType={setConnectorType}
-          connectorType={connectorType}
-          connectorLabel={connectorLabel}
-          setConnectorLabel={setConnectorLabel}
-          googleUseLocalAuth={googleUseLocalAuth}
-          setGoogleUseLocalAuth={setGoogleUseLocalAuth}
-          googleConnectorToken={googleConnectorToken}
-          setGoogleConnectorToken={setGoogleConnectorToken}
-          googleCalendarId={googleCalendarId}
-          setGoogleCalendarId={setGoogleCalendarId}
-          googleTimezone={googleTimezone}
-          setGoogleTimezone={setGoogleTimezone}
-          microsoftAccessToken={microsoftAccessToken}
-          setMicrosoftAccessToken={setMicrosoftAccessToken}
-          telegramBotToken={telegramBotToken}
-          setTelegramBotToken={setTelegramBotToken}
-          telegramChatId={telegramChatId}
-          setTelegramChatId={setTelegramChatId}
-          discordBotToken={discordBotToken}
-          setDiscordBotToken={setDiscordBotToken}
-          discordChannelId={discordChannelId}
-          setDiscordChannelId={setDiscordChannelId}
-          discordGuildId={discordGuildId}
-          setDiscordGuildId={setDiscordGuildId}
-          instagramAccessToken={instagramAccessToken}
-          setInstagramAccessToken={setInstagramAccessToken}
-          instagramAccountId={instagramAccountId}
-          setInstagramAccountId={setInstagramAccountId}
-          instagramPageId={instagramPageId}
-          setInstagramPageId={setInstagramPageId}
-          twilioAccountSid={twilioAccountSid}
-          setTwilioAccountSid={setTwilioAccountSid}
-          twilioAuthToken={twilioAuthToken}
-          setTwilioAuthToken={setTwilioAuthToken}
-          twilioFromNumber={twilioFromNumber}
-          setTwilioFromNumber={setTwilioFromNumber}
-          twilioToNumber={twilioToNumber}
-          setTwilioToNumber={setTwilioToNumber}
-          saveConnector={saveConnector}
-          refreshConnectors={refreshConnectors}
-          isConnectorsLoading={isConnectorsLoading}
-          testConnector={testConnector}
-          testConnection={testConnection}
-          setupStatusObj={setupStatus}
-          isMobile={isMobile}
-        />
-      </section>
-
-      <section
-        style={{
-          borderRadius: 10,
-          border: `1px solid ${UI.border}`,
-          background: UI.surface,
-          padding: isMobile ? 12 : 16,
-          display: 'grid',
-          gap: 10,
-        }}
-      >
-        <div style={{ fontSize: 14, fontWeight: 700, color: UI.textSoft }}>Advanced diagnostics moved to Health</div>
-        <div style={{ fontSize: 12, color: UI.textMuted, lineHeight: 1.45 }}>
-          Setup is onboarding-first. Runtime controls, daemon recovery, channel reliability, and media diagnostics live in Health.
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Link className="orion-btn orion-btn-primary" href="/health" style={{ minHeight: 34, fontSize: 12 }}>
-            Open Health
-          </Link>
-          <button
-            onClick={() => {
-              void Promise.all([pollDaemonStatus('manual'), pollChannelStatus(), pollMediaStatus()])
-                .then(() => addDaemonEvent('info', 'Setup diagnostics refreshed.'))
-                .catch((error: unknown) => {
-                  const message = error instanceof Error ? error.message : 'Refresh failed.';
-                  addDaemonEvent('error', message);
-                });
-            }}
-            className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, background: UI.shell }}
-          >
-            Refresh status
-          </button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${daemonSnapshot?.running ? UI.successBorder : UI.warningBorder}`,
-              background: daemonSnapshot?.running ? UI.successBg : UI.warningBg,
-              color: daemonSnapshot?.running ? UI.successFg : UI.warningFg,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            Daemon {daemonSnapshot?.running ? 'running' : 'offline'}
-          </span>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${telegramHealthy ? UI.successBorder : UI.warningBorder}`,
-              background: telegramHealthy ? UI.successBg : UI.warningBg,
-              color: telegramHealthy ? UI.successFg : UI.warningFg,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            Telegram {telegramHealthy ? 'healthy' : 'attention'}
-          </span>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${whatsappHealthy ? UI.successBorder : UI.warningBorder}`,
-              background: whatsappHealthy ? UI.successBg : UI.warningBg,
-              color: whatsappHealthy ? UI.successFg : UI.warningFg,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            WhatsApp {whatsappHealthy ? 'healthy' : 'attention'}
-          </span>
-          <span
-            style={{
-              borderRadius: 10,
-              border: `1px solid ${UI.border}`,
-              background: UI.shell,
-              color: UI.textMuted,
-              padding: '4px 10px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            Media files {mediaSnapshot?.filesTotal ?? 0}
-          </span>
-        </div>
-
-        <details
-          style={{
-            borderTop: `1px solid ${UI.borderSoft}`,
-            paddingTop: 8,
-          }}
-        >
-          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 700, color: UI.textSoft }}>
-            Advanced diagnostics
-          </summary>
-          <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-            <div style={{ fontSize: 12, color: UI.textMuted }}>
-              Use <Link href="/health" style={{ color: UI.textSoft, textDecoration: 'underline' }}>Health</Link> for full diagnostics and recovery actions.
-            </div>
-
-            <div style={{ borderTop: `1px solid ${UI.borderSoft}`, borderBottom: `1px solid ${UI.borderSoft}`, padding: '8px 0', display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 12, color: UI.textSoft }}>
-                Daemon {daemonSnapshot?.running ? 'running' : 'offline'} · watchdog {daemonSnapshot?.watchdog.healthy === true ? 'healthy' : daemonSnapshot?.watchdog.healthy === false ? 'unhealthy' : 'pending'} · last poll {daemonLastPollAt ? fmtTime(daemonLastPollAt) : '-'}
+          <div className="hekor-setup-source-grid">
+            <button
+              type="button"
+              className={`hekor-setup-source-card${selectedSourceMode === 'credits' ? ' is-selected' : ''}`}
+              onClick={handleSelectCredits}
+            >
+              <div className="hekor-setup-source-head">
+                <span className="hekor-setup-source-title">Hekor-managed access</span>
+                <span className="hekor-setup-source-badge">Soon</span>
               </div>
-              <div style={{ fontSize: 12, color: UI.textSoft }}>
-                Telegram {telegramHealthy ? 'healthy' : 'attention'} · WhatsApp {whatsappHealthy ? 'healthy' : 'attention'} · media files {mediaSnapshot?.filesTotal ?? 0}
+              <div className="hekor-setup-source-copy">Available soon. Use your own API key for now.</div>
+            </button>
+
+            <button
+              type="button"
+              className={`hekor-setup-source-card${selectedSourceMode === 'byok' ? ' is-selected' : ''}`}
+              onClick={handleSelectByok}
+            >
+              <div className="hekor-setup-source-head">
+                <span className="hekor-setup-source-title">My own API key</span>
               </div>
-              <div style={{ fontSize: 12, color: UI.textMuted }}>
-                Last event: {daemonEvents[0] ? `${fmtTime(daemonEvents[0].ts)} · ${daemonEvents[0].message}` : 'none'}
+              <div className="hekor-setup-source-copy">Use OpenAI, Anthropic, or Google.</div>
+            </button>
+          </div>
+
+          {selectedSourceMode === 'byok' ? (
+            <div className="orion-panel hekor-setup-panel">
+              <div className="hekor-setup-provider-row">
+                {(['openai', 'anthropic', 'gemini'] as SetupProviderId[]).map((provider) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    className={`btn-secondary hekor-setup-provider-btn${selectedProvider === provider ? ' is-selected' : ''}`}
+                    onClick={() => setSelectedProvider(provider)}
+                  >
+                    {providerLabel(provider)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="hekor-setup-field">
+                <label htmlFor="setup-api-key">API key</label>
+                <input
+                  id="setup-api-key"
+                  type="password"
+                  className="orion-input"
+                  placeholder={`Paste your ${providerLabel(selectedProvider)} API key`}
+                  value={apiKeyInput}
+                  onChange={(event) => setApiKeyInput(event.target.value)}
+                />
+                <div className="hekor-setup-muted">Encrypted and stored securely. Change anytime.</div>
+              </div>
+
+              {sourceError ? <div className="hekor-setup-inline-error">{sourceError}</div> : null}
+
+              <div className="hekor-setup-actions">
+                <button type="button" className="btn-primary" onClick={() => void handleSaveApiKey()} disabled={sourceBusy}>
+                  {sourceBusy ? (
+                    <>
+                      <Loader2 size={14} className="hekor-spin" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save and continue'
+                  )}
+                </button>
               </div>
             </div>
+          ) : (
+            <div className="orion-panel muted hekor-setup-panel">
+              <div className="hekor-setup-inline-note">
+                Hekor-managed access is not available yet. Use your own API key for now.
+              </div>
+              <div className="hekor-setup-actions">
+                <button type="button" className="btn-primary" onClick={handleCreditsContinue}>
+                  Use my own API key
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : null}
 
-            {(daemonPollError || channelPollError || mediaPollError) ? (
-              <div
-                style={{
-                  borderLeft: `2px solid ${UI.warningBorder}`,
-                  background: UI.warningBg,
-                  color: UI.warningFg,
-                  padding: '8px 10px',
-                  fontSize: 12,
-                  lineHeight: 1.45,
-                }}
-              >
-                {daemonPollError ? `daemon: ${daemonPollError}` : ''}
-                {channelPollError ? `${daemonPollError ? ' | ' : ''}channels: ${channelPollError}` : ''}
-                {mediaPollError ? `${daemonPollError || channelPollError ? ' | ' : ''}media: ${mediaPollError}` : ''}
+      {step === 4 ? (
+        <section className="hekor-setup-stage">
+          <div className="hekor-setup-copy">
+            <h1>Connect the tools this task needs</h1>
+            <p>Hekor only asks for access when it is needed for this task.</p>
+          </div>
+
+          <div className="orion-panel hekor-setup-panel">
+            <div className="hekor-setup-tool-list">
+              {tools.map((tool) => {
+                const Icon = statusIconForTool(tool.id);
+                const connected = isToolConnected(tool);
+                return (
+                  <div key={tool.id} className="hekor-setup-tool-row">
+                    <div className="hekor-setup-tool-leading">
+                      <span className="hekor-setup-tool-icon">
+                        <Icon size={16} />
+                      </span>
+                      <div className="hekor-setup-tool-copy">
+                        <div className="hekor-setup-tool-title">{tool.label}</div>
+                        <div className="hekor-setup-tool-note">{tool.reason}</div>
+                      </div>
+                    </div>
+
+                    {connected ? (
+                      <span className="hekor-setup-tool-state is-connected">
+                        <Check size={14} />
+                        Connected
+                      </span>
+                    ) : (
+                      <Link className="btn-secondary" href={tool.connectHref}>
+                        Connect
+                      </Link>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {unresolvedBlockingTools.length > 0 ? (
+              <div className="hekor-setup-inline-note">
+                Connect {unresolvedBlockingTools.map((tool) => tool.label).join(' and ')} to continue.
               </div>
             ) : null}
           </div>
-        </details>
-      </section>
 
-      <section
-        style={{
-          borderRadius: 10,
-          border: `1px solid ${UI.border}`,
-          background: UI.surface,
-          padding: isMobile ? 12 : 16,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          color: UI.textMuted,
-          fontSize: 12,
-        }}
-      >
-        <ShieldCheck size={14} color={UI.accent} />
-        Use this page for onboarding and tool access changes. Run daily work from Home.
-      </section>
+          <div className="hekor-setup-actions">
+            <button type="button" className="btn-primary" onClick={handleContinueFromTools} disabled={unresolvedBlockingTools.length > 0}>
+              Continue
+            </button>
+            {canSkipToolsStep ? (
+              <button type="button" className="btn-secondary" onClick={() => setStep(5)}>
+                Skip for now
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {step === 5 ? (
+        <section className="hekor-setup-stage">
+          <div className="hekor-setup-copy">
+            <h1>Ready to run</h1>
+            <p>Check the task, AI access, and tools before it starts.</p>
+          </div>
+
+          <div className="orion-panel hekor-setup-panel">
+            <div className="hekor-setup-summary">
+              <div className="hekor-setup-summary-row">
+                <span>Task</span>
+                <div className="hekor-setup-summary-value is-clamped">{buildTaskSummary(prompt, 140)}</div>
+              </div>
+              <div className="hekor-setup-summary-row">
+                <span>AI source</span>
+                <div className="hekor-setup-summary-value">
+                  {activeProfile ? providerLabel(activeProfile.provider) : 'Use my own API key'}
+                </div>
+              </div>
+              <div className="hekor-setup-summary-row">
+                <span>Route</span>
+                <div className="hekor-setup-summary-value">{effectiveExecutionTargetLabel}</div>
+              </div>
+              <div className="hekor-setup-summary-row">
+                <span>Tools connected</span>
+                <div className="hekor-setup-icon-stack">
+                  {connectedSummaryTools.length > 0 ? (
+                    connectedSummaryTools.map((tool) => {
+                      const Icon = statusIconForTool(tool.id);
+                      return (
+                        <span key={tool.id} className="hekor-setup-icon-pill" title={tool.label}>
+                          <Icon size={14} />
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span className="hekor-setup-muted">No tools connected yet</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="hekor-setup-trust">
+              <ShieldCheck size={16} />
+              <span>You can review and approve before anything is sent.</span>
+            </div>
+
+            <div className="hekor-setup-advanced">
+              <button
+                type="button"
+                className="btn-secondary hekor-setup-advanced-toggle"
+                onClick={() => setShowAdvancedRouteOptions((current) => !current)}
+              >
+                {showAdvancedRouteOptions ? 'Hide route options' : 'Route options'}
+              </button>
+              {showRouteDetails ? (
+                <div className="hekor-setup-advanced-panel">
+                  <div className="hekor-setup-targets">
+                    <div className="hekor-setup-tools-needed-title">Execution route</div>
+                    <div className="hekor-setup-target-grid">
+                      {executionTargetGuides.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`hekor-setup-target-card${selectedExecutionTarget === option.value ? ' is-selected' : ''}`}
+                          onClick={() => setSelectedExecutionTarget(option.value)}
+                          disabled={option.value === 'local_companion' && !hasLocalRuntime}
+                        >
+                          <span className="hekor-setup-target-title">{option.label}</span>
+                          <span className="hekor-setup-target-copy">{option.summary}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="hekor-setup-muted">{selectedExecutionTargetDescription}</div>
+                    <div className="hekor-setup-route-guide">
+                      {executionTargetGuides.map((option) => (
+                        <div
+                          key={`${option.value}-guide`}
+                          className={`hekor-setup-route-guide-item${selectedExecutionTarget === option.value ? ' is-selected' : ''}`}
+                        >
+                          <div className="hekor-setup-route-guide-title">{option.label}</div>
+                          <div className="hekor-setup-route-guide-copy">{option.hint}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {runPrecheck?.route ? (
+                    <div className={`hekor-setup-route-decision${(precheckWaitingForRuntime || precheckWaitingForCapacity) ? ' is-warning' : ''}`}>
+                      <div className="hekor-setup-route-decision-title">
+                        {precheckWaitingForCapacity
+                          ? 'Waiting on machine capacity'
+                          : precheckWaitingForRuntime
+                            ? 'Waiting on machine capabilities'
+                            : 'Routing decision'}
+                      </div>
+                      <div className="hekor-setup-route-decision-copy">{routeDecisionSummary}</div>
+                      {precheckRouteFallback ? (
+                        <div className="hekor-setup-route-decision-copy is-secondary">{precheckRouteFallback}</div>
+                      ) : null}
+                      {precheckRequiredCapabilities.length > 0 ? (
+                        <div className="hekor-setup-route-capability-group">
+                          <div className="hekor-setup-route-capability-title">Required</div>
+                          <div className="hekor-setup-chip-row">
+                            {precheckRequiredCapabilities.map((item) => (
+                              <span key={`required:${item}`} className="hekor-setup-chip is-static">
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {precheckMissingCapabilities.length > 0 ? (
+                        <div className="hekor-setup-route-capability-group">
+                          <div className="hekor-setup-route-capability-title">Missing online now</div>
+                          <div className="hekor-setup-chip-row">
+                            {precheckMissingCapabilities.map((item) => (
+                              <span key={`missing:${item}`} className="hekor-setup-chip is-static is-warning">
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {precheckWaitingForCapacity && (precheckBusyRuntimeLabels.length > 0 || precheckBusyRuntimeIds.length > 0) ? (
+                        <div className="hekor-setup-route-capability-group">
+                          <div className="hekor-setup-route-capability-title">Busy machines</div>
+                          <div className="hekor-setup-chip-row">
+                            {(precheckBusyRuntimeLabels.length > 0 ? precheckBusyRuntimeLabels : precheckBusyRuntimeIds).map((item) => (
+                              <span key={`busy:${item}`} className="hekor-setup-chip is-static">
+                                {item}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {precheckWaitingForCapacity && (precheckQueuedAheadCount > 0 || precheckEstimatedWaitBand) ? (
+                        <div className="hekor-setup-route-capability-group">
+                          <div className="hekor-setup-route-capability-title">Queue outlook</div>
+                          <div className="hekor-setup-route-decision-copy is-secondary">
+                            {precheckQueuedAheadCount > 0
+                              ? `${precheckQueuedAheadCount} similar local run${precheckQueuedAheadCount === 1 ? ' is' : 's are'} ahead.`
+                              : 'No similar local runs are ahead right now.'}
+                            {precheckEstimatedWaitBand ? ` Expected wait: ${precheckEstimatedWaitBand}.` : ''}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {runError ? <div className="hekor-setup-inline-error">{runError}</div> : null}
+          </div>
+
+          <div className="hekor-setup-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => void handleRunTask()}
+              disabled={runBusy || doctorChecking || profilesLoading || connectorsLoading || runTargetBlocked || doctorRunBlocked}
+            >
+              {runBusy || doctorChecking ? (
+                <>
+                  <Loader2 size={14} className="hekor-spin" />
+                  {runBusy ? 'Starting…' : 'Checking…'}
+                </>
+              ) : (
+                'Run task'
+              )}
+            </button>
+            <button type="button" className="btn-secondary" onClick={handleBack}>
+              Back
+            </button>
+          </div>
+          <div className={`hekor-setup-action-note${runTargetBlocked || precheckWaitingForRuntime || precheckWaitingForCapacity ? ' is-warning' : ''}`.trim()}>
+            {runTargetBlocked
+              ? 'Local machine is selected, but no local runtime is online. Switch to Automatic or Cloud runtime to continue.'
+              : (precheckWaitingForRuntime || precheckWaitingForCapacity) && precheckRouteReason
+                ? precheckRouteReason
+                : selectedExecutionTarget === 'auto' && !showAdvancedRouteOptions
+                ? ''
+                : `This task will start on ${effectiveExecutionTargetLabel.toLowerCase()}.`}
+          </div>
+          <DoctorPreflightNotice decision={doctorDecision} />
+          {runTargetBlocked || precheckWaitingForRuntime ? (
+            <LocalRuntimeRecoveryCard
+              title="Local machine required"
+              copy={
+                precheckWaitingForRuntime
+                  ? 'This task needs a local machine with the right capabilities. Bring a capable machine online, then return here and run the task.'
+                  : 'Start the local runtime on this device, then return here and run the task locally.'
+              }
+              onStatusRefresh={loadRuntimeState}
+            />
+          ) : null}
+        </section>
+      ) : null}
+
     </div>
   );
 }

@@ -367,6 +367,68 @@ def _runtime_skills_snapshot() -> Dict[str, Any]:
         "updated_at": updated_at,
     }
 
+
+def _persist_doctor_snapshot(report: Dict[str, Any]) -> None:
+    generated_at = str(report.get("generated_at") or _utc_now_iso())
+    snapshot = {
+        "generated_at": generated_at,
+        "ok": bool(report.get("ok")),
+        "overview": report.get("overview") if isinstance(report.get("overview"), dict) else {},
+        "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {"pass": 0, "warn": 0, "fail": 0},
+        "checks": report.get("checks") if isinstance(report.get("checks"), list) else [],
+        "priority_fixes": report.get("priority_fixes") if isinstance(report.get("priority_fixes"), list) else [],
+    }
+    _safe_write_json(ORION_DOCTOR_REPORT_FILE, snapshot)
+
+    payload = _safe_read_json(
+        ORION_DOCTOR_HISTORY_FILE,
+        {"version": 1, "updated_at": None, "items": []},
+    )
+    items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
+    items: List[Dict[str, Any]] = [item for item in items_raw if isinstance(item, dict)]
+    items = [item for item in items if str(item.get("generated_at") or "") != generated_at]
+    items.insert(0, snapshot)
+    payload["version"] = 1
+    payload["updated_at"] = _utc_now_iso()
+    payload["items"] = items[: max(10, int(ORION_DOCTOR_HISTORY_LIMIT or 120))]
+    _safe_write_json(ORION_DOCTOR_HISTORY_FILE, payload)
+
+
+async def doctor_history(limit: int = 10):
+    safe_limit = max(1, min(limit, 30))
+    payload = _safe_read_json(
+        ORION_DOCTOR_HISTORY_FILE,
+        {"version": 1, "updated_at": None, "items": []},
+    )
+    items_raw = payload.get("items") if isinstance(payload.get("items"), list) else []
+    items: List[Dict[str, Any]] = []
+    for item in items_raw[:safe_limit]:
+        if not isinstance(item, dict):
+            continue
+        overview = item.get("overview") if isinstance(item.get("overview"), dict) else {}
+        summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
+        items.append(
+            {
+                "generated_at": item.get("generated_at"),
+                "ok": bool(item.get("ok")),
+                "overview": {
+                    "status": str(overview.get("status") or "warn"),
+                    "title": str(overview.get("title") or "").strip(),
+                    "detail": str(overview.get("detail") or "").strip(),
+                },
+                "summary": {
+                    "pass": int(summary.get("pass") or 0),
+                    "warn": int(summary.get("warn") or 0),
+                    "fail": int(summary.get("fail") or 0),
+                },
+            }
+        )
+    return {
+        "items": items,
+        "count": len(items),
+        "updated_at": payload.get("updated_at"),
+    }
+
 def _env_truthy(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return bool(default)
@@ -451,7 +513,7 @@ async def doctor():
     from server_modules.health_core import health
 
     health_data = await health()
-    return build_doctor_report(
+    report = build_doctor_report(
         health_data,
         {
             "ORION_AUTH_REQUIRED": ORION_AUTH_REQUIRED,
@@ -481,6 +543,8 @@ async def doctor():
             "ORION_MEMORY_LANCEDB_URI": ORION_MEMORY_LANCEDB_URI,
         },
     )
+    _persist_doctor_snapshot(report)
+    return report
 
 async def get_runtime_skills_state():
     installed: List[Dict[str, Any]] = []

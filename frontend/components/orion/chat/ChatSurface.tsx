@@ -44,6 +44,7 @@ type ChatSurfaceProps = {
   identityDrawerOpen: boolean;
   onToggleIdentityDrawer: () => void;
   onCloseIdentityDrawer: () => void;
+  identityGuide?: ReactNode;
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
 };
@@ -262,6 +263,7 @@ export function ChatSurface({
   identityDrawerOpen,
   onToggleIdentityDrawer,
   onCloseIdentityDrawer,
+  identityGuide = null,
   identitySections,
   identityActions,
 }: ChatSurfaceProps) {
@@ -315,7 +317,7 @@ export function ChatSurface({
           <button
             type="button"
             className="orion-chat-v2-identity-bar"
-            aria-label="Open current assistant session details"
+            aria-label="Review current task setup"
             aria-expanded={identityDrawerOpen}
             onClick={onToggleIdentityDrawer}
           >
@@ -328,13 +330,14 @@ export function ChatSurface({
                 <span className="orion-chat-v2-identity-value">{item.value}</span>
               </div>
             ))}
-            <span className="orion-chat-v2-identity-cta">{identityDrawerOpen ? 'Hide details' : 'Open details'}</span>
+            <span className="orion-chat-v2-identity-cta">{identityDrawerOpen ? 'Hide setup' : 'Review setup'}</span>
           </button>
         ) : null}
+        {identityGuide ? <div className="orion-chat-v2-route-guide">{identityGuide}</div> : null}
         {!hasMessages ? (
           <section className="orion-chat-v2-premium-empty" aria-label="Automation suggestions">
-            <h1 className="orion-chat-v2-premium-title">Automate anything.</h1>
-            <p className="orion-chat-v2-premium-copy">Describe what you want. I&apos;ll build it for you.</p>
+            <h1 className="orion-chat-v2-premium-title">What do you want done?</h1>
+            <p className="orion-chat-v2-premium-copy">Describe the task in plain language.</p>
             <div className="orion-chat-v2-premium-chips">
               {emptyStateSuggestions.map((task) => (
                 <button
@@ -352,7 +355,7 @@ export function ChatSurface({
             </div>
           </section>
         ) : null}
-        {isFirstThread ? <div className="orion-chat-v2-hero-ghost" aria-hidden>Automate anything.</div> : null}
+        {isFirstThread ? <div className="orion-chat-v2-hero-ghost" aria-hidden>What do you want done?</div> : null}
 
         {renderedMessages.length > 0 ? (
           <div className="orion-chat-v2-thread" aria-live="polite">
@@ -428,7 +431,7 @@ export function ChatSurface({
               ref={primaryGoalRef}
               value={goal}
               onChange={(event) => setGoal(event.target.value)}
-              placeholder={hasMessages ? 'Reply to your assistant' : 'Message your assistant'}
+              placeholder={hasMessages ? 'Add the next instruction' : 'Describe the task you want Hekor to handle'}
               rows={1}
               className="orion-chat-v2-input"
               onKeyDown={(event) => {
@@ -449,7 +452,7 @@ export function ChatSurface({
             </button>
           </div>
           <div className="orion-chat-v2-footer">
-            {hasMessages ? 'Enter to send • Shift+Enter for a new line' : isMobile ? 'Start with one concrete task' : 'Start with one concrete task or next step'}
+            {hasMessages ? 'Enter to send • Shift+Enter for a new line' : 'Start with one concrete business task'}
           </div>
         </div>
       </div>
@@ -465,8 +468,8 @@ export function ChatSurface({
           <aside className="orion-chat-v2-drawer" aria-label="Assistant session details">
             <div className="orion-chat-v2-drawer-header">
               <div>
-                <div className="orion-chat-v2-drawer-eyebrow">Session details</div>
-                <h2 className="orion-chat-v2-drawer-title">Current assistant state</h2>
+                <div className="orion-chat-v2-drawer-eyebrow">Task setup</div>
+                <h2 className="orion-chat-v2-drawer-title">Before you run</h2>
               </div>
               <button type="button" className="orion-chat-v2-drawer-close" onClick={onCloseIdentityDrawer} aria-label="Close details">
                 <X size={16} />

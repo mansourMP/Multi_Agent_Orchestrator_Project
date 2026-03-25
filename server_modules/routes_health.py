@@ -27,6 +27,7 @@ router.add_api_route("/mobile/handoff", core.mobile_handoff, methods=['GET'], de
 router.add_api_route("/validation/latest", core.validation_latest, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/validation/history", core.validation_history, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/doctor", diagnostics.doctor, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/doctor/history", diagnostics.doctor_history, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/solutions/state", diagnostics.get_runtime_solutions_state, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/skills/state", skills_state, methods=['GET', 'PUT'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/api/solutions/{solution_id}/{subpath:path}", diagnostics.dispatch_installed_solution_api, methods=["GET", "POST", "PUT"], dependencies=[Depends(require_api_key)])

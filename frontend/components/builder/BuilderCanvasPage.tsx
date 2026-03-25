@@ -45,8 +45,19 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-import { createWorkflow, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
+import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
+import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
+import { createWorkflow, fetchRuntimeMachines, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { API_BASE } from '@/lib/config';
+import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
+import {
+  type ExecutionTarget,
+  describeExecutionTarget,
+  formatExecutionTargetLabel,
+  getExecutionTargetGuides,
+  hasOnlineLocalRuntime,
+  normalizeExecutionTarget,
+} from '@/lib/executionTargets';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
@@ -470,6 +481,7 @@ function buildWorkflowDefinition(
   nodes: CanvasWorkflowNode[],
   edges: CanvasWorkflowEdge[],
   goal: string,
+  executionTarget: ExecutionTarget,
   runtimeProfileId?: string,
   runtimeProfile?: BuilderRuntimeProfileRow | null,
 ) {
@@ -491,6 +503,7 @@ function buildWorkflowDefinition(
       mode: 'visual_builder',
       origin: 'builder',
       draft_goal: goal,
+      execution_target: executionTarget,
       runtime_profile_id: String(runtimeProfileId || '').trim() || undefined,
       runtime_profile_label: String(runtimeProfile?.label || '').trim() || undefined,
       runtime_profile_provider: String(runtimeProfile?.provider || '').trim() || undefined,
@@ -694,6 +707,20 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [futureStack, setFutureStack] = useState<GraphSnapshot[]>([]);
   const [runtimeProfiles, setRuntimeProfiles] = useState<BuilderRuntimeProfileRow[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [executionTarget, setExecutionTarget] = useState<ExecutionTarget>('auto');
+  const [hasLocalRuntime, setHasLocalRuntime] = useState(false);
+  const [doctorChecking, setDoctorChecking] = useState(false);
+  const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
+  const executionTargetGuides = useMemo(() => getExecutionTargetGuides(hasLocalRuntime), [hasLocalRuntime]);
+
+  const refreshLocalRuntimeState = useCallback(async () => {
+    try {
+      const machinesPayload = await fetchRuntimeMachines().catch(() => ({ items: [] }));
+      setHasLocalRuntime(hasOnlineLocalRuntime(machinesPayload));
+    } catch {
+      setHasLocalRuntime(false);
+    }
+  }, []);
 
   const pushHistory = useCallback(() => {
     setHistoryStack((current) => [...current.slice(-19), cloneGraph(nodes, edges)]);
@@ -715,6 +742,28 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     () => runtimeProfiles.find((profile) => profile.id === selectedProfileId) || null,
     [runtimeProfiles, selectedProfileId],
   );
+  const currentRuntimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
+
+  const loadDoctorDecision = useCallback(async () => {
+    const runtimeKey = readRuntimeApiKeyFromStorage('');
+    if (!runtimeKey) {
+      setDoctorDecision(null);
+      setDoctorChecking(false);
+      return null;
+    }
+    setDoctorChecking(true);
+    try {
+      const nextDecision = await fetchDoctorRunGate({
+        executionTarget,
+        runtimeProvider: currentRuntimeProvider,
+        usesManagedOpenAi: false,
+      });
+      setDoctorDecision(nextDecision);
+      return nextDecision;
+    } finally {
+      setDoctorChecking(false);
+    }
+  }, [currentRuntimeProvider, executionTarget]);
 
   const stagedDraftGoal = stagedPrompt.trim();
 
@@ -798,6 +847,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setStagedPrompt(nextGoal);
     setPromptInput(nextGoal);
     setSelectedProfileId(String(workflow?.definition?.meta?.runtime_profile_id || '').trim());
+    setExecutionTarget(normalizeExecutionTarget(workflow?.definition?.meta?.execution_target));
     setSaveState('saved');
     setSaveMessage('Workflow loaded.');
   }, []);
@@ -813,16 +863,22 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     async function loadRuntimeProfiles() {
       const runtimeKey = readRuntimeApiKeyFromStorage('');
       if (!runtimeKey) {
-        if (!cancelled) setRuntimeProfiles([]);
+        if (!cancelled) {
+          setRuntimeProfiles([]);
+          setHasLocalRuntime(false);
+        }
         return;
       }
 
       try {
-        const response = await fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(DEFAULT_WORKSPACE_ID)}`, {
-          headers: {
-            'X-API-Key': runtimeKey,
-          },
-        });
+        const [response, machinesPayload] = await Promise.all([
+          fetch(`${ORION_API_URL}/providers/profiles/health?workspace_id=${encodeURIComponent(DEFAULT_WORKSPACE_ID)}`, {
+            headers: {
+              'X-API-Key': runtimeKey,
+            },
+          }),
+          fetchRuntimeMachines().catch(() => ({ items: [] })),
+        ]);
         const payload = (await response.json().catch(() => null)) as { items?: unknown[] } | null;
         if (!response.ok) throw new Error('Failed to load runtime profiles.');
         const rows = Array.isArray(payload?.items)
@@ -849,13 +905,17 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
         if (cancelled) return;
         const sorted = sortBuilderProfiles(rows);
         setRuntimeProfiles(sorted);
+        setHasLocalRuntime(hasOnlineLocalRuntime(machinesPayload));
         setSelectedProfileId((current) => {
           if (current && sorted.some((item) => item.id === current)) return current;
           const defaultReadyProfile = sorted.find((item) => String(item.health || '').trim().toLowerCase() === 'healthy');
           return defaultReadyProfile?.id || '';
         });
       } catch {
-        if (!cancelled) setRuntimeProfiles([]);
+        if (!cancelled) {
+          setRuntimeProfiles([]);
+          setHasLocalRuntime(false);
+        }
       }
     }
 
@@ -999,7 +1059,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
   const persistCurrentWorkflow = async (): Promise<string | null> => {
     if (nodes.length === 0 || !draftGoal.trim()) return null;
-    const definition = buildWorkflowDefinition(nodes, edges, draftGoal, selectedProfileId, selectedRuntimeProfile);
+    const definition = buildWorkflowDefinition(nodes, edges, draftGoal, executionTarget, selectedProfileId, selectedRuntimeProfile);
     if (savedWorkflowId) {
       await updateWorkflow(savedWorkflowId, definition);
       return savedWorkflowId;
@@ -1063,11 +1123,19 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       if (!runtimeKey) {
         throw new Error('Add your runtime access key before starting a test run.');
       }
+      if (executionTarget === 'local_companion' && !hasLocalRuntime) {
+        throw new Error('No local machine is online. Choose Automatic or Cloud runtime, or connect a local runtime first.');
+      }
+      const doctorGate = await loadDoctorDecision();
+      if (doctorGate?.blocking) {
+        throw new Error(doctorGate.detail);
+      }
       const runtimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
       const runtimeModel = resolveBuilderRuntimeModel(selectedRuntimeProfile, nodes);
       const businessPlan = [
         `Workflow: ${workflowName.trim() || buildWorkflowName(draftGoal)}`,
         `Goal: ${draftGoal.trim() || 'No goal provided.'}`,
+        `Execution route: ${formatExecutionTargetLabel(executionTarget)}`,
         `Runtime Provider: ${runtimeProvider}`,
         `Runtime Model: ${runtimeModel}`,
         selectedRuntimeProfile ? `Runtime Profile: ${selectedRuntimeProfile.label}` : 'Runtime Profile: Automatic routing',
@@ -1092,6 +1160,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           metadata: {
             workspace_id: DEFAULT_WORKSPACE_ID,
             origin: 'builder',
+            execution_target: executionTarget,
+            execution_target_requested: executionTarget,
             runtime_profile_id: selectedProfileId || undefined,
             profile_id: selectedProfileId || undefined,
             provider: runtimeProvider,
@@ -1118,6 +1188,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
         active_profile_label?: string;
         active_profile_provider?: string;
         active_profile_model?: string;
+        execution_target_selected?: string;
       } | null;
       if (!response.ok) {
         throw new Error(
@@ -1135,11 +1206,15 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           created_at: new Date().toISOString(),
           agent_role: 'builder',
           triggered_by: 'Direct',
-          active_profile_id: payload.active_profile_id || selectedProfileId || null,
-          active_profile_label: payload.active_profile_label || selectedRuntimeProfile?.label || null,
-          active_profile_provider: payload.active_profile_provider || runtimeProvider,
-          active_profile_model: payload.active_profile_model || runtimeModel,
-        });
+        active_profile_id: payload.active_profile_id || selectedProfileId || null,
+        active_profile_label: payload.active_profile_label || selectedRuntimeProfile?.label || null,
+        active_profile_provider: payload.active_profile_provider || runtimeProvider,
+        active_profile_model: payload.active_profile_model || runtimeModel,
+        execution_target_selected:
+          (typeof payload.execution_target_selected === 'string' && payload.execution_target_selected)
+            ? payload.execution_target_selected
+            : executionTarget,
+      });
       }
       setMessageRunId(payload?.run_id || null);
       setSavedWorkflowId(workflowId);
@@ -1153,6 +1228,10 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       setRunState('idle');
     }
   };
+
+  useEffect(() => {
+    void loadDoctorDecision();
+  }, [loadDoctorDecision]);
 
   const handleNodesChange = (changes: NodeChange<CanvasWorkflowNode>[]) => {
     if (changes.length > 0) pushHistory();
@@ -1323,6 +1402,18 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             <span className="orion-builder-draft-badge">Draft</span>
           </div>
           <div className="orion-builder-toolbar-actions">
+            <label className="orion-builder-runtime-picker is-route-picker">
+              <span className="orion-builder-runtime-picker-label">Route</span>
+              <select
+                className="orion-builder-runtime-select is-route-select"
+                value={executionTarget}
+                onChange={(event) => setExecutionTarget(normalizeExecutionTarget(event.target.value))}
+              >
+                <option value="auto">Automatic</option>
+                <option value="local_companion" disabled={!hasLocalRuntime}>Local machine</option>
+                <option value="cloud">Cloud runtime</option>
+              </select>
+            </label>
             <label className="orion-builder-runtime-picker">
               <span className="orion-builder-runtime-picker-label">Runtime</span>
               <select
@@ -1355,9 +1446,14 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
               <BrainCircuit size={15} />
               AI
             </button>
-            <button type="button" className="btn-ghost" onClick={handleTest} disabled={nodes.length === 0 || runState !== 'idle'}>
-              {runState === 'testing' ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
-              Evaluate
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={handleTest}
+              disabled={nodes.length === 0 || runState !== 'idle' || doctorChecking || Boolean(doctorDecision?.blocking) || (executionTarget === 'local_companion' && !hasLocalRuntime)}
+            >
+              {runState === 'testing' || doctorChecking ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />}
+              {runState === 'testing' ? 'Evaluating…' : doctorChecking ? 'Checking…' : 'Evaluate'}
             </button>
             <button type="button" className="btn-primary" onClick={handlePublish} disabled={nodes.length === 0 || runState !== 'idle'}>
               {runState === 'publishing' ? <LoaderCircle size={14} className="spin" /> : <Rocket size={14} />}
@@ -1365,6 +1461,29 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             </button>
           </div>
         </div>
+
+        <div className={`orion-builder-toolbar-note${executionTarget === 'local_companion' && !hasLocalRuntime ? ' is-warning' : ''}`.trim()}>
+          Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
+        </div>
+        <div className="orion-builder-route-guide orion-route-guide" aria-label="Execution route guide">
+          {executionTargetGuides.map((guide) => (
+            <div
+              key={guide.value}
+              className={`orion-route-guide-item${guide.value === executionTarget ? ' is-selected' : ''}`.trim()}
+            >
+              <div className="orion-route-guide-title">{guide.label}</div>
+              <div className="orion-route-guide-copy">{guide.hint}</div>
+            </div>
+          ))}
+        </div>
+        <DoctorPreflightNotice decision={doctorDecision} />
+        {executionTarget === 'local_companion' && !hasLocalRuntime ? (
+          <LocalRuntimeRecoveryCard
+            title="Local machine required"
+            copy="Start the local runtime on this device, then return here and evaluate the workflow locally."
+            onStatusRefresh={refreshLocalRuntimeState}
+          />
+        ) : null}
 
         <div className="orion-builder-main is-agent-builder">
           <section className="orion-builder-canvas-panel is-agent-builder">

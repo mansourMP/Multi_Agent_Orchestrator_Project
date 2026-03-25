@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from server_modules.doctor_gate import build_doctor_run_gate_live
+
 
 def _late_server_export(name: str):
     import server as _server
@@ -157,7 +159,22 @@ def register_run_routes(app) -> None:
     async def start_run(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
         req = body or RunStartRequest()
-        return _late_server_export("_create_run_from_request")(req)
+        prepared = _late_server_export("_prepare_run_start_request")(req)
+        metadata = dict(prepared["metadata"])
+        route = decide_execution_target(metadata)
+        metadata = apply_execution_route_metadata(metadata, route)
+        doctor_preflight = await build_doctor_run_gate_live(
+            execution_target=route["selected"],
+            metadata=metadata,
+            provider=req.provider,
+            credential_id=req.credential_id,
+        )
+        if bool(doctor_preflight.get("blocking")):
+            raise HTTPException(status_code=409, detail=str(doctor_preflight.get("detail") or doctor_preflight.get("title") or "Run blocked by doctor policy."))
+        result = _late_server_export("_create_run_from_request")(req)
+        if isinstance(result, dict):
+            result["doctor_preflight"] = doctor_preflight
+        return result
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest):
@@ -349,11 +366,7 @@ def register_run_routes(app) -> None:
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
         route = decide_execution_target(metadata)
-        metadata["execution_target_requested"] = route["requested"]
-        metadata["execution_target_selected"] = route["selected"]
-        metadata["execution_target_reason"] = route["reason"]
-        if route.get("fallback"):
-            metadata["execution_target_fallback"] = route.get("fallback")
+        metadata = apply_execution_route_metadata(metadata, route)
         precheck = _compute_tool_policy_precheck(
             {
                 "workflow_id": req.workflow_id,
@@ -383,11 +396,7 @@ def register_run_routes(app) -> None:
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
         route = decide_execution_target(metadata)
-        metadata["execution_target_requested"] = route["requested"]
-        metadata["execution_target_selected"] = route["selected"]
-        metadata["execution_target_reason"] = route["reason"]
-        if route.get("fallback"):
-            metadata["execution_target_fallback"] = route.get("fallback")
+        metadata = apply_execution_route_metadata(metadata, route)
         precheck = _compute_tool_policy_precheck(
             {
                 "workflow_id": req.workflow_id,
@@ -402,6 +411,12 @@ def register_run_routes(app) -> None:
                 "metadata": metadata,
             }
         )
+        doctor_preflight = await build_doctor_run_gate_live(
+            execution_target=route["selected"],
+            metadata=metadata,
+            provider=req.provider,
+            credential_id=req.credential_id,
+        )
         return {
             "ok": True,
             "engine": prepared["engine"],
@@ -409,6 +424,7 @@ def register_run_routes(app) -> None:
             "agent_role_source": metadata.get("agent_role_source"),
             "route": route,
             "tool_policy_precheck": precheck,
+            "doctor_preflight": doctor_preflight,
         }
 
     @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
@@ -465,11 +481,41 @@ def register_run_routes(app) -> None:
                 "pending_approval": None,
                 "dag": snapshot.get("dag"),
                 "context": redact_sensitive(context),
+                "execution_target_requested": snapshot.get("execution_target_requested"),
+                "execution_target_selected": snapshot.get("execution_target_selected"),
+                "execution_target_reason": snapshot.get("execution_target_reason"),
+                "execution_target_fallback": snapshot.get("execution_target_fallback"),
+                "execution_target_required_capabilities": snapshot.get("execution_target_required_capabilities"),
+                "execution_target_missing_capabilities": snapshot.get("execution_target_missing_capabilities"),
+                "execution_target_matching_runtime_ids": snapshot.get("execution_target_matching_runtime_ids"),
+                "execution_target_available_runtime_ids": snapshot.get("execution_target_available_runtime_ids"),
+                "execution_target_busy_runtime_ids": snapshot.get("execution_target_busy_runtime_ids"),
+                "execution_target_busy_runtime_labels": snapshot.get("execution_target_busy_runtime_labels"),
+                "execution_target_queued_ahead_count": snapshot.get("execution_target_queued_ahead_count"),
+                "execution_target_estimated_wait_band": snapshot.get("execution_target_estimated_wait_band"),
+                "execution_target_waiting_for_runtime": snapshot.get("execution_target_waiting_for_runtime"),
+                "execution_target_waiting_for_capacity": snapshot.get("execution_target_waiting_for_capacity"),
+                "execution_target_preferred_runtime_id": snapshot.get("execution_target_preferred_runtime_id"),
+                "execution_target_preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
+                "execution_target_preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
                 "route": {
-                    "requested": metadata.get("execution_target_requested"),
-                    "selected": metadata.get("execution_target_selected"),
-                    "reason": metadata.get("execution_target_reason"),
-                    "fallback": metadata.get("execution_target_fallback"),
+                    "requested": snapshot.get("execution_target_requested"),
+                    "selected": snapshot.get("execution_target_selected"),
+                    "reason": snapshot.get("execution_target_reason"),
+                    "fallback": snapshot.get("execution_target_fallback"),
+                    "required_capabilities": snapshot.get("execution_target_required_capabilities"),
+                    "missing_capabilities": snapshot.get("execution_target_missing_capabilities"),
+                    "matching_runtime_ids": snapshot.get("execution_target_matching_runtime_ids"),
+                    "available_runtime_ids": snapshot.get("execution_target_available_runtime_ids"),
+                    "busy_runtime_ids": snapshot.get("execution_target_busy_runtime_ids"),
+                    "busy_runtime_labels": snapshot.get("execution_target_busy_runtime_labels"),
+                    "queued_ahead_count": snapshot.get("execution_target_queued_ahead_count"),
+                    "estimated_wait_band": snapshot.get("execution_target_estimated_wait_band"),
+                    "waiting_for_runtime": snapshot.get("execution_target_waiting_for_runtime"),
+                    "waiting_for_capacity": snapshot.get("execution_target_waiting_for_capacity"),
+                    "preferred_runtime_id": snapshot.get("execution_target_preferred_runtime_id"),
+                    "preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
+                    "preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
                 },
                 "archived": True,
             }
@@ -513,11 +559,41 @@ def register_run_routes(app) -> None:
             "pending_approval": run.get("pending_approval"),
             "dag": run.get("dag"),
             "context": redact_sensitive(context),
+            "execution_target_requested": metadata.get("execution_target_requested"),
+            "execution_target_selected": metadata.get("execution_target_selected"),
+            "execution_target_reason": metadata.get("execution_target_reason"),
+            "execution_target_fallback": metadata.get("execution_target_fallback"),
+            "execution_target_required_capabilities": metadata.get("execution_target_required_capabilities"),
+            "execution_target_missing_capabilities": metadata.get("execution_target_missing_capabilities"),
+            "execution_target_matching_runtime_ids": metadata.get("execution_target_matching_runtime_ids"),
+            "execution_target_available_runtime_ids": metadata.get("execution_target_available_runtime_ids"),
+            "execution_target_busy_runtime_ids": metadata.get("execution_target_busy_runtime_ids"),
+            "execution_target_busy_runtime_labels": metadata.get("execution_target_busy_runtime_labels"),
+            "execution_target_queued_ahead_count": metadata.get("execution_target_queued_ahead_count"),
+            "execution_target_estimated_wait_band": metadata.get("execution_target_estimated_wait_band"),
+            "execution_target_waiting_for_runtime": metadata.get("execution_target_waiting_for_runtime"),
+            "execution_target_waiting_for_capacity": metadata.get("execution_target_waiting_for_capacity"),
+            "execution_target_preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
+            "execution_target_preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
+            "execution_target_preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
             "route": {
                 "requested": metadata.get("execution_target_requested"),
                 "selected": metadata.get("execution_target_selected"),
                 "reason": metadata.get("execution_target_reason"),
                 "fallback": metadata.get("execution_target_fallback"),
+                "required_capabilities": metadata.get("execution_target_required_capabilities"),
+                "missing_capabilities": metadata.get("execution_target_missing_capabilities"),
+                "matching_runtime_ids": metadata.get("execution_target_matching_runtime_ids"),
+                "available_runtime_ids": metadata.get("execution_target_available_runtime_ids"),
+                "busy_runtime_ids": metadata.get("execution_target_busy_runtime_ids"),
+                "busy_runtime_labels": metadata.get("execution_target_busy_runtime_labels"),
+                "queued_ahead_count": metadata.get("execution_target_queued_ahead_count"),
+                "estimated_wait_band": metadata.get("execution_target_estimated_wait_band"),
+                "waiting_for_runtime": metadata.get("execution_target_waiting_for_runtime"),
+                "waiting_for_capacity": metadata.get("execution_target_waiting_for_capacity"),
+                "preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
+                "preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
+                "preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
             },
             "archived": archived,
         }

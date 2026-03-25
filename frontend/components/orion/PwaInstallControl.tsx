@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, X } from 'lucide-react';
 import { useDesktopShell } from '@/lib/desktopBridge';
 
@@ -25,27 +25,33 @@ function detectSafari(): { isSafari: boolean; isIOS: boolean } {
 
 export default function PwaInstallControl() {
   const isDesktopShell = useDesktopShell();
+  const [mounted, setMounted] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
+  const [showInstalledNotice, setShowInstalledNotice] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
-
-  const safari = useMemo(() => detectSafari(), []);
+  const [safari, setSafari] = useState<{ isSafari: boolean; isIOS: boolean }>({ isSafari: false, isIOS: false });
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    setIsInstalled(isStandaloneMode());
+    setMounted(true);
+    setSafari(detectSafari());
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || isDesktopShell) return;
+    if (!mounted || typeof window === 'undefined') return;
+    setIsInstalled(isStandaloneMode());
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted || typeof window === 'undefined' || !('serviceWorker' in navigator) || isDesktopShell) return;
     if (!(window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
       return;
     }
     void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => undefined);
-  }, [isDesktopShell]);
+  }, [isDesktopShell, mounted]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || isDesktopShell) return;
+    if (!mounted || typeof window === 'undefined' || isDesktopShell) return;
 
     const handleBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
@@ -56,6 +62,7 @@ export default function PwaInstallControl() {
       setIsInstalled(true);
       setDeferredPrompt(null);
       setShowInstructions(false);
+      setShowInstalledNotice(true);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -64,14 +71,12 @@ export default function PwaInstallControl() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleInstalled);
     };
-  }, [isDesktopShell]);
+  }, [isDesktopShell, mounted]);
 
   const buttonLabel = deferredPrompt
-    ? 'Install app'
+    ? 'Install App'
     : safari.isSafari
-      ? safari.isIOS
-        ? 'Add to Home Screen'
-        : 'Add to Dock'
+      ? 'Install App'
       : '';
 
   const handleInstall = async () => {
@@ -80,6 +85,7 @@ export default function PwaInstallControl() {
       const choice = await deferredPrompt.userChoice.catch(() => null);
       if (choice?.outcome === 'accepted') {
         setIsInstalled(true);
+        setShowInstalledNotice(true);
       }
       setDeferredPrompt(null);
       return;
@@ -87,52 +93,43 @@ export default function PwaInstallControl() {
     setShowInstructions(true);
   };
 
-  if (isDesktopShell || isInstalled) return null;
+  if (!mounted) return null;
+  if (isDesktopShell || (isInstalled && !showInstalledNotice)) return null;
   if (!deferredPrompt && !safari.isSafari) return null;
 
   return (
     <>
-      <button
-        type="button"
-        className="orion-shellbar-install-btn"
-        onClick={() => void handleInstall()}
-        aria-label={buttonLabel}
-        title={buttonLabel}
-      >
-        <Download size={14} />
-        <span>{buttonLabel}</span>
-      </button>
+      {showInstalledNotice ? (
+        <div className="orion-shellbar-install-status" role="status" aria-live="polite">
+          Installed. Open from your dock anytime.
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="orion-shellbar-install-btn"
+          onClick={() => void handleInstall()}
+          aria-label={buttonLabel}
+          title={buttonLabel}
+        >
+          <Download size={14} />
+          <span>{buttonLabel}</span>
+        </button>
+      )}
 
       {showInstructions ? (
         <div className="orion-modal-overlay" onClick={() => setShowInstructions(false)}>
           <div className="orion-modal orion-pwa-modal" onClick={(event) => event.stopPropagation()}>
             <div className="orion-pwa-modal-head">
               <div>
-                <div className="orion-panel-title">Install Empyralis</div>
-                <div className="orion-panel-copy">
-                  {safari.isIOS
-                    ? 'Safari on iPhone and iPad installs this app from the Share menu.'
-                    : 'Safari on macOS installs this app through Add to Dock.'}
-                </div>
+                <div className="orion-panel-title">Install Hekor</div>
+                <div className="orion-panel-copy">Add to your dock for instant access.</div>
               </div>
               <button type="button" className="orion-pwa-modal-close" onClick={() => setShowInstructions(false)} aria-label="Close">
                 <X size={14} />
               </button>
             </div>
             <ol className="orion-pwa-steps">
-              {safari.isIOS ? (
-                <>
-                  <li>Open this platform in Safari.</li>
-                  <li>Tap the Share button.</li>
-                  <li>Choose “Add to Home Screen”.</li>
-                </>
-              ) : (
-                <>
-                  <li>Open this platform in Safari.</li>
-                  <li>Use the Share button in the toolbar.</li>
-                  <li>Choose “Add to Dock”.</li>
-                </>
-              )}
+              {safari.isIOS ? <li>Tap Share → Add to Home Screen</li> : <li>Use Share → Add to Dock</li>}
             </ol>
           </div>
         </div>

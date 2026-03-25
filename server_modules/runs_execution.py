@@ -380,6 +380,16 @@ def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for 
     run = runs.get(run_id)
     if not isinstance(run, dict):
         return
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if message == "Run queued for Local Companion execution." and bool(metadata.get("execution_target_waiting_for_runtime")):
+        waiting_reason = str(metadata.get("execution_target_reason") or "").strip()
+        if waiting_reason:
+            message = waiting_reason
+    if message == "Run queued for Local Companion execution." and bool(metadata.get("execution_target_waiting_for_capacity")):
+        waiting_reason = str(metadata.get("execution_target_reason") or "").strip()
+        if waiting_reason:
+            message = waiting_reason
     set_run_status(run_id, "queued_local")
     run["updated_at"] = datetime.utcnow().isoformat() + "Z"
     with LOCAL_QUEUE_LOCK:
@@ -390,7 +400,19 @@ def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for 
         "info",
         message,
         event=event,
-        data={"run_id": run_id, "lease_seconds": ORION_LOCAL_LEASE_SECONDS},
+        data={
+            "run_id": run_id,
+            "lease_seconds": ORION_LOCAL_LEASE_SECONDS,
+            "waiting_for_runtime": bool(metadata.get("execution_target_waiting_for_runtime")),
+            "required_capabilities": list(metadata.get("execution_target_required_capabilities") or []),
+            "missing_capabilities": list(metadata.get("execution_target_missing_capabilities") or []),
+            "matching_runtime_ids": list(metadata.get("execution_target_matching_runtime_ids") or []),
+            "available_runtime_ids": list(metadata.get("execution_target_available_runtime_ids") or []),
+            "busy_runtime_ids": list(metadata.get("execution_target_busy_runtime_ids") or []),
+            "preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
+            "preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
+            "waiting_for_capacity": bool(metadata.get("execution_target_waiting_for_capacity")),
+        },
     )
 
 

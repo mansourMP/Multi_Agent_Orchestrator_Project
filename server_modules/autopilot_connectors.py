@@ -3856,11 +3856,7 @@ def _create_telegram_run(
     selected_target = normalize_execution_target(ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET)
     metadata["execution_target"] = selected_target
     route = decide_execution_target(metadata)
-    metadata["execution_target_requested"] = route["requested"]
-    metadata["execution_target_selected"] = route["selected"]
-    metadata["execution_target_reason"] = route["reason"]
-    if route.get("fallback"):
-        metadata["execution_target_fallback"] = route.get("fallback")
+    metadata = apply_execution_route_metadata(metadata, route)
 
     engine = ORION_TELEGRAM_AUTOPILOT_ENGINE if ORION_TELEGRAM_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion"
     run_id = create_run(
@@ -4026,11 +4022,7 @@ def _create_whatsapp_run(
     selected_target = normalize_execution_target(ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET)
     metadata["execution_target"] = selected_target
     route = decide_execution_target(metadata)
-    metadata["execution_target_requested"] = route["requested"]
-    metadata["execution_target_selected"] = route["selected"]
-    metadata["execution_target_reason"] = route["reason"]
-    if route.get("fallback"):
-        metadata["execution_target_fallback"] = route.get("fallback")
+    metadata = apply_execution_route_metadata(metadata, route)
 
     engine = ORION_WHATSAPP_AUTOPILOT_ENGINE if ORION_WHATSAPP_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion"
     run_id = create_run(

@@ -34,6 +34,16 @@ def ensure_trailing_slashless(url: str) -> str:
     return (url or "").rstrip("/")
 
 
+def build_runtime_capabilities() -> List[str]:
+    return [
+        "filesystem.read",
+        "filesystem.write",
+        "shell.exec",
+        "desktop.screenshot",
+        "local.worker",
+    ]
+
+
 def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -410,6 +420,7 @@ def main() -> int:
     if not worker_id:
         host = socket.gethostname().split(".")[0]
         worker_id = f"empyralis-local-{host}-{uuid.uuid4().hex[:6]}"
+    runtime_instance_id = f"{socket.gethostname().split('.')[0]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
     client = RuntimeClient(base_url=args.runtime_url, api_key=api_key)
     verbose = not args.quiet
@@ -418,6 +429,20 @@ def main() -> int:
         print(f"Empyralis Local Worker v0")
         print(f"Runtime: {ensure_trailing_slashless(args.runtime_url)}")
         print(f"Worker:  {worker_id}")
+
+    try:
+        client.register_runtime(
+            worker_id,
+            runtime_type="local",
+            display_name=f"Empyralis Local Worker ({socket.gethostname().split('.')[0]})",
+            platform=sys.platform,
+            capabilities=build_runtime_capabilities(),
+            execution_targets=["local"],
+            instance_id=runtime_instance_id,
+        )
+    except Exception as exc:
+        if verbose:
+            print(f"[warn] Runtime registration failed: {exc}")
 
     deadline = time.time() + max(5.0, args.max_wait_seconds)
     next_idle_heartbeat_at = 0.0

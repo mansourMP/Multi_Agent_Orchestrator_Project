@@ -40,6 +40,8 @@ const THEME_BOOTSTRAP_SCRIPT = `
     const resolved = theme === 'system'
       ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : theme;
+    const pathname = String(window.location.pathname || '/');
+    const hideShellChrome = pathname.startsWith('/builder/') || pathname.startsWith('/setup');
     const root = document.documentElement;
     root.setAttribute('data-theme', resolved);
     if (resolved === 'dark') root.classList.add('dark');
@@ -47,7 +49,8 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.style.colorScheme = resolved;
     const sidebarCollapsed = localStorage.getItem('empyralist:sidebar-collapsed') === '1';
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-    root.style.setProperty('--sidebar-width', sidebarCollapsed ? '72px' : '200px');
+    root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '72px' : '200px');
+    root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '48px');
     document.body?.style?.setProperty('background', resolved === 'dark' ? '#0a0a0a' : '#ffffff');
   } catch {}
 })();

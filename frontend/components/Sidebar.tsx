@@ -8,6 +8,7 @@ import {
   PanelLeft,
   Workflow,
   Activity,
+  Server,
   FileStack,
   Key,
   MessageSquare,
@@ -33,6 +34,7 @@ const PRIMARY_NAV: NavItem[] = [
   { label: 'Builder', href: '/builder', icon: GitBranch },
   { label: 'Workflows', href: '/workflows', icon: Workflow },
   { label: 'Runs', href: '/executions', icon: Activity },
+  { label: 'Machines', href: '/machines', icon: Server },
   { label: 'Integrations', href: '/credentials', icon: Key },
   { label: 'Usage', href: '/usage', icon: Activity },
 ];
@@ -54,6 +56,7 @@ function isActivePath(pathname: string, href: string): boolean {
   if (href === '/builder') return pathname === '/builder' || pathname.startsWith('/builder/');
   if (href === '/workflows') return pathname === '/workflows' || pathname.startsWith('/workflows/');
   if (href === '/executions') return pathname === '/executions' || pathname.startsWith('/runs/');
+  if (href === '/machines') return pathname === '/machines';
   return pathname === href;
 }
 
@@ -61,16 +64,18 @@ export default function Sidebar() {
   const pathname = usePathname() ?? '/';
   const router = useRouter();
   const isBuilderEditorRoute = pathname.startsWith('/builder/');
+  const isSetupRoute = pathname.startsWith('/setup');
+  const hideShellChrome = isBuilderEditorRoute || isSetupRoute;
   const pendingApprovalsCount = 0;
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
 
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--sidebar-width', isBuilderEditorRoute ? '0px' : collapsed ? '72px' : '200px');
+    root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : collapsed ? '72px' : '200px');
     return () => {
       root.style.setProperty('--sidebar-width', '200px');
     };
-  }, [collapsed, isBuilderEditorRoute]);
+  }, [collapsed, hideShellChrome]);
 
   const primarySections = useMemo<NavSection[]>(
     () => [
@@ -90,7 +95,7 @@ export default function Sidebar() {
     [pendingApprovalsCount],
   );
 
-  if (isBuilderEditorRoute) {
+  if (hideShellChrome) {
     return null;
   }
 

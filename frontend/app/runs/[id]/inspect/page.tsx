@@ -18,6 +18,7 @@ import {
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
+import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 import { readRuntimeApiKeyFromStorage } from '@/lib/runtimeKey';
 import { resolveSkillsByIds } from '@/lib/skills';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
@@ -1384,9 +1385,9 @@ export default function RunInspectPage() {
               <div className="orion-panel-title">Route & Runtime</div>
               <div style={{ marginTop: 6, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
                 <Route size={13} />
-                {(historyItem?.execution_target_requested || '--')}
+                {historyItem?.execution_target_requested ? formatExecutionTargetLabel(historyItem.execution_target_requested) : '--'}
                 {' -> '}
-                {(historyItem?.execution_target_selected || '--')}
+                {historyItem?.execution_target_selected ? formatExecutionTargetLabel(historyItem.execution_target_selected) : '--'}
               </div>
               <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-tertiary)' }}>
                 {compactText(historyItem?.execution_target_reason, '--', 220)}

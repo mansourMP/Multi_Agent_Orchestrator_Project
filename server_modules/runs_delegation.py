@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules.runs_output import _serialize_run_snapshot
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -499,11 +500,19 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     metadata = prepared["metadata"]
     route = decide_execution_target(metadata, schedule_id=schedule_id)
     metadata = dict(metadata)
-    metadata["execution_target_requested"] = route["requested"]
-    metadata["execution_target_selected"] = route["selected"]
-    metadata["execution_target_reason"] = route["reason"]
-    if route.get("fallback"):
-        metadata["execution_target_fallback"] = route.get("fallback")
+    metadata = apply_execution_route_metadata(metadata, route)
+    doctor_preflight = build_doctor_run_gate_from_snapshot(
+        execution_target=route["selected"],
+        metadata=metadata,
+        provider=req.provider,
+        credential_id=req.credential_id,
+    )
+    if bool(doctor_preflight.get("blocking")):
+        raise HTTPException(
+            status_code=409,
+            detail=str(doctor_preflight.get("detail") or doctor_preflight.get("title") or "Run blocked by doctor policy."),
+        )
+    metadata["doctor_preflight"] = doctor_preflight
 
     if schedule_id:
         metadata["schedule_id"] = schedule_id
@@ -559,6 +568,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "delegated_by_run_id": metadata.get("delegated_by_run_id"),
         "delegated_by_role": metadata.get("delegated_by_role"),
         "route": route,
+        "doctor_preflight": doctor_preflight,
         "pending_approval": pending,
     }
 

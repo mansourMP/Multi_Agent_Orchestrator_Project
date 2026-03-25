@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, Plus, Clock, Workflow as WorkflowIcon, Search, Trash, Copy, RefreshCw } from 'lucide-react';
+import { AlertCircle, Plus, Clock, Workflow as WorkflowIcon, Search, Trash, Copy, RefreshCw, PlayCircle } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { fetchWorkflows, createWorkflow, deleteWorkflow, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useRouter } from 'next/navigation';
@@ -22,6 +22,13 @@ type WorkflowRecord = {
         meta?: Record<string, unknown>;
     };
 };
+
+function compactWorkflowText(value?: string, fallback = 'No description yet') {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return fallback;
+    if (normalized.length <= 110) return normalized;
+    return `${normalized.slice(0, 107).trimEnd()}…`;
+}
 
 function formatApiError(error: unknown, fallback: string): string {
     const message = error instanceof Error ? error.message : '';
@@ -134,6 +141,15 @@ export default function WorkflowsPage() {
         return profileId ? `Profile ${profileId.slice(0, 8)}` : '';
     };
 
+    const recentWorkflowCount = useMemo(() => {
+        const now = Date.now();
+        return workflows.filter((workflow) => {
+            const ts = new Date(workflow.updatedAt || '').getTime();
+            if (Number.isNaN(ts)) return false;
+            return now - ts <= 7 * 24 * 60 * 60 * 1000;
+        }).length;
+    }, [workflows]);
+
     const handleDelete = (event: React.MouseEvent, wf: WorkflowRecord) => {
         event.stopPropagation();
         setDeleteTarget(wf);
@@ -158,28 +174,80 @@ export default function WorkflowsPage() {
             <OsPageHeader
                 icon={<WorkflowIcon size={16} />}
                 title="Workflows"
-                subtitle="Build and manage reusable agent systems."
+                subtitle="Save repeatable work as reusable playbooks."
                 meta={
                     workflows.length > 0 ? (
                         <>
-                            <span>{workflows.length} total</span>
+                            <span>{workflows.length} saved</span>
                             <span>{statusSummary.active} active</span>
                         </>
                     ) : (
-                        <span>Reusable workflows for your team</span>
+                        <span>Reusable playbooks for repeatable work</span>
                     )
                 }
                 actions={
-                    <Link href="/builder/new" className="btn-primary">
-                        <Plus size={14} />
-                        New Workflow
-                    </Link>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <Link href="/setup" className="btn-secondary">
+                            <PlayCircle size={14} />
+                            New Task
+                        </Link>
+                        <Link href="/builder/new" className="btn-primary">
+                            <Plus size={14} />
+                            New Workflow
+                        </Link>
+                    </div>
                 }
             />
 
+            <section className="orion-panel orion-home-overview">
+                <div className="orion-home-overview-main">
+                    <div className="orion-home-overview-kicker">Reusable playbooks</div>
+                    <div className="orion-home-overview-title">Save the tasks that work well and run them again.</div>
+                    <div className="orion-home-overview-copy">
+                        Start with a task. When the steps are stable, keep it here as a reusable workflow for your team.
+                    </div>
+                    <div className="orion-home-overview-actions">
+                        <Link href="/builder/new" className="btn-primary">
+                            <Plus size={14} />
+                            New Workflow
+                        </Link>
+                        <Link href="/setup" className="btn-secondary">
+                            <PlayCircle size={14} />
+                            Start from a task
+                        </Link>
+                    </div>
+                </div>
+                <aside className="orion-home-overview-side">
+                    <div className="orion-home-side-card">
+                        <div className="orion-home-side-label">Library snapshot</div>
+                        <div className="orion-home-side-stats">
+                            <div>
+                                <div className="orion-home-side-value">{statusSummary.total}</div>
+                                <div className="orion-home-side-note">Saved workflows</div>
+                            </div>
+                            <div>
+                                <div className="orion-home-side-value">{recentWorkflowCount}</div>
+                                <div className="orion-home-side-note">Updated this week</div>
+                            </div>
+                        </div>
+                        <div className="orion-runs-overview-side-note">
+                            {statusSummary.active > 0
+                                ? `${statusSummary.active} workflow${statusSummary.active === 1 ? '' : 's'} already active.`
+                                : 'No active workflows yet. Start with one repeatable task.'}
+                        </div>
+                    </div>
+                    <div className="orion-home-side-card">
+                        <div className="orion-home-side-label">When to use this</div>
+                        <div className="orion-home-side-empty">
+                            Use workflows for recurring business work that already has a clear process, tools, and approvals.
+                        </div>
+                    </div>
+                </aside>
+            </section>
+
             <MetricStrip
                 items={[
-                    { label: 'Total', value: String(statusSummary.total) },
+                    { label: 'Saved', value: String(statusSummary.total) },
                     { label: 'Active', value: String(statusSummary.active) },
                     { label: 'Draft', value: String(statusSummary.draft) },
                     { label: 'Needs attention', value: String(statusSummary.needsAttention) },
@@ -216,8 +284,8 @@ export default function WorkflowsPage() {
                         <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
                             <div className="orion-panel-header" style={{ marginBottom: 0 }}>
                                 <div>
-                                    <div className="orion-panel-title">Search workflows</div>
-                                    <div className="orion-panel-copy">Find a workflow by name or description.</div>
+                                    <div className="orion-panel-title">Find a workflow</div>
+                                    <div className="orion-panel-copy">Search by name or purpose.</div>
                                 </div>
                             </div>
                             <div className="orion-toolbar">
@@ -241,15 +309,18 @@ export default function WorkflowsPage() {
 
                     {filtered.length === 0 ? (
                         <section className="orion-empty">
-                            <div className="orion-empty-title">{workflows.length === 0 ? 'No workflows yet' : 'No workflows match'}</div>
+                            <div className="orion-empty-title">{workflows.length === 0 ? 'No reusable workflows yet' : 'No workflows match'}</div>
                             <div className="orion-empty-copy orion-empty-copy-spaced">
                                 {workflows.length === 0
-                                    ? 'Create your first workflow to start automating repeatable work.'
+                                    ? 'Start with a task. Save it as a workflow when it becomes repeatable.'
                                     : 'Try another search or clear the current query.'}
                             </div>
                             <div className="orion-inline-actions">
                                 {workflows.length === 0 ? (
-                                    <Link href="/builder/new" className="btn-primary">New Workflow</Link>
+                                    <>
+                                        <Link href="/setup" className="btn-secondary">New Task</Link>
+                                        <Link href="/builder/new" className="btn-primary">New Workflow</Link>
+                                    </>
                                 ) : null}
                             </div>
                         </section>
@@ -257,8 +328,8 @@ export default function WorkflowsPage() {
                         <section className="orion-panel orion-panel-shell">
                             <div className="orion-panel-header orion-panel-shell-header">
                                 <div>
-                                    <div className="orion-panel-title">Workflow library</div>
-                                    <div className="orion-panel-copy">Reusable systems you can open, test, and activate.</div>
+                                    <div className="orion-panel-title">Saved workflows</div>
+                                    <div className="orion-panel-copy">Reusable playbooks you can open, refine, and run again.</div>
                                 </div>
                             </div>
                             <section className="orion-list orion-panel-shell-body">
@@ -283,14 +354,14 @@ export default function WorkflowsPage() {
                                     </div>
                                     <div className="orion-list-row-main">
                                         <div className="orion-list-row-title">{wf.name || 'Untitled Workflow'}</div>
-                                        <div className="orion-list-row-subtitle">{wf.description || 'No description provided'}</div>
+                                        <div className="orion-list-row-subtitle">{compactWorkflowText(wf.description)}</div>
                                         <div className="orion-item-meta">
                                             <span className="orion-item-meta-entry">
                                                 <Clock size={11} />
                                                 Updated {formatDate(wf.updatedAt)}
                                             </span>
                                             <span>Last run {formatDate(wf.lastRun)}</span>
-                                            {runtimeProfileLabel(wf) ? <span>Runtime {runtimeProfileLabel(wf)}</span> : null}
+                                            {runtimeProfileLabel(wf) ? <span>AI {runtimeProfileLabel(wf)}</span> : null}
                                         </div>
                                     </div>
                                 </div>
@@ -348,7 +419,7 @@ export default function WorkflowsPage() {
                             </button>
                         </header>
                         <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-                            This will delete <strong>{deleteTarget.name}</strong>.
+                            This will delete <strong>{deleteTarget.name}</strong> from the reusable workflow library.
                         </div>
                         <footer style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--border-default)' }}>
                             <button type="button" onClick={() => setDeleteTarget(null)} className="btn-secondary">

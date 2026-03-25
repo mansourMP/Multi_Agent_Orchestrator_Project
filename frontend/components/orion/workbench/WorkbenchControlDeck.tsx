@@ -15,6 +15,7 @@ import {
   type OutcomePack,
 } from '@/app/page.catalog';
 import type { ChatMessageRecord } from '@/components/orion/chat/chatSchema';
+import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 
 export type WorkbenchDeckMode = 'context' | 'control' | 'inspect';
 export type WorkbenchInspectStreamState = 'idle' | 'live' | 'reconnecting' | 'closed';
@@ -1502,7 +1503,9 @@ export function WorkbenchControlDeck({
             </div>
             <div style={{ display: 'grid', gap: 3 }}>
               <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Route</div>
-              <div style={{ color: UI.textMuted }}>{selectedRun?.execution_target_selected || '--'}</div>
+              <div style={{ color: UI.textMuted }}>
+                {selectedRun?.execution_target_selected ? formatExecutionTargetLabel(selectedRun.execution_target_selected) : '--'}
+              </div>
             </div>
             <div style={{ display: 'grid', gap: 3 }}>
               <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Pack</div>

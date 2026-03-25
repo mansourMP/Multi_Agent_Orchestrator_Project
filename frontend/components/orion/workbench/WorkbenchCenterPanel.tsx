@@ -4,6 +4,7 @@ import { Fragment, createElement, useEffect, useMemo, useRef, type ReactNode, ty
 import { Bot, Camera, CheckCircle2, FileText, Globe, Send, ShieldCheck, Sparkles, Terminal } from 'lucide-react';
 import { UI, fmtTime, formatDurationMs, type AgentRoleOption, type ExecutionSummary, type LogEntry, type PackResult as PackResultType } from '@/app/page.catalog';
 import { LogViewer } from '@/components/orion/LogViewer';
+import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 import { safeNavigate } from '@/lib/safeNavigate';
 import type { WorkbenchAgentChatMessage } from './WorkbenchControlDeck';
 
@@ -2315,7 +2316,7 @@ export function WorkbenchCenterPanel({
                 const statusTone = runStatusTone(item.status);
                 const recentActivityMeta = [
                   item.pack_id ? toTitleCase(item.pack_id) : null,
-                  item.execution_target_selected ? item.execution_target_selected.replace(/_/g, ' ') : null,
+                  item.execution_target_selected ? formatExecutionTargetLabel(item.execution_target_selected) : null,
                   item.usage_provider ? item.usage_provider : null,
                   item.usage_model ? item.usage_model : null,
                 ].filter(Boolean).join(' · ');

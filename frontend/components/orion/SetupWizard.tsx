@@ -442,7 +442,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
           <div style={{ display: 'grid', gap: 8, borderTop: `1px dashed ${UI.borderSoft}`, paddingTop: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
               <span style={{ fontSize: 12, color: UI.textSoft }}>
-                2. Choose assistant account mode
+                2. Choose runtime and account mode
                 {' '}
                 {setupSteps[1].done ? '✓' : ''}
               </span>
@@ -467,9 +467,9 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                   fontWeight: 700,
                 }}
               >
-                <option value="managed">Managed access</option>
+                <option value="managed">Automatic route</option>
                 <option value="byok">Use my own key</option>
-                <option value="local_companion">Local Companion</option>
+                <option value="local_companion">Local machine</option>
               </select>
             </div>
 

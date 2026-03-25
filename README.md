@@ -35,6 +35,8 @@ Empyralis now ships web-first, with PWA installability as the primary distributi
 - Platform frontend: [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend)
 - Desktop/PWA strategy: [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
 - Frozen desktop wrapper note: [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
+- Hekor v1 architecture: [docs/HEKOR_V1_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/HEKOR_V1_ARCHITECTURE.md)
+- Runtime scaffold: [runtime/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/runtime/README.md)
 
 ### Empyralis Terminal Commands
 

@@ -596,7 +596,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
         source: 'weekly_scheduler',
         guided_defaults_enabled: guidedDefaultsEnabled,
         connection_mode: connectionMode,
-        execution_target: 'cloud',
+        execution_target: 'auto',
         execution_reason: 'scheduled_reliability',
         outcome_pack: selectedPack.id,
         outcome_pack_label: selectedPack.label,
@@ -1828,7 +1828,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
               ? 'local_companion'
               : state.connectionMode === 'local_companion'
               ? 'local_companion'
-              : 'cloud',
+              : 'auto',
             outcome_pack: selectedPack.id,
             outcome_pack_label: selectedPack.label,
             outcome_scope: selectedPack.scope,
@@ -1892,6 +1892,14 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Eve
           typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : state.provider,
         active_profile_model:
           typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : state.model,
+        execution_target_selected:
+          route && typeof route.selected === 'string'
+            ? route.selected
+            : selectedPack.id === 'local-execution-v1'
+              ? 'local_companion'
+              : state.connectionMode === 'local_companion'
+                ? 'local_companion'
+                : 'auto',
       });
       appendLog(
         buildRunStartedMessage(

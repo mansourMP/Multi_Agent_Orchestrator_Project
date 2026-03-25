@@ -989,6 +989,417 @@ def normalize_execution_target(raw_value: Any) -> str:
     return EXECUTION_TARGET_AUTO
 
 
+def _normalize_capability_ids(raw_items: Any) -> List[str]:
+    seen: Set[str] = set()
+    normalized: List[str] = []
+    for item in raw_items or []:
+        clean = str(item or "").strip().lower()
+        if clean and clean not in seen:
+            seen.add(clean)
+            normalized.append(clean)
+    return normalized
+
+
+def _predict_required_capabilities_from_metadata(metadata: Dict[str, Any]) -> List[str]:
+    precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
+    if isinstance(precheck, dict):
+        capability_ids = _normalize_capability_ids(precheck.get("capability_ids"))
+        if capability_ids:
+            return capability_ids
+
+    pack_id = normalize_action_id(metadata.get("outcome_pack"))
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    if pack_id != LOCAL_EXECUTION_PACK_ID:
+        return []
+
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    capability_ids: List[str] = []
+    if operations:
+        for item in operations:
+            if not isinstance(item, dict):
+                continue
+            capability_ids.extend(_normalize_capability_ids([item.get("capability")]))
+    else:
+        capability_ids.extend(_normalize_capability_ids([pack_inputs.get("capability")]))
+    return _normalize_capability_ids(capability_ids)
+
+
+def _local_runtime_capability_state(required_capabilities: List[str]) -> Dict[str, Any]:
+    def _runtime_trust_rank(value: Any) -> int:
+        normalized = str(value or "").strip().lower()
+        if normalized == "verified":
+            return 0
+        if normalized in {"trusted", "healthy"}:
+            return 1
+        if normalized:
+            return 2
+        return 3
+
+    def _runtime_selection_key(item: Dict[str, Any], required_set: Set[str]) -> tuple:
+        capabilities = set(_normalize_capability_ids(item.get("capabilities")))
+        is_busy = bool(item.get("current_run_id"))
+        seconds_since_seen = item.get("seconds_since_seen")
+        try:
+            seen_rank = int(seconds_since_seen)
+        except Exception:
+            seen_rank = 999999
+        extra_capabilities = len(capabilities - required_set)
+        runtime_id = str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        return (
+            0 if not is_busy else 1,
+            _runtime_trust_rank(item.get("trust_state")),
+            extra_capabilities,
+            seen_rank,
+            runtime_id,
+        )
+
+    normalized_required = _normalize_capability_ids(required_capabilities)
+    if not normalized_required:
+        return {
+            "required_capabilities": [],
+            "matching_runtime_ids": [],
+            "matching_runtime_count": 0,
+            "available_runtime_ids": [],
+            "available_runtime_count": 0,
+            "busy_matching_runtime_ids": [],
+            "busy_runtime_labels": [],
+            "online_runtime_ids": [],
+            "online_capabilities": [],
+            "missing_capabilities": [],
+            "waiting_for_runtime": False,
+            "waiting_for_capacity": False,
+            "preferred_runtime_id": None,
+            "preferred_runtime_label": None,
+            "preferred_runtime_reason": None,
+            "queued_ahead_count": 0,
+            "estimated_wait_band": "unknown",
+        }
+
+    from server_modules import local_queue
+
+    payload = local_queue.handle_get_local_workers_status()
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    online_runtime_ids: List[str] = []
+    matching_runtime_ids: List[str] = []
+    matching_runtime_items: List[Dict[str, Any]] = []
+    available_runtime_ids: List[str] = []
+    busy_matching_runtime_ids: List[str] = []
+    online_capability_set: Set[str] = set()
+    required_set = set(normalized_required)
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        runtime_type = str(item.get("runtime_type") or "").strip().lower()
+        if runtime_type not in {"local", "local_companion"}:
+            continue
+        if not bool(item.get("online")):
+            continue
+        runtime_id = str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        if runtime_id:
+            online_runtime_ids.append(runtime_id)
+        capabilities = set(_normalize_capability_ids(item.get("capabilities")))
+        online_capability_set.update(capabilities)
+        if required_set.issubset(capabilities) and runtime_id:
+            matching_runtime_items.append(dict(item))
+
+    matching_runtime_items.sort(key=lambda item: _runtime_selection_key(item, required_set))
+    matching_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in matching_runtime_items
+        if str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    available_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in matching_runtime_items
+        if not bool(item.get("current_run_id")) and str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    busy_matching_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in matching_runtime_items
+        if bool(item.get("current_run_id")) and str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    busy_runtime_labels = [
+        str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in matching_runtime_items
+        if bool(item.get("current_run_id")) and str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    preferred_runtime = matching_runtime_items[0] if matching_runtime_items else None
+    preferred_runtime_id = (
+        str(preferred_runtime.get("runtime_id") or preferred_runtime.get("worker_id") or "").strip()
+        if isinstance(preferred_runtime, dict)
+        else None
+    )
+    preferred_runtime_label = (
+        str(preferred_runtime.get("display_name") or preferred_runtime_id or "").strip() or None
+        if isinstance(preferred_runtime, dict)
+        else None
+    )
+    preferred_runtime_reason = None
+    if isinstance(preferred_runtime, dict) and preferred_runtime_id:
+        is_busy = bool(preferred_runtime.get("current_run_id"))
+        trust_state = str(preferred_runtime.get("trust_state") or "").strip().lower()
+        if not is_busy and trust_state == "verified":
+            preferred_runtime_reason = f"{preferred_runtime_label} is preferred because it is idle, verified, and already reports the required capabilities."
+        elif not is_busy:
+            preferred_runtime_reason = f"{preferred_runtime_label} is preferred because it is idle and reports the required capabilities."
+        elif trust_state == "verified":
+            preferred_runtime_reason = f"{preferred_runtime_label} is the best verified machine online for the required capabilities, but it is busy right now."
+        else:
+            preferred_runtime_reason = f"{preferred_runtime_label} is the best machine online for the required capabilities, but it is busy right now."
+
+    missing_capabilities = sorted(required_set - online_capability_set)
+    waiting_for_runtime = bool(normalized_required and not matching_runtime_ids)
+    waiting_for_capacity = bool(normalized_required and matching_runtime_ids and not available_runtime_ids)
+    with _server.LOCAL_QUEUE_LOCK:
+        pending_run_ids = list(_server.LOCAL_PENDING_RUN_IDS)
+    queue_pressure = local_queue._queue_pressure_for_runtime_group(
+        pending_run_ids,
+        matching_runtime_ids,
+        preferred_runtime_id,
+    )
+    queued_ahead_count = int(queue_pressure.get("queued_ahead_count") or 0)
+    estimated_wait_band = local_queue._capacity_wait_band(queued_ahead_count, len(busy_matching_runtime_ids)) if waiting_for_capacity else "unknown"
+    return {
+        "required_capabilities": normalized_required,
+        "matching_runtime_ids": matching_runtime_ids,
+        "matching_runtime_count": len(matching_runtime_ids),
+        "available_runtime_ids": available_runtime_ids,
+        "available_runtime_count": len(available_runtime_ids),
+        "busy_matching_runtime_ids": busy_matching_runtime_ids,
+        "busy_runtime_labels": busy_runtime_labels,
+        "online_runtime_ids": online_runtime_ids,
+        "online_capabilities": sorted(online_capability_set),
+        "missing_capabilities": missing_capabilities,
+        "waiting_for_runtime": waiting_for_runtime,
+        "waiting_for_capacity": waiting_for_capacity,
+        "preferred_runtime_id": preferred_runtime_id,
+        "preferred_runtime_label": preferred_runtime_label,
+        "preferred_runtime_reason": preferred_runtime_reason,
+        "queued_ahead_count": queued_ahead_count,
+        "estimated_wait_band": estimated_wait_band,
+    }
+
+
+def _local_runtime_pool_state() -> Dict[str, Any]:
+    _init()
+    from server_modules import local_queue
+
+    def _runtime_trust_rank(value: Any) -> int:
+        normalized = str(value or "").strip().lower()
+        if normalized == "verified":
+            return 0
+        if normalized in {"trusted", "healthy"}:
+            return 1
+        if normalized:
+            return 2
+        return 3
+
+    def _runtime_selection_key(item: Dict[str, Any]) -> tuple:
+        is_busy = bool(item.get("current_run_id"))
+        last_seen = str(item.get("last_seen_at") or "").strip()
+        return (
+            1 if is_busy else 0,
+            _runtime_trust_rank(item.get("trust_state")),
+            -(parse_positive_int(item.get("capability_count"), 0)),
+            1 if not last_seen else 0,
+            last_seen or "",
+            str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip(),
+        )
+
+    payload = local_queue.handle_runtime_status(scope="all")
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    online_items = [
+        item for item in items
+        if isinstance(item, dict)
+        and bool(item.get("online"))
+        and (
+            normalize_execution_target(item.get("runtime_type")) == EXECUTION_TARGET_LOCAL_COMPANION
+            or EXECUTION_TARGET_LOCAL_COMPANION in {
+                normalize_execution_target(candidate)
+                for candidate in (item.get("execution_targets") or [])
+                if str(candidate or "").strip()
+            }
+        )
+    ]
+    ordered_online_items = sorted(online_items, key=_runtime_selection_key)
+    available_items = [item for item in ordered_online_items if not bool(item.get("current_run_id"))]
+    busy_items = [item for item in ordered_online_items if bool(item.get("current_run_id"))]
+    online_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in ordered_online_items
+        if str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    available_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in available_items
+        if str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    busy_runtime_ids = [
+        str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in busy_items
+        if str(item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    busy_runtime_labels = [
+        str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip()
+        for item in busy_items
+        if str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip()
+    ]
+    preferred_runtime = ordered_online_items[0] if ordered_online_items else None
+    preferred_runtime_id = (
+        str(preferred_runtime.get("runtime_id") or preferred_runtime.get("worker_id") or "").strip()
+        if isinstance(preferred_runtime, dict)
+        else None
+    )
+    preferred_runtime_label = (
+        str(preferred_runtime.get("display_name") or preferred_runtime_id or "").strip() or None
+        if isinstance(preferred_runtime, dict)
+        else None
+    )
+    preferred_runtime_reason = None
+    if isinstance(preferred_runtime, dict) and preferred_runtime_id:
+        is_busy = bool(preferred_runtime.get("current_run_id"))
+        trust_state = str(preferred_runtime.get("trust_state") or "").strip().lower()
+        if not is_busy and trust_state == "verified":
+            preferred_runtime_reason = f"{preferred_runtime_label} is preferred because it is idle and verified."
+        elif not is_busy:
+            preferred_runtime_reason = f"{preferred_runtime_label} is preferred because it is idle."
+        elif trust_state == "verified":
+            preferred_runtime_reason = f"{preferred_runtime_label} is the best verified local machine online, but it is busy right now."
+        else:
+            preferred_runtime_reason = f"{preferred_runtime_label} is the best local machine online, but it is busy right now."
+    with _server.LOCAL_QUEUE_LOCK:
+        pending_run_ids = list(_server.LOCAL_PENDING_RUN_IDS)
+    queue_pressure = local_queue._queue_pressure_for_runtime_group(
+        pending_run_ids,
+        online_runtime_ids,
+        preferred_runtime_id,
+    )
+    queued_ahead_count = int(queue_pressure.get("queued_ahead_count") or 0)
+    estimated_wait_band = (
+        local_queue._capacity_wait_band(queued_ahead_count, len(busy_runtime_ids))
+        if busy_runtime_ids and not available_runtime_ids
+        else "unknown"
+    )
+    return {
+        "online_runtime_ids": online_runtime_ids,
+        "available_runtime_ids": available_runtime_ids,
+        "busy_runtime_ids": busy_runtime_ids,
+        "busy_runtime_labels": busy_runtime_labels,
+        "online_runtime_count": len(online_runtime_ids),
+        "available_runtime_count": len(available_runtime_ids),
+        "busy_runtime_count": len(busy_runtime_ids),
+        "preferred_runtime_id": preferred_runtime_id,
+        "preferred_runtime_label": preferred_runtime_label,
+        "preferred_runtime_reason": preferred_runtime_reason,
+        "queued_ahead_count": queued_ahead_count,
+        "estimated_wait_band": estimated_wait_band,
+    }
+
+
+def _metadata_has_connector_or_channel_work(metadata: Dict[str, Any]) -> bool:
+    if str(metadata.get("connector_credential_id") or "").strip():
+        return True
+    if str(metadata.get("source_channel") or metadata.get("channel") or "").strip():
+        return True
+    if str(metadata.get("app_id") or "").strip():
+        return True
+    connected_connector_ids = metadata.get("connected_connector_ids") if isinstance(metadata.get("connected_connector_ids"), list) else []
+    return any(str(item or "").strip() for item in connected_connector_ids)
+
+
+def _metadata_has_local_artifact_hints(metadata: Dict[str, Any]) -> bool:
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    if any(str(pack_inputs.get(key) or "").strip() for key in ["file_path", "path", "cwd", "command"]):
+        return True
+    argv = pack_inputs.get("argv") if isinstance(pack_inputs.get("argv"), list) else []
+    if any(str(item or "").strip() for item in argv):
+        return True
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    for item in operations:
+        if not isinstance(item, dict):
+            continue
+        if any(str(item.get(key) or "").strip() for key in ["path", "file_path", "cwd", "command"]):
+            return True
+        nested_argv = item.get("argv") if isinstance(item.get("argv"), list) else []
+        if any(str(arg or "").strip() for arg in nested_argv):
+            return True
+    return False
+
+
+def _auto_cloud_capacity_fallback_allowed(metadata: Dict[str, Any]) -> tuple[bool, str]:
+    trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
+    if trust_mode != TRUST_MODE_AUTO:
+        return False, "Automatic route keeps local execution for guarded or stricter trust modes."
+
+    if _metadata_has_connector_or_channel_work(metadata):
+        return False, "Automatic route keeps local execution for connector-backed or channel-bound work."
+
+    if _metadata_has_local_artifact_hints(metadata):
+        return False, "Automatic route keeps local execution for file-backed or command-backed work."
+
+    outcome_pack = normalize_action_id(metadata.get("outcome_pack"))
+    if outcome_pack in {LOCAL_EXECUTION_PACK_ID, SPREADSHEET_OPS_PACK_ID, DOCUMENT_STUDIO_PACK_ID, CUSTOMER_OPS_PACK_ID}:
+        return False, "Automatic route keeps local execution for this task type."
+
+    return True, "Local machines are busy, so Hekor can use cloud runtime for this task."
+
+
+def apply_execution_route_metadata(metadata: Dict[str, Any], route: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return metadata
+    metadata["execution_target_requested"] = route.get("requested")
+    metadata["execution_target_selected"] = route.get("selected")
+    metadata["execution_target_reason"] = route.get("reason")
+    if route.get("fallback"):
+        metadata["execution_target_fallback"] = route.get("fallback")
+    else:
+        metadata.pop("execution_target_fallback", None)
+
+    if route.get("required_capabilities"):
+        metadata["execution_target_required_capabilities"] = list(route.get("required_capabilities") or [])
+    else:
+        metadata.pop("execution_target_required_capabilities", None)
+    if route.get("missing_capabilities"):
+        metadata["execution_target_missing_capabilities"] = list(route.get("missing_capabilities") or [])
+    else:
+        metadata.pop("execution_target_missing_capabilities", None)
+    if route.get("matching_runtime_ids"):
+        metadata["execution_target_matching_runtime_ids"] = list(route.get("matching_runtime_ids") or [])
+    else:
+        metadata.pop("execution_target_matching_runtime_ids", None)
+    if route.get("available_runtime_ids"):
+        metadata["execution_target_available_runtime_ids"] = list(route.get("available_runtime_ids") or [])
+    else:
+        metadata.pop("execution_target_available_runtime_ids", None)
+    if route.get("busy_matching_runtime_ids"):
+        metadata["execution_target_busy_runtime_ids"] = list(route.get("busy_matching_runtime_ids") or [])
+    else:
+        metadata.pop("execution_target_busy_runtime_ids", None)
+    if route.get("preferred_runtime_id"):
+        metadata["execution_target_preferred_runtime_id"] = route.get("preferred_runtime_id")
+    else:
+        metadata.pop("execution_target_preferred_runtime_id", None)
+    if route.get("preferred_runtime_label"):
+        metadata["execution_target_preferred_runtime_label"] = route.get("preferred_runtime_label")
+    else:
+        metadata.pop("execution_target_preferred_runtime_label", None)
+    if route.get("preferred_runtime_reason"):
+        metadata["execution_target_preferred_runtime_reason"] = route.get("preferred_runtime_reason")
+    else:
+        metadata.pop("execution_target_preferred_runtime_reason", None)
+    if route.get("busy_runtime_labels"):
+        metadata["execution_target_busy_runtime_labels"] = list(route.get("busy_runtime_labels") or [])
+    else:
+        metadata.pop("execution_target_busy_runtime_labels", None)
+    metadata["execution_target_queued_ahead_count"] = int(route.get("queued_ahead_count") or 0)
+    metadata["execution_target_estimated_wait_band"] = str(route.get("estimated_wait_band") or "unknown")
+
+    metadata["execution_target_waiting_for_runtime"] = bool(route.get("waiting_for_runtime"))
+    metadata["execution_target_waiting_for_capacity"] = bool(route.get("waiting_for_capacity"))
+    return metadata
+
+
 def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str] = None) -> Dict[str, Any]:
     _init()
     requested = normalize_execution_target(metadata.get("execution_target"))
@@ -1001,6 +1412,72 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
     selected = requested
     reason = ""
     fallback = None
+    capability_state = _local_runtime_capability_state(_predict_required_capabilities_from_metadata(metadata))
+    required_capabilities = list(capability_state.get("required_capabilities") or [])
+    missing_capabilities = list(capability_state.get("missing_capabilities") or [])
+    matching_runtime_ids = list(capability_state.get("matching_runtime_ids") or [])
+    available_runtime_ids = list(capability_state.get("available_runtime_ids") or [])
+    busy_matching_runtime_ids = list(capability_state.get("busy_matching_runtime_ids") or [])
+    waiting_for_runtime = bool(capability_state.get("waiting_for_runtime"))
+    waiting_for_capacity = bool(capability_state.get("waiting_for_capacity"))
+    preferred_runtime_id = str(capability_state.get("preferred_runtime_id") or "").strip() or None
+    preferred_runtime_label = str(capability_state.get("preferred_runtime_label") or "").strip() or None
+    preferred_runtime_reason = str(capability_state.get("preferred_runtime_reason") or "").strip() or None
+    busy_runtime_labels = list(capability_state.get("busy_runtime_labels") or [])
+    queued_ahead_count = int(capability_state.get("queued_ahead_count") or 0)
+    estimated_wait_band = str(capability_state.get("estimated_wait_band") or "unknown")
+    local_pool = _local_runtime_pool_state() if not required_capabilities else {}
+
+    if required_capabilities:
+        capability_text = ", ".join(required_capabilities)
+        missing_text = ", ".join(missing_capabilities or required_capabilities)
+        selected = EXECUTION_TARGET_LOCAL_COMPANION
+        if available_runtime_ids:
+            preferred_text = preferred_runtime_label or "a capable local runtime"
+            if requested == EXECUTION_TARGET_CLOUD:
+                reason = f"Run requires local machine capabilities ({capability_text}) and will use {preferred_text}."
+                fallback = "Cloud runtime cannot satisfy these local capabilities; using local machine instead."
+            elif requested == EXECUTION_TARGET_LOCAL_COMPANION:
+                reason = f"Run requires local machine capabilities ({capability_text}) and will use {preferred_text}."
+            else:
+                reason = f"Run requires local machine capabilities ({capability_text}) and will use {preferred_text}."
+        elif matching_runtime_ids:
+            preferred_text = preferred_runtime_label or "a capable local runtime"
+            if schedule_id:
+                reason = f"Scheduled run requires local machine capabilities ({capability_text}) and is waiting for machine capacity on {preferred_text}."
+            else:
+                reason = f"Run requires local machine capabilities ({capability_text}) and is waiting for machine capacity on {preferred_text}."
+            fallback = "Capable local machines are online, but they are currently busy."
+            if queued_ahead_count > 0:
+                fallback = f"{fallback} {queued_ahead_count} similar local run{'s are' if queued_ahead_count != 1 else ' is'} ahead in the queue."
+        else:
+            if schedule_id:
+                reason = f"Scheduled run requires local machine capabilities ({capability_text}) and is waiting for a capable machine."
+            else:
+                reason = f"Run requires local machine capabilities ({capability_text}) and is waiting for a machine that reports: {missing_text}."
+            fallback = f"No online local machine currently reports required capabilities: {missing_text}."
+        return {
+            "requested": requested,
+            "selected": selected,
+            "reason": reason,
+            "fallback": fallback,
+            "local_companion_enabled": ORION_LOCAL_COMPANION_ENABLED,
+            "required_capabilities": required_capabilities,
+            "missing_capabilities": missing_capabilities,
+            "matching_runtime_ids": matching_runtime_ids,
+            "matching_runtime_count": int(capability_state.get("matching_runtime_count") or 0),
+            "available_runtime_ids": available_runtime_ids,
+            "available_runtime_count": int(capability_state.get("available_runtime_count") or 0),
+            "busy_matching_runtime_ids": busy_matching_runtime_ids,
+            "waiting_for_runtime": waiting_for_runtime,
+            "waiting_for_capacity": waiting_for_capacity,
+            "preferred_runtime_id": preferred_runtime_id,
+            "preferred_runtime_label": preferred_runtime_label,
+            "preferred_runtime_reason": preferred_runtime_reason,
+            "busy_runtime_labels": busy_runtime_labels,
+            "queued_ahead_count": queued_ahead_count,
+            "estimated_wait_band": estimated_wait_band,
+        }
 
     if selected == EXECUTION_TARGET_AUTO:
         if schedule_id or str(metadata.get("source") or "").strip().lower() in {"weekly_scheduler", "scheduled"}:
@@ -1008,8 +1485,62 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
             reason = "Scheduled runs default to always-on cloud execution."
         else:
             if ORION_LOCAL_COMPANION_ENABLED:
-                selected = EXECUTION_TARGET_LOCAL_COMPANION
-                reason = "Default runtime route is local companion for computer-first execution."
+                local_online_ids = list(local_pool.get("online_runtime_ids") or [])
+                local_available_ids = list(local_pool.get("available_runtime_ids") or [])
+                local_busy_ids = list(local_pool.get("busy_runtime_ids") or [])
+                local_busy_labels = list(local_pool.get("busy_runtime_labels") or [])
+                local_preferred_runtime_id = str(local_pool.get("preferred_runtime_id") or "").strip() or None
+                local_preferred_runtime_label = str(local_pool.get("preferred_runtime_label") or "").strip() or None
+                local_preferred_runtime_reason = str(local_pool.get("preferred_runtime_reason") or "").strip() or None
+                local_queued_ahead_count = int(local_pool.get("queued_ahead_count") or 0)
+                local_estimated_wait_band = str(local_pool.get("estimated_wait_band") or "unknown")
+                if local_available_ids:
+                    selected = EXECUTION_TARGET_LOCAL_COMPANION
+                    reason = (
+                        f"Automatic route will use {local_preferred_runtime_label or 'a local machine'} because local execution is available now."
+                    )
+                    matching_runtime_ids = local_online_ids
+                    available_runtime_ids = local_available_ids
+                    busy_matching_runtime_ids = local_busy_ids
+                    waiting_for_runtime = False
+                    waiting_for_capacity = False
+                    preferred_runtime_id = local_preferred_runtime_id
+                    preferred_runtime_label = local_preferred_runtime_label
+                    preferred_runtime_reason = local_preferred_runtime_reason
+                    busy_runtime_labels = local_busy_labels
+                    queued_ahead_count = local_queued_ahead_count
+                    estimated_wait_band = local_estimated_wait_band
+                elif local_online_ids:
+                    can_reroute_to_cloud, reroute_reason = _auto_cloud_capacity_fallback_allowed(metadata)
+                    if can_reroute_to_cloud:
+                        selected = EXECUTION_TARGET_CLOUD
+                        reason = reroute_reason
+                        fallback = (
+                            f"{local_preferred_runtime_label or 'The local machine'} is busy right now, so Hekor is starting this in cloud runtime."
+                        )
+                    else:
+                        selected = EXECUTION_TARGET_LOCAL_COMPANION
+                        reason = (
+                            f"Automatic route prefers local execution and is waiting for capacity on {local_preferred_runtime_label or 'a local machine'}."
+                        )
+                        fallback = reroute_reason
+                        matching_runtime_ids = local_online_ids
+                        available_runtime_ids = local_available_ids
+                        busy_matching_runtime_ids = local_busy_ids
+                        waiting_for_runtime = False
+                        waiting_for_capacity = True
+                        preferred_runtime_id = local_preferred_runtime_id
+                        preferred_runtime_label = local_preferred_runtime_label
+                        preferred_runtime_reason = local_preferred_runtime_reason
+                        busy_runtime_labels = local_busy_labels
+                        queued_ahead_count = local_queued_ahead_count
+                        estimated_wait_band = local_estimated_wait_band
+                        if queued_ahead_count > 0:
+                            fallback = f"{fallback} {queued_ahead_count} similar local run{'s are' if queued_ahead_count != 1 else ' is'} ahead in the queue."
+                else:
+                    selected = EXECUTION_TARGET_CLOUD
+                    reason = "Default runtime route is cloud because no local machine is online."
+                    fallback = "Bring a local machine online if you want automatic tasks to prefer local execution."
             else:
                 selected = EXECUTION_TARGET_CLOUD
                 reason = "Default runtime route is cloud because local companion is unavailable."
@@ -1035,6 +1566,21 @@ def decide_execution_target(metadata: Dict[str, Any], schedule_id: Optional[str]
         "reason": reason,
         "fallback": fallback,
         "local_companion_enabled": ORION_LOCAL_COMPANION_ENABLED,
+        "required_capabilities": required_capabilities,
+        "missing_capabilities": missing_capabilities,
+        "matching_runtime_ids": matching_runtime_ids,
+        "matching_runtime_count": int(capability_state.get("matching_runtime_count") or 0),
+        "available_runtime_ids": available_runtime_ids,
+        "available_runtime_count": int(capability_state.get("available_runtime_count") or 0),
+        "busy_matching_runtime_ids": busy_matching_runtime_ids,
+        "waiting_for_runtime": waiting_for_runtime,
+        "waiting_for_capacity": waiting_for_capacity,
+        "preferred_runtime_id": preferred_runtime_id,
+        "preferred_runtime_label": preferred_runtime_label,
+        "preferred_runtime_reason": preferred_runtime_reason,
+        "busy_runtime_labels": busy_runtime_labels,
+        "queued_ahead_count": queued_ahead_count,
+        "estimated_wait_band": estimated_wait_band,
     }
 
 

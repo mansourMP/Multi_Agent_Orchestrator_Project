@@ -33,6 +33,10 @@ export class N8nService {
                     parameters = { path: node.id, options: {} };
                     break;
                 case 'agent':
+                    {
+                    const config = typeof node.config === 'object' && node.config !== null ? node.config : {};
+                    const identity = typeof config.identity === 'object' && config.identity !== null ? config.identity : {};
+                    const runtime = typeof config.runtime === 'object' && config.runtime !== null ? config.runtime : {};
                     // Using a placeholder for n8n AI agent node or HTTP Request to our backend
                     n8nType = 'n8n-nodes-base.httpRequest';
                     parameters = {
@@ -40,16 +44,17 @@ export class N8nService {
                         method: 'POST',
                         body: {
                             nodeId: node.id,
-                            model: node.data.model,
-                            prompt: node.data.systemPrompt
+                            model: node?.data?.modelId || runtime.model,
+                            prompt: node?.data?.prompt || identity.goal,
                         }
                     };
                     break;
+                    }
                 case 'tool':
                     n8nType = 'n8n-nodes-base.httpRequest';
                     parameters = {
-                        url: `https://api.example.com/${node.data.action}`,
-                        method: 'GET'
+                        url: node?.config?.url || `https://api.example.com/${node?.config?.action_id || node?.data?.actionType || 'tool'}`,
+                        method: node?.config?.method || 'GET',
                     };
                     break;
             }
@@ -57,10 +62,10 @@ export class N8nService {
             return {
                 parameters,
                 id: node.id,
-                name: node.data.label,
+                name: node?.data?.label || node?.config?.identity?.name || node.id,
                 type: n8nType,
                 typeVersion: 1,
-                position: [node.position.x, node.position.y]
+                position: [node?.position?.x || 120, node?.position?.y || 120]
             };
         });
 

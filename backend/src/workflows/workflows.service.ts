@@ -1,7 +1,11 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
+import {
+    normalizeWorkflowDefinition,
+    validateWorkflowDefinition,
+} from './workflow-schema';
 
 @Injectable()
 export class WorkflowsService {
@@ -109,16 +113,18 @@ export class WorkflowsService {
 
     async create(workspaceId: string, createWorkflowDto: CreateWorkflowDto, userId: string = 'system', isService = false) {
         const finalWorkspaceId = await this.resolveWorkspaceIdForActor(workspaceId, userId, isService);
+        const normalizedDefinition = normalizeWorkflowDefinition(createWorkflowDto.definition);
 
-        return this.prisma.workflow.create({
+        const workflow = await this.prisma.workflow.create({
             data: {
                 ...createWorkflowDto,
-                definition: JSON.stringify(createWorkflowDto.definition),
+                definition: JSON.stringify(normalizedDefinition),
                 workspaceId: finalWorkspaceId,
                 createdBy: userId || 'system',
                 status: 'draft',
             },
         });
+        return this.deserializeWorkflow(workflow);
     }
 
     async findAll(workspaceId: string, userId?: string, isService = false) {
@@ -147,7 +153,7 @@ export class WorkflowsService {
 
         const data: any = { ...updateWorkflowDto };
         if (data.definition) {
-            data.definition = JSON.stringify(data.definition);
+            data.definition = JSON.stringify(normalizeWorkflowDefinition(data.definition));
         }
 
         const workflow = await this.prisma.workflow.update({
@@ -160,10 +166,12 @@ export class WorkflowsService {
     private deserializeWorkflow(workflow: any) {
         if (workflow && workflow.definition && typeof workflow.definition === 'string') {
             try {
-                workflow.definition = JSON.parse(workflow.definition);
+                workflow.definition = normalizeWorkflowDefinition(JSON.parse(workflow.definition));
             } catch (e) {
-                workflow.definition = {};
+                workflow.definition = normalizeWorkflowDefinition({});
             }
+        } else if (workflow && workflow.definition) {
+            workflow.definition = normalizeWorkflowDefinition(workflow.definition);
         }
         return workflow;
     }
@@ -179,13 +187,23 @@ export class WorkflowsService {
     }
 
     async publish(id: string, userId?: string, isService = false) {
-        await this.getWorkflowForActor(id, userId, isService);
-        return this.prisma.workflow.update({
+        const workflow = await this.getWorkflowForActor(id, userId, isService);
+        const normalizedDefinition = normalizeWorkflowDefinition(
+            typeof workflow.definition === 'string' ? JSON.parse(workflow.definition) : workflow.definition,
+        );
+        const issues = validateWorkflowDefinition(normalizedDefinition, { forPublish: true })
+            .filter((item) => item.level === 'error');
+        if (issues.length > 0) {
+            throw new BadRequestException(issues.map((item) => item.message).join(' '));
+        }
+        const published = await this.prisma.workflow.update({
             where: { id },
             data: {
+                definition: JSON.stringify(normalizedDefinition),
                 status: 'published',
                 publishedAt: new Date(),
             },
         });
+        return this.deserializeWorkflow(published);
     }
 }

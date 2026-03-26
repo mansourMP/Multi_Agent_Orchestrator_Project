@@ -10,13 +10,14 @@ import sqlite3
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, Request
 
-from server_modules.runtime_config import EMPYRALIS_STATE_HOME, ORION_API_KEY, ORION_AUTH_REQUIRED
-
-
+EMPYRALIS_STATE_HOME = Path(
+    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+).expanduser()
 AUTH_DB_FILE = (EMPYRALIS_STATE_HOME / "auth" / "users.db").expanduser()
 AUTH_LOCK = threading.Lock()
 LOGIN_RATE_LIMIT_LOCK = threading.Lock()
@@ -32,8 +33,20 @@ ORION_DEFAULT_WORKSPACE_IDS = tuple(
 ) or ("default",)
 
 
+def _orion_api_key() -> str:
+    return str(os.getenv("ORION_API_KEY") or "").strip()
+
+
+def _orion_auth_required() -> bool:
+    raw = os.getenv("ORION_AUTH_REQUIRED")
+    required = (str(raw).strip() != "0") if raw is not None else True
+    if _orion_api_key():
+        required = False
+    return required
+
+
 def _jwt_secret() -> str:
-    secret = str(os.getenv("ORION_JWT_SECRET") or ORION_API_KEY or "").strip()
+    secret = str(os.getenv("ORION_JWT_SECRET") or _orion_api_key() or "").strip()
     if not secret:
         raise HTTPException(status_code=503, detail="JWT secret is not configured.")
     return secret
@@ -274,7 +287,7 @@ def get_current_user(
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ) -> Dict[str, Any]:
-    if not ORION_AUTH_REQUIRED:
+    if not _orion_auth_required():
         user = {"user_id": "anonymous", "auth_type": "disabled"}
         _enforce_window_limit(
             buckets=USER_RATE_LIMIT_BUCKETS,
@@ -303,7 +316,7 @@ def get_current_user(
         )
         return {"user_id": user_id, "auth_type": "bearer", "email": email, "workspace_ids": workspace_ids}
 
-    expected_api_key = str(ORION_API_KEY or "").strip()
+    expected_api_key = _orion_api_key()
     provided_api_key = str(x_api_key or "").strip()
     if expected_api_key and provided_api_key and secrets.compare_digest(provided_api_key, expected_api_key):
         _enforce_window_limit(
@@ -333,7 +346,7 @@ def require_admin_access(
         authorization=authorization,
         x_api_key=x_api_key,
     )
-    if not ORION_AUTH_REQUIRED:
+    if not _orion_auth_required():
         user["is_admin"] = True
         return user
     if str(user.get("auth_type") or "").strip() == "api_key":

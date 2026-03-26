@@ -3,7 +3,12 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, Plus } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { PageCollection } from '@/components/orion/page/PageCollection';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { EmptyState } from '@/components/orion/state/EmptyState';
+import { ErrorState } from '@/components/orion/state/ErrorState';
+import { LoadingState } from '@/components/orion/state/LoadingState';
 import { fetchWorkflows } from '@/lib/api';
 
 type WorkflowRecord = {
@@ -97,61 +102,82 @@ export default function BuilderLandingPage() {
   );
 
   return (
-    <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
-        icon={<Bot size={16} />}
-        title="Agent Builder"
-        subtitle="Create and manage agent systems."
-      />
-
-      <section className="orion-panel orion-builder-hub-hero">
-        <div className="orion-builder-hub-hero-copy">
-          <h2>Create an agent system</h2>
-          <p>Design a reusable system that can coordinate tools, reasoning, approvals, and follow-up work.</p>
+    <div className="orion-page-shell is-static-entry">
+      <PageHero
+        kicker="Builder"
+        title="Create an agent system"
+        copy="Design a reusable system that can coordinate tools, reasoning, approvals, and follow-up work."
+        actions={
           <Link href="/builder/new" className="btn-primary">
             <Plus size={14} />
             Create
           </Link>
-        </div>
-      </section>
+        }
+        aside={
+          <>
+            <PageHeroCard label="Draft library">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{draftWorkflows.length}</div>
+                  <div className="orion-home-side-note">Drafts</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{BUILDER_TEMPLATES.length}</div>
+                  <div className="orion-home-side-note">Templates</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">
+                Use drafts for active work and templates when you want a faster starting point.
+              </div>
+            </PageHeroCard>
+          </>
+        }
+      />
 
-      <section className="orion-panel">
-        <div className="orion-builder-hub-tabs" role="tablist" aria-label="Builder library tabs">
-          <button
-            type="button"
-            className={`orion-builder-hub-tab${activeTab === 'drafts' ? ' is-active' : ''}`}
-            onClick={() => setActiveTab('drafts')}
-          >
-            Drafts
-          </button>
-          <button
-            type="button"
-            className={`orion-builder-hub-tab${activeTab === 'templates' ? ' is-active' : ''}`}
-            onClick={() => setActiveTab('templates')}
-          >
-            Templates
-          </button>
-        </div>
-
+      <PageCollection
+        title="Builder library"
+        description="Open saved drafts or start from a reusable template."
+        actions={
+          <div className="orion-segmented orion-builder-hub-tabbar" role="tablist" aria-label="Builder library tabs">
+            <button
+              type="button"
+              className={`orion-segmented-btn${activeTab === 'drafts' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('drafts')}
+            >
+              Drafts
+            </button>
+            <button
+              type="button"
+              className={`orion-segmented-btn${activeTab === 'templates' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('templates')}
+            >
+              Templates
+            </button>
+          </div>
+        }
+      >
         {activeTab === 'drafts' ? (
           loading ? (
-            <div className="orion-empty" style={{ minHeight: 220 }}>
-              <div className="orion-empty-title">Loading workflows…</div>
-            </div>
+            <LoadingState
+              title="Loading drafts…"
+              copy="Reading saved builder drafts."
+            />
           ) : error ? (
-            <div className="orion-empty" style={{ minHeight: 220 }}>
-              <div className="orion-empty-title">Couldn't load this section.</div>
-              <div className="orion-empty-copy">{error}</div>
-            </div>
+            <ErrorState
+              title="Couldn't load this section."
+              copy={error}
+            />
           ) : draftWorkflows.length === 0 ? (
-            <div className="orion-empty" style={{ minHeight: 220 }}>
-              <div className="orion-empty-title">No drafts yet</div>
-              <div className="orion-empty-copy">Create your first workflow to start shaping your agent system.</div>
-              <Link href="/builder/new" className="btn-primary">
-                <Plus size={14} />
-                Create
-              </Link>
-            </div>
+            <EmptyState
+              title="No drafts yet"
+              copy="Create your first workflow to start shaping your agent system."
+              actions={
+                <Link href="/builder/new" className="btn-primary">
+                  <Plus size={14} />
+                  Create
+                </Link>
+              }
+            />
           ) : (
             <div className="orion-builder-hub-grid">
               {draftWorkflows.map((workflow) => (
@@ -194,7 +220,7 @@ export default function BuilderLandingPage() {
             ))}
           </div>
         )}
-      </section>
+      </PageCollection>
     </div>
   );
 }

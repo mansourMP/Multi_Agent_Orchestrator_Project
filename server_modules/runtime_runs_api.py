@@ -461,6 +461,7 @@ def register_run_routes(app) -> None:
         req = body or RunStartRequest()
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
+        workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
         route = decide_execution_target(metadata)
         metadata = apply_execution_route_metadata(metadata, route)
         precheck = _compute_tool_policy_precheck(
@@ -475,6 +476,9 @@ def register_run_routes(app) -> None:
                 "credential_id": req.credential_id,
                 "agents": req.agents or [],
                 "metadata": metadata,
+                "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
+                "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
+                "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
             }
         )
         return {
@@ -491,6 +495,7 @@ def register_run_routes(app) -> None:
         req = body or RunStartRequest()
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
+        workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
         route = decide_execution_target(metadata)
         metadata = apply_execution_route_metadata(metadata, route)
         precheck = _compute_tool_policy_precheck(
@@ -505,6 +510,9 @@ def register_run_routes(app) -> None:
                 "credential_id": req.credential_id,
                 "agents": req.agents or [],
                 "metadata": metadata,
+                "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
+                "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
+                "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
             }
         )
         doctor_preflight = await build_doctor_run_gate_live(

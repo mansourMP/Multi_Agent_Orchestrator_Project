@@ -66,8 +66,12 @@ type WorkflowExecutionShape = {
     description?: string;
     workspaceId?: string;
     definition?: {
+        version?: string;
         nodes?: unknown[];
         edges?: unknown[];
+        defaults?: Record<string, unknown>;
+        resources?: Record<string, unknown>;
+        policy?: Record<string, unknown>;
         meta?: Record<string, unknown>;
     };
 };
@@ -75,24 +79,30 @@ type WorkflowExecutionShape = {
 function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: string) {
     const definition = isRecord(workflow.definition) ? workflow.definition : {};
     const meta = isRecord(definition.meta) ? definition.meta : {};
+    const defaults = isRecord(definition.defaults) ? definition.defaults : {};
+    const runtimeDefaults = isRecord(defaults.runtime) ? defaults.runtime : {};
     const operator = isRecord(meta.operator) ? meta.operator : {};
     const connection = isRecord(operator.connection) ? operator.connection : {};
     const nodes = Array.isArray(definition.nodes) ? definition.nodes : [];
     const agentNodes = nodes.filter((node) => isRecord(node) && String(node.type || '').trim() === 'agent');
-    const firstAgentData = agentNodes.length > 0 && isRecord(agentNodes[0]) && isRecord(agentNodes[0].data)
-        ? agentNodes[0].data
-        : {};
-    const runtimeProfileId = String(meta.runtime_profile_id || '').trim();
-    const executionTarget = normalizeExecutionTarget(meta.execution_target);
+    const firstAgentNode = agentNodes.length > 0 && isRecord(agentNodes[0]) ? agentNodes[0] : {};
+    const firstAgentData = isRecord(firstAgentNode.data) ? firstAgentNode.data : {};
+    const firstAgentConfig = isRecord(firstAgentNode.config) ? firstAgentNode.config : {};
+    const identity = isRecord(firstAgentConfig.identity) ? firstAgentConfig.identity : {};
+    const runtime = isRecord(firstAgentConfig.runtime) ? firstAgentConfig.runtime : {};
+    const permissions = isRecord(firstAgentConfig.permissions) ? firstAgentConfig.permissions : {};
+    const runtimeProfileId = String(runtime.provider_profile_id || runtimeDefaults.provider_profile_id || meta.runtime_profile_id || '').trim();
+    const executionTarget = normalizeExecutionTarget(runtime.execution_target || runtimeDefaults.execution_target || meta.execution_target);
     const provider = String(
-        firstAgentData.provider || connection.provider || meta.provider || 'openai',
+        runtime.provider || firstAgentData.provider || connection.provider || runtimeDefaults.provider || meta.provider || 'openai',
     ).trim() || 'openai';
     const model = String(
-        firstAgentData.modelId || operator.modelId || meta.model || 'gpt-4o-mini',
+        runtime.model || firstAgentData.modelId || operator.modelId || runtimeDefaults.model || meta.model || 'gpt-4o-mini',
     ).trim() || 'gpt-4o-mini';
-    const userGoal = String(operator.userGoal || workflow.description || workflow.name || 'Run workflow').trim()
+    const userGoal = String(identity.goal || operator.userGoal || workflow.description || workflow.name || 'Run workflow').trim()
         || 'Run workflow';
-    const agentRole = String(operator.agentRole || meta.agent_role || 'operator').trim() || 'operator';
+    const agentRole = String(identity.role || operator.agentRole || meta.agent_role || 'operator').trim() || 'operator';
+    const trustMode = String(permissions.action_policy || meta.trust_mode || 'guarded').trim() || 'guarded';
     const credentialId = runtimeProfileId
         ? ''
         : String(connection.mode || '').trim() === 'byok'
@@ -100,11 +110,14 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
             : '';
     const agents = agentNodes.map((node) => {
         const data = isRecord(node) && isRecord(node.data) ? node.data : {};
+        const config = isRecord(node) && isRecord(node.config) ? node.config : {};
+        const agentIdentity = isRecord(config.identity) ? config.identity : {};
+        const agentRuntime = isRecord(config.runtime) ? config.runtime : {};
         return {
-            role: String(data.role || data.label || 'Agent').trim() || 'Agent',
-            modelId: String(data.modelId || model).trim() || model,
-            provider: String(data.provider || provider).trim() || provider,
-            duty: String(data.duty || data.description || '').trim(),
+            role: String(agentIdentity.role || data.role || data.label || 'Agent').trim() || 'Agent',
+            modelId: String(agentRuntime.model || data.modelId || model).trim() || model,
+            provider: String(agentRuntime.provider || data.provider || provider).trim() || provider,
+            duty: String(agentIdentity.success_condition || agentIdentity.goal || data.duty || data.description || '').trim(),
         };
     });
     const businessPlan = [
@@ -126,6 +139,14 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         credentialId,
         runtimeProfileId,
         executionTarget,
+        trustMode,
+        connectorPermissions: Array.isArray(permissions.connector_permissions)
+            ? permissions.connector_permissions.map((item) => String(item || '').trim()).filter(Boolean)
+            : [],
+        browserPermissions: isRecord(permissions.browser_permissions) ? permissions.browser_permissions : undefined,
+        fileMountGrants: Array.isArray(permissions.file_mount_grants)
+            ? permissions.file_mount_grants.filter((item) => isRecord(item))
+            : [],
         businessPlan,
         agents,
     };
@@ -133,6 +154,40 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
 
 export async function fetchWorkflows(workspaceId: string = 'default') {
     return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`);
+}
+
+export interface BuilderConnectorManifestItem {
+    id: string;
+    label: string;
+    auth?: {
+        required_fields?: string[];
+    };
+    triggers?: Array<{
+        id: string;
+        label: string;
+        description?: string;
+    }>;
+    actions?: Array<{
+        id: string;
+        label: string;
+        description?: string;
+    }>;
+    resources?: Array<{
+        id: string;
+        label: string;
+        access?: string[];
+    }>;
+    runtime_constraints?: {
+        supported_targets?: string[];
+    };
+    notes?: string[];
+    future_capabilities?: string[];
+}
+
+export async function fetchBuilderConnectorManifests(): Promise<BuilderConnectorManifestItem[]> {
+    const payload = await internalApiFetch('/api/builder/manifests/connectors');
+    const items = Array.isArray(payload?.items) ? payload.items as unknown[] : [];
+    return items.filter((item): item is BuilderConnectorManifestItem => isRecord(item) && typeof item.id === 'string');
 }
 
 export async function createWorkflow(
@@ -193,6 +248,10 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
                 agent_role: config.agentRole,
                 provider: config.provider,
                 model: config.model,
+                trust_mode: config.trustMode,
+                connector_permissions: config.connectorPermissions,
+                browser_permissions: config.browserPermissions,
+                file_mount_grants: config.fileMountGrants,
                 execution_target: config.executionTarget,
                 execution_target_requested: config.executionTarget,
                 profile_id: config.runtimeProfileId || undefined,

@@ -70,7 +70,7 @@ export default function Sidebar() {
 
   useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : collapsed ? '72px' : '200px');
+    root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : collapsed ? '56px' : '200px');
     return () => {
       root.style.setProperty('--sidebar-width', '200px');
     };

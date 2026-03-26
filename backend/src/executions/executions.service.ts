@@ -10,6 +10,7 @@ import { TelegramService } from '../integrations/telegram.service';
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizeWorkflowDefinition } from '../workflows/workflow-schema';
 
 /**
  * AC-OS Execution Engine
@@ -115,19 +116,80 @@ export class ExecutionsService {
         return {};
     }
 
+    private getNodeData(node: any): Record<string, any> {
+        return node && typeof node.data === 'object' && node.data !== null ? node.data : {};
+    }
+
+    private getNodeConfig(node: any): Record<string, any> {
+        return node && typeof node.config === 'object' && node.config !== null ? node.config : {};
+    }
+
+    private getNodeLabel(node: any): string {
+        const data = this.getNodeData(node);
+        const config = this.getNodeConfig(node);
+        const identity = typeof config.identity === 'object' && config.identity !== null ? config.identity : {};
+        return String(
+            data.label
+            || config.title
+            || identity.name
+            || identity.role
+            || node?.id
+            || node?.type
+            || 'Step',
+        ).trim() || 'Step';
+    }
+
+    private getAgentModel(node: any): string {
+        const data = this.getNodeData(node);
+        const config = this.getNodeConfig(node);
+        const runtime = typeof config.runtime === 'object' && config.runtime !== null ? config.runtime : {};
+        return String(data.model || data.modelId || runtime.model || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
+    }
+
+    private getAgentSystemPrompt(node: any): string {
+        const data = this.getNodeData(node);
+        const config = this.getNodeConfig(node);
+        const identity = typeof config.identity === 'object' && config.identity !== null ? config.identity : {};
+        const goal = String(identity.goal || '').trim();
+        const successCondition = String(identity.success_condition || '').trim();
+        const outputContract = String(identity.output_contract || '').trim();
+        const parts = [
+            String(data.systemPrompt || '').trim(),
+            goal ? `Goal: ${goal}` : '',
+            successCondition ? `Success condition: ${successCondition}` : '',
+            outputContract ? `Output contract: ${outputContract}` : '',
+        ].filter(Boolean);
+        return parts.join('\n\n').trim();
+    }
+
+    private getToolAction(node: any): string {
+        const data = this.getNodeData(node);
+        const config = this.getNodeConfig(node);
+        const variant = String(node?.variant || '').trim().toLowerCase();
+        const explicit = String(data.action || data.actionType || config.action_id || '').trim().toLowerCase();
+        if (variant === 'http') return 'http';
+        if (variant === 'shell') return 'execute_command';
+        if (explicit === 'send_telegram' || explicit === 'telegram' || explicit === 'send_message') return 'telegram';
+        if (explicit) return explicit;
+        if (variant) return variant;
+        return 'webhook';
+    }
+
     // --- MAIN API ---
 
     async executeWorkflow(workflowId: string, input: any = {}, userId?: string, isService = false) {
         const workflow = await this.getWorkflowForActor(workflowId, userId, isService);
 
-        const definition = typeof workflow.definition === 'string'
-            ? JSON.parse(workflow.definition)
-            : workflow.definition;
+        const definition = normalizeWorkflowDefinition(
+            typeof workflow.definition === 'string'
+                ? JSON.parse(workflow.definition)
+                : workflow.definition,
+        );
 
-        const nodes = definition.nodes || [];
+        const nodes: any[] = definition.nodes || [];
 
         // Find Start Node
-        let startNode = nodes.find((n: any) => n.type === 'trigger');
+        let startNode: any = nodes.find((n: any) => n.type === 'trigger');
         if (!startNode && nodes.length > 0) startNode = nodes[0];
 
         const execution = await this.prisma.execution.create({
@@ -150,7 +212,7 @@ export class ExecutionsService {
             initialContext += `\n\n[AC-OS SYSTEM]: Active Niches: ${nicheList.join(', ')}.`;
         }
 
-        return this.runExecutionLoop(execution.id, initialContext);
+        return this.runExecutionLoop(execution.id, initialContext, { userId, isService });
     }
 
     async resumeExecution(executionId: string, resumeData: any = {}, userId?: string, isService = false) {
@@ -171,12 +233,16 @@ export class ExecutionsService {
             },
         });
 
-        return this.runExecutionLoop(executionId, resumeData.context || "Resuming after approval.");
+        return this.runExecutionLoop(executionId, resumeData.context || "Resuming after approval.", { userId, isService });
     }
 
     // --- EXECUTION CORE ---
 
-    private async runExecutionLoop(executionId: string, initialContext: string) {
+    private async runExecutionLoop(
+        executionId: string,
+        initialContext: string,
+        actor: { userId?: string; isService?: boolean } = {},
+    ) {
         const execution = await this.prisma.execution.findUnique({
             where: { id: executionId },
             include: { workflow: true }
@@ -195,12 +261,14 @@ export class ExecutionsService {
             // ignore parse error
         }
 
-        const definition = typeof workflow.definition === 'string'
-            ? JSON.parse(workflow.definition)
-            : workflow.definition;
+        const definition = normalizeWorkflowDefinition(
+            typeof workflow.definition === 'string'
+                ? JSON.parse(workflow.definition)
+                : workflow.definition,
+        );
 
-        const nodes = definition.nodes || [];
-        const edges = definition.edges || [];
+        const nodes: any[] = definition.nodes || [];
+        const edges: any[] = definition.edges || [];
 
         let currentContext = initialContext;
         const outputRaw = execution.output as string;
@@ -224,16 +292,18 @@ export class ExecutionsService {
             }
         };
 
-        let currentNode = nodes.find((n: any) => n.id === execution.currentNodeId);
+        let currentNode: any = nodes.find((n: any) => n.id === execution.currentNodeId);
         let safetyCounter = 0;
 
         while (currentNode && safetyCounter < 50) {
             safetyCounter++;
-            emitLog(`⏳ Processing: ${currentNode.data?.label || currentNode.type}...`);
+            const currentNodeData = this.getNodeData(currentNode);
+            const currentNodeConfig = this.getNodeConfig(currentNode);
+            emitLog(`⏳ Processing: ${this.getNodeLabel(currentNode)}...`);
 
             // 1. Handle Node Types
             if (currentNode.type === 'agent') {
-                emitLog(`🤖 Agent "${currentNode.data.label}" is thinking...`);
+                emitLog(`🤖 Agent "${this.getNodeLabel(currentNode)}" is thinking...`);
                 try {
                     let augmentedContext = currentContext;
                     try {
@@ -246,12 +316,12 @@ export class ExecutionsService {
                     } catch (ragErr) { }
 
                     // --- AC-OS: IDENTITY INJECTION ---
-                    let effectiveSystemPrompt = currentNode.data.systemPrompt;
+                    let effectiveSystemPrompt = this.getAgentSystemPrompt(currentNode);
                     const dna = {
-                        core_motivation: currentNode.data.core_motivation,
-                        intrinsic_values: currentNode.data.intrinsic_values,
-                        forbidden_behaviors: currentNode.data.forbidden_behaviors,
-                        knowledge_domain: currentNode.data.knowledge_domain
+                        core_motivation: currentNodeData.core_motivation,
+                        intrinsic_values: currentNodeData.intrinsic_values,
+                        forbidden_behaviors: currentNodeData.forbidden_behaviors,
+                        knowledge_domain: currentNodeData.knowledge_domain
                     };
 
                     if (dna.core_motivation || (dna.forbidden_behaviors && dna.forbidden_behaviors.length > 0)) {
@@ -260,7 +330,7 @@ export class ExecutionsService {
                         You are an Autonomous Agent within the Conductor OS.
                         
                         == IDENTITY DNA ==
-                        ROLE: ${currentNode.data.label}
+                        ROLE: ${this.getNodeLabel(currentNode)}
                         MOTIVATION: "${dna.core_motivation || 'Execute task successfully'}"
                         VALUES: [${(Array.isArray(dna.intrinsic_values) ? dna.intrinsic_values : [dna.intrinsic_values]).filter(Boolean).join(', ')}]
                         
@@ -285,7 +355,7 @@ export class ExecutionsService {
                     }
 
                     // --- AC-OS: CAPABILITIES ---
-                    const caps = currentNode.data.capabilities || {};
+                    const caps = currentNodeData.capabilities || {};
                     const activeCaps = [];
                     if (caps.web_search) activeCaps.push("- WEB_SEARCH: Access live internet data via Google/Bing.");
                     if (caps.code_execution) activeCaps.push("- CODE_EXECUTION: Run Python 3.11 scripts in E2B Sandbox.");
@@ -309,7 +379,7 @@ export class ExecutionsService {
                     const completion = await this.llm.generateCompletionWithUsage(
                         augmentedContext,
                         effectiveSystemPrompt, // Injected Prompt
-                        currentNode.data.model
+                        this.getAgentModel(currentNode)
                     );
                     let result = completion?.text || "[No response]";
                     if (completion?.usage) {
@@ -370,11 +440,12 @@ export class ExecutionsService {
                 }
                 emitNodeResult(currentNode.id, { output: currentContext });
             }
-            else if (currentNode.type === 'logic') {
-                emitLog(`🔀 Evaluating: ${currentNode.data.condition}`);
+            else if (currentNode.type === 'logic' || currentNode.type === 'decision') {
+                const expression = String(currentNodeData.condition || currentNodeConfig.expression || '').trim() || 'false';
+                emitLog(`🔀 Evaluating: ${expression}`);
                 let evaluation = false;
                 try {
-                    const script = `return !!(${currentNode.data.condition})`;
+                    const script = `return !!(${expression})`;
                     const func = new Function('context', script);
                     evaluation = func(currentContext);
                     emitLog(`ℹ️ Condition result: ${evaluation}`);
@@ -390,8 +461,15 @@ export class ExecutionsService {
                     continue;
                 }
             }
-            else if (currentNode.type === 'approval') {
-                emitLog(`⏸️ Human Approval Required. Pausing...`);
+            else if (currentNode.type === 'approval' || currentNode.type === 'human') {
+                const variant = String(currentNode.variant || '').trim().toLowerCase() || 'approval';
+                emitLog(
+                    variant === 'wait_for_reply'
+                        ? '⏸️ Waiting for reply. Pausing...'
+                        : variant === 'review'
+                            ? '⏸️ Human review required. Pausing...'
+                            : '⏸️ Human approval required. Pausing...',
+                );
                 await (this.prisma.execution.update as any)({
                     where: { id: executionId },
                     data: {
@@ -400,7 +478,47 @@ export class ExecutionsService {
                         output: JSON.stringify({ logs, finalResult: currentContext })
                     },
                 });
-                return { executionId, status: 'waiting', logs };
+                return { executionId, status: 'waiting', logs, finalResult: currentContext };
+            }
+            else if (currentNode.type === 'data') {
+                const variant = String(currentNode.variant || '').trim().toLowerCase() || 'transform';
+                const transformSummary = String(
+                    currentNodeConfig.mapping
+                    || currentNodeConfig.template
+                    || this.getNodeLabel(currentNode),
+                ).trim() || 'Transform data';
+                emitLog(`🧮 Data step (${variant}): ${transformSummary}`);
+                currentContext = `DATA STEP (${variant}): ${transformSummary}\n\n${currentContext}`;
+                emitNodeResult(currentNode.id, { output: currentContext });
+            }
+            else if (currentNode.type === 'subflow') {
+                const childWorkflowId = String(currentNodeConfig.workflow_id || '').trim();
+                if (!childWorkflowId) {
+                    emitLog('⚠️ Subflow skipped: no workflow_id configured.');
+                } else if (childWorkflowId === workflow.id) {
+                    emitLog('⚠️ Subflow skipped: recursive call to the same workflow is not allowed.');
+                } else {
+                    emitLog(`↪️ Calling subflow ${childWorkflowId}...`);
+                    const childResult = await this.executeWorkflow(
+                        childWorkflowId,
+                        {
+                            initialPrompt: currentContext,
+                            parentExecutionId: executionId,
+                            parentWorkflowId: workflow.id,
+                        },
+                        actor.userId,
+                        Boolean(actor.isService),
+                    );
+                    currentContext = typeof childResult?.finalResult === 'string' && childResult.finalResult.trim()
+                        ? childResult.finalResult
+                        : currentContext;
+                    emitLog(`✅ Subflow ${childWorkflowId} completed.`);
+                    emitNodeResult(currentNode.id, {
+                        output: currentContext,
+                        childExecutionId: childResult?.executionId,
+                        childStatus: childResult?.status,
+                    });
+                }
             }
             else if (currentNode.type === 'parallel') {
                 emitLog(`🔀 Parallel Split: Executing ${edges.filter((e: any) => e.source === currentNode.id).length} branches simultaneously...`);
@@ -410,12 +528,12 @@ export class ExecutionsService {
                 if (parallelEdges.length > 0) {
                     // Execute all branches in parallel
                     const branchPromises = parallelEdges.map(async (edge: any) => {
-                        const branchNode = nodes.find((n: any) => n.id === edge.target);
+                        const branchNode: any = nodes.find((n: any) => n.id === edge.target);
                         if (!branchNode) return null;
 
                         const branchLogs: string[] = [];
                         let branchContext = currentContext;
-                        let currentBranchNode = branchNode;
+                        let currentBranchNode: any = branchNode;
                         let branchSafety = 0;
 
                         // Execute this branch until it ends or merges
@@ -570,7 +688,7 @@ export class ExecutionsService {
                 }
             }
             else if (currentNode.type === 'tool') {
-                const action = currentNode.data.action || 'webhook';
+                const action = this.getToolAction(currentNode);
                 emitLog(`🛠️ Executing Tool: ${action}`);
 
                 try {
@@ -580,19 +698,19 @@ export class ExecutionsService {
                         // === AC-OS DIAMOND FEATURES ===
                         case 'identity_action': {
                             // First-class wrapper for agent_identity.py
-                            const actionType = currentNode.data.actionType || 'sign_publish';
-                            const nicheId = currentNode.data.nicheId || 'default';
+                            const actionType = currentNodeData.actionType || 'sign_publish';
+                            const nicheId = currentNodeData.nicheId || 'default';
 
                             emitLog(`💎 AC-OS Identity Action: ${actionType} for ${nicheId}`);
 
                             const pyPath = path.join(process.cwd(), '..', 'python_engine', 'agency_logic.py');
                             let command = `python3 ${pyPath} ${nicheId} ${actionType}`;
 
-                            if (currentNode.data.payload) {
+                            if (currentNodeData.payload) {
                                 // Create temp payload file
                                 const payloadPath = `/tmp/acos_${executionId}_${Date.now()}.json`;
                                 fs.writeFileSync(payloadPath, JSON.stringify({
-                                    ...currentNode.data.payload,
+                                    ...currentNodeData.payload,
                                     execution_id: executionId,
                                     node_id: currentNode.id
                                 }));
@@ -619,10 +737,10 @@ export class ExecutionsService {
 
                         case 'webhook':
                         case 'http': {
-                            const url = currentNode.data.url || currentNode.data.webhookUrl;
-                            const method = currentNode.data.method || 'POST';
-                            const headers = currentNode.data.headers || { 'Content-Type': 'application/json' };
-                            const body = currentNode.data.body || { context: currentContext };
+                            const url = currentNodeConfig.url || currentNodeData.url || currentNodeData.webhookUrl;
+                            const method = currentNodeConfig.method || currentNodeData.method || 'POST';
+                            const headers = currentNodeData.headers || { 'Content-Type': 'application/json' };
+                            const body = currentNodeData.body || { context: currentContext };
 
                             if (!url) throw new Error('No URL configured');
                             const response = await fetch(url, {
@@ -640,13 +758,13 @@ export class ExecutionsService {
                             const cred = runCredentials.find((c: any) => c.provider === 'telegram');
                             const token = cred?.apiKey;
                             if (!token) throw new Error('Telegram Bot Token not configured.');
-                            const chatId = currentNode.data.chatId;
+                            const chatId = currentNodeData.chatId || currentNodeConfig.chat_id;
                             if (!chatId) throw new Error('Telegram Chat ID is required.');
-                            const text = currentNode.data.message || currentContext;
+                            const text = currentNodeData.message || currentNodeConfig.message || currentContext;
 
                             await this.telegramService.sendMessage(token, chatId, text);
                             emitLog(`✅ Telegram message sent!`);
-                            if (currentNode.data.waitForReply) {
+                            if (currentNodeData.waitForReply) {
                                 emitLog(`⏳ Waiting for reply...`);
                                 this.telegramService.registerPendingReply(chatId, executionId);
                                 await this.prisma.execution.update({
@@ -661,8 +779,8 @@ export class ExecutionsService {
                         }
 
                         case 'execute_command': {
-                            const command = currentNode.data.command || currentNode.data.text;
-                            const cwd = currentNode.data.cwd;
+                            const command = currentNodeConfig.command || currentNodeData.command || currentNodeData.text;
+                            const cwd = currentNodeConfig.cwd || currentNodeData.cwd;
                             if (!command) throw new Error("No command configured");
                             emitLog(`💻 Executing on Bridge: ${command}`);
                             toolResult = await this.gateway.executeOnBridge(executionId, command, cwd);
@@ -713,7 +831,7 @@ export class ExecutionsService {
             finalResult: currentContext
         });
 
-        return { executionId, status: 'success', logs };
+        return { executionId, status: 'success', logs, finalResult: currentContext };
     }
 
     async findAll(userId?: string, isService = false) {

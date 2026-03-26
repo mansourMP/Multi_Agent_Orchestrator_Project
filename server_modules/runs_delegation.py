@@ -402,9 +402,22 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
             {"action_policy": app_policy},
         )
 
+    workflow_snapshot = None
+    if str(req.workflow_id or "").strip():
+        workflow_snapshot = fetch_workflow_snapshot(req.workflow_id)
+        if isinstance(workflow_snapshot, dict):
+            metadata["workflow_schema_version"] = str(
+                workflow_snapshot.get("definition", {}).get("version") or ""
+            ).strip() or None
+            if workflow_snapshot.get("name") and "workflow_name" not in metadata:
+                metadata["workflow_name"] = workflow_snapshot.get("name")
+            if workflow_snapshot.get("status"):
+                metadata["workflow_status"] = workflow_snapshot.get("status")
+
     return {
         "engine": engine,
         "metadata": metadata,
+        "workflow_snapshot": workflow_snapshot,
     }
 
 
@@ -498,6 +511,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     prepared = _prepare_run_start_request(req)
     engine = prepared["engine"]
     metadata = prepared["metadata"]
+    workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
     route = decide_execution_target(metadata, schedule_id=schedule_id)
     metadata = dict(metadata)
     metadata = apply_execution_route_metadata(metadata, route)
@@ -528,6 +542,9 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "credential_id": req.credential_id,
         "agents": req.agents or [],
         "metadata": metadata,
+        "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
+        "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
+        "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
     metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
     needs_local_approval = _local_execution_requires_start_approval(metadata, metadata["tool_policy_precheck"])

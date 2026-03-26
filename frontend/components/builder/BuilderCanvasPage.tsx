@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -25,12 +26,12 @@ import {
   Hand,
   LoaderCircle,
   MousePointer2,
-  Paperclip,
   Play,
   Plus,
   Redo2,
   Rocket,
   Send,
+  Settings2,
   Shuffle,
   Undo2,
   X,
@@ -45,8 +46,6 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
-import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
 import { createWorkflow, fetchRuntimeMachines, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
 import { API_BASE } from '@/lib/config';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
@@ -55,7 +54,6 @@ import {
   type ExecutionTarget,
   describeExecutionTarget,
   formatExecutionTargetLabel,
-  getExecutionTargetGuides,
   hasOnlineLocalRuntime,
   normalizeExecutionTarget,
 } from '@/lib/executionTargets';
@@ -63,10 +61,34 @@ import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
-type TriggerKind = 'schedule' | 'webhook' | 'manual';
-type ActionKind = 'send_wechat' | 'send_telegram' | 'send_whatsapp' | 'send_email' | 'write_file';
+type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+type TriggerKind = 'schedule' | 'webhook' | 'manual' | 'connector_event' | 'workflow' | 'file_watch';
+type ActionKind =
+  | 'send_wechat'
+  | 'send_telegram'
+  | 'send_whatsapp'
+  | 'send_email'
+  | 'write_file'
+  | 'connector_action'
+  | 'browser'
+  | 'file'
+  | 'shell'
+  | 'document'
+  | 'spreadsheet'
+  | 'approval'
+  | 'review'
+  | 'wait_for_reply'
+  | 'call_workflow';
 
-type TriggerCanvasData = { label: string; triggerType: TriggerKind };
+type CanvasCompatibilityMeta = {
+  __canonicalType?: CanonicalNodeType;
+  __canonicalVariant?: string;
+  __canonicalConfig?: Record<string, unknown>;
+  __canonicalResources?: Record<string, unknown>;
+  __canonicalPolicy?: Record<string, unknown>;
+};
+
+type TriggerCanvasData = CanvasCompatibilityMeta & { label: string; triggerType: TriggerKind };
 type AgentCanvasData = {
   label: string;
   modelId: string;
@@ -77,12 +99,12 @@ type AgentCanvasData = {
   duty: string;
   status: string;
   description: string;
-};
-type ActionCanvasData = { label: string; actionType: ActionKind };
-type HttpRequestCanvasData = { label: string; method: string; url: string };
-type ConditionCanvasData = { label: string; condition: string };
-type TransformCanvasData = { label: string; mapping: string };
-type CodeCanvasData = { label: string; summary: string; code: string };
+} & CanvasCompatibilityMeta;
+type ActionCanvasData = CanvasCompatibilityMeta & { label: string; actionType: ActionKind };
+type HttpRequestCanvasData = CanvasCompatibilityMeta & { label: string; method: string; url: string };
+type ConditionCanvasData = CanvasCompatibilityMeta & { label: string; condition: string };
+type TransformCanvasData = CanvasCompatibilityMeta & { label: string; mapping: string };
+type CodeCanvasData = CanvasCompatibilityMeta & { label: string; summary: string; code: string };
 type CanvasNodeData =
   | TriggerCanvasData
   | AgentCanvasData
@@ -108,14 +130,18 @@ type BuilderWorkflowRecord = {
   description?: string;
   status?: string;
   definition?: {
+    version?: string;
     nodes?: unknown;
     edges?: unknown;
+    defaults?: Record<string, unknown>;
+    resources?: Record<string, unknown>;
+    policy?: Record<string, unknown>;
     meta?: Record<string, unknown>;
   };
 };
 type BuilderGeneratedNode = {
   id: string;
-  type: CanvasNodeType;
+  type: string;
   label?: string;
   subtitle?: string;
   x?: number;
@@ -163,29 +189,126 @@ const CANVAS_EDGE_TYPES = {
   smoothstep: SmoothActionEdge,
 } satisfies EdgeTypes;
 
-const CANVAS_NODE_LIBRARY: Array<{
+type CanvasLibraryItem = {
+  id: string;
   type: CanvasNodeType;
   label: string;
   accent: string;
   icon: ReactNode;
-}> = [
-  { type: 'trigger', label: 'Start', accent: '#d7f0ea', icon: <Play size={14} /> },
-  { type: 'agent', label: 'Agent', accent: '#dce9ff', icon: <Bot size={14} /> },
-  { type: 'action', label: 'Note', accent: '#ece8ff', icon: <Send size={14} /> },
-  { type: 'http_request', label: 'Tool', accent: '#f7ebc6', icon: <Globe size={14} /> },
-  { type: 'condition', label: 'If / else', accent: '#f7ebc6', icon: <Shuffle size={14} /> },
-  { type: 'transform', label: 'Transform', accent: '#ece1ff', icon: <Shuffle size={14} /> },
-  { type: 'code', label: 'Code', accent: '#ececec', icon: <Code2 size={14} /> },
+  canonicalType?: CanonicalNodeType;
+  canonicalVariant?: string;
+  defaultData?: Partial<CanvasNodeData>;
+};
+
+const CANVAS_NODE_LIBRARY: CanvasLibraryItem[] = [
+  {
+    id: 'trigger',
+    type: 'trigger',
+    label: 'Trigger',
+    accent: '#d7f0ea',
+    icon: <Play size={14} />,
+    canonicalType: 'trigger',
+    canonicalVariant: 'manual',
+    defaultData: { label: 'Manual trigger', triggerType: 'manual' },
+  },
+  {
+    id: 'agent',
+    type: 'agent',
+    label: 'Agent',
+    accent: '#dce9ff',
+    icon: <Bot size={14} />,
+    canonicalType: 'agent',
+    defaultData: {
+      label: 'Agent',
+      role: 'Agent',
+      description: 'Core reasoning step',
+      duty: 'Core reasoning step',
+      status: 'ready',
+    },
+  },
+  {
+    id: 'tool',
+    type: 'action',
+    label: 'Tool',
+    accent: '#ece8ff',
+    icon: <Send size={14} />,
+    canonicalType: 'tool',
+    canonicalVariant: 'connector_action',
+    defaultData: { label: 'Tool action', actionType: 'connector_action' },
+  },
+  {
+    id: 'http',
+    type: 'http_request',
+    label: 'HTTP',
+    accent: '#f7ebc6',
+    icon: <Globe size={14} />,
+    canonicalType: 'tool',
+    canonicalVariant: 'http',
+    defaultData: { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' },
+  },
+  {
+    id: 'human',
+    type: 'action',
+    label: 'Human',
+    accent: '#fde5cf',
+    icon: <Hand size={14} />,
+    canonicalType: 'human',
+    canonicalVariant: 'approval',
+    defaultData: { label: 'Approval', actionType: 'approval' },
+  },
+  {
+    id: 'decision',
+    type: 'condition',
+    label: 'Decision',
+    accent: '#f7ebc6',
+    icon: <Shuffle size={14} />,
+    canonicalType: 'decision',
+    canonicalVariant: 'if_else',
+    defaultData: { label: 'Decision', condition: 'Continue only when the required condition is true' },
+  },
+  {
+    id: 'data',
+    type: 'transform',
+    label: 'Data',
+    accent: '#ece1ff',
+    icon: <Shuffle size={14} />,
+    canonicalType: 'data',
+    canonicalVariant: 'transform',
+    defaultData: { label: 'Transform', mapping: 'Map fields to output payload' },
+  },
+  {
+    id: 'subflow',
+    type: 'action',
+    label: 'Subflow',
+    accent: '#e7ecff',
+    icon: <Rocket size={14} />,
+    canonicalType: 'subflow',
+    canonicalVariant: 'call_workflow',
+    defaultData: { label: 'Call workflow', actionType: 'call_workflow' },
+  },
+  {
+    id: 'code_tool',
+    type: 'code',
+    label: 'Code tool',
+    accent: '#ececec',
+    icon: <Code2 size={14} />,
+    canonicalType: 'tool',
+    canonicalVariant: 'code',
+    defaultData: { label: 'Code tool', summary: 'Run custom logic', code: 'return input;' },
+  },
 ];
 
 const CANVAS_NODE_GROUPS: Array<{
   label: string;
-  items: CanvasNodeType[];
+  items: string[];
 }> = [
-  { label: 'Core', items: ['agent', 'trigger', 'action'] },
-  { label: 'Tools', items: ['http_request'] },
-  { label: 'Logic', items: ['condition', 'code'] },
-  { label: 'Data', items: ['transform'] },
+  { label: 'Triggers', items: ['trigger'] },
+  { label: 'Agents', items: ['agent'] },
+  { label: 'Tools', items: ['tool', 'http', 'code_tool'] },
+  { label: 'Human', items: ['human'] },
+  { label: 'Logic', items: ['decision'] },
+  { label: 'Data', items: ['data'] },
+  { label: 'Subflows', items: ['subflow'] },
 ];
 
 type GraphSnapshot = {
@@ -211,6 +334,308 @@ function extractUrl(value: string): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isCanvasNodeType(value: string): value is CanvasNodeType {
+  return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(value);
+}
+
+function isCanonicalNodeType(value: string): value is CanonicalNodeType {
+  return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow'].includes(value);
+}
+
+function canonicalTypeForCanvasType(type: CanvasNodeType): CanonicalNodeType {
+  if (type === 'http_request' || type === 'code' || type === 'action') return 'tool';
+  if (type === 'condition') return 'decision';
+  if (type === 'transform') return 'data';
+  return type;
+}
+
+function normalizeTriggerKind(value: unknown): TriggerKind {
+  const token = String(value || '').trim().toLowerCase();
+  return token === 'schedule'
+    || token === 'webhook'
+    || token === 'connector_event'
+    || token === 'workflow'
+    || token === 'file_watch'
+    ? token
+    : 'manual';
+}
+
+function normalizeActionKind(value: unknown): ActionKind {
+  const token = String(value || '').trim().toLowerCase();
+  return token === 'send_wechat'
+    || token === 'send_telegram'
+    || token === 'send_whatsapp'
+    || token === 'send_email'
+    || token === 'write_file'
+    || token === 'connector_action'
+    || token === 'browser'
+    || token === 'file'
+    || token === 'shell'
+    || token === 'document'
+    || token === 'spreadsheet'
+    || token === 'approval'
+    || token === 'review'
+    || token === 'wait_for_reply'
+    || token === 'call_workflow'
+    ? token
+    : 'write_file';
+}
+
+function deriveCanvasType(rawNode: Record<string, unknown>): CanvasNodeType | null {
+  const rawType = String(rawNode.type || '').trim().toLowerCase();
+  if (isCanvasNodeType(rawType)) return rawType;
+  if (!isCanonicalNodeType(rawType)) return null;
+  const variant = String(rawNode.variant || '').trim().toLowerCase();
+  if (rawType === 'tool') {
+    if (variant === 'http') return 'http_request';
+    if (variant === 'code') return 'code';
+    return 'action';
+  }
+  if (rawType === 'decision') return 'condition';
+  if (rawType === 'data') return 'transform';
+  if (rawType === 'human' || rawType === 'subflow') return 'action';
+  return rawType;
+}
+
+function buildCanvasCompatibilityMeta(
+  rawNode: Record<string, unknown>,
+  canonicalType: CanonicalNodeType,
+  canonicalVariant: string | undefined,
+  canonicalConfig: Record<string, unknown>,
+): CanvasCompatibilityMeta {
+  return {
+    __canonicalType: canonicalType,
+    __canonicalVariant: canonicalVariant,
+    __canonicalConfig: canonicalConfig,
+    __canonicalResources: isRecord(rawNode.resources) ? rawNode.resources : {},
+    __canonicalPolicy: isRecord(rawNode.policy) ? rawNode.policy : {},
+  };
+}
+
+function canonicalToolVariantToActionKind(variant: string): ActionKind {
+  if (variant === 'browser') return 'browser';
+  if (variant === 'file') return 'file';
+  if (variant === 'shell') return 'shell';
+  if (variant === 'document') return 'document';
+  if (variant === 'spreadsheet') return 'spreadsheet';
+  return 'connector_action';
+}
+
+function deriveCanvasDataFromCanonicalNode(
+  rawNode: Record<string, unknown>,
+  canvasType: CanvasNodeType,
+): Partial<CanvasNodeData> {
+  const canonicalType = String(rawNode.type || '').trim().toLowerCase() as CanonicalNodeType;
+  const canonicalVariant = String(rawNode.variant || '').trim().toLowerCase() || undefined;
+  const config = isRecord(rawNode.config) ? rawNode.config : {};
+  const rawData = isRecord(rawNode.data) ? rawNode.data : {};
+  const compatibility = buildCanvasCompatibilityMeta(rawNode, canonicalType, canonicalVariant, config);
+  const identity = isRecord(config.identity) ? config.identity : {};
+  const label = compactText(
+    String(
+      rawData.label
+        ?? rawNode.label
+        ?? (canonicalType === 'agent' ? identity.name ?? identity.role : '')
+        ?? (canonicalType === 'human' ? config.title : '')
+        ?? (canonicalType === 'tool' ? config.summary ?? config.action_id : '')
+        ?? (canonicalType === 'subflow' ? 'Call workflow' : ''),
+    ),
+    80,
+  );
+  const subtitle = compactText(String(rawData.description ?? rawData.summary ?? rawNode.subtitle ?? ''), 140);
+
+  if (canvasType === 'trigger') {
+    return {
+      ...compatibility,
+      label: label || 'Trigger',
+      triggerType: normalizeTriggerKind(canonicalVariant),
+    };
+  }
+
+  if (canvasType === 'agent') {
+    const runtime = isRecord(config.runtime) ? config.runtime : {};
+    const tools = isRecord(config.tools) ? config.tools : {};
+    return {
+      ...compatibility,
+      label: label || compactText(String(identity.name ?? identity.role ?? 'Agent'), 80) || 'Agent',
+      modelId: String(runtime.model || '').trim(),
+      prompt: String(identity.goal || '').trim(),
+      tools: Array.isArray(tools.explicit_required)
+        ? tools.explicit_required.map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
+      provider: String(runtime.provider || '').trim(),
+      role: String(identity.role || label || 'Agent').trim() || 'Agent',
+      duty: compactText(String(identity.success_condition ?? identity.goal ?? subtitle), 120) || 'Autonomous reasoning',
+      status: 'ready',
+      description: compactText(String(identity.goal ?? subtitle), 120) || 'Autonomous reasoning',
+    };
+  }
+
+  if (canvasType === 'http_request') {
+    return {
+      ...compatibility,
+      label: label || 'HTTP Request',
+      method: String(config.method || 'GET').trim().toUpperCase() || 'GET',
+      url: String(config.url || '').trim() || 'https://api.example.com',
+    };
+  }
+
+  if (canvasType === 'code') {
+    return {
+      ...compatibility,
+      label: label || 'Code',
+      summary: compactText(String(config.summary ?? subtitle ?? 'Run custom logic'), 120) || 'Run custom logic',
+      code: String(config.code || 'return input;'),
+    };
+  }
+
+  if (canvasType === 'condition') {
+    return {
+      ...compatibility,
+      label: label || 'Decision',
+      condition:
+        compactText(
+          String(
+            config.expression
+              ?? config.field
+              ?? subtitle
+              ?? (Array.isArray(config.routes) ? config.routes.join(', ') : ''),
+          ),
+          160,
+        ) || 'Continue only when the required condition is true',
+    };
+  }
+
+  if (canvasType === 'transform') {
+    return {
+      ...compatibility,
+      label: label || 'Transform',
+      mapping: compactText(String(config.mapping ?? config.template ?? subtitle), 160) || 'Map fields to output payload',
+    };
+  }
+
+  let actionType: ActionKind = 'connector_action';
+  if (canonicalType === 'tool') {
+    actionType = canonicalToolVariantToActionKind(canonicalVariant || '');
+  } else if (canonicalType === 'human') {
+    actionType = normalizeActionKind(canonicalVariant || 'approval');
+  } else if (canonicalType === 'subflow') {
+    actionType = 'call_workflow';
+  }
+
+  return {
+    ...compatibility,
+    label: label || 'Action',
+    actionType,
+  };
+}
+
+function deriveCanvasMeta(data: CanvasNodeData): CanvasCompatibilityMeta {
+  const raw = isRecord(data) ? data as Record<string, unknown> : {};
+  return {
+    __canonicalType: isCanonicalNodeType(String(raw.__canonicalType || '')) ? String(raw.__canonicalType || '') as CanonicalNodeType : undefined,
+    __canonicalVariant: String(raw.__canonicalVariant || '').trim() || undefined,
+    __canonicalConfig: isRecord(raw.__canonicalConfig) ? raw.__canonicalConfig : undefined,
+    __canonicalResources: isRecord(raw.__canonicalResources) ? raw.__canonicalResources : undefined,
+    __canonicalPolicy: isRecord(raw.__canonicalPolicy) ? raw.__canonicalPolicy : undefined,
+  };
+}
+
+function canonicalVariantForCanvasNode(type: CanvasNodeType, data: CanvasNodeData): string | undefined {
+  if (type === 'trigger') return normalizeTriggerKind((data as TriggerCanvasData).triggerType);
+  if (type === 'http_request') return 'http';
+  if (type === 'code') return 'code';
+  if (type === 'condition') return 'if_else';
+  if (type === 'transform') return 'transform';
+  if (type === 'action') {
+    const actionType = normalizeActionKind((data as ActionCanvasData).actionType);
+    if (actionType === 'approval' || actionType === 'review' || actionType === 'wait_for_reply' || actionType === 'call_workflow') {
+      return actionType;
+    }
+    if (actionType === 'browser' || actionType === 'file' || actionType === 'shell' || actionType === 'document' || actionType === 'spreadsheet') {
+      return actionType;
+    }
+    return 'connector_action';
+  }
+  return undefined;
+}
+
+function canonicalConfigFromCanvasNode(
+  type: CanvasNodeType,
+  data: CanvasNodeData,
+  seed: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const next = isRecord(seed) ? structuredClone(seed) : {};
+  if (type === 'trigger') {
+    const triggerData = data as TriggerCanvasData;
+    const kind = normalizeTriggerKind(triggerData.triggerType);
+    next.test_only = kind === 'manual';
+    if (!isRecord(next.schedule)) next.schedule = {};
+    if (!isRecord(next.webhook)) next.webhook = {};
+    if (!isRecord(next.file_watch)) next.file_watch = {};
+    return next;
+  }
+  if (type === 'agent') {
+    const agentData = data as AgentCanvasData;
+    const identity = isRecord(next.identity) ? { ...next.identity } : {};
+    const runtime = isRecord(next.runtime) ? { ...next.runtime } : {};
+    const tools = isRecord(next.tools) ? { ...next.tools } : {};
+    identity.name = agentData.label;
+    identity.role = agentData.role || agentData.label;
+    identity.goal = agentData.prompt || identity.goal || '';
+    identity.success_condition = agentData.duty || identity.success_condition || '';
+    runtime.model = agentData.modelId || runtime.model || null;
+    runtime.provider = agentData.provider || runtime.provider || null;
+    tools.explicit_required = Array.isArray(agentData.tools) ? agentData.tools : [];
+    next.identity = identity;
+    next.runtime = runtime;
+    next.tools = tools;
+    return next;
+  }
+  if (type === 'http_request') {
+    const httpData = data as HttpRequestCanvasData;
+    next.method = httpData.method;
+    next.url = httpData.url;
+    next.action_id = httpData.label;
+    return next;
+  }
+  if (type === 'condition') {
+    const conditionData = data as ConditionCanvasData;
+    next.expression = conditionData.condition;
+    return next;
+  }
+  if (type === 'transform') {
+    const transformData = data as TransformCanvasData;
+    next.mapping = transformData.mapping;
+    return next;
+  }
+  if (type === 'code') {
+    const codeData = data as CodeCanvasData;
+    next.summary = codeData.summary;
+    next.code = codeData.code;
+    return next;
+  }
+  const actionData = data as ActionCanvasData;
+  if (actionData.actionType === 'approval' || actionData.actionType === 'review' || actionData.actionType === 'wait_for_reply') {
+    next.title = actionData.label;
+    next.decision_options = Array.isArray(next.decision_options) && next.decision_options.length > 0
+      ? next.decision_options
+      : ['approve', 'reject'];
+    return next;
+  }
+  if (actionData.actionType === 'call_workflow') {
+    next.mode = next.mode || 'sync';
+    return next;
+  }
+  if (typeof next.action_id !== 'string' || !String(next.action_id || '').trim()) {
+    next.action_id = actionData.label;
+  }
+  if (typeof next.summary !== 'string' || !String(next.summary || '').trim()) {
+    next.summary = actionData.label;
+  }
+  return next;
 }
 
 function makeNodeId(type: CanvasNodeType): string {
@@ -244,27 +669,31 @@ function layoutDraftNodes(nodes: CanvasWorkflowNode[], host: HTMLDivElement | nu
 }
 
 function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
-  if (type === 'trigger') return { label: 'Start Trigger', triggerType: 'manual' };
+  if (type === 'trigger') return { label: 'Manual trigger', triggerType: 'manual' };
   if (type === 'http_request') return { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' };
-  if (type === 'condition') return { label: 'Condition', condition: 'value > 10' };
+  if (type === 'condition') return { label: 'Decision', condition: 'Continue only when the required condition is true' };
   if (type === 'transform') return { label: 'Transform', mapping: 'Map fields to output payload' };
-  if (type === 'code') return { label: 'Code', summary: 'Run custom logic', code: 'return input;' };
-  if (type === 'action') return { label: 'Send Telegram', actionType: 'send_telegram' };
+  if (type === 'code') return { label: 'Code tool', summary: 'Run custom logic', code: 'return input;' };
+  if (type === 'action') return { label: 'Tool action', actionType: 'connector_action' };
   return {
-    label: 'AI Agent',
+    label: 'Agent',
     modelId: 'gpt-4.1',
     prompt: 'Describe the task for this agent.',
     tools: [],
     provider: 'openai',
-    role: 'Worker',
-    duty: 'Complete the assigned task clearly and reliably.',
+    role: 'Agent',
+    duty: 'Core reasoning step',
     status: 'ready',
-    description: 'Autonomous reasoning',
+    description: 'Core reasoning step',
   };
 }
 
 function normalizeCanvasNodeData(type: CanvasNodeType, raw: Partial<CanvasNodeData>): CanvasNodeData {
-  return { ...defaultNodeData(type), ...raw } as CanvasNodeData;
+  const base = defaultNodeData(type) as Record<string, unknown>;
+  const next = { ...base, ...(raw as Record<string, unknown>) } as Record<string, unknown>;
+  if (type === 'trigger') next.triggerType = normalizeTriggerKind(next.triggerType);
+  if (type === 'action') next.actionType = normalizeActionKind(next.actionType);
+  return next as CanvasNodeData;
 }
 
 function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
@@ -272,19 +701,22 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
   const parsed: CanvasWorkflowNode[] = [];
   for (const item of rawNodes) {
     if (!isRecord(item)) continue;
-    const type = String(item.type || '').trim().toLowerCase();
-    if (!['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(type)) continue;
+    const type = deriveCanvasType(item);
+    if (!type) continue;
     const position = isRecord(item.position) ? item.position : {};
     const x = Number(position.x);
     const y = Number(position.y);
+    const normalizedData = isCanvasNodeType(String(item.type || '').trim().toLowerCase())
+      ? normalizeCanvasNodeData(type, (isRecord(item.data) ? item.data : {}) as Partial<CanvasNodeData>)
+      : normalizeCanvasNodeData(type, deriveCanvasDataFromCanonicalNode(item, type));
     parsed.push({
-      id: String(item.id || makeNodeId(type as CanvasNodeType)).trim() || makeNodeId(type as CanvasNodeType),
-      type: type as CanvasNodeType,
+      id: String(item.id || makeNodeId(type)).trim() || makeNodeId(type),
+      type,
       position: {
         x: Number.isFinite(x) ? x : CANVAS_NODE_X,
         y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + parsed.length * CANVAS_NODE_GAP,
       },
-      data: normalizeCanvasNodeData(type as CanvasNodeType, (isRecord(item.data) ? item.data : {}) as Partial<CanvasNodeData>),
+      data: normalizedData,
     });
   }
   return parsed;
@@ -404,37 +836,51 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
 }
 
 function buildStarterGraph(): GraphSnapshot {
+  const triggerItem = CANVAS_NODE_LIBRARY.find((item) => item.id === 'trigger') || CANVAS_NODE_LIBRARY[0]!;
+  const agentItem = CANVAS_NODE_LIBRARY.find((item) => item.id === 'agent') || CANVAS_NODE_LIBRARY[1]!;
   const nodes: CanvasWorkflowNode[] = [
     {
       id: 'trigger-1',
       type: 'trigger',
       position: { x: 560, y: 300 },
-      data: normalizeCanvasNodeData('trigger', { label: 'Start', triggerType: 'manual' }),
+      data: buildNodeDataFromLibraryItem(triggerItem),
     },
     {
       id: 'agent-2',
       type: 'agent',
       position: { x: 920, y: 300 },
       data: normalizeCanvasNodeData('agent', {
+        ...buildNodeDataFromLibraryItem(agentItem),
         label: 'My agent',
         modelId: '',
-        role: 'Agent',
-        description: 'Agent',
-        duty: 'Agent',
-        status: '',
       }),
     },
   ];
   return { nodes, edges: buildDraftEdges(nodes) };
 }
 
-function getCanvasLibraryItem(type: CanvasNodeType) {
-  return CANVAS_NODE_LIBRARY.find((item) => item.type === type) || CANVAS_NODE_LIBRARY[0]!;
+function buildNodeDataFromLibraryItem(item: CanvasLibraryItem): CanvasNodeData {
+  return normalizeCanvasNodeData(item.type, {
+    ...defaultNodeData(item.type),
+    ...(item.defaultData || {}),
+    ...(item.canonicalType
+      ? {
+          __canonicalType: item.canonicalType,
+          __canonicalVariant: item.canonicalVariant,
+          __canonicalConfig: {},
+          __canonicalResources: {},
+          __canonicalPolicy: {},
+        }
+      : {}),
+  });
 }
 
 function formatTriggerKindLabel(kind: TriggerKind): string {
   if (kind === 'schedule') return 'Scheduled start';
   if (kind === 'webhook') return 'Webhook start';
+  if (kind === 'connector_event') return 'Connector event';
+  if (kind === 'workflow') return 'Workflow trigger';
+  if (kind === 'file_watch') return 'File watcher';
   return 'Manual start';
 }
 
@@ -443,6 +889,16 @@ function formatActionKindLabel(kind: ActionKind): string {
   if (kind === 'send_whatsapp') return 'WhatsApp delivery';
   if (kind === 'send_email') return 'Email delivery';
   if (kind === 'write_file') return 'File output';
+  if (kind === 'connector_action') return 'Tool action';
+  if (kind === 'browser') return 'Browser action';
+  if (kind === 'file') return 'File action';
+  if (kind === 'shell') return 'Shell action';
+  if (kind === 'document') return 'Document action';
+  if (kind === 'spreadsheet') return 'Spreadsheet action';
+  if (kind === 'approval') return 'Human approval';
+  if (kind === 'review') return 'Human review';
+  if (kind === 'wait_for_reply') return 'Wait for reply';
+  if (kind === 'call_workflow') return 'Call workflow';
   return 'Telegram delivery';
 }
 
@@ -476,6 +932,27 @@ function buildWorkflowDescription(goal: string): string {
   return compactText(goal, 160) || 'Workflow created from Builder.';
 }
 
+function serializeCanvasNode(node: CanvasWorkflowNode): Record<string, unknown> {
+  const canvasType = (isCanvasNodeType(String(node.type || '').trim()) ? String(node.type || '').trim() : 'action') as CanvasNodeType;
+  const compatibility = deriveCanvasMeta(node.data);
+  const canonicalType: CanonicalNodeType = compatibility.__canonicalType ?? canonicalTypeForCanvasType(canvasType);
+  const canonicalVariant = compatibility.__canonicalVariant || canonicalVariantForCanvasNode(canvasType, node.data);
+  const config = canonicalConfigFromCanvasNode(canvasType, node.data, compatibility.__canonicalConfig);
+  const strippedData = Object.fromEntries(
+    Object.entries(node.data as Record<string, unknown>).filter(([key]) => !key.startsWith('__canonical')),
+  );
+  return {
+    id: node.id,
+    type: canonicalType,
+    variant: canonicalVariant,
+    config,
+    resources: compatibility.__canonicalResources || {},
+    policy: compatibility.__canonicalPolicy || {},
+    position: node.position,
+    data: strippedData,
+  };
+}
+
 function buildWorkflowDefinition(
   nodes: CanvasWorkflowNode[],
   edges: CanvasWorkflowEdge[],
@@ -483,14 +960,13 @@ function buildWorkflowDefinition(
   executionTarget: ExecutionTarget,
   runtimeProfileId?: string,
   runtimeProfile?: BuilderRuntimeProfileRow | null,
+  baseDefinition?: BuilderWorkflowRecord['definition'] | null,
 ) {
+  const baseDefaults = isRecord(baseDefinition?.defaults) ? baseDefinition.defaults : {};
+  const baseRuntimeDefaults = isRecord(baseDefaults.runtime) ? baseDefaults.runtime : {};
   return {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      type: node.type,
-      position: node.position,
-      data: node.data,
-    })),
+    version: 'empyralist.workflow.v2',
+    nodes: nodes.map((node) => serializeCanvasNode(node)),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: edge.source,
@@ -498,7 +974,20 @@ function buildWorkflowDefinition(
       sourceHandle: edge.sourceHandle,
       targetHandle: edge.targetHandle,
     })),
+    defaults: {
+      ...baseDefaults,
+      runtime: {
+        ...baseRuntimeDefaults,
+        execution_target: executionTarget,
+        provider_profile_id: String(runtimeProfileId || '').trim() || undefined,
+        provider: String(runtimeProfile?.provider || '').trim() || undefined,
+        model: String(runtimeProfile?.model || '').trim() || undefined,
+      },
+    },
+    resources: isRecord(baseDefinition?.resources) ? baseDefinition.resources : {},
+    policy: isRecord(baseDefinition?.policy) ? baseDefinition.policy : {},
     meta: {
+      ...(isRecord(baseDefinition?.meta) ? baseDefinition.meta : {}),
       mode: 'visual_builder',
       origin: 'builder',
       draft_goal: goal,
@@ -582,7 +1071,7 @@ function resolveBuilderGenerateUrl(): string {
 }
 
 function mapGeneratedNodeData(node: BuilderGeneratedNode, prompt: string): CanvasNodeData {
-  const type = node.type;
+  const type: CanvasNodeType = isCanvasNodeType(node.type) ? node.type : 'action';
   const label = compactText(String(node.label || '').trim(), 48) || defaultNodeData(type).label;
   const subtitle = compactText(String(node.subtitle || '').trim(), 64);
 
@@ -635,41 +1124,9 @@ function mapGeneratedNodeData(node: BuilderGeneratedNode, prompt: string): Canva
 }
 
 function parseGeneratedWorkflow(workflow: BuilderGeneratedWorkflow, prompt: string): GraphSnapshot {
-  const rawNodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
-  const nextNodes: CanvasWorkflowNode[] = rawNodes
-    .filter((node): node is BuilderGeneratedNode => isRecord(node) && typeof node.id === 'string' && typeof node.type === 'string')
-    .filter((node) => ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(node.type))
-    .map((node, index) => ({
-      id: node.id,
-      type: node.type,
-      position: {
-        x: snapToGrid(Number.isFinite(node.x) ? Number(node.x) : CANVAS_NODE_X + index * NODE_HORIZONTAL_GAP),
-        y: snapToGrid(Number.isFinite(node.y) ? Number(node.y) : CANVAS_NODE_TOP),
-      },
-      data: mapGeneratedNodeData(node, prompt),
-    }));
-
-  const nodeIds = new Set(nextNodes.map((node) => node.id));
-  const rawEdges = Array.isArray(workflow.edges) ? workflow.edges : [];
-  const nextEdges: CanvasWorkflowEdge[] = rawEdges
-    .filter((edge): edge is BuilderGeneratedEdge => isRecord(edge) && typeof edge.source === 'string' && typeof edge.target === 'string')
-    .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
-    .map((edge, index) => ({
-      id: `edge-${edge.source}-${edge.target}-${index + 1}`,
-      source: edge.source,
-      target: edge.target,
-      sourceHandle: 'bottom',
-      targetHandle: 'top',
-      type: 'smoothstep',
-      animated: false,
-      style: {
-        stroke: CANVAS_EDGE_COLOR,
-        strokeWidth: 2,
-        strokeLinecap: 'round' as const,
-      },
-      interactionWidth: 40,
-    }));
-
+  void prompt;
+  const nextNodes = parseCanvasNodes(workflow.nodes);
+  const nextEdges = parseCanvasEdges(workflow.edges, nextNodes);
   return { nodes: nextNodes, edges: nextEdges };
 }
 
@@ -682,9 +1139,11 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const router = useRouter();
   const flowRef = useRef<{ screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number } } | null>(null);
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const settingsPopoverRef = useRef<HTMLDivElement | null>(null);
   const nodeSearchInputRef = useRef<HTMLInputElement | null>(null);
   const aiAssistantInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const [assistantDockOpen, setAssistantDockOpen] = useState(true);
+  const [assistantDockOpen, setAssistantDockOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [promptInput, setPromptInput] = useState('');
   const [stagedPrompt, setStagedPrompt] = useState('');
   const [aiAssistantPrompt, setAiAssistantPrompt] = useState('');
@@ -700,6 +1159,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [messageRunId, setMessageRunId] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
+  const [loadedDefinition, setLoadedDefinition] = useState<BuilderWorkflowRecord['definition'] | null>(null);
   const [nodeSearch, setNodeSearch] = useState<CanvasNodeSearchState | null>(null);
   const [interactionMode, setInteractionMode] = useState<'pan' | 'select'>('select');
   const [historyStack, setHistoryStack] = useState<GraphSnapshot[]>([]);
@@ -710,7 +1170,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [hasLocalRuntime, setHasLocalRuntime] = useState(false);
   const [doctorChecking, setDoctorChecking] = useState(false);
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
-  const executionTargetGuides = useMemo(() => getExecutionTargetGuides(hasLocalRuntime), [hasLocalRuntime]);
 
   const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
     await ensureControlPlaneSession();
@@ -721,15 +1180,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       headers,
       cache: 'no-store',
     });
-  }, []);
-
-  const refreshLocalRuntimeState = useCallback(async () => {
-    try {
-      const machinesPayload = await fetchRuntimeMachines().catch(() => ({ items: [] }));
-      setHasLocalRuntime(hasOnlineLocalRuntime(machinesPayload));
-    } catch {
-      setHasLocalRuntime(false);
-    }
   }, []);
 
   const pushHistory = useCallback(() => {
@@ -829,7 +1279,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       CANVAS_NODE_GROUPS.map((group) => ({
         ...group,
         items: group.items
-          .map((type) => filteredNodeLibrary.find((item) => item.type === type) || null)
+          .map((itemId) => filteredNodeLibrary.find((item) => item.id === itemId) || null)
           .filter((item): item is (typeof CANVAS_NODE_LIBRARY)[number] => item !== null),
       })).filter((group) => group.items.length > 0),
     [filteredNodeLibrary],
@@ -841,6 +1291,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     const safeNodes = nextNodes.length > 0 ? nextNodes : buildDraftNodes(workflow?.definition?.meta?.draft_goal ? String(workflow.definition.meta.draft_goal) : workflow?.description || workflow?.name || '');
     setNodes(safeNodes);
     setEdges(parseCanvasEdges(workflow?.definition?.edges, safeNodes));
+    setLoadedDefinition(workflow?.definition || null);
     setSelectedNodeId(safeNodes[0]?.id || null);
     setSelectedEdgeId(null);
     setSavedWorkflowId(id);
@@ -925,6 +1376,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setDraftGoal(next);
     setNodes(nextNodes);
     setEdges(buildDraftEdges(nextNodes));
+    setLoadedDefinition(null);
     setSelectedNodeId(nextNodes[0]?.id || null);
     setSavedWorkflowId(null);
     setSaveState('idle');
@@ -955,6 +1407,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setDraftGoal('');
     setNodes([]);
     setEdges([]);
+    setLoadedDefinition(null);
     setSelectedNodeId(null);
     setSavedWorkflowId(null);
     setSaveState('idle');
@@ -987,7 +1440,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     [],
   );
 
-  const addCanvasNode = (type: CanvasNodeType) => {
+  const addCanvasNode = (item: CanvasLibraryItem) => {
     pushHistory();
     const position =
       nodeSearch?.insertEdgeId
@@ -996,7 +1449,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     const insertEdgeId = nodeSearch?.insertEdgeId;
     const edgeToSplit = insertEdgeId ? edges.find((edge) => edge.id === insertEdgeId) || null : null;
     setNodes((current) => {
-      if (type === 'trigger') {
+      if (item.type === 'trigger') {
         const existingTrigger = current.find((node) => node.type === 'trigger');
         if (existingTrigger) {
           setSelectedNodeId(existingTrigger.id);
@@ -1014,10 +1467,10 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             };
           })();
       const nextNode: CanvasWorkflowNode = {
-        id: makeNodeId(type),
-        type,
+        id: makeNodeId(item.type),
+        type: item.type,
         position: position || defaultPosition,
-        data: defaultNodeData(type),
+        data: buildNodeDataFromLibraryItem(item),
       };
       const nextNodes = [...current, nextNode];
       setSelectedNodeId(nextNode.id);
@@ -1050,7 +1503,15 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
   const persistCurrentWorkflow = async (): Promise<string | null> => {
     if (nodes.length === 0 || !draftGoal.trim()) return null;
-    const definition = buildWorkflowDefinition(nodes, edges, draftGoal, executionTarget, selectedProfileId, selectedRuntimeProfile);
+    const definition = buildWorkflowDefinition(
+      nodes,
+      edges,
+      draftGoal,
+      executionTarget,
+      selectedProfileId,
+      selectedRuntimeProfile,
+      loadedDefinition,
+    );
     if (savedWorkflowId) {
       await updateWorkflow(savedWorkflowId, definition);
       return savedWorkflowId;
@@ -1119,6 +1580,20 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       }
       const runtimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
       const runtimeModel = resolveBuilderRuntimeModel(selectedRuntimeProfile, nodes);
+      const primaryAgentNode = nodes.find((node) => node.type === 'agent') || null;
+      const primaryAgentMeta = primaryAgentNode ? deriveCanvasMeta(primaryAgentNode.data) : {};
+      const primaryAgentConfig = isRecord(primaryAgentMeta.__canonicalConfig) ? primaryAgentMeta.__canonicalConfig : {};
+      const primaryAgentPermissions = isRecord(primaryAgentConfig.permissions) ? primaryAgentConfig.permissions : {};
+      const trustMode = String(primaryAgentPermissions.action_policy || 'guarded').trim() || 'guarded';
+      const connectorPermissions = Array.isArray(primaryAgentPermissions.connector_permissions)
+        ? primaryAgentPermissions.connector_permissions.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+      const browserPermissions = isRecord(primaryAgentPermissions.browser_permissions)
+        ? primaryAgentPermissions.browser_permissions
+        : undefined;
+      const fileMountGrants = Array.isArray(primaryAgentPermissions.file_mount_grants)
+        ? primaryAgentPermissions.file_mount_grants.filter((item) => isRecord(item))
+        : [];
       const businessPlan = [
         `Workflow: ${workflowName.trim() || buildWorkflowName(draftGoal)}`,
         `Goal: ${draftGoal.trim() || 'No goal provided.'}`,
@@ -1143,6 +1618,10 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           metadata: {
             workspace_id: DEFAULT_WORKSPACE_ID,
             origin: 'builder',
+            trust_mode: trustMode,
+            connector_permissions: connectorPermissions,
+            browser_permissions: browserPermissions,
+            file_mount_grants: fileMountGrants,
             execution_target: executionTarget,
             execution_target_requested: executionTarget,
             runtime_profile_id: selectedProfileId || undefined,
@@ -1364,12 +1843,30 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     return () => window.clearTimeout(timeout);
   }, [assistantDockOpen]);
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof globalThis.Node && settingsPopoverRef.current?.contains(target)) return;
+      setSettingsOpen(false);
+    };
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [settingsOpen]);
+
   const handleAssistantApply = useCallback((value?: string) => {
     const next = String(value || aiAssistantPrompt).trim();
     if (!next) return;
     handleBuild(next);
     setAiAssistantPrompt('');
   }, [aiAssistantPrompt, handleBuild]);
+
+  const builderNoticeAction = executionTarget === 'local_companion' && !hasLocalRuntime
+    ? { href: '/machines', label: 'Open Machines' }
+    : doctorDecision && doctorDecision.status !== 'pass'
+      ? { href: '/health', label: 'Open Health' }
+      : null;
+  const showBuilderNotice = Boolean(builderNoticeAction);
 
   return (
     <div className="orion-page-shell orion-animate-in is-builder-page">
@@ -1385,45 +1882,60 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             <span className="orion-builder-draft-badge">Draft</span>
           </div>
           <div className="orion-builder-toolbar-actions">
-            <label className="orion-builder-runtime-picker is-route-picker">
-              <span className="orion-builder-runtime-picker-label">Route</span>
-              <select
-                className="orion-builder-runtime-select is-route-select"
-                value={executionTarget}
-                onChange={(event) => setExecutionTarget(normalizeExecutionTarget(event.target.value))}
+            <div ref={settingsPopoverRef} className={`orion-builder-toolbar-popover${settingsOpen ? ' is-open' : ''}`.trim()}>
+              <button
+                type="button"
+                className="orion-builder-toolbar-icon-button"
+                onClick={() => setSettingsOpen((current) => !current)}
+                aria-label="Builder settings"
+                aria-expanded={settingsOpen}
               >
-                <option value="auto">Automatic</option>
-                <option value="local_companion" disabled={!hasLocalRuntime}>Local machine</option>
-                <option value="cloud">Cloud runtime</option>
-              </select>
-            </label>
-            <label className="orion-builder-runtime-picker">
-              <span className="orion-builder-runtime-picker-label">Runtime</span>
-              <select
-                className="orion-builder-runtime-select"
-                value={selectedProfileId}
-                onChange={(event) => setSelectedProfileId(event.target.value)}
-              >
-                <option value="">Automatic</option>
-                {groupedRuntimeProfiles.map(([provider, profiles]) => (
-                  <optgroup key={provider} label={formatProviderLabel(provider)}>
-                    {profiles.map((profile) => {
-                      const health = String(profile.health || '').trim().toLowerCase();
-                      const healthSuffix = health === 'cooldown' ? ' · cooling down' : '';
-                      const modelSuffix = profile.model ? ` · ${profile.model}` : '';
-                      return (
-                        <option key={profile.id} value={profile.id}>
-                          {`${profile.label}${modelSuffix}${healthSuffix}`}
-                        </option>
-                      );
-                    })}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
+                <Settings2 size={15} />
+              </button>
+              {settingsOpen ? (
+                <div className="orion-builder-toolbar-popover-panel">
+                  <label className="orion-builder-runtime-picker is-route-picker">
+                    <span className="orion-builder-runtime-picker-label">Route</span>
+                    <select
+                      className="orion-builder-runtime-select is-route-select"
+                      value={executionTarget}
+                      onChange={(event) => setExecutionTarget(normalizeExecutionTarget(event.target.value))}
+                    >
+                      <option value="auto">Automatic</option>
+                      <option value="local_companion" disabled={!hasLocalRuntime}>Local machine</option>
+                      <option value="cloud">Cloud runtime</option>
+                    </select>
+                  </label>
+                  <label className="orion-builder-runtime-picker">
+                    <span className="orion-builder-runtime-picker-label">Runtime</span>
+                    <select
+                      className="orion-builder-runtime-select"
+                      value={selectedProfileId}
+                      onChange={(event) => setSelectedProfileId(event.target.value)}
+                    >
+                      <option value="">Automatic</option>
+                      {groupedRuntimeProfiles.map(([provider, profiles]) => (
+                        <optgroup key={provider} label={formatProviderLabel(provider)}>
+                          {profiles.map((profile) => {
+                            const health = String(profile.health || '').trim().toLowerCase();
+                            const healthSuffix = health === 'cooldown' ? ' · cooling down' : '';
+                            const modelSuffix = profile.model ? ` · ${profile.model}` : '';
+                            return (
+                              <option key={profile.id} value={profile.id}>
+                                {`${profile.label}${modelSuffix}${healthSuffix}`}
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
-              className="orion-builder-ai-button"
+              className={`orion-builder-ai-button${assistantDockOpen ? ' is-open' : ''}`.trim()}
               onClick={() => setAssistantDockOpen((current) => !current)}
             >
               <BrainCircuit size={15} />
@@ -1445,27 +1957,18 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           </div>
         </div>
 
-        <div className={`orion-builder-toolbar-note${executionTarget === 'local_companion' && !hasLocalRuntime ? ' is-warning' : ''}`.trim()}>
-          Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
-        </div>
-        <div className="orion-builder-route-guide orion-route-guide" aria-label="Execution route guide">
-          {executionTargetGuides.map((guide) => (
-            <div
-              key={guide.value}
-              className={`orion-route-guide-item${guide.value === executionTarget ? ' is-selected' : ''}`.trim()}
-            >
-              <div className="orion-route-guide-title">{guide.label}</div>
-              <div className="orion-route-guide-copy">{guide.hint}</div>
-            </div>
-          ))}
-        </div>
-        <DoctorPreflightNotice decision={doctorDecision} />
-        {executionTarget === 'local_companion' && !hasLocalRuntime ? (
-          <LocalRuntimeRecoveryCard
-            title="Local machine required"
-            copy="Start the local runtime on this device, then return here and evaluate the workflow locally."
-            onStatusRefresh={refreshLocalRuntimeState}
-          />
+        {showBuilderNotice ? (
+          <div className={`orion-builder-toolbar-note${executionTarget === 'local_companion' && !hasLocalRuntime ? ' is-warning' : ''}`.trim()}>
+            <span>
+              Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
+              {doctorDecision && doctorDecision.status !== 'pass' ? ` ${doctorDecision.title}.` : ''}
+            </span>
+            {builderNoticeAction ? (
+              <Link href={builderNoticeAction.href} className="orion-builder-toolbar-note-link">
+                {builderNoticeAction.label}
+              </Link>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="orion-builder-main is-agent-builder">
@@ -1477,7 +1980,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                     <div className="orion-builder-library-title">{group.label}</div>
                     <div className="orion-builder-library-list">
                       {group.items.map((item) => (
-                        <button key={item.type} type="button" className="orion-builder-library-item" onClick={() => addCanvasNode(item.type)}>
+                        <button key={item.id} type="button" className="orion-builder-library-item" onClick={() => addCanvasNode(item)}>
                           <span className="orion-builder-library-icon" style={{ ['--builder-accent' as string]: item.accent }}>
                             {item.icon}
                           </span>
@@ -1492,14 +1995,19 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
               {assistantDockOpen ? (
                 <aside className="orion-builder-preview-dock is-floating">
                 <div className="orion-builder-preview-head">
-                  <div className="orion-builder-preview-head-copy" />
+                  <div className="orion-builder-preview-head-copy">
+                    <div className="orion-builder-preview-title">Build with AI</div>
+                    <div className="orion-builder-preview-subtitle">
+                      Describe the workflow, tools, approvals, and outcome you want, and Hekor will draft the canvas.
+                    </div>
+                  </div>
                   <div className="orion-builder-preview-head-actions">
                     <button
                       type="button"
                       className="orion-builder-preview-reset"
                       onClick={() => setAiAssistantPrompt('')}
                     >
-                      New chat
+                      Clear
                     </button>
                     <button
                       type="button"
@@ -1518,9 +2026,9 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                       <span className="orion-builder-preview-empty-icon">
                         <BrainCircuit size={20} />
                       </span>
-                      <div className="orion-builder-preview-empty-title">Preview your agent</div>
+                      <div className="orion-builder-preview-empty-title">Describe the workflow you want to build</div>
                       <div className="orion-builder-preview-empty-copy">
-                        Prompt the agent as if you&apos;re the user.
+                        Ask for steps, tools, conditions, approvals, and handoffs. The builder will turn that brief into a workflow draft.
                       </div>
                     </div>
                   </div>
@@ -1538,16 +2046,13 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                     className="orion-builder-preview-input"
                     value={aiAssistantPrompt}
                     onChange={(event) => setAiAssistantPrompt(event.target.value)}
-                    placeholder="Send a message..."
+                    placeholder="Describe the workflow to generate..."
                   />
-                  <button type="button" className="orion-builder-preview-attach" aria-label="Attach context">
-                    <Paperclip size={16} />
-                  </button>
                   <button
                     type="submit"
                     className="orion-builder-preview-send"
                     disabled={!aiAssistantPrompt.trim()}
-                    aria-label="Apply assistant change"
+                    aria-label="Generate workflow draft"
                   >
                     <ArrowUp size={15} />
                   </button>
@@ -1652,10 +2157,10 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                   <div className="orion-builder-node-search-list">
                     {filteredNodeLibrary.map((item) => (
                       <button
-                        key={item.type}
-                        type="button"
-                        className="orion-builder-node-search-item"
-                        onClick={() => addCanvasNode(item.type)}
+                          key={item.id}
+                          type="button"
+                          className="orion-builder-node-search-item"
+                          onClick={() => addCanvasNode(item)}
                       >
                         <span className="orion-builder-palette-icon" style={{ ['--builder-accent' as string]: item.accent }}>
                           {item.icon}

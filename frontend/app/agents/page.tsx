@@ -1,8 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Puzzle, Sparkles } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { Sparkles } from 'lucide-react';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
@@ -77,15 +80,23 @@ export default function SkillsPage() {
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<Puzzle size={18} />}
-        title="Skills"
-        subtitle="Installed skill modules available to this deployment"
-        meta={
-          <>
-            <span>{activeCount} active</span>
-            <span>{skills.length} installed</span>
-          </>
+      <PageHero
+        kicker="Skills"
+        title="Installed capability modules available to this deployment."
+        copy="Use this page to confirm which skill modules are active, what they do, and which built-in assistant capabilities remain available by default."
+        aside={
+          <PageHeroCard label="Current status">
+            <div className="orion-home-side-stats">
+              <div>
+                <div className="orion-home-side-value">{activeCount}</div>
+                <div className="orion-home-side-note">Active skills</div>
+              </div>
+              <div>
+                <div className="orion-home-side-value">{skills.length}</div>
+                <div className="orion-home-side-note">Installed skills</div>
+              </div>
+            </div>
+          </PageHeroCard>
         }
       />
 
@@ -98,30 +109,18 @@ export default function SkillsPage() {
         minWidth={180}
       />
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Installed skills</div>
-            <div className="orion-panel-copy">These skills are loaded from the backend `/skills/state` endpoint.</div>
-          </div>
-        </div>
+      <PageSection title="Installed skills" description="These skills are loaded from the backend `/skills/state` endpoint.">
 
         {loading ? (
-          <div className="orion-empty" style={{ minHeight: 180 }}>
-            <div className="orion-empty-title">Loading skills…</div>
-          </div>
+          <PageStatePanel variant="loading" title="Loading skills…" />
         ) : error ? (
-          <div className="orion-empty" style={{ minHeight: 180 }}>
-            <div className="orion-empty-title">Could not load skills</div>
-            <div className="orion-empty-copy">{error}</div>
-          </div>
+          <PageStatePanel variant="error" title="Could not load skills" copy={error} />
         ) : skills.length === 0 ? (
-          <div className="orion-empty" style={{ minHeight: 180 }}>
-            <div className="orion-empty-title">No installed skills found</div>
-            <div className="orion-empty-copy">
-              Add a skill directory under `/skills` on the runtime host and it will appear here automatically.
-            </div>
-          </div>
+          <PageStatePanel
+            variant="empty"
+            title="No installed skills found"
+            copy="Add a skill directory under `/skills` on the runtime host and it will appear here automatically."
+          />
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
             {skills.map((skill) => {
@@ -169,15 +168,9 @@ export default function SkillsPage() {
             })}
           </div>
         )}
-      </section>
+      </PageSection>
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Built-in skills</div>
-            <div className="orion-panel-copy">Core assistant abilities available independently of installed plugins.</div>
-          </div>
-        </div>
+      <PageSection title="Built-in skills" description="Core assistant abilities available independently of installed plugins.">
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
           {BUILT_IN_SKILLS.map((skill) => (
@@ -191,7 +184,7 @@ export default function SkillsPage() {
             </div>
           ))}
         </div>
-      </section>
+      </PageSection>
     </div>
   );
 }

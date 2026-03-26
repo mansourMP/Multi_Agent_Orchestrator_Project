@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, LogOut } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { RUNTIME_KEY_STORAGE_CANDIDATES } from '@/lib/runtimeKey';
 
@@ -131,25 +134,29 @@ export default function SettingsPage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
-        icon={null}
-        title="Settings"
-        subtitle="Manage your workspace and account."
-        meta={
+      <PageHero
+        kicker="Settings"
+        title="Manage your workspace, account, and connected tool access."
+        copy="Use this page for device-level account details and a quick view of the shared tools available to your agents."
+        aside={
           <>
-            <span>{connectedCount} connected</span>
-            <span>{profile.roleLabel}</span>
+            <PageHeroCard label="Workspace account">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{connectedCount}</div>
+                  <div className="orion-home-side-note">Connected tools</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{profile.roleLabel}</div>
+                  <div className="orion-home-side-note">Account role</div>
+                </div>
+              </div>
+            </PageHeroCard>
           </>
         }
       />
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Account</div>
-            <div className="orion-panel-copy">Workspace owner details stored on this device.</div>
-          </div>
-        </div>
+      <PageSection title="Account" description="Workspace owner details stored on this device.">
         <div style={{ display: 'grid', gap: 16 }}>
           <label style={{ display: 'grid', gap: 8 }}>
             <span className="orion-panel-copy" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Name</span>
@@ -171,33 +178,29 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
-      </section>
+      </PageSection>
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Connected tools</div>
-            <div className="orion-panel-copy">The accounts currently available to your agents and workflows.</div>
-          </div>
-        </div>
+      <PageSection title="Connected tools" description="The accounts currently available to your agents and workflows.">
 
         {loading ? (
-          <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">Loading connected tools…</div>
-          </div>
+          <PageStatePanel variant="loading" title="Loading connected tools…" />
         ) : error ? (
-          <div className="orion-empty" style={{ minHeight: 160, alignItems: 'center' }}>
-            <div className="orion-empty-title">Couldn't load connected tools</div>
-            <div className="orion-empty-copy">{error}</div>
-            <button type="button" className="btn-secondary" onClick={() => void loadConnectors()}>
-              Retry
-            </button>
-          </div>
+          <PageStatePanel
+            variant="error"
+            title="Couldn't load connected tools"
+            copy={error}
+            actions={
+              <button type="button" className="orion-btn" onClick={() => void loadConnectors()}>
+                Retry
+              </button>
+            }
+          />
         ) : connectors.length === 0 ? (
-          <div className="orion-empty" style={{ minHeight: 160 }}>
-            <div className="orion-empty-title">No connected tools yet</div>
-            <div className="orion-empty-copy">Open Integrations to add Google Workspace, Telegram, or another account.</div>
-          </div>
+          <PageStatePanel
+            variant="empty"
+            title="No connected tools yet"
+            copy="Open Integrations to add Google Workspace, Telegram, or another account."
+          />
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {connectors.map((connector) => {
@@ -223,22 +226,19 @@ export default function SettingsPage() {
             })}
           </div>
         )}
-      </section>
+      </PageSection>
 
-      <section className="orion-panel" style={{ borderColor: 'var(--status-red)', background: 'var(--status-red-bg)' }}>
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Danger zone</div>
-            <div className="orion-panel-copy">Sign out from this device and clear local workspace settings.</div>
-          </div>
-        </div>
+      <PageSection
+        title="Danger zone"
+        description="Sign out from this device and clear local workspace settings."
+      >
         <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-          <button className="btn-secondary" onClick={handleSignOut} disabled={signingOut}>
+          <button className="orion-btn orion-btn-danger" onClick={handleSignOut} disabled={signingOut}>
             <LogOut size={14} />
             {signingOut ? 'Signing out…' : 'Sign out'}
           </button>
         </div>
-      </section>
+      </PageSection>
     </div>
   );
 }

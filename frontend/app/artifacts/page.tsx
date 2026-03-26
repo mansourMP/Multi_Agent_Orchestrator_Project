@@ -1,9 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { FileStack, RefreshCw, Search } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, type AgentRoleId } from '@/app/page.catalog';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
@@ -55,26 +54,8 @@ export default function ArtifactsPage() {
 
   return (
     <div className="orion-page-shell is-static-entry">
-      <OsPageHeader
-        icon={<FileStack size={18} />}
-        title="Assets"
-        subtitle="Outputs, files, and evidence from your agent runs."
-        meta={
-          <>
-            <span>{filteredItems.length} visible</span>
-            {payload ? <span>{payload.summary.total} total</span> : null}
-          </>
-        }
-        actions={
-          <button className="orion-btn orion-btn-ghost" onClick={() => void refresh()}>
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        }
-      />
-
       <PageHero
-        kicker="Evidence and outputs"
+        kicker="Assets"
         title="Open deliverables, inspect proof, and trace what each run produced."
         copy="Assets are the execution record. Use this page to review final deliverables, screenshots, and support files without digging through raw run logs first."
         actions={

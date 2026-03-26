@@ -1,10 +1,17 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Loader2, Play, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Hand, Loader2, Play, Rocket, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
 import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type EdgeTypes, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
+import {
+    fetchBuilderConnectorManifests,
+    fetchWorkflows,
+    getWorkflow,
+    publishWorkflow,
+    updateWorkflow,
+    type BuilderConnectorManifestItem,
+} from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
     AGENT_ROLE_OPTIONS,
@@ -77,8 +84,12 @@ interface WorkflowShape {
     workspaceId?: string;
     status?: string;
     definition?: {
+        version?: string;
         nodes?: unknown[];
         edges?: unknown[];
+        defaults?: Record<string, unknown>;
+        resources?: Record<string, unknown>;
+        policy?: Record<string, unknown>;
         meta?: Record<string, unknown>;
     };
 }
@@ -146,13 +157,37 @@ interface AutopilotPack {
 }
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
-type TriggerKind = 'schedule' | 'webhook' | 'manual';
-type ActionKind = 'send_wechat' | 'send_telegram' | 'send_whatsapp' | 'send_email' | 'write_file';
+type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+type TriggerKind = 'schedule' | 'webhook' | 'manual' | 'connector_event' | 'workflow' | 'file_watch';
+type ActionKind =
+    | 'send_wechat'
+    | 'send_telegram'
+    | 'send_whatsapp'
+    | 'send_email'
+    | 'write_file'
+    | 'connector_action'
+    | 'browser'
+    | 'file'
+    | 'shell'
+    | 'document'
+    | 'spreadsheet'
+    | 'approval'
+    | 'review'
+    | 'wait_for_reply'
+    | 'call_workflow';
+
+type CanvasCompatibilityMeta = {
+    __canonicalType?: CanonicalNodeType;
+    __canonicalVariant?: string;
+    __canonicalConfig?: Record<string, unknown>;
+    __canonicalResources?: Record<string, unknown>;
+    __canonicalPolicy?: Record<string, unknown>;
+};
 
 type TriggerCanvasData = {
     label: string;
     triggerType: TriggerKind;
-};
+} & CanvasCompatibilityMeta;
 
 type AgentCanvasData = {
     label: string;
@@ -164,34 +199,34 @@ type AgentCanvasData = {
     duty: string;
     status: string;
     description: string;
-};
+} & CanvasCompatibilityMeta;
 
 type ActionCanvasData = {
     label: string;
     actionType: ActionKind;
-};
+} & CanvasCompatibilityMeta;
 
 type HttpRequestCanvasData = {
     label: string;
     method: string;
     url: string;
-};
+} & CanvasCompatibilityMeta;
 
 type ConditionCanvasData = {
     label: string;
     condition: string;
-};
+} & CanvasCompatibilityMeta;
 
 type TransformCanvasData = {
     label: string;
     mapping: string;
-};
+} & CanvasCompatibilityMeta;
 
 type CodeCanvasData = {
     label: string;
     summary: string;
     code: string;
-};
+} & CanvasCompatibilityMeta;
 
 type CanvasNodeData =
     | TriggerCanvasData
@@ -203,9 +238,31 @@ type CanvasNodeData =
     | CodeCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
+type CanonicalInspectorNode = {
+    canonicalType: CanonicalNodeType;
+    canonicalVariant?: string;
+    config: Record<string, unknown>;
+    resources: Record<string, unknown>;
+    policy: Record<string, unknown>;
+};
+type WorkflowListItem = {
+    id: string;
+    name?: string;
+};
 const CANVAS_NODE_X = 265;
 const CANVAS_NODE_TOP = 50;
 const CANVAS_NODE_GAP = 170;
+const ACTION_POLICY_OPTIONS = [
+    { value: 'guarded', label: 'Guarded' },
+    { value: 'auto', label: 'Automatic' },
+    { value: 'strict', label: 'Strict' },
+    { value: 'cost_guard', label: 'Cost guard' },
+    { value: 'sensitive_guard', label: 'Sensitive guard' },
+] as const;
+const MEMORY_SCOPE_OPTIONS = ['session', 'project', 'profile'] as const;
+const MEMORY_RETRIEVAL_OPTIONS = ['recent', 'pinned', 'semantic'] as const;
+const FILE_MOUNT_OPTIONS = ['artifacts', 'project', 'shared', 'knowledge', 'local_root', 'connector_files'] as const;
+const FILE_GRANT_OPTIONS = ['none', 'read', 'read_write', 'create_only', 'append_only'] as const;
 
 const DEFAULT_OPERATOR: OperatorConfig = {
     modelId: 'gpt-4.1',
@@ -259,23 +316,525 @@ const CANVAS_EDGE_TYPES = {
     smoothstep: SmoothActionEdge,
 } satisfies EdgeTypes;
 
-const CANVAS_NODE_LIBRARY: Array<{
+type CanvasLibraryItem = {
+    id: string;
     type: CanvasNodeType;
     label: string;
     accent: string;
     icon: React.ReactNode;
-}> = [
-    { type: 'trigger', label: 'Trigger', accent: '#f59e0b', icon: <Zap size={14} /> },
-    { type: 'agent', label: 'Agent', accent: BRAND.accentColor, icon: <BrainCircuit size={14} /> },
-    { type: 'action', label: 'Action', accent: '#10b981', icon: <Send size={14} /> },
-    { type: 'http_request', label: 'HTTP Request', accent: '#6b7280', icon: <Globe size={14} /> },
-    { type: 'condition', label: 'If / Condition', accent: '#f59e0b', icon: <GitBranch size={14} /> },
-    { type: 'transform', label: 'Transform', accent: '#3b82f6', icon: <Shuffle size={14} /> },
-    { type: 'code', label: 'Code', accent: '#1f2937', icon: <Code2 size={14} /> },
+    canonicalType?: CanonicalNodeType;
+    canonicalVariant?: string;
+    defaultData?: Partial<CanvasNodeData>;
+};
+
+const CANVAS_NODE_LIBRARY: CanvasLibraryItem[] = [
+    {
+        id: 'trigger',
+        type: 'trigger',
+        label: 'Trigger',
+        accent: '#f59e0b',
+        icon: <Play size={14} />,
+        canonicalType: 'trigger',
+        canonicalVariant: 'manual',
+        defaultData: { label: 'Manual trigger', triggerType: 'manual' },
+    },
+    {
+        id: 'agent',
+        type: 'agent',
+        label: 'Agent',
+        accent: BRAND.accentColor,
+        icon: <BrainCircuit size={14} />,
+        canonicalType: 'agent',
+        defaultData: {
+            label: 'Agent',
+            role: 'Agent',
+            description: 'Core reasoning step',
+            duty: 'Core reasoning step',
+            status: 'ready',
+        },
+    },
+    {
+        id: 'tool',
+        type: 'action',
+        label: 'Tool',
+        accent: '#10b981',
+        icon: <Send size={14} />,
+        canonicalType: 'tool',
+        canonicalVariant: 'connector_action',
+        defaultData: { label: 'Tool action', actionType: 'connector_action' },
+    },
+    {
+        id: 'http',
+        type: 'http_request',
+        label: 'HTTP',
+        accent: '#6b7280',
+        icon: <Globe size={14} />,
+        canonicalType: 'tool',
+        canonicalVariant: 'http',
+        defaultData: { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' },
+    },
+    {
+        id: 'human',
+        type: 'action',
+        label: 'Human',
+        accent: '#f59e0b',
+        icon: <Hand size={14} />,
+        canonicalType: 'human',
+        canonicalVariant: 'approval',
+        defaultData: { label: 'Approval', actionType: 'approval' },
+    },
+    {
+        id: 'decision',
+        type: 'condition',
+        label: 'Decision',
+        accent: '#f59e0b',
+        icon: <GitBranch size={14} />,
+        canonicalType: 'decision',
+        canonicalVariant: 'if_else',
+        defaultData: { label: 'Decision', condition: 'Continue only when the required condition is true' },
+    },
+    {
+        id: 'data',
+        type: 'transform',
+        label: 'Data',
+        accent: '#3b82f6',
+        icon: <Shuffle size={14} />,
+        canonicalType: 'data',
+        canonicalVariant: 'transform',
+        defaultData: { label: 'Transform', mapping: 'Map fields to output payload' },
+    },
+    {
+        id: 'subflow',
+        type: 'action',
+        label: 'Subflow',
+        accent: '#8b5cf6',
+        icon: <Rocket size={14} />,
+        canonicalType: 'subflow',
+        canonicalVariant: 'call_workflow',
+        defaultData: { label: 'Call workflow', actionType: 'call_workflow' },
+    },
+    {
+        id: 'code_tool',
+        type: 'code',
+        label: 'Code tool',
+        accent: '#1f2937',
+        icon: <Code2 size={14} />,
+        canonicalType: 'tool',
+        canonicalVariant: 'code',
+        defaultData: { label: 'Code tool', summary: 'Run custom logic', code: 'return input;' },
+    },
+];
+
+const CANVAS_NODE_GROUPS: Array<{ label: string; items: string[] }> = [
+    { label: 'Triggers', items: ['trigger'] },
+    { label: 'Agents', items: ['agent'] },
+    { label: 'Tools', items: ['tool', 'http', 'code_tool'] },
+    { label: 'Human', items: ['human'] },
+    { label: 'Logic', items: ['decision'] },
+    { label: 'Data', items: ['data'] },
+    { label: 'Subflows', items: ['subflow'] },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+}
+
+function isCanvasNodeType(value: string): value is CanvasNodeType {
+    return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(value);
+}
+
+function isCanonicalNodeType(value: string): value is CanonicalNodeType {
+    return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow'].includes(value);
+}
+
+function canonicalTypeForCanvasType(type: CanvasNodeType): CanonicalNodeType {
+    if (type === 'http_request' || type === 'code' || type === 'action') return 'tool';
+    if (type === 'condition') return 'decision';
+    if (type === 'transform') return 'data';
+    return type;
+}
+
+function normalizeTriggerKind(value: unknown): TriggerKind {
+    const token = String(value || '').trim().toLowerCase();
+    return token === 'schedule'
+        || token === 'webhook'
+        || token === 'connector_event'
+        || token === 'workflow'
+        || token === 'file_watch'
+        ? token
+        : 'manual';
+}
+
+function normalizeActionKind(value: unknown): ActionKind {
+    const token = String(value || '').trim().toLowerCase();
+    return token === 'send_wechat'
+        || token === 'send_telegram'
+        || token === 'send_whatsapp'
+        || token === 'send_email'
+        || token === 'write_file'
+        || token === 'connector_action'
+        || token === 'browser'
+        || token === 'file'
+        || token === 'shell'
+        || token === 'document'
+        || token === 'spreadsheet'
+        || token === 'approval'
+        || token === 'review'
+        || token === 'wait_for_reply'
+        || token === 'call_workflow'
+        ? token
+        : 'write_file';
+}
+
+function compactText(value: unknown, max = 160): string {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return '';
+    if (normalized.length <= max) return normalized;
+    return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function normalizeCsvList(value: string): string[] {
+    const seen = new Set<string>();
+    return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => {
+            if (!item || seen.has(item)) return false;
+            seen.add(item);
+            return true;
+        });
+}
+
+function ensureRecord(value: unknown): Record<string, unknown> {
+    return isRecord(value) ? structuredClone(value) : {};
+}
+
+function normalizeStringList(value: unknown, allowed?: readonly string[]): string[] {
+    const items = Array.isArray(value) ? value : [];
+    const seen = new Set<string>();
+    return items
+        .map((item) => String(item || '').trim())
+        .filter((item) => {
+            if (!item || seen.has(item)) return false;
+            if (allowed && !allowed.includes(item)) return false;
+            seen.add(item);
+            return true;
+        });
+}
+
+function toggleStringList(values: string[], token: string, enabled: boolean): string[] {
+    const next = new Set(values);
+    if (enabled) next.add(token);
+    else next.delete(token);
+    return Array.from(next);
+}
+
+function canvasTypeFromCanonicalNode(canonicalType: CanonicalNodeType, canonicalVariant?: string): CanvasNodeType {
+    return deriveCanvasType({ type: canonicalType, variant: canonicalVariant }) || (canonicalType === 'tool' ? 'action' : canonicalType as CanvasNodeType);
+}
+
+function defaultGrantForMount(mount: typeof FILE_MOUNT_OPTIONS[number]): typeof FILE_GRANT_OPTIONS[number] {
+    if (mount === 'artifacts') return 'read_write';
+    if (mount === 'local_root') return 'none';
+    return 'read';
+}
+
+function normalizeFileMountGrantRows(value: unknown): Array<{ mount: typeof FILE_MOUNT_OPTIONS[number]; grant: typeof FILE_GRANT_OPTIONS[number] }> {
+    const entries = Array.isArray(value) ? value : [];
+    return FILE_MOUNT_OPTIONS.map((mount) => {
+        const match = entries.find((item) => isRecord(item) && String(item.mount || '').trim() === mount);
+        const rawGrant = String((isRecord(match) ? match.grant : '') || '').trim();
+        return {
+            mount,
+            grant: FILE_GRANT_OPTIONS.includes(rawGrant as typeof FILE_GRANT_OPTIONS[number])
+                ? rawGrant as typeof FILE_GRANT_OPTIONS[number]
+                : defaultGrantForMount(mount),
+        };
+    });
+}
+
+function deriveCanvasType(rawNode: Record<string, unknown>): CanvasNodeType | null {
+    const rawType = String(rawNode.type || '').trim().toLowerCase();
+    if (isCanvasNodeType(rawType)) return rawType;
+    if (!isCanonicalNodeType(rawType)) return null;
+    const variant = String(rawNode.variant || '').trim().toLowerCase();
+    if (rawType === 'tool') {
+        if (variant === 'http') return 'http_request';
+        if (variant === 'code') return 'code';
+        return 'action';
+    }
+    if (rawType === 'decision') return 'condition';
+    if (rawType === 'data') return 'transform';
+    if (rawType === 'human' || rawType === 'subflow') return 'action';
+    return rawType;
+}
+
+function buildCanvasCompatibilityMeta(
+    rawNode: Record<string, unknown>,
+    canonicalType: CanonicalNodeType,
+    canonicalVariant: string | undefined,
+    canonicalConfig: Record<string, unknown>,
+): CanvasCompatibilityMeta {
+    return {
+        __canonicalType: canonicalType,
+        __canonicalVariant: canonicalVariant,
+        __canonicalConfig: canonicalConfig,
+        __canonicalResources: isRecord(rawNode.resources) ? rawNode.resources : {},
+        __canonicalPolicy: isRecord(rawNode.policy) ? rawNode.policy : {},
+    };
+}
+
+function canonicalToolVariantToActionKind(variant: string): ActionKind {
+    if (variant === 'browser') return 'browser';
+    if (variant === 'file') return 'file';
+    if (variant === 'shell') return 'shell';
+    if (variant === 'document') return 'document';
+    if (variant === 'spreadsheet') return 'spreadsheet';
+    return 'connector_action';
+}
+
+function deriveCanvasDataFromCanonicalNode(rawNode: Record<string, unknown>, canvasType: CanvasNodeType): Partial<CanvasNodeData> {
+    const canonicalType = String(rawNode.type || '').trim().toLowerCase() as CanonicalNodeType;
+    const canonicalVariant = String(rawNode.variant || '').trim().toLowerCase() || undefined;
+    const config = isRecord(rawNode.config) ? rawNode.config : {};
+    const rawData = isRecord(rawNode.data) ? rawNode.data : {};
+    const compatibility = buildCanvasCompatibilityMeta(rawNode, canonicalType, canonicalVariant, config);
+    const label = String(
+        rawData.label
+        || rawNode.label
+        || (canonicalType === 'agent' && isRecord(config.identity) ? config.identity.name || config.identity.role : '')
+        || (canonicalType === 'human' ? config.title : '')
+        || (canonicalType === 'tool' ? config.summary || config.action_id : '')
+        || (canonicalType === 'subflow' ? 'Call workflow' : ''),
+    ).trim();
+    const subtitle = String(rawData.description || rawData.summary || rawNode.subtitle || '').trim();
+
+    if (canvasType === 'trigger') {
+        return {
+            ...compatibility,
+            label: label || 'Trigger',
+            triggerType: normalizeTriggerKind(canonicalVariant),
+        };
+    }
+
+    if (canvasType === 'agent') {
+        const identity = isRecord(config.identity) ? config.identity : {};
+        const runtime = isRecord(config.runtime) ? config.runtime : {};
+        const tools = isRecord(config.tools) ? config.tools : {};
+        return {
+            ...compatibility,
+            label: label || String(identity.name || identity.role || 'Agent').trim() || 'Agent',
+            modelId: String(runtime.model || '').trim(),
+            prompt: String(identity.goal || '').trim(),
+            tools: Array.isArray(tools.explicit_required)
+                ? tools.explicit_required.map((item) => String(item || '').trim()).filter(Boolean)
+                : [],
+            provider: String(runtime.provider || '').trim(),
+            role: String(identity.role || label || 'Agent').trim() || 'Agent',
+            duty: String(identity.success_condition || identity.goal || subtitle || 'Autonomous reasoning').trim(),
+            status: 'ready',
+            description: String(identity.goal || subtitle || 'Autonomous reasoning').trim(),
+        };
+    }
+
+    if (canvasType === 'http_request') {
+        return {
+            ...compatibility,
+            label: label || 'HTTP Request',
+            method: String(config.method || 'GET').trim().toUpperCase() || 'GET',
+            url: String(config.url || '').trim() || 'https://api.example.com',
+        };
+    }
+
+    if (canvasType === 'code') {
+        return {
+            ...compatibility,
+            label: label || 'Code',
+            summary: String(config.summary || subtitle || 'Run custom logic').trim() || 'Run custom logic',
+            code: String(config.code || 'return input;'),
+        };
+    }
+
+    if (canvasType === 'condition') {
+        return {
+            ...compatibility,
+            label: label || 'Decision',
+            condition:
+                String(config.expression || config.field || subtitle || '').trim()
+                || (Array.isArray(config.routes) ? config.routes.map((item) => String(item || '').trim()).filter(Boolean).join(', ') : '')
+                || 'Continue only when the required condition is true',
+        };
+    }
+
+    if (canvasType === 'transform') {
+        return {
+            ...compatibility,
+            label: label || 'Transform',
+            mapping: String(config.mapping || config.template || subtitle || 'Map fields to output payload').trim() || 'Map fields to output payload',
+        };
+    }
+
+    let actionType: ActionKind = 'connector_action';
+    if (canonicalType === 'tool') {
+        actionType = canonicalToolVariantToActionKind(canonicalVariant || '');
+    } else if (canonicalType === 'human') {
+        actionType = normalizeActionKind(canonicalVariant || 'approval');
+    } else if (canonicalType === 'subflow') {
+        actionType = 'call_workflow';
+    }
+    return {
+        ...compatibility,
+        label: label || 'Action',
+        actionType,
+    };
+}
+
+function deriveCanvasMeta(data: CanvasNodeData): CanvasCompatibilityMeta {
+    const raw = isRecord(data) ? data as Record<string, unknown> : {};
+    return {
+        __canonicalType: isCanonicalNodeType(String(raw.__canonicalType || '')) ? String(raw.__canonicalType || '') as CanonicalNodeType : undefined,
+        __canonicalVariant: String(raw.__canonicalVariant || '').trim() || undefined,
+        __canonicalConfig: isRecord(raw.__canonicalConfig) ? raw.__canonicalConfig : undefined,
+        __canonicalResources: isRecord(raw.__canonicalResources) ? raw.__canonicalResources : undefined,
+        __canonicalPolicy: isRecord(raw.__canonicalPolicy) ? raw.__canonicalPolicy : undefined,
+    };
+}
+
+function canonicalVariantForCanvasNode(type: CanvasNodeType, data: CanvasNodeData): string | undefined {
+    if (type === 'trigger') return normalizeTriggerKind((data as TriggerCanvasData).triggerType);
+    if (type === 'http_request') return 'http';
+    if (type === 'code') return 'code';
+    if (type === 'condition') return 'if_else';
+    if (type === 'transform') return 'transform';
+    if (type === 'action') {
+        const actionType = normalizeActionKind((data as ActionCanvasData).actionType);
+        if (actionType === 'approval' || actionType === 'review' || actionType === 'wait_for_reply' || actionType === 'call_workflow') {
+            return actionType;
+        }
+        if (actionType === 'browser' || actionType === 'file' || actionType === 'shell' || actionType === 'document' || actionType === 'spreadsheet') {
+            return actionType;
+        }
+        return 'connector_action';
+    }
+    return undefined;
+}
+
+function canonicalConfigFromCanvasNode(
+    type: CanvasNodeType,
+    data: CanvasNodeData,
+    seed: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+    const next = isRecord(seed) ? structuredClone(seed) : {};
+    if (type === 'trigger') {
+        next.test_only = normalizeTriggerKind((data as TriggerCanvasData).triggerType) === 'manual';
+        if (!isRecord(next.schedule)) next.schedule = {};
+        if (!isRecord(next.webhook)) next.webhook = {};
+        if (!isRecord(next.file_watch)) next.file_watch = {};
+        return next;
+    }
+    if (type === 'agent') {
+        const agentData = data as AgentCanvasData;
+        const identity = isRecord(next.identity) ? { ...next.identity } : {};
+        const runtime = isRecord(next.runtime) ? { ...next.runtime } : {};
+        const tools = isRecord(next.tools) ? { ...next.tools } : {};
+        identity.name = agentData.label;
+        identity.role = agentData.role || agentData.label;
+        identity.goal = agentData.prompt || identity.goal || '';
+        identity.success_condition = agentData.duty || identity.success_condition || '';
+        runtime.model = agentData.modelId || runtime.model || null;
+        runtime.provider = agentData.provider || runtime.provider || null;
+        tools.explicit_required = Array.isArray(agentData.tools) ? agentData.tools : [];
+        next.identity = identity;
+        next.runtime = runtime;
+        next.tools = tools;
+        return next;
+    }
+    if (type === 'http_request') {
+        const httpData = data as HttpRequestCanvasData;
+        next.method = httpData.method;
+        next.url = httpData.url;
+        next.action_id = httpData.label;
+        return next;
+    }
+    if (type === 'condition') {
+        next.expression = (data as ConditionCanvasData).condition;
+        return next;
+    }
+    if (type === 'transform') {
+        next.mapping = (data as TransformCanvasData).mapping;
+        return next;
+    }
+    if (type === 'code') {
+        const codeData = data as CodeCanvasData;
+        next.summary = codeData.summary;
+        next.code = codeData.code;
+        return next;
+    }
+    const actionData = data as ActionCanvasData;
+    if (actionData.actionType === 'approval' || actionData.actionType === 'review' || actionData.actionType === 'wait_for_reply') {
+        next.title = actionData.label;
+        next.decision_options = Array.isArray(next.decision_options) && next.decision_options.length > 0
+            ? next.decision_options
+            : ['approve', 'reject'];
+        return next;
+    }
+    if (actionData.actionType === 'call_workflow') {
+        next.mode = next.mode || 'sync';
+        return next;
+    }
+    if (typeof next.action_id !== 'string' || !String(next.action_id || '').trim()) {
+        next.action_id = actionData.label;
+    }
+    if (typeof next.summary !== 'string' || !String(next.summary || '').trim()) {
+        next.summary = actionData.label;
+    }
+    return next;
+}
+
+function readCanonicalInspectorNode(node: CanvasWorkflowNode): CanonicalInspectorNode {
+    const meta = deriveCanvasMeta(node.data);
+    const canonicalType = meta.__canonicalType ?? canonicalTypeForCanvasType(node.type as CanvasNodeType);
+    const canonicalVariant = meta.__canonicalVariant || canonicalVariantForCanvasNode(node.type as CanvasNodeType, node.data);
+    return {
+        canonicalType,
+        canonicalVariant,
+        config: ensureRecord(meta.__canonicalConfig),
+        resources: ensureRecord(meta.__canonicalResources),
+        policy: ensureRecord(meta.__canonicalPolicy),
+    };
+}
+
+function rebuildCanvasNodeFromCanonical(
+    node: CanvasWorkflowNode,
+    nextState: CanonicalInspectorNode,
+    displayData?: Partial<CanvasNodeData>,
+): CanvasWorkflowNode {
+    const nextCanvasType = canvasTypeFromCanonicalNode(nextState.canonicalType, nextState.canonicalVariant);
+    const rawNode = {
+        type: nextState.canonicalType,
+        variant: nextState.canonicalVariant,
+        config: nextState.config,
+        resources: nextState.resources,
+        policy: nextState.policy,
+        data: {
+            label: String((node.data as { label?: string })?.label || '').trim() || undefined,
+            ...(displayData || {}),
+        },
+    };
+    const derivedData = deriveCanvasDataFromCanonicalNode(rawNode, nextCanvasType);
+    return {
+        ...node,
+        type: nextCanvasType,
+        data: normalizeCanvasNodeData(nextCanvasType, {
+            ...derivedData,
+            ...(displayData || {}),
+            __canonicalType: nextState.canonicalType,
+            __canonicalVariant: nextState.canonicalVariant,
+            __canonicalConfig: nextState.config,
+            __canonicalResources: nextState.resources,
+            __canonicalPolicy: nextState.policy,
+        }),
+    };
 }
 
 function makeNodeId(type: CanvasNodeType): string {
@@ -285,7 +844,7 @@ function makeNodeId(type: CanvasNodeType): string {
 function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
     if (type === 'trigger') {
         return {
-            label: 'Start Trigger',
+            label: 'Manual trigger',
             triggerType: 'manual',
         };
     }
@@ -298,8 +857,8 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
     }
     if (type === 'condition') {
         return {
-            label: 'Condition',
-            condition: 'occupancy_count > 10',
+            label: 'Decision',
+            condition: 'Continue only when the required condition is true',
         };
     }
     if (type === 'transform') {
@@ -310,58 +869,70 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
     }
     if (type === 'code') {
         return {
-            label: 'Code',
+            label: 'Code tool',
             summary: 'Run custom logic',
             code: 'return input;',
         };
     }
     if (type === 'action') {
         return {
-            label: 'Send WhatsApp',
-            actionType: 'send_whatsapp',
+            label: 'Tool action',
+            actionType: 'connector_action',
         };
     }
     return {
-        label: 'AI Agent',
+        label: 'Agent',
         modelId: 'gpt-4.1',
         prompt: 'Describe the task for this agent.',
         tools: [],
         provider: 'openai',
-        role: 'Worker',
-        duty: 'Complete the assigned task clearly and reliably.',
+        role: 'Agent',
+        duty: 'Core reasoning step',
         status: 'ready',
-        description: 'Autonomous reasoning',
+        description: 'Core reasoning step',
     };
+}
+
+function buildNodeDataFromLibraryItem(item: CanvasLibraryItem): CanvasNodeData {
+    return normalizeCanvasNodeData(item.type, {
+        ...defaultNodeData(item.type),
+        ...(item.defaultData || {}),
+        ...(item.canonicalType
+            ? {
+                __canonicalType: item.canonicalType,
+                __canonicalVariant: item.canonicalVariant,
+                __canonicalConfig: {},
+                __canonicalResources: {},
+                __canonicalPolicy: {},
+            }
+            : {}),
+    });
 }
 
 function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNodeData {
     if (!isRecord(raw)) return defaultNodeData(type);
     if (type === 'trigger') {
-        const base: TriggerCanvasData = { label: 'Start Trigger', triggerType: 'manual' };
-        const triggerType = String(raw.triggerType || base.triggerType).trim().toLowerCase();
+        const base: TriggerCanvasData = { label: 'Manual trigger', triggerType: 'manual' };
+        const triggerType = normalizeTriggerKind(raw.triggerType || base.triggerType);
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
-            triggerType: triggerType === 'schedule' || triggerType === 'webhook' ? triggerType : 'manual',
+            triggerType,
         };
     }
     if (type === 'action') {
-        const base: ActionCanvasData = { label: 'Send WhatsApp', actionType: 'send_whatsapp' };
-        const actionType = String(raw.actionType || base.actionType).trim().toLowerCase();
+        const base: ActionCanvasData = { label: 'Tool action', actionType: 'connector_action' };
+        const actionType = normalizeActionKind(raw.actionType || base.actionType);
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
-            actionType:
-                actionType === 'send_wechat'
-                || actionType === 'send_telegram'
-                || actionType === 'send_whatsapp'
-                || actionType === 'send_email'
-                || actionType === 'write_file'
-                    ? actionType
-                    : 'send_whatsapp',
+            actionType,
         };
     }
     if (type === 'http_request') {
         const base: HttpRequestCanvasData = { label: 'HTTP Request', method: 'GET', url: 'https://api.example.com' };
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             method: String(raw.method || base.method).trim().toUpperCase() || base.method,
             url: String(raw.url || base.url).trim() || base.url,
@@ -370,6 +941,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     if (type === 'condition') {
         const base: ConditionCanvasData = { label: 'Condition', condition: 'occupancy_count > 10' };
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             condition: String(raw.condition || base.condition).trim() || base.condition,
         };
@@ -377,6 +949,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     if (type === 'transform') {
         const base: TransformCanvasData = { label: 'Transform', mapping: 'Map fields to output payload' };
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             mapping: String(raw.mapping || base.mapping).trim() || base.mapping,
         };
@@ -384,6 +957,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     if (type === 'code') {
         const base: CodeCanvasData = { label: 'Code', summary: 'Run custom logic', code: 'return input;' };
         return {
+            ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             summary: String(raw.summary || base.summary).trim() || base.summary,
             code: String(raw.code || base.code),
@@ -401,6 +975,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
         description: 'Autonomous reasoning',
     };
     return {
+        ...(raw as CanvasCompatibilityMeta),
         label: String(raw.label || base.label).trim() || base.label,
         modelId: String(raw.modelId || base.modelId).trim() || base.modelId,
         prompt: String(raw.prompt || base.prompt).trim() || base.prompt,
@@ -418,11 +993,14 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
     const parsed: CanvasWorkflowNode[] = [];
     for (const item of rawNodes) {
         if (!isRecord(item)) continue;
-        const type = String(item.type || '').trim().toLowerCase();
-        if (type !== 'trigger' && type !== 'agent' && type !== 'action' && type !== 'http_request' && type !== 'condition' && type !== 'transform' && type !== 'code') continue;
+        const type = deriveCanvasType(item);
+        if (!type) continue;
         const position = isRecord(item.position) ? item.position : {};
         const x = Number(position.x);
         const y = Number(position.y);
+        const normalizedData = isCanvasNodeType(String(item.type || '').trim().toLowerCase())
+            ? normalizeCanvasNodeData(type, item.data)
+            : normalizeCanvasNodeData(type, deriveCanvasDataFromCanonicalNode(item, type));
         parsed.push({
             id: String(item.id || makeNodeId(type)).trim() || makeNodeId(type),
             type,
@@ -430,7 +1008,7 @@ function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
                 x: Number.isFinite(x) ? x : CANVAS_NODE_X,
                 y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + (parsed.length * CANVAS_NODE_GAP),
             },
-            data: normalizeCanvasNodeData(type, item.data),
+            data: normalizedData,
         });
     }
     return parsed;
@@ -474,18 +1052,32 @@ function buildDefaultCanvasNodes(): CanvasWorkflowNode[] {
             id: 'trigger-default',
             type: 'trigger',
             position: { x: CANVAS_NODE_X, y: CANVAS_NODE_TOP },
-            data: { label: 'Start Trigger', triggerType: 'manual' },
+            data: { label: 'Manual trigger', triggerType: 'manual' },
         },
     ];
 }
 
 function serializeCanvasNodes(nodes: CanvasWorkflowNode[]): Array<Record<string, unknown>> {
-    return nodes.map((node) => ({
-        id: node.id,
-        type: node.type,
-        position: node.position,
-        data: node.data,
-    }));
+    return nodes.map((node) => {
+        const canvasType = (isCanvasNodeType(String(node.type || '').trim()) ? String(node.type || '').trim() : 'action') as CanvasNodeType;
+        const compatibility = deriveCanvasMeta(node.data);
+        const canonicalType: CanonicalNodeType = compatibility.__canonicalType ?? canonicalTypeForCanvasType(canvasType);
+        const canonicalVariant = compatibility.__canonicalVariant || canonicalVariantForCanvasNode(canvasType, node.data);
+        const config = canonicalConfigFromCanvasNode(canvasType, node.data, compatibility.__canonicalConfig);
+        const strippedData = Object.fromEntries(
+            Object.entries(node.data as Record<string, unknown>).filter(([key]) => !key.startsWith('__canonical')),
+        );
+        return {
+            id: node.id,
+            type: canonicalType,
+            variant: canonicalVariant,
+            config,
+            resources: compatibility.__canonicalResources || {},
+            policy: compatibility.__canonicalPolicy || {},
+            position: node.position,
+            data: strippedData,
+        };
+    });
 }
 
 function formatTime(ts: string): string {
@@ -649,6 +1241,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const [modelsLoading, setModelsLoading] = useState(false);
     const [credentialBusy, setCredentialBusy] = useState(false);
     const [connectedChannels, setConnectedChannels] = useState<string[]>([]);
+    const [connectorManifests, setConnectorManifests] = useState<BuilderConnectorManifestItem[]>([]);
+    const [availableWorkflows, setAvailableWorkflows] = useState<WorkflowListItem[]>([]);
 
     const [newCredentialLabel, setNewCredentialLabel] = useState('');
     const [openaiKey, setOpenaiKey] = useState('');
@@ -699,6 +1293,40 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const selectedProvider = useMemo(() => {
         return providerOptions.find((item) => normalizeProvider(item.id) === connection.provider) || providerOptions[0];
     }, [providerOptions, connection.provider]);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const items = await fetchBuilderConnectorManifests();
+                if (!cancelled) setConnectorManifests(items);
+            } catch {
+                if (!cancelled) setConnectorManifests([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const payload = await fetchWorkflows(workspaceId);
+                if (cancelled) return;
+                const items = Array.isArray(payload)
+                    ? payload.filter((item): item is WorkflowListItem => isRecord(item) && typeof item.id === 'string')
+                    : [];
+                setAvailableWorkflows(items);
+            } catch {
+                if (!cancelled) setAvailableWorkflows([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [workspaceId]);
 
     const primaryTriggerNode = useMemo(
         () => canvasNodes.find((node) => node.type === 'trigger') || null,
@@ -763,6 +1391,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         () => runtimeProfiles.find((profile) => profile.id === selectedProfileId) || null,
         [runtimeProfiles, selectedProfileId],
     );
+    const groupedRuntimeProfiles = useMemo(() => {
+        const grouped = new Map<string, RuntimeProfileRow[]>();
+        for (const profile of runtimeProfiles) {
+            const key = String(profile.provider || '').trim() || 'other';
+            const current = grouped.get(key) || [];
+            current.push(profile);
+            grouped.set(key, current);
+        }
+        return Array.from(grouped.entries());
+    }, [runtimeProfiles]);
 
     const appendLog = useCallback((message: string, level: LogLevel = 'info') => {
         setLogs((prev) => [...prev, { ts: new Date().toISOString(), level, message }]);
@@ -809,7 +1447,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     const buildCanvasDefinition = useCallback((baseDefinition: WorkflowShape['definition'], nextNodes: CanvasWorkflowNode[], nextEdges: CanvasWorkflowEdge[]) => {
         const baseMeta = baseDefinition?.meta || {};
+        const baseDefaults = isRecord(baseDefinition?.defaults) ? baseDefinition.defaults : {};
+        const baseRuntimeDefaults = isRecord(baseDefaults.runtime) ? baseDefaults.runtime : {};
         return {
+            version: 'empyralist.workflow.v2',
             nodes: serializeCanvasNodes(nextNodes),
             edges: nextEdges.map((edge) => ({
                 id: edge.id,
@@ -818,6 +1459,18 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 sourceHandle: edge.sourceHandle,
                 targetHandle: edge.targetHandle,
             })),
+            defaults: {
+                ...baseDefaults,
+                runtime: {
+                    ...baseRuntimeDefaults,
+                    execution_target: executionTarget,
+                    provider_profile_id: selectedProfileId || undefined,
+                    provider: selectedRuntimeProfile?.provider || undefined,
+                    model: selectedRuntimeProfile?.model || undefined,
+                },
+            },
+            resources: isRecord(baseDefinition?.resources) ? baseDefinition.resources : {},
+            policy: isRecord(baseDefinition?.policy) ? baseDefinition.policy : {},
             meta: {
                 ...baseMeta,
                 mode: 'visual_builder',
@@ -1186,6 +1839,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         () => canvasNodes.find((node) => node.id === selectedNodeId) || null,
         [canvasNodes, selectedNodeId],
     );
+    const selectedCanonicalNode = useMemo(
+        () => (selectedNode ? readCanonicalInspectorNode(selectedNode) : null),
+        [selectedNode],
+    );
+    const availableSubflowTargets = useMemo(
+        () => availableWorkflows.filter((item) => item.id !== workflowId),
+        [availableWorkflows, workflowId],
+    );
 
     const renderedCanvasEdges = useMemo<Edge[]>(
         () => canvasEdges.map((edge) => ({
@@ -1238,11 +1899,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         instance.fitView({ padding: 0.4, duration: 400, maxZoom: 1.1 });
     }, []);
 
-    const addCanvasNode = useCallback((type: CanvasNodeType, position?: { x: number; y: number }) => {
+    const addCanvasNode = useCallback((item: CanvasLibraryItem, position?: { x: number; y: number }) => {
         const insertEdgeId = canvasNodeSearch?.insertEdgeId;
         const edgeToSplit = insertEdgeId ? canvasEdges.find((edge) => edge.id === insertEdgeId) || null : null;
         setCanvasNodes((prev) => {
-            if (type === 'trigger') {
+            if (item.type === 'trigger') {
                 const existingTrigger = prev.find((node) => node.type === 'trigger');
                 if (existingTrigger) {
                     setSelectedNodeId(existingTrigger.id);
@@ -1251,14 +1912,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 }
             }
             const maxY = prev.length > 0 ? Math.max(...prev.map((node) => Number(node.position.y) || CANVAS_NODE_TOP)) : (CANVAS_NODE_TOP - CANVAS_NODE_GAP);
-            const nextNodeId = makeNodeId(type);
+            const nextNodeId = makeNodeId(item.type);
             const nextNodes = [
                 ...prev,
                 {
                     id: nextNodeId,
-                    type,
+                    type: item.type,
                     position: position || { x: CANVAS_NODE_X, y: maxY + CANVAS_NODE_GAP },
-                    data: defaultNodeData(type),
+                    data: buildNodeDataFromLibraryItem(item),
                 },
             ];
             setSelectedNodeId(nextNodeId);
@@ -1291,6 +1952,1314 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         if (!selectedNodeId) return;
         setCanvasNodes((prev) => prev.map((node) => (node.id === selectedNodeId ? updater(node) : node)));
     }, [selectedNodeId]);
+
+    const updateSelectedCanonicalNode = useCallback((
+        updater: (node: CanonicalInspectorNode) => Partial<CanonicalInspectorNode> & { displayData?: Partial<CanvasNodeData> },
+    ) => {
+        updateSelectedNode((node) => {
+            const current = readCanonicalInspectorNode(node);
+            const next = updater(current);
+            return rebuildCanvasNodeFromCanonical(
+                node,
+                {
+                    canonicalType: next.canonicalType ?? current.canonicalType,
+                    canonicalVariant: next.canonicalVariant === undefined ? current.canonicalVariant : next.canonicalVariant,
+                    config: isRecord(next.config) ? next.config : current.config,
+                    resources: isRecord(next.resources) ? next.resources : current.resources,
+                    policy: isRecord(next.policy) ? next.policy : current.policy,
+                },
+                isRecord(next.displayData) ? next.displayData : undefined,
+            );
+        });
+    }, [updateSelectedNode]);
+
+    const renderFileMountGrantFields = useCallback((
+        grants: unknown,
+        onChange: (next: Array<{ mount: typeof FILE_MOUNT_OPTIONS[number]; grant: typeof FILE_GRANT_OPTIONS[number] }>) => void,
+    ) => {
+        const rows = normalizeFileMountGrantRows(grants);
+        return (
+            <div style={workflowSectionDividerStyle}>
+                <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>File mounts</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                    {rows.map((row) => (
+                        <div key={row.mount} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 8, alignItems: 'center' }}>
+                            <div>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{row.mount}</div>
+                                <div style={workflowMutedCopyStyle}>
+                                    {row.mount === 'local_root'
+                                        ? 'Available only on the local companion.'
+                                        : row.mount === 'artifacts'
+                                            ? 'Runtime outputs and generated files.'
+                                            : 'Shared runtime mount.'}
+                                </div>
+                            </div>
+                            <select
+                                value={row.grant}
+                                onChange={(event) => {
+                                    const next = rows.map((item) => (
+                                        item.mount === row.mount
+                                            ? { ...item, grant: event.target.value as typeof FILE_GRANT_OPTIONS[number] }
+                                            : item
+                                    ));
+                                    onChange(next);
+                                }}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                {FILE_GRANT_OPTIONS.map((grant) => (
+                                    <option key={grant} value={grant}>{grant}</option>
+                                ))}
+                            </select>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    }, []);
+
+    const renderCanvasInspector = useCallback(() => {
+        if (!selectedNode || !selectedCanonicalNode) {
+            return <div style={workflowMutedCopyStyle}>Select a node on the canvas to edit its configuration.</div>;
+        }
+
+        const canonicalType = selectedCanonicalNode.canonicalType;
+        const canonicalVariant = selectedCanonicalNode.canonicalVariant || '';
+        const config = selectedCanonicalNode.config;
+
+        return (
+            <>
+                <div>
+                    <label style={workflowLabelStyle}>Node label</label>
+                    <input
+                        value={String((selectedNode.data as { label?: string })?.label || '')}
+                        onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                            ...current,
+                            displayData: { label: e.target.value },
+                        }))}
+                        style={workflowInputSurfaceStyle}
+                    />
+                </div>
+
+                {canonicalType === 'trigger' ? (() => {
+                    const triggerConfig = config;
+                    const triggerConnector = String(triggerConfig.connector || '').trim();
+                    const triggerManifest = connectorManifests.find((item) => item.id === triggerConnector) || null;
+                    const triggerEvents = Array.isArray(triggerManifest?.triggers) ? triggerManifest.triggers : [];
+                    const scheduleConfig = ensureRecord(triggerConfig.schedule);
+                    const webhookConfig = ensureRecord(triggerConfig.webhook);
+                    const fileWatchConfig = ensureRecord(triggerConfig.file_watch);
+                    return (
+                        <>
+                            <div>
+                                <label style={workflowLabelStyle}>Trigger type</label>
+                                <select
+                                    value={canonicalVariant || 'manual'}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        canonicalType: 'trigger',
+                                        canonicalVariant: e.target.value,
+                                        config: {
+                                            ...current.config,
+                                            test_only: e.target.value === 'manual',
+                                        },
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                >
+                                    <option value="manual">Manual</option>
+                                    <option value="connector_event">Connector event</option>
+                                    <option value="schedule">Schedule</option>
+                                    <option value="webhook">Webhook</option>
+                                    <option value="workflow">Workflow trigger</option>
+                                    <option value="file_watch">File watch</option>
+                                </select>
+                            </div>
+
+                            {canonicalVariant === 'connector_event' ? (
+                                <>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Connector</label>
+                                        <select
+                                            value={triggerConnector}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    connector: e.target.value,
+                                                    event: '',
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                        >
+                                            <option value="">Choose connector</option>
+                                            {connectorManifests.map((item) => (
+                                                <option key={item.id} value={item.id}>{item.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Event</label>
+                                        <select
+                                            value={String(triggerConfig.event || '').trim()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    event: e.target.value,
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                            disabled={!triggerConnector}
+                                        >
+                                            <option value="">{triggerConnector ? 'Choose event' : 'Choose connector first'}</option>
+                                            {triggerEvents.map((item) => (
+                                                <option key={item.id} value={item.id}>{item.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    {triggerManifest?.notes?.length ? (
+                                        <div style={workflowMutedCopyStyle}>{triggerManifest.notes[0]}</div>
+                                    ) : null}
+                                </>
+                            ) : null}
+
+                            {canonicalVariant === 'schedule' ? (
+                                <div>
+                                    <label style={workflowLabelStyle}>Schedule expression</label>
+                                    <input
+                                        value={String(scheduleConfig.expression || scheduleConfig.cron || '').trim()}
+                                        onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            config: {
+                                                ...current.config,
+                                                schedule: {
+                                                    ...ensureRecord(current.config.schedule),
+                                                    expression: e.target.value,
+                                                },
+                                            },
+                                        }))}
+                                        placeholder="0 9 * * 1-5"
+                                        style={workflowInputSurfaceStyle}
+                                    />
+                                </div>
+                            ) : null}
+
+                            {canonicalVariant === 'webhook' ? (
+                                <>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Method</label>
+                                        <select
+                                            value={String(webhookConfig.method || 'POST').trim().toUpperCase()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    webhook: {
+                                                        ...ensureRecord(current.config.webhook),
+                                                        method: e.target.value,
+                                                    },
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                        >
+                                            <option value="POST">POST</option>
+                                            <option value="GET">GET</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Path</label>
+                                        <input
+                                            value={String(webhookConfig.path || '').trim()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    webhook: {
+                                                        ...ensureRecord(current.config.webhook),
+                                                        path: e.target.value,
+                                                    },
+                                                },
+                                            }))}
+                                            placeholder="/webhooks/inbound"
+                                            style={workflowInputSurfaceStyle}
+                                        />
+                                    </div>
+                                </>
+                            ) : null}
+
+                            {canonicalVariant === 'workflow' ? (
+                                <div>
+                                    <label style={workflowLabelStyle}>Source workflow</label>
+                                    <select
+                                        value={String(triggerConfig.workflow_id || '').trim()}
+                                        onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            config: {
+                                                ...current.config,
+                                                workflow_id: e.target.value,
+                                            },
+                                        }))}
+                                        style={workflowInputSurfaceStyle}
+                                    >
+                                        <option value="">Choose workflow</option>
+                                        {availableSubflowTargets.map((item) => (
+                                            <option key={item.id} value={item.id}>{item.name || item.id}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ) : null}
+
+                            {canonicalVariant === 'file_watch' ? (
+                                <>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Watch path</label>
+                                        <input
+                                            value={String(fileWatchConfig.path || '').trim()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    file_watch: {
+                                                        ...ensureRecord(current.config.file_watch),
+                                                        path: e.target.value,
+                                                    },
+                                                },
+                                            }))}
+                                            placeholder="/watch/invoices"
+                                            style={workflowInputSurfaceStyle}
+                                        />
+                                    </div>
+                                    <div style={workflowMutedCopyStyle}>
+                                        File watch triggers are valid in schema and drafts, but publish stays blocked until local trigger runtime support is added.
+                                    </div>
+                                </>
+                            ) : null}
+
+                            {canonicalVariant === 'manual' ? (
+                                <div style={workflowMutedCopyStyle}>
+                                    Manual triggers are for draft testing only. Published workflows must include a real trigger.
+                                </div>
+                            ) : null}
+                        </>
+                    );
+                })() : null}
+
+                {canonicalType === 'agent' ? (
+                    <>
+                        {isSimplifiedCanvasWorkflow && !showAdvancedSettings ? (
+                            <div style={workflowMutedCopyStyle}>
+                                Advanced agent settings are hidden for onboarding workflows. Open <strong style={{ color: 'var(--text-primary)' }}>Advanced settings</strong> to adjust runtime, skills, tools, memory, and permissions.
+                            </div>
+                        ) : (() => {
+                            const identity = ensureRecord(config.identity);
+                            const runtime = ensureRecord(config.runtime);
+                            const skills = ensureRecord(config.skills);
+                            const tools = ensureRecord(config.tools);
+                            const memory = ensureRecord(config.memory);
+                            const connectors = ensureRecord(config.connectors);
+                            const permissions = ensureRecord(config.permissions);
+                            const bindings = Array.isArray(connectors.bindings) ? connectors.bindings : [];
+                            const boundConnectorIds = bindings
+                                .filter((item) => isRecord(item) && typeof item.connector_id === 'string')
+                                .map((item) => String((item as Record<string, unknown>).connector_id || '').trim())
+                                .filter(Boolean);
+                            const connectorPermissions = normalizeStringList(permissions.connector_permissions);
+                            const browserPermissions = ensureRecord(permissions.browser_permissions);
+                            return (
+                                <>
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Identity</div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Name</label>
+                                            <input
+                                                value={String(identity.name || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        identity: {
+                                                            ...ensureRecord(current.config.identity),
+                                                            name: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Role</label>
+                                            <input
+                                                value={String(identity.role || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        identity: {
+                                                            ...ensureRecord(current.config.identity),
+                                                            role: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Goal</label>
+                                            <textarea
+                                                value={String(identity.goal || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        identity: {
+                                                            ...ensureRecord(current.config.identity),
+                                                            goal: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={4}
+                                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Success condition</label>
+                                            <textarea
+                                                value={String(identity.success_condition || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        identity: {
+                                                            ...ensureRecord(current.config.identity),
+                                                            success_condition: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={3}
+                                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Output contract</label>
+                                            <textarea
+                                                value={String(identity.output_contract || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        identity: {
+                                                            ...ensureRecord(current.config.identity),
+                                                            output_contract: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={3}
+                                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Runtime</div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Provider profile</label>
+                                            <select
+                                                value={String(runtime.provider_profile_id || '').trim()}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        runtime: {
+                                                            ...ensureRecord(current.config.runtime),
+                                                            provider_profile_id: e.target.value || null,
+                                                        },
+                                                    },
+                                                }))}
+                                                style={workflowInputSurfaceStyle}
+                                            >
+                                                <option value="">Automatic</option>
+                                                {groupedRuntimeProfiles.map(([provider, profiles]) => (
+                                                    <optgroup key={provider} label={provider}>
+                                                        {profiles.map((profile) => (
+                                                            <option key={profile.id} value={profile.id}>
+                                                                {profile.label}{profile.model ? ` · ${profile.model}` : ''}
+                                                            </option>
+                                                        ))}
+                                                    </optgroup>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Provider</label>
+                                                <select
+                                                    value={String(runtime.provider || connection.provider || 'openai').trim()}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            runtime: {
+                                                                ...ensureRecord(current.config.runtime),
+                                                                provider: e.target.value,
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                >
+                                                    {providerOptions.map((provider) => (
+                                                        <option key={provider.id} value={normalizeProvider(provider.id)}>{provider.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Model</label>
+                                                <select
+                                                    value={String(runtime.model || '').trim()}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            runtime: {
+                                                                ...ensureRecord(current.config.runtime),
+                                                                model: e.target.value,
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                >
+                                                    {(models.length > 0 ? models : [String(runtime.model || operator.modelId || 'gpt-4.1')]).map((model) => (
+                                                        <option key={model} value={model}>{model}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Run location</label>
+                                                <select
+                                                    value={String(runtime.execution_target || 'auto').trim()}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            runtime: {
+                                                                ...ensureRecord(current.config.runtime),
+                                                                execution_target: e.target.value,
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                >
+                                                    <option value="auto">Automatic</option>
+                                                    <option value="cloud">Cloud</option>
+                                                    <option value="local_companion">Local</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Timeout (sec)</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={String(runtime.timeout_seconds ?? 300)}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            runtime: {
+                                                                ...ensureRecord(current.config.runtime),
+                                                                timeout_seconds: Number(e.target.value || 0),
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Retries</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={String(ensureRecord(runtime.retry_policy).max_attempts ?? 1)}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            runtime: {
+                                                                ...ensureRecord(current.config.runtime),
+                                                                retry_policy: {
+                                                                    ...ensureRecord(ensureRecord(current.config.runtime).retry_policy),
+                                                                    max_attempts: Number(e.target.value || 0),
+                                                                },
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Token budget</label>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                value={runtime.token_budget == null ? '' : String(runtime.token_budget)}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        runtime: {
+                                                            ...ensureRecord(current.config.runtime),
+                                                            token_budget: e.target.value ? Number(e.target.value) : null,
+                                                        },
+                                                    },
+                                                }))}
+                                                placeholder="Optional"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Skills</div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Skill bundles</label>
+                                            <input
+                                                value={normalizeStringList(skills.skill_bundle_ids).join(', ')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        skills: {
+                                                            ...ensureRecord(current.config.skills),
+                                                            skill_bundle_ids: normalizeCsvList(e.target.value),
+                                                        },
+                                                    },
+                                                }))}
+                                                placeholder="customer-ops, routing"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Prompt append</label>
+                                            <textarea
+                                                value={String(skills.prompt_append || '')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        skills: {
+                                                            ...ensureRecord(current.config.skills),
+                                                            prompt_append: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={3}
+                                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Tools</div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Dynamic allowed</label>
+                                            <input
+                                                value={normalizeStringList(tools.dynamic_allowed).join(', ')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        tools: {
+                                                            ...ensureRecord(current.config.tools),
+                                                            dynamic_allowed: normalizeCsvList(e.target.value),
+                                                        },
+                                                    },
+                                                }))}
+                                                placeholder="Leave empty to require explicit tool nodes"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Explicit required</label>
+                                            <input
+                                                value={normalizeStringList(tools.explicit_required).join(', ')}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        tools: {
+                                                            ...ensureRecord(current.config.tools),
+                                                            explicit_required: normalizeCsvList(e.target.value),
+                                                        },
+                                                    },
+                                                }))}
+                                                placeholder="draft_email, send_message"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Memory</div>
+                                        <div style={{ display: 'grid', gap: 8 }}>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Read scopes</label>
+                                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                                    {MEMORY_SCOPE_OPTIONS.map((scope) => {
+                                                        const values = normalizeStringList(memory.read_scopes, MEMORY_SCOPE_OPTIONS);
+                                                        return (
+                                                            <label key={scope} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={values.includes(scope)}
+                                                                    onChange={(e) => updateSelectedCanonicalNode((current) => {
+                                                                        const currentMemory = ensureRecord(current.config.memory);
+                                                                        const currentValues = normalizeStringList(currentMemory.read_scopes, MEMORY_SCOPE_OPTIONS);
+                                                                        return {
+                                                                            ...current,
+                                                                            config: {
+                                                                                ...current.config,
+                                                                                memory: {
+                                                                                    ...currentMemory,
+                                                                                    read_scopes: toggleStringList(currentValues, scope, e.target.checked),
+                                                                                },
+                                                                            },
+                                                                        };
+                                                                    })}
+                                                                />
+                                                                {scope}
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Write scopes</label>
+                                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                                    {MEMORY_SCOPE_OPTIONS.map((scope) => {
+                                                        const values = normalizeStringList(memory.write_scopes, MEMORY_SCOPE_OPTIONS);
+                                                        return (
+                                                            <label key={scope} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={values.includes(scope)}
+                                                                    onChange={(e) => updateSelectedCanonicalNode((current) => {
+                                                                        const currentMemory = ensureRecord(current.config.memory);
+                                                                        const currentValues = normalizeStringList(currentMemory.write_scopes, MEMORY_SCOPE_OPTIONS);
+                                                                        return {
+                                                                            ...current,
+                                                                            config: {
+                                                                                ...current.config,
+                                                                                memory: {
+                                                                                    ...currentMemory,
+                                                                                    write_scopes: toggleStringList(currentValues, scope, e.target.checked),
+                                                                                },
+                                                                            },
+                                                                        };
+                                                                    })}
+                                                                />
+                                                                {scope}
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label style={workflowLabelStyle}>Retrieval</label>
+                                                <select
+                                                    value={String(memory.retrieval_policy || 'recent').trim()}
+                                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                        ...current,
+                                                        config: {
+                                                            ...current.config,
+                                                            memory: {
+                                                                ...ensureRecord(current.config.memory),
+                                                                retrieval_policy: e.target.value,
+                                                            },
+                                                        },
+                                                    }))}
+                                                    style={workflowInputSurfaceStyle}
+                                                >
+                                                    {MEMORY_RETRIEVAL_OPTIONS.map((item) => (
+                                                        <option key={item} value={item}>{item}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Connectors</div>
+                                        <div style={{ display: 'grid', gap: 8 }}>
+                                            {connectorManifests.map((manifest) => (
+                                                <div key={manifest.id} style={{ display: 'grid', gap: 6, padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border-subtle)', background: 'var(--bg-panel-muted)' }}>
+                                                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>{manifest.label}</div>
+                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={boundConnectorIds.includes(manifest.id)}
+                                                            onChange={(e) => updateSelectedCanonicalNode((current) => {
+                                                                const currentConnectors = ensureRecord(current.config.connectors);
+                                                                const currentBindings = Array.isArray(currentConnectors.bindings) ? currentConnectors.bindings.filter((item) => isRecord(item)) : [];
+                                                                const nextBindings = e.target.checked
+                                                                    ? [
+                                                                        ...currentBindings.filter((item) => String(item.connector_id || '').trim() !== manifest.id),
+                                                                        { connector_id: manifest.id, binding_id: null, resource: null },
+                                                                    ]
+                                                                    : currentBindings.filter((item) => String(item.connector_id || '').trim() !== manifest.id);
+                                                                return {
+                                                                    ...current,
+                                                                    config: {
+                                                                        ...current.config,
+                                                                        connectors: {
+                                                                            ...currentConnectors,
+                                                                            bindings: nextBindings,
+                                                                        },
+                                                                    },
+                                                                };
+                                                            })}
+                                                        />
+                                                        Bind connector
+                                                    </label>
+                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={connectorPermissions.includes(manifest.id)}
+                                                            onChange={(e) => updateSelectedCanonicalNode((current) => {
+                                                                const currentPermissions = ensureRecord(current.config.permissions);
+                                                                const currentValues = normalizeStringList(currentPermissions.connector_permissions);
+                                                                return {
+                                                                    ...current,
+                                                                    config: {
+                                                                        ...current.config,
+                                                                        permissions: {
+                                                                            ...currentPermissions,
+                                                                            connector_permissions: toggleStringList(currentValues, manifest.id, e.target.checked),
+                                                                        },
+                                                                    },
+                                                                };
+                                                            })}
+                                                        />
+                                                        Allow connector
+                                                    </label>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div style={workflowSectionDividerStyle}>
+                                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Permissions</div>
+                                        <div>
+                                            <label style={workflowLabelStyle}>Action policy</label>
+                                            <select
+                                                value={String(permissions.action_policy || 'guarded').trim()}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        permissions: {
+                                                            ...ensureRecord(current.config.permissions),
+                                                            action_policy: e.target.value,
+                                                        },
+                                                    },
+                                                }))}
+                                                style={workflowInputSurfaceStyle}
+                                            >
+                                                {ACTION_POLICY_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(browserPermissions.allow)}
+                                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                    ...current,
+                                                    config: {
+                                                        ...current.config,
+                                                        permissions: {
+                                                            ...ensureRecord(current.config.permissions),
+                                                            browser_permissions: {
+                                                                ...ensureRecord(ensureRecord(current.config.permissions).browser_permissions),
+                                                                allow: e.target.checked,
+                                                            },
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                            Allow browser automation
+                                        </label>
+                                        {renderFileMountGrantFields(
+                                            permissions.file_mount_grants,
+                                            (next) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    permissions: {
+                                                        ...ensureRecord(current.config.permissions),
+                                                        file_mount_grants: next,
+                                                    },
+                                                },
+                                            })),
+                                        )}
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </>
+                ) : null}
+
+                {canonicalType === 'tool' ? (() => {
+                    const toolConfig = config;
+                    const toolPermissions = ensureRecord(toolConfig.permissions);
+                    const toolVariant = canonicalVariant || 'connector_action';
+                    const toolConnectorId = String(toolConfig.connector || '').trim();
+                    const toolManifest = connectorManifests.find((item) => item.id === toolConnectorId) || null;
+                    const toolActions = Array.isArray(toolManifest?.actions) ? toolManifest.actions : [];
+                    return (
+                        <>
+                            <div>
+                                <label style={workflowLabelStyle}>Tool type</label>
+                                <select
+                                    value={toolVariant}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        canonicalType: 'tool',
+                                        canonicalVariant: e.target.value,
+                                        config: {
+                                            ...current.config,
+                                            execution_target: e.target.value === 'shell'
+                                                ? 'local_companion'
+                                                : current.config.execution_target,
+                                        },
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                >
+                                    <option value="connector_action">Connector action</option>
+                                    <option value="http">HTTP request</option>
+                                    <option value="browser">Browser</option>
+                                    <option value="file">File</option>
+                                    <option value="shell">Shell</option>
+                                    <option value="document">Document</option>
+                                    <option value="spreadsheet">Spreadsheet</option>
+                                    <option value="code">Code</option>
+                                </select>
+                            </div>
+
+                            {toolVariant === 'connector_action' ? (
+                                <>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Connector</label>
+                                        <select
+                                            value={toolConnectorId}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    connector: e.target.value,
+                                                    action_id: '',
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                        >
+                                            <option value="">Choose connector</option>
+                                            {connectorManifests.map((item) => (
+                                                <option key={item.id} value={item.id}>{item.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Action</label>
+                                        <select
+                                            value={String(toolConfig.action_id || '').trim()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    action_id: e.target.value,
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                            disabled={!toolConnectorId}
+                                        >
+                                            <option value="">{toolConnectorId ? 'Choose action' : 'Choose connector first'}</option>
+                                            {toolActions.map((item) => (
+                                                <option key={item.id} value={item.id}>{item.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </>
+                            ) : null}
+
+                            {toolVariant === 'http' ? (
+                                <>
+                                    <div>
+                                        <label style={workflowLabelStyle}>Method</label>
+                                        <select
+                                            value={String(toolConfig.method || 'GET').trim().toUpperCase()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    method: e.target.value,
+                                                },
+                                            }))}
+                                            style={workflowInputSurfaceStyle}
+                                        >
+                                            <option value="GET">GET</option>
+                                            <option value="POST">POST</option>
+                                            <option value="PUT">PUT</option>
+                                            <option value="PATCH">PATCH</option>
+                                            <option value="DELETE">DELETE</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={workflowLabelStyle}>URL</label>
+                                        <input
+                                            value={String(toolConfig.url || '').trim()}
+                                            onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                                ...current,
+                                                config: {
+                                                    ...current.config,
+                                                    url: e.target.value,
+                                                },
+                                            }))}
+                                            placeholder="https://api.example.com"
+                                            style={workflowInputSurfaceStyle}
+                                        />
+                                    </div>
+                                </>
+                            ) : null}
+
+                            <div>
+                                <label style={workflowLabelStyle}>Execution target</label>
+                                <select
+                                    value={String(toolConfig.execution_target || (toolVariant === 'shell' ? 'local_companion' : 'auto')).trim()}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            execution_target: e.target.value,
+                                        },
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                >
+                                    <option value="auto">Automatic</option>
+                                    <option value="cloud">Cloud</option>
+                                    <option value="local_companion">Local</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={workflowLabelStyle}>Summary</label>
+                                <input
+                                    value={String(toolConfig.summary || '').trim()}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            summary: e.target.value,
+                                        },
+                                    }))}
+                                    placeholder="What this tool does"
+                                    style={workflowInputSurfaceStyle}
+                                />
+                            </div>
+
+                            {toolVariant === 'code' ? (
+                                <div>
+                                    <label style={workflowLabelStyle}>Code</label>
+                                    <textarea
+                                        value={String(toolConfig.code || '')}
+                                        onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            config: {
+                                                ...current.config,
+                                                code: e.target.value,
+                                            },
+                                        }))}
+                                        rows={6}
+                                        style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                    />
+                                </div>
+                            ) : null}
+
+                            {renderFileMountGrantFields(
+                                toolPermissions.file_mount_grants,
+                                (next) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        permissions: {
+                                            ...ensureRecord(current.config.permissions),
+                                            file_mount_grants: next,
+                                        },
+                                    },
+                                })),
+                            )}
+                        </>
+                    );
+                })() : null}
+
+                {canonicalType === 'human' ? (() => {
+                    const humanConfig = config;
+                    return (
+                        <>
+                            <div>
+                                <label style={workflowLabelStyle}>Checkpoint type</label>
+                                <select
+                                    value={canonicalVariant || 'approval'}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        canonicalType: 'human',
+                                        canonicalVariant: e.target.value,
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                >
+                                    <option value="approval">Approval</option>
+                                    <option value="review">Review</option>
+                                    <option value="wait_for_reply">Wait for reply</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style={workflowLabelStyle}>Title</label>
+                                <input
+                                    value={String(humanConfig.title || '').trim()}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            title: e.target.value,
+                                        },
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                />
+                            </div>
+                            <div>
+                                <label style={workflowLabelStyle}>Instructions</label>
+                                <textarea
+                                    value={String(humanConfig.instructions || '')}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            instructions: e.target.value,
+                                        },
+                                    }))}
+                                    rows={4}
+                                    style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={workflowLabelStyle}>Decision options</label>
+                                <input
+                                    value={normalizeStringList(humanConfig.decision_options).join(', ')}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            decision_options: normalizeCsvList(e.target.value),
+                                        },
+                                    }))}
+                                    placeholder="approve, reject"
+                                    style={workflowInputSurfaceStyle}
+                                />
+                            </div>
+                            <div>
+                                <label style={workflowLabelStyle}>Timeout (sec)</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={humanConfig.timeout_seconds == null ? '' : String(humanConfig.timeout_seconds)}
+                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        config: {
+                                            ...current.config,
+                                            timeout_seconds: e.target.value ? Number(e.target.value) : null,
+                                        },
+                                    }))}
+                                    style={workflowInputSurfaceStyle}
+                                />
+                            </div>
+                        </>
+                    );
+                })() : null}
+
+                {canonicalType === 'decision' ? (
+                    <>
+                        <div>
+                            <label style={workflowLabelStyle}>Decision type</label>
+                            <select
+                                value={canonicalVariant || 'if_else'}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    canonicalType: 'decision',
+                                    canonicalVariant: e.target.value,
+                                }))}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="if_else">If / else</option>
+                                <option value="classifier">Classifier</option>
+                                <option value="field_router">Field router</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Expression</label>
+                            <textarea
+                                value={String(config.expression || '').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        expression: e.target.value,
+                                    },
+                                }))}
+                                rows={3}
+                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Field</label>
+                            <input
+                                value={String(config.field || '').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        field: e.target.value,
+                                    },
+                                }))}
+                                placeholder="priority"
+                                style={workflowInputSurfaceStyle}
+                            />
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Routes</label>
+                            <input
+                                value={normalizeStringList(config.routes).join(', ')}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        routes: normalizeCsvList(e.target.value),
+                                    },
+                                }))}
+                                placeholder="high, medium, low"
+                                style={workflowInputSurfaceStyle}
+                            />
+                        </div>
+                    </>
+                ) : null}
+
+                {canonicalType === 'data' ? (
+                    <>
+                        <div>
+                            <label style={workflowLabelStyle}>Data step</label>
+                            <select
+                                value={canonicalVariant || 'transform'}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    canonicalType: 'data',
+                                    canonicalVariant: e.target.value,
+                                }))}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="transform">Transform</option>
+                                <option value="compose">Compose</option>
+                                <option value="validate">Validate</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Mapping</label>
+                            <textarea
+                                value={String(config.mapping || '').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        mapping: e.target.value,
+                                    },
+                                }))}
+                                rows={4}
+                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Template</label>
+                            <textarea
+                                value={String(config.template || '').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        template: e.target.value,
+                                    },
+                                }))}
+                                rows={4}
+                                style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
+                            />
+                        </div>
+                    </>
+                ) : null}
+
+                {canonicalType === 'subflow' ? (
+                    <>
+                        <div>
+                            <label style={workflowLabelStyle}>Subflow target</label>
+                            <select
+                                value={String(config.workflow_id || '').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    canonicalType: 'subflow',
+                                    canonicalVariant: 'call_workflow',
+                                    config: {
+                                        ...current.config,
+                                        workflow_id: e.target.value,
+                                    },
+                                }))}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="">Choose workflow</option>
+                                {availableSubflowTargets.map((item) => (
+                                    <option key={item.id} value={item.id}>{item.name || item.id}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={workflowLabelStyle}>Mode</label>
+                            <select
+                                value={String(config.mode || 'sync').trim()}
+                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
+                                    ...current,
+                                    config: {
+                                        ...current.config,
+                                        mode: e.target.value,
+                                    },
+                                }))}
+                                style={workflowInputSurfaceStyle}
+                            >
+                                <option value="sync">Sync</option>
+                            </select>
+                        </div>
+                    </>
+                ) : null}
+            </>
+        );
+    }, [
+        availableSubflowTargets,
+        connectorManifests,
+        groupedRuntimeProfiles,
+        isSimplifiedCanvasWorkflow,
+        models,
+        operator.modelId,
+        providerOptions,
+        renderFileMountGrantFields,
+        selectedCanonicalNode,
+        selectedNode,
+        showAdvancedSettings,
+        updateSelectedCanonicalNode,
+        connection.provider,
+    ]);
 
     const handleCanvasNodesChange = useCallback((changes: NodeChange<CanvasWorkflowNode>[]) => {
         setCanvasNodes((prev) => applyNodeChanges(changes, prev));
@@ -1346,6 +3315,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         if (!query) return library;
         return library.filter((item) => item.label.toLowerCase().includes(query));
     }, [canvasNodeSearch?.insertEdgeId, canvasNodeSearch?.query]);
+
+    const groupedCanvasNodeLibrary = useMemo(
+        () =>
+            CANVAS_NODE_GROUPS.map((group) => ({
+                ...group,
+                items: group.items
+                    .map((itemId) => filteredCanvasNodeLibrary.find((item) => item.id === itemId) || null)
+                    .filter((item): item is CanvasLibraryItem => item !== null),
+            })).filter((group) => group.items.length > 0),
+        [filteredCanvasNodeLibrary],
+    );
 
     useEffect(() => {
         if (!canvasNodeSearch) return;
@@ -2058,21 +4038,26 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     >
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
                             <div className="workflow-pro-section-title">Palette</div>
-                            {CANVAS_NODE_LIBRARY.map((item) => (
-                                <button
-                                    key={item.type}
-                                    className="btn-secondary workflow-canvas-palette-btn"
-                                    onClick={() => addCanvasNode(item.type)}
-                                    style={{ ['--workflow-palette-accent' as string]: item.accent }}
-                                >
-                                    <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${item.accent}1f`, color: item.accent }}>
-                                        {item.icon}
-                                    </span>
-                                    {item.label}
-                                </button>
+                            {groupedCanvasNodeLibrary.map((group) => (
+                                <div key={group.label} style={{ display: 'grid', gap: 8 }}>
+                                    <div className="workflow-pro-section-title" style={{ fontSize: 11 }}>{group.label}</div>
+                                    {group.items.map((item) => (
+                                        <button
+                                            key={item.id}
+                                            className="btn-secondary workflow-canvas-palette-btn"
+                                            onClick={() => addCanvasNode(item)}
+                                            style={{ ['--workflow-palette-accent' as string]: item.accent }}
+                                        >
+                                            <span style={{ width: 20, height: 20, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${item.accent}1f`, color: item.accent }}>
+                                                {item.icon}
+                                            </span>
+                                            {item.label}
+                                        </button>
+                                    ))}
+                                </div>
                             ))}
                             <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.5 }}>
-                                Click a node type to add it, or click empty canvas to search and place a node. Drag handles to connect steps. Press Backspace to delete the selected node or edge.
+                                Add triggers, agents, tools, human checkpoints, decisions, data steps, and subflows. Drag handles to connect steps. Press Backspace to delete the selected node or edge.
                             </div>
                         </section>
 
@@ -2175,10 +4160,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
                                         {filteredCanvasNodeLibrary.map((item) => (
                                             <button
-                                                key={item.type}
+                                                key={item.id}
                                                 type="button"
                                                 className="btn-secondary"
-                                                onClick={() => addCanvasNode(item.type, { x: canvasNodeSearch.flowX, y: canvasNodeSearch.flowY })}
+                                                onClick={() => addCanvasNode(item, { x: canvasNodeSearch.flowX, y: canvasNodeSearch.flowY })}
                                                 style={{ justifyContent: 'flex-start', borderLeft: `3px solid ${item.accent}` }}
                                             >
                                                 {item.label}
@@ -2194,176 +4179,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                         <section className="workflow-pro-panel" style={{ overflowY: 'auto', display: 'grid', gap: 12, alignContent: 'start' }}>
                             <div className="workflow-pro-section-title">Inspector</div>
-                            {!selectedNode ? (
-                                <div style={workflowMutedCopyStyle}>Select a node on the canvas to edit its configuration.</div>
-                            ) : (
-                                <>
-                                    <div>
-                                        <label style={workflowLabelStyle}>Label</label>
-                                        <input
-                                            value={String((selectedNode.data as { label?: string })?.label || '')}
-                                            onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, label: e.target.value } }))}
-                                            style={workflowInputSurfaceStyle}
-                                        />
-                                    </div>
-
-                                    {selectedNode.type === 'trigger' ? (
-                                        <div>
-                                            <label style={workflowLabelStyle}>Trigger type</label>
-                                            <select
-                                                value={String((selectedNode.data as TriggerCanvasData).triggerType || 'manual')}
-                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, triggerType: e.target.value as TriggerKind } }))}
-                                                style={workflowInputSurfaceStyle}
-                                            >
-                                                <option value="manual">Manual</option>
-                                                <option value="schedule">Schedule</option>
-                                                <option value="webhook">Webhook</option>
-                                            </select>
-                                        </div>
-                                    ) : null}
-
-                                    {selectedNode.type === 'agent' ? (
-                                        <>
-                                            {isSimplifiedCanvasWorkflow && !showAdvancedSettings ? (
-                                                <div style={workflowMutedCopyStyle}>
-                                                    Advanced agent settings are hidden for onboarding workflows. Open <strong style={{ color: 'var(--text-primary)' }}>Advanced settings</strong> to adjust the model, prompt, or tools.
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <div>
-                                                        <label style={workflowLabelStyle}>Model</label>
-                                                        <select
-                                                            value={String((selectedNode.data as AgentCanvasData).modelId || operator.modelId)}
-                                                            onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, modelId: e.target.value } }))}
-                                                            style={workflowInputSurfaceStyle}
-                                                        >
-                                                            {(models.length > 0 ? models : [operator.modelId || 'gpt-4.1']).map((model) => (
-                                                                <option key={model} value={model}>{model}</option>
-                                                            ))}
-                                                        </select>
-                                                    </div>
-                                                    <div>
-                                                        <label style={workflowLabelStyle}>Prompt</label>
-                                                        <textarea
-                                                            value={String((selectedNode.data as AgentCanvasData).prompt || '')}
-                                                            onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, prompt: e.target.value } }))}
-                                                            rows={5}
-                                                            style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <label style={workflowLabelStyle}>Tools</label>
-                                                        <input
-                                                            value={String(((selectedNode.data as AgentCanvasData).tools || []).join(', '))}
-                                                            onChange={(e) => updateSelectedNode((node) => ({
-                                                                ...node,
-                                                                data: {
-                                                                    ...node.data,
-                                                                    tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean),
-                                                                },
-                                                            }))}
-                                                            placeholder="browser, telegram, files"
-                                                            style={workflowInputSurfaceStyle}
-                                                        />
-                                                    </div>
-                                                </>
-                                            )}
-                                        </>
-                                    ) : null}
-
-                                    {selectedNode.type === 'action' ? (
-                                        <div>
-                                            <label style={workflowLabelStyle}>Action</label>
-                                            <select
-                                                value={String((selectedNode.data as ActionCanvasData).actionType || 'send_whatsapp')}
-                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, actionType: e.target.value as ActionKind } }))}
-                                                style={workflowInputSurfaceStyle}
-                                            >
-                                                <option value="send_whatsapp">Send WhatsApp</option>
-                                                <option value="send_email">Send Email</option>
-                                                <option value="send_wechat">Send WeChat</option>
-                                                <option value="send_telegram">Send Telegram</option>
-                                                <option value="write_file">Write File</option>
-                                            </select>
-                                        </div>
-                                    ) : null}
-
-                                    {selectedNode.type === 'http_request' ? (
-                                        <>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Method</label>
-                                                <select
-                                                    value={String((selectedNode.data as HttpRequestCanvasData).method || 'GET')}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, method: e.target.value } }))}
-                                                    style={workflowInputSurfaceStyle}
-                                                >
-                                                    <option value="GET">GET</option>
-                                                    <option value="POST">POST</option>
-                                                    <option value="PUT">PUT</option>
-                                                    <option value="PATCH">PATCH</option>
-                                                    <option value="DELETE">DELETE</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label style={workflowLabelStyle}>URL</label>
-                                                <input
-                                                    value={String((selectedNode.data as HttpRequestCanvasData).url || '')}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, url: e.target.value } }))}
-                                                    placeholder="https://api.example.com"
-                                                    style={workflowInputSurfaceStyle}
-                                                />
-                                            </div>
-                                        </>
-                                    ) : null}
-
-                                    {selectedNode.type === 'condition' ? (
-                                        <div>
-                                            <label style={workflowLabelStyle}>Condition</label>
-                                            <input
-                                                value={String((selectedNode.data as ConditionCanvasData).condition || '')}
-                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, condition: e.target.value } }))}
-                                                placeholder="status === 'open'"
-                                                style={workflowInputSurfaceStyle}
-                                            />
-                                        </div>
-                                    ) : null}
-
-                                    {selectedNode.type === 'transform' ? (
-                                        <div>
-                                            <label style={workflowLabelStyle}>Mapping</label>
-                                            <input
-                                                value={String((selectedNode.data as TransformCanvasData).mapping || '')}
-                                                onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, mapping: e.target.value } }))}
-                                                placeholder="Map fields to output payload"
-                                                style={workflowInputSurfaceStyle}
-                                            />
-                                        </div>
-                                    ) : null}
-
-                                    {selectedNode.type === 'code' ? (
-                                        <>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Summary</label>
-                                                <input
-                                                    value={String((selectedNode.data as CodeCanvasData).summary || '')}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, summary: e.target.value } }))}
-                                                    placeholder="Normalize data"
-                                                    style={workflowInputSurfaceStyle}
-                                                />
-                                            </div>
-                                            <div>
-                                                <label style={workflowLabelStyle}>Code</label>
-                                                <textarea
-                                                    value={String((selectedNode.data as CodeCanvasData).code || '')}
-                                                    onChange={(e) => updateSelectedNode((node) => ({ ...node, data: { ...node.data, code: e.target.value } }))}
-                                                    rows={5}
-                                                    style={{ ...workflowInputSurfaceStyle, padding: 10, resize: 'vertical' }}
-                                                />
-                                            </div>
-                                        </>
-                                    ) : null}
-                                </>
-                            )}
+                            {renderCanvasInspector()}
                         </section>
                     </div>
                 </div>

@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Laptop, Server, Settings, TriangleAlert, UserRound, Wrench } from 'lucide-react';
+import { ChevronDown, Laptop, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
@@ -20,9 +20,9 @@ export default function PlatformTopBar() {
   const { status } = usePlatformShell();
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '48px');
+    document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
     return () => {
-      document.documentElement.style.setProperty('--topbar-height', '48px');
+      document.documentElement.style.setProperty('--topbar-height', '56px');
     };
   }, [hideShellChrome]);
 
@@ -94,15 +94,6 @@ export default function PlatformTopBar() {
           <span>{runtimeStatus.label}</span>
         </button>
         <PwaInstallControl />
-        <button
-          type="button"
-          className="orion-shellbar-icon-btn"
-          onClick={() => safeNavigate('/settings')}
-          aria-label="Settings"
-          title="Settings"
-        >
-          <Settings size={15} />
-        </button>
         <button
           type="button"
           className="orion-shellbar-avatar-btn"

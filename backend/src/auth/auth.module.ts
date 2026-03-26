@@ -25,6 +25,6 @@ import { HybridAuthGuard } from './guards/hybrid-auth.guard';
     ],
     controllers: [AuthController],
     providers: [AuthService, JwtStrategy, HybridAuthGuard],
-    exports: [AuthService, JwtStrategy, HybridAuthGuard, PassportModule],
+    exports: [AuthService, JwtStrategy, HybridAuthGuard, PassportModule, JwtModule],
 })
 export class AuthModule { }

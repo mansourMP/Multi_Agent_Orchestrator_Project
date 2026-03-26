@@ -1,5 +1,8 @@
 import logging
+import base64
+import asyncio
 
+from server_modules.builder_runtime_mapping import map_builder_permissions_to_runtime_metadata
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -65,7 +68,128 @@ def selected_execution_target_from_context(context: Optional[Dict[str, Any]]) ->
     return EXECUTION_TARGET_LOCAL_COMPANION if ORION_LOCAL_COMPANION_ENABLED else EXECUTION_TARGET_CLOUD
 
 
+def _workflow_definition_from_context(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw = context.get("workflow_definition")
+    if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
+        return raw
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    raw = metadata.get("workflow_definition")
+    if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
+        return raw
+    return None
+
+
+def _workflow_label(node: Dict[str, Any]) -> str:
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    return (
+        str(data.get("label") or "").strip()
+        or str(node.get("label") or "").strip()
+        or str(identity.get("name") or identity.get("role") or "").strip()
+        or str(node.get("id") or "").strip()
+        or "Node"
+    )
+
+
+def _workflow_text_payload(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=True, indent=2)
+        except Exception:
+            return str(value)
+    return str(value or "").strip()
+
+
+def _workflow_variant_default_tool_id(variant: str) -> str:
+    mapping = {
+        "shell": "execute_shell_command",
+        "code": "execute_shell_command",
+        "browser": "browser_automation",
+        "file": "read_write_files",
+        "document": "document_create",
+        "spreadsheet": "spreadsheet_update",
+    }
+    return mapping.get(str(variant or "").strip().lower(), "")
+
+
+def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
+    clean_variant = str(variant or "").strip().lower()
+    if clean_variant == "connector_action":
+        action_id = normalize_action_id(config.get("action_id"))
+        action_mapping = {
+            "send_email": "send_message",
+            "send_message": "send_message",
+            "send_dm": "send_message",
+            "publish_reply": "send_message",
+            "send_media": "send_message",
+            "update_message": "send_message",
+            "draft_email": "draft_email",
+            "create_calendar_event": "create_calendar_event",
+            "create_doc": "document_create",
+            "create_document": "document_create",
+            "create_sheet": "spreadsheet_create",
+            "create_spreadsheet": "spreadsheet_create",
+            "upload_drive_file": "read_write_files",
+            "http_request": "http_request",
+            "signed_webhook": "http_request",
+        }
+        return action_mapping.get(action_id, action_id)
+    if clean_variant == "spreadsheet":
+        operation = normalize_action_id(config.get("operation") or "read")
+        if operation == "append":
+            return "spreadsheet_append"
+        if operation in {"update", "edit"}:
+            return "spreadsheet_update"
+        if operation in {"create", "new"}:
+            return "spreadsheet_create"
+        return "spreadsheet_read"
+    if clean_variant == "document":
+        operation = normalize_action_id(config.get("operation") or "create")
+        file_path = str(config.get("file_path") or config.get("path") or "").strip().lower()
+        if file_path.endswith(".pptx"):
+            return "presentation_update" if operation in {"update", "edit", "append"} else "presentation_create"
+        return "document_update" if operation in {"update", "edit", "append"} else "document_create"
+    return normalize_action_id(config.get("action_id") or _workflow_variant_default_tool_id(clean_variant))
+
+
+def _predict_tool_ids_from_workflow_definition(definition: Dict[str, Any]) -> List[str]:
+    nodes = definition.get("nodes") if isinstance(definition.get("nodes"), list) else []
+    out: List[str] = []
+    seen: Set[str] = set()
+
+    def _append(raw_tool: Any) -> None:
+        clean = normalize_action_id(raw_tool)
+        if clean and clean not in seen:
+            seen.add(clean)
+            out.append(clean)
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("type") or "").strip().lower()
+        variant = str(node.get("variant") or "").strip().lower()
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if node_type == "agent":
+            tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+            for item in tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []:
+                _append(item)
+            for item in tools.get("explicit_required") if isinstance(tools.get("explicit_required"), list) else []:
+                _append(item)
+        elif node_type == "tool":
+            _append(_workflow_tool_policy_tool_id(variant, config))
+    return out
+
+
 def _predict_tool_ids_for_context(context: Dict[str, Any]) -> List[str]:
+    workflow_definition = _workflow_definition_from_context(context)
+    if isinstance(workflow_definition, dict):
+        predicted = _predict_tool_ids_from_workflow_definition(workflow_definition)
+        if predicted:
+            return predicted
+
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     pack_id = str(metadata.get("outcome_pack") or "").strip().lower()
     pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
@@ -510,7 +634,947 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
     worker.start()
     return run_id
 
+
+def _workflow_outgoing_edges(edges: List[Dict[str, Any]], node_id: str) -> List[Dict[str, Any]]:
+    return [
+        edge
+        for edge in edges
+        if isinstance(edge, dict) and str(edge.get("source") or "").strip() == node_id
+    ]
+
+
+def _workflow_next_node_id(
+    edges: List[Dict[str, Any]],
+    node_id: str,
+    *,
+    preferred_handle: Optional[str] = None,
+) -> Optional[str]:
+    outgoing = _workflow_outgoing_edges(edges, node_id)
+    if preferred_handle:
+        desired = str(preferred_handle or "").strip().lower()
+        for edge in outgoing:
+            if str(edge.get("sourceHandle") or "").strip().lower() == desired:
+                target = str(edge.get("target") or "").strip()
+                if target:
+                    return target
+    for edge in outgoing:
+        target = str(edge.get("target") or "").strip()
+        if target:
+            return target
+    return None
+
+
+def _build_workflow_agent_system_prompt(config: Dict[str, Any]) -> str:
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+    skills = config.get("skills") if isinstance(config.get("skills"), dict) else {}
+    tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+    memory = config.get("memory") if isinstance(config.get("memory"), dict) else {}
+    connectors = config.get("connectors") if isinstance(config.get("connectors"), dict) else {}
+    permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+
+    lines = [
+        f"You are workflow node '{str(identity.get('name') or identity.get('role') or 'Agent').strip() or 'Agent'}'.",
+        f"Role: {str(identity.get('role') or 'Agent').strip() or 'Agent'}",
+        f"Goal: {str(identity.get('goal') or 'Complete the assigned workflow step.').strip()}",
+    ]
+    success_condition = str(identity.get("success_condition") or "").strip()
+    if success_condition:
+        lines.append(f"Success condition: {success_condition}")
+    output_contract = str(identity.get("output_contract") or "").strip()
+    if output_contract:
+        lines.append(f"Output contract: {output_contract}")
+    skill_ids = skills.get("skill_bundle_ids") if isinstance(skills.get("skill_bundle_ids"), list) else []
+    if skill_ids:
+        lines.append(f"Skill bundles: {', '.join(str(item).strip() for item in skill_ids if str(item).strip())}")
+    prompt_append = str(skills.get("prompt_append") or "").strip()
+    if prompt_append:
+        lines.append(f"Skill guidance: {prompt_append}")
+    dynamic_allowed = tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []
+    explicit_required = tools.get("explicit_required") if isinstance(tools.get("explicit_required"), list) else []
+    lines.append(
+        "Dynamic tools allowed: "
+        + (", ".join(str(item).strip() for item in dynamic_allowed if str(item).strip()) if dynamic_allowed else "none")
+    )
+    if explicit_required:
+        lines.append(
+            "Operations requiring explicit tool nodes: "
+            + ", ".join(str(item).strip() for item in explicit_required if str(item).strip())
+        )
+    read_scopes = memory.get("read_scopes") if isinstance(memory.get("read_scopes"), list) else []
+    write_scopes = memory.get("write_scopes") if isinstance(memory.get("write_scopes"), list) else []
+    lines.append(
+        "Memory policy: "
+        f"read={','.join(str(item).strip() for item in read_scopes if str(item).strip()) or 'session'}; "
+        f"write={','.join(str(item).strip() for item in write_scopes if str(item).strip()) or 'session'}; "
+        f"retrieval={str(memory.get('retrieval_policy') or 'recent').strip() or 'recent'}"
+    )
+    bindings = connectors.get("bindings") if isinstance(connectors.get("bindings"), list) else []
+    if bindings:
+        lines.append(f"Connector bindings: {json.dumps(_json_safe(bindings), ensure_ascii=True)}")
+    lines.append(
+        "Permission policy: "
+        f"action_policy={str(permissions.get('action_policy') or 'guarded').strip() or 'guarded'}; "
+        f"execution_target={str(runtime.get('execution_target') or 'auto').strip() or 'auto'}"
+    )
+    lines.append("Be concise, operational, and produce output for the next workflow node.")
+    return "\n".join(lines)
+
+
+def _resolve_agent_generation_state(base_context: Dict[str, Any], config: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+    execution_context = dict(base_context)
+    metadata = dict(base_context.get("metadata") if isinstance(base_context.get("metadata"), dict) else {})
+    profile_id = str(runtime.get("provider_profile_id") or "").strip()
+    provider = str(runtime.get("provider") or execution_context.get("provider") or metadata.get("provider") or "openai").strip()
+    model = str(runtime.get("model") or execution_context.get("model") or metadata.get("model") or "").strip()
+    if profile_id:
+        metadata["profile_id"] = profile_id
+    if provider:
+        metadata["provider"] = provider
+        execution_context["provider"] = provider
+    if model:
+        metadata["model"] = model
+        execution_context["model"] = model
+    execution_context["metadata"] = metadata
+    provider_id, selected_model, candidates, _ = resolve_run_execution_context(execution_context)
+    return execution_context, {
+        "provider": provider_id,
+        "selected_model": str(selected_model),
+        "credential_candidates": candidates,
+        "credentials": candidates[0].get("credentials") if candidates else {},
+    }
+
+
+def _workflow_decision_value(current_text: str, state: Dict[str, Any], expression: str) -> bool:
+    scope = {
+        "context_text": current_text,
+        "result_text": current_text,
+        "result_data": state.get("last_data") if isinstance(state.get("last_data"), dict) else {},
+        "state": state,
+    }
+    return bool(eval(expression, {"__builtins__": {}}, scope))
+
+
+def _workflow_tool_text_input(config: Dict[str, Any], current_text: str) -> str:
+    for candidate in [
+        config.get("text"),
+        config.get("body_text"),
+        config.get("body"),
+        config.get("message"),
+        config.get("content"),
+        current_text,
+    ]:
+        text = _workflow_text_payload(candidate)
+        if text:
+            return text
+    return ""
+
+
+def _workflow_tool_workspace_id(context: Dict[str, Any]) -> Optional[str]:
+    workspace_id = str(context.get("workspace_id") or "").strip()
+    return workspace_id or None
+
+
+def _workflow_tool_connector_secret(
+    context: Dict[str, Any],
+    config: Dict[str, Any],
+) -> tuple[str, str, Dict[str, Any]]:
+    requested_connector = str(config.get("connector") or "").strip().lower()
+    if not requested_connector:
+        raise RuntimeError("Connector action tool node is missing connector.")
+
+    workspace_id = _workflow_tool_workspace_id(context)
+    explicit_ids = [
+        str(config.get("binding_id") or "").strip(),
+        str(config.get("connector_credential_id") or "").strip(),
+        str(config.get("credential_id") or "").strip(),
+    ]
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    explicit_ids.append(str(metadata.get("connector_credential_id") or "").strip())
+
+    for credential_id in explicit_ids:
+        if not credential_id:
+            continue
+        secret = resolve_vault_credential(credential_id, workspace_id)
+        provider = str(secret.get("_provider") or "").strip().lower()
+        if provider == requested_connector:
+            return credential_id, requested_connector, secret
+
+    candidates = [
+        item
+        for item in list_vault_connectors(workspace_id)
+        if isinstance(item, dict) and str(item.get("connector") or "").strip().lower() == requested_connector
+    ]
+    if not candidates:
+        raise RuntimeError(f"No connector binding is available for '{requested_connector}'.")
+    candidates.sort(key=lambda item: parse_iso_datetime(item.get("updated_at")), reverse=True)
+    selected = candidates[0]
+    credential_id = str(selected.get("id") or "").strip()
+    if not credential_id:
+        raise RuntimeError(f"Connector binding for '{requested_connector}' is invalid.")
+    secret = resolve_vault_credential(credential_id, workspace_id)
+    return credential_id, requested_connector, secret
+
+
+def _workflow_tool_connector_headers(secret: Dict[str, Any]) -> Dict[str, str]:
+    access_token = str(secret.get("access_token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Connector access token is missing.")
+    return {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+
+
+def _workflow_tool_create_child_local_run(
+    run_id: str,
+    context: Dict[str, Any],
+    *,
+    label: str,
+    operation: Dict[str, Any],
+    summary: str,
+) -> str:
+    from server_modules.runtime_models import RunStartRequest
+    from server_modules.runs_delegation import _create_run_from_request as _create_child_run
+
+    child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+    child_metadata.update(
+        {
+            "outcome_pack": LOCAL_EXECUTION_PACK_ID,
+            "execution_target": EXECUTION_TARGET_LOCAL_COMPANION,
+            "trust_mode": TRUST_MODE_AUTO,
+            "pack_inputs": {"operations": [operation]},
+            "subflow_parent_run_id": run_id,
+            "workflow_tool_parent_run_id": run_id,
+        }
+    )
+    child_req = RunStartRequest(
+        engine=str(context.get("engine") or "orion"),
+        workflow_id=None,
+        workspace_id=context.get("workspace_id"),
+        user_goal=summary or f"Execute local workflow tool node: {label}",
+        business_plan=context.get("business_plan"),
+        agent_role=context.get("agent_role"),
+        provider=context.get("provider"),
+        model=context.get("model"),
+        credential_id=context.get("credential_id"),
+        parent_run_id=run_id,
+        metadata=child_metadata,
+    )
+    child_result = _create_child_run(child_req)
+    route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
+    if str(route.get("selected") or "").strip().lower() != EXECUTION_TARGET_LOCAL_COMPANION:
+        raise RuntimeError(f"Local tool node '{label}' requires a local_companion route.")
+    child_run_id = str(child_result.get("run_id") or "").strip()
+    if not child_run_id:
+        raise RuntimeError(f"Local tool node '{label}' did not produce a child run id.")
+    return child_run_id
+
+
+def _workflow_wait_for_child_run(
+    child_run_id: str,
+    *,
+    timeout_seconds: int,
+) -> Dict[str, Any]:
+    deadline = time.monotonic() + max(5, int(timeout_seconds or 300))
+    while True:
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"Child run '{child_run_id}' did not finish within {timeout_seconds}s.")
+        child_run = runs.get(child_run_id)
+        if not isinstance(child_run, dict):
+            time.sleep(0.25)
+            continue
+        child_status = str(child_run.get("status") or "").strip().lower()
+        if child_status == "completed":
+            return child_run
+        if child_status == "waiting_for_input":
+            raise RuntimeError(f"Child run '{child_run_id}' is waiting for human input and cannot resume synchronously.")
+        if child_status in {"failed", "timeout", "cancelled", "stopped"}:
+            raise RuntimeError(f"Child run '{child_run_id}' ended with status '{child_status}'.")
+        time.sleep(0.25)
+
+
+def _workflow_execute_connector_action(
+    context: Dict[str, Any],
+    config: Dict[str, Any],
+    *,
+    current_text: str,
+) -> Dict[str, Any]:
+    credential_id, connector_id, secret = _workflow_tool_connector_secret(context, config)
+    workspace_id = _workflow_tool_workspace_id(context)
+    action_id = normalize_action_id(config.get("action_id"))
+    if not action_id:
+        raise RuntimeError("Connector action tool node is missing action_id.")
+
+    if connector_id == "telegram_bot" and action_id in {"send_message", "send_media", "update_message"}:
+        chat_id = str(config.get("chat_id") or secret.get("chat_id") or "").strip()
+        if not chat_id:
+            raise RuntimeError("Telegram connector action requires chat_id.")
+        result = asyncio.run(
+            handle_telegram_send_message(
+                text=_workflow_tool_text_input(config, current_text),
+                workspace_id=workspace_id,
+                session_key=str(config.get("session_key") or "").strip() or None,
+                chat_id=chat_id,
+            )
+        )
+        return {
+            "summary": f"Connector action completed: telegram_bot.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id in {"google_workspace", "microsoft_365"} and action_id in {"send_email", "send_message", "draft_email"}:
+        to_email = str(
+            config.get("to_email")
+            or config.get("to")
+            or config.get("email")
+            or config.get("recipient")
+            or ""
+        ).strip()
+        if not to_email:
+            raise RuntimeError(f"Connector action '{action_id}' requires a recipient email.")
+        subject = str(config.get("subject") or f"Empyralist workflow: {context.get('workflow_name') or context.get('workflow_id') or 'Untitled'}").strip()
+        body_text = _workflow_tool_text_input(config, current_text)
+        if connector_id == "google_workspace":
+            if google_workspace_uses_local_cli(secret):
+                result = (
+                    google_workspace_local_create_draft(secret, to_email, subject, body_text)
+                    if action_id == "draft_email"
+                    else google_workspace_local_send_message(secret, to_email, subject, body_text)
+                )
+            else:
+                message = (
+                    f"To: {to_email}\r\n"
+                    f"Subject: {subject}\r\n"
+                    "Content-Type: text/plain; charset=UTF-8\r\n"
+                    "\r\n"
+                    f"{body_text}\r\n"
+                )
+                raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
+                if action_id == "draft_email":
+                    payload = {"message": {"raw": raw_encoded}}
+                    response = http_json_request(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+                        method="POST",
+                        headers=_workflow_tool_connector_headers(secret),
+                        payload=payload,
+                    )
+                else:
+                    payload = {"raw": raw_encoded}
+                    response = http_json_request(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                        method="POST",
+                        headers=_workflow_tool_connector_headers(secret),
+                        payload=payload,
+                    )
+                result = response.get("json") if isinstance(response.get("json"), dict) else response
+        else:
+            result = (
+                microsoft_365_create_draft(secret, http_json_request, to_email, subject, body_text)
+                if action_id == "draft_email"
+                else microsoft_365_send_message(secret, http_json_request, to_email, subject, body_text)
+            )
+        return {
+            "summary": f"Connector action completed: {connector_id}.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "recipient": to_email,
+                    "subject": subject,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id in {"google_workspace", "microsoft_365"} and action_id == "create_calendar_event":
+        payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
+        if not payload:
+            start = str(config.get("start") or "").strip()
+            end = str(config.get("end") or "").strip()
+            timezone = str(config.get("timezone") or "UTC").strip() or "UTC"
+            if not start or not end:
+                raise RuntimeError("create_calendar_event requires payload or start/end values.")
+            title = str(config.get("title") or "Empyralist workflow event").strip() or "Empyralist workflow event"
+            description = str(config.get("description") or current_text or "").strip()
+            if connector_id == "microsoft_365":
+                payload = {
+                    "subject": title,
+                    "body": {"contentType": "Text", "content": description},
+                    "start": {"dateTime": start, "timeZone": timezone},
+                    "end": {"dateTime": end, "timeZone": timezone},
+                }
+            else:
+                payload = {
+                    "summary": title,
+                    "description": description,
+                    "start": {"dateTime": start, "timeZone": timezone},
+                    "end": {"dateTime": end, "timeZone": timezone},
+                }
+        if connector_id == "microsoft_365":
+            result = microsoft_365_create_calendar_event(secret, http_json_request, payload=payload)
+        else:
+            calendar_id = str(config.get("calendar_id") or "primary").strip() or "primary"
+            if google_workspace_uses_local_cli(secret):
+                result = google_workspace_local_create_calendar_event(
+                    secret,
+                    calendar_id=calendar_id,
+                    send_updates="none",
+                    payload=payload,
+                )
+            else:
+                url = (
+                    f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}"
+                    f"/events?sendUpdates=none"
+                )
+                response = http_json_request(
+                    url,
+                    method="POST",
+                    headers=_workflow_tool_connector_headers(secret),
+                    payload=payload,
+                )
+                result = response.get("json") if isinstance(response.get("json"), dict) else response
+        return {
+            "summary": f"Connector action completed: {connector_id}.create_calendar_event.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "google_workspace" and action_id in {"create_doc", "create_document"}:
+        title = str(config.get("title") or "Empyralist Document").strip() or "Empyralist Document"
+        result = google_workspace_create_document(secret, title)
+        return {
+            "summary": f"Connector action completed: google_workspace.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "title": title,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "google_workspace" and action_id in {"create_sheet", "create_spreadsheet"}:
+        title = str(config.get("title") or "Empyralist Sheet").strip() or "Empyralist Sheet"
+        result = google_workspace_create_spreadsheet(secret, title)
+        return {
+            "summary": f"Connector action completed: google_workspace.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "title": title,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    raise RuntimeError(f"Connector action '{connector_id}.{action_id}' is not executable in the Orion graph runtime yet.")
+
+
+def _workflow_execute_document_or_spreadsheet_tool(
+    context: Dict[str, Any],
+    config: Dict[str, Any],
+    *,
+    variant: str,
+) -> Dict[str, Any]:
+    metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+    pack_inputs = {
+        "file_path": config.get("file_path") or config.get("path"),
+        "operation": config.get("operation") or ("create" if variant == "document" else "read"),
+        "title": config.get("title"),
+        "payload": config.get("payload"),
+        "rows": config.get("rows"),
+        "values": config.get("values"),
+        "row_index": config.get("row_index"),
+        "sheet_name": config.get("sheet_name"),
+        "row_limit": config.get("row_limit"),
+        "overwrite": config.get("overwrite"),
+    }
+    connector_credential_id = str(
+        config.get("binding_id")
+        or config.get("connector_credential_id")
+        or config.get("credential_id")
+        or metadata.get("connector_credential_id")
+        or ""
+    ).strip()
+    if connector_credential_id:
+        metadata["connector_credential_id"] = connector_credential_id
+    metadata["pack_inputs"] = {key: value for key, value in pack_inputs.items() if value is not None}
+    pack_id = DOCUMENT_STUDIO_PACK_ID if variant == "document" else SPREADSHEET_OPS_PACK_ID
+    raw_result = execute_outcome_pack(pack_id, {"metadata": metadata}, run_id=context.get("run_id"))
+    result_data = normalize_pack_result(pack_id, raw_result)
+    summary = str(result_data.get("summary") or f"{variant.title()} tool completed.").strip()
+    return {
+        "summary": summary,
+        "result_data": {
+            "pack_id": pack_id,
+            "tool_variant": variant,
+            **_json_safe(result_data),
+        },
+    }
+
+
+def _workflow_execute_local_tool(
+    run_id: str,
+    context: Dict[str, Any],
+    config: Dict[str, Any],
+    *,
+    label: str,
+    variant: str,
+    current_text: str,
+) -> Dict[str, Any]:
+    if variant == "file":
+        operation = {
+            "tool": "read_write_files",
+            "mode": str(config.get("mode") or config.get("operation") or "read").strip().lower() or "read",
+            "path": str(config.get("path") or config.get("file_path") or "").strip(),
+            "content": str(config.get("content") or current_text or ""),
+            "overwrite": bool(config.get("overwrite")),
+        }
+        if not operation["path"]:
+            raise RuntimeError("File tool node requires path or file_path.")
+    elif variant in {"shell", "code"}:
+        operation = {
+            "tool": "execute_shell_command",
+            "command": str(config.get("command") or "").strip() or None,
+            "argv": list(config.get("argv") or []) if isinstance(config.get("argv"), list) else None,
+            "cwd": str(config.get("cwd") or ".").strip() or ".",
+            "timeout_seconds": int(config.get("timeout_seconds") or 60),
+            "capability": str(config.get("capability") or "").strip() or None,
+        }
+        if not operation["command"] and not operation["argv"]:
+            raise RuntimeError(f"{variant.title()} tool nodes require command or argv in the current runtime.")
+    elif variant == "browser":
+        operation = {
+            "tool": "browser_automation",
+            "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
+            "url": str(config.get("url") or "").strip(),
+            "path": str(config.get("path") or "").strip() or None,
+            "session_profile": str(config.get("session_profile") or "").strip() or None,
+            "browser_actions": config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None,
+        }
+        if not operation["url"]:
+            raise RuntimeError("Browser tool node requires a URL.")
+    else:
+        raise RuntimeError(f"Local tool variant '{variant}' is not supported.")
+
+    operation = {key: value for key, value in operation.items() if value is not None}
+    child_run_id = _workflow_tool_create_child_local_run(
+        run_id,
+        context,
+        label=label,
+        operation=operation,
+        summary=str(config.get("summary") or f"Execute {variant} tool node {label}").strip(),
+    )
+    child_run = _workflow_wait_for_child_run(
+        child_run_id,
+        timeout_seconds=int(config.get("timeout_seconds") or 300),
+    )
+    result_text = _workflow_text_payload(child_run.get("result") or "")
+    result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
+    return {
+        "summary": result_text or f"Local tool node completed: {label}",
+        "result_data": {
+            "local_child_run_id": child_run_id,
+            "tool_variant": variant,
+            "child_result": _json_safe(result_data),
+        },
+    }
+
+
+def _workflow_final_result_data(
+    workflow_definition: Dict[str, Any],
+    *,
+    final_node_id: Optional[str],
+    final_text: str,
+    final_data: Optional[Dict[str, Any]],
+    run_id: str,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "summary": final_text,
+        "workflow_execution": {
+            "schema_version": str(workflow_definition.get("version") or "").strip() or None,
+            "node_count": len(workflow_definition.get("nodes") or []),
+            "edge_count": len(workflow_definition.get("edges") or []),
+            "final_node_id": final_node_id,
+            "run_id": run_id,
+        },
+    }
+    if isinstance(final_data, dict) and final_data:
+        result["last_node_data"] = _json_safe(final_data)
+    return result
+
+
+def _execute_workflow_graph(
+    run_id: str,
+    context: Dict[str, Any],
+    log_queue: queue.Queue,
+    workflow_definition: Dict[str, Any],
+) -> Dict[str, Any]:
+    nodes = workflow_definition.get("nodes") if isinstance(workflow_definition.get("nodes"), list) else []
+    edges = workflow_definition.get("edges") if isinstance(workflow_definition.get("edges"), list) else []
+    if not nodes:
+        raise RuntimeError("Workflow definition has no nodes.")
+
+    node_map: Dict[str, Dict[str, Any]] = {
+        str(node.get("id") or "").strip(): node
+        for node in nodes
+        if isinstance(node, dict) and str(node.get("id") or "").strip()
+    }
+    if not node_map:
+        raise RuntimeError("Workflow definition has no usable node ids.")
+
+    trigger_nodes = [
+        node for node in nodes if isinstance(node, dict) and str(node.get("type") or "").strip().lower() == "trigger"
+    ]
+    current_node = None
+    if trigger_nodes:
+        non_manual = [node for node in trigger_nodes if str(node.get("variant") or "").strip().lower() != "manual"]
+        current_node = (non_manual or trigger_nodes)[0]
+    else:
+        current_node = nodes[0] if isinstance(nodes[0], dict) else None
+
+    current_text = (
+        _workflow_text_payload(context.get("business_plan"))
+        or _workflow_text_payload(context.get("user_goal"))
+        or "Workflow run started."
+    )
+    state: Dict[str, Any] = {
+        "last_text": current_text,
+        "last_data": None,
+        "active_provider": str(context.get("provider") or "openai").strip() or "openai",
+        "active_model": str(context.get("model") or CODEX_MODEL).strip() or CODEX_MODEL,
+    }
+    final_node_id: Optional[str] = None
+    safety_counter = 0
+
+    while current_node and safety_counter < 100:
+        safety_counter += 1
+        node_id = str(current_node.get("id") or "").strip()
+        node_type = str(current_node.get("type") or "").strip().lower()
+        variant = str(current_node.get("variant") or "").strip().lower()
+        config = current_node.get("config") if isinstance(current_node.get("config"), dict) else {}
+        label = _workflow_label(current_node)
+        final_node_id = node_id or final_node_id
+        emit_log(log_queue, "info", f"Workflow node: {label}", event="workflow_node_start", data={"node_id": node_id, "type": node_type, "variant": variant})
+
+        next_handle: Optional[str] = None
+        if node_type == "trigger":
+            emit_log(log_queue, "info", f"Trigger active: {label}", event="workflow_trigger", data={"variant": variant or "manual", "node_id": node_id})
+
+        elif node_type == "agent":
+            execution_context, agent_state = _resolve_agent_generation_state(context, config)
+            system_prompt = _build_workflow_agent_system_prompt(config)
+            user_input = (
+                f"Workflow context:\n{current_text or 'No previous node output.'}\n\n"
+                f"Current workflow node: {label}\n"
+                "Produce the result for this node only."
+            )
+            text = generate_with_candidate_failover(agent_state, execution_context, log_queue, system_prompt, user_input)
+            current_text = text
+            state["last_text"] = text
+            state["last_data"] = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "variant": variant,
+                "text": text,
+            }
+            state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
+            state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
+            emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
+
+        elif node_type == "decision":
+            expression = str(config.get("expression") or "").strip() or "False"
+            try:
+                decision = _workflow_decision_value(current_text, state, expression)
+            except Exception as exc:
+                raise RuntimeError(f"Decision node '{label}' failed to evaluate expression: {exc}") from exc
+            next_handle = "true" if decision else "false"
+            state["last_data"] = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "variant": variant,
+                "decision": bool(decision),
+                "expression": expression,
+            }
+            current_text = f"{label}: {'true' if decision else 'false'}"
+            state["last_text"] = current_text
+            emit_log(log_queue, "info", current_text, event="workflow_decision", data={"node_id": node_id, "decision": bool(decision), "expression": expression})
+
+        elif node_type == "human":
+            title = str(config.get("title") or label or "Approval required").strip() or "Approval required"
+            instructions = str(config.get("instructions") or "").strip()
+            decision_options = config.get("decision_options") if isinstance(config.get("decision_options"), list) else []
+            option_text = ", ".join(str(item).strip() for item in decision_options if str(item).strip()) or "approve / reject"
+            prompt = (
+                f"{title}. {instructions} "
+                f"Current workflow context: {current_text or 'No current output.'} "
+                f"Reply with one of: {option_text}."
+            ).strip()
+            approved = wait_for_human_decision(run_id, prompt)
+            if not approved:
+                raise RuntimeError(f"Workflow stopped at human node '{label}'.")
+            current_text = f"{title}: approved"
+            state["last_text"] = current_text
+            state["last_data"] = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "variant": variant,
+                "decision": "approved",
+            }
+            emit_log(log_queue, "info", current_text, event="workflow_human_resolved", data={"node_id": node_id, "variant": variant or "approval"})
+
+        elif node_type == "data":
+            template = str(config.get("template") or "").strip()
+            mapping = str(config.get("mapping") or "").strip()
+            summary = template or mapping or label
+            current_text = summary if not current_text else f"{summary}\n\n{current_text}"
+            state["last_text"] = current_text
+            state["last_data"] = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "variant": variant,
+                "summary": summary,
+            }
+            emit_log(log_queue, "info", f"Data step: {summary}", event="workflow_data_step", data={"node_id": node_id, "variant": variant})
+
+        elif node_type == "subflow":
+            child_workflow_id = str(config.get("workflow_id") or "").strip()
+            if not child_workflow_id:
+                raise RuntimeError(f"Subflow node '{label}' is missing workflow_id.")
+            if child_workflow_id == str(context.get("workflow_id") or "").strip():
+                raise RuntimeError("Recursive subflow calls are not allowed.")
+            from server_modules.runtime_models import RunStartRequest
+            from server_modules.runs_delegation import _create_run_from_request as _create_child_run
+
+            child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+            child_metadata["subflow_parent_run_id"] = run_id
+            child_metadata["subflow_parent_workflow_id"] = str(context.get("workflow_id") or "").strip() or None
+            child_req = RunStartRequest(
+                engine=str(context.get("engine") or "orion"),
+                workflow_id=child_workflow_id,
+                workspace_id=context.get("workspace_id"),
+                user_goal=current_text or context.get("user_goal"),
+                business_plan=current_text or context.get("business_plan"),
+                agent_role=context.get("agent_role"),
+                provider=context.get("provider"),
+                model=context.get("model"),
+                credential_id=context.get("credential_id"),
+                parent_run_id=run_id,
+                metadata=child_metadata,
+            )
+            child_result = _create_child_run(child_req)
+            route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
+            if str(route.get("selected") or "").strip().lower() == EXECUTION_TARGET_LOCAL_COMPANION:
+                raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")
+            child_run_id = str(child_result.get("run_id") or "").strip()
+            if not child_run_id:
+                raise RuntimeError("Subflow execution did not return a child run id.")
+            emit_log(log_queue, "info", f"Subflow started: {child_workflow_id}", event="workflow_subflow_start", data={"node_id": node_id, "child_run_id": child_run_id, "workflow_id": child_workflow_id})
+            child_timeout = max(30, int(config.get("timeout_seconds") or 300))
+            deadline = time.monotonic() + child_timeout
+            while True:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Subflow '{child_workflow_id}' did not finish within {child_timeout}s.")
+                child_run = runs.get(child_run_id)
+                if not isinstance(child_run, dict):
+                    time.sleep(0.25)
+                    continue
+                child_status = str(child_run.get("status") or "").strip().lower()
+                if child_status == "completed":
+                    child_result_text = _workflow_text_payload(child_run.get("result") or "")
+                    child_result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
+                    current_text = child_result_text or current_text
+                    state["last_text"] = current_text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "child_run_id": child_run_id,
+                        "child_workflow_id": child_workflow_id,
+                        "child_status": child_status,
+                        "child_result_data": child_result_data,
+                    }
+                    emit_log(log_queue, "info", f"Subflow completed: {child_workflow_id}", event="workflow_subflow_complete", data={"node_id": node_id, "child_run_id": child_run_id})
+                    break
+                if child_status in {"failed", "timeout", "cancelled", "stopped"}:
+                    raise RuntimeError(f"Subflow '{child_workflow_id}' ended with status '{child_status}'.")
+                time.sleep(0.25)
+
+        elif node_type == "tool":
+            execution_target = str(
+                config.get("execution_target")
+                or context.get("metadata", {}).get("execution_target_selected")
+                or context.get("metadata", {}).get("execution_target")
+                or "auto"
+            ).strip() or "auto"
+            permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+            policy_metadata = map_builder_permissions_to_runtime_metadata(permissions, execution_target=execution_target)
+            capability_ids = []
+            if str(config.get("capability") or "").strip():
+                capability_ids = [str(config.get("capability") or "").strip()]
+            tool_id = _workflow_tool_policy_tool_id(variant, config)
+            if tool_id:
+                evaluation = evaluate_tool_policy_decision(
+                    tool_id=tool_id,
+                    trust_mode=str(policy_metadata.get("trust_mode") or "guarded"),
+                    target=str(policy_metadata.get("execution_target") or execution_target or "auto"),
+                    metadata=policy_metadata,
+                    capability_ids=capability_ids,
+                )
+                _append_run_tool_policy_audit(
+                    run_id,
+                    evaluation,
+                    source="workflow_tool_node",
+                    metadata={"node_id": node_id, "variant": variant},
+                )
+                decision = str(evaluation.get("decision") or "").strip().lower()
+                if decision == "blocked":
+                    raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
+                if decision == "approval_required":
+                    approved = wait_for_human_decision(
+                        run_id,
+                        f"Tool node '{label}' requires approval before execution. Reply with Proceed to continue or Hold to stop.",
+                    )
+                    if not approved:
+                        raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
+
+            if variant == "http":
+                method = str(config.get("method") or "GET").strip().upper() or "GET"
+                url = str(config.get("url") or "").strip()
+                if not url:
+                    raise RuntimeError(f"HTTP tool node '{label}' requires a URL.")
+                payload = None if method == "GET" else {"context": current_text}
+                response = http_json_request(url, method=method, payload=payload, timeout=30)
+                if int(response.get("status") or 500) >= 400:
+                    raise RuntimeError(f"HTTP tool node '{label}' failed with status {int(response.get('status') or 500)}.")
+                tool_output = response.get("json") if response.get("json") is not None else response.get("text")
+                current_text = _workflow_text_payload(tool_output)
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "tool_id": tool_id or "http",
+                    "output": _json_safe(tool_output),
+                }
+                emit_log(log_queue, "info", f"HTTP tool completed: {label}", event="workflow_tool_http", data={"node_id": node_id, "url": url, "method": method})
+            elif variant == "connector_action":
+                tool_result = _workflow_execute_connector_action(
+                    context,
+                    config,
+                    current_text=current_text,
+                )
+                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "tool_id": tool_id or "connector_action",
+                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                }
+                emit_log(log_queue, "info", current_text, event="workflow_tool_connector_action", data={"node_id": node_id, "tool_id": tool_id})
+            elif variant in {"document", "spreadsheet"}:
+                tool_result = _workflow_execute_document_or_spreadsheet_tool(
+                    context,
+                    config,
+                    variant=variant,
+                )
+                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "tool_id": tool_id or variant,
+                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                }
+                emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
+            elif variant in {"file", "shell", "browser", "code"}:
+                tool_result = _workflow_execute_local_tool(
+                    run_id,
+                    context,
+                    config,
+                    label=label,
+                    variant=variant,
+                    current_text=current_text,
+                )
+                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "tool_id": tool_id or variant,
+                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                }
+                emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
+            else:
+                raise RuntimeError(f"Tool variant '{variant or 'unknown'}' is not executable in the Orion graph runtime yet.")
+
+        else:
+            raise RuntimeError(f"Unsupported workflow node type '{node_type}'.")
+
+        next_node_id = _workflow_next_node_id(edges, node_id, preferred_handle=next_handle)
+        current_node = node_map.get(next_node_id) if next_node_id else None
+
+    if safety_counter >= 100:
+        raise RuntimeError("Workflow graph exceeded the maximum node execution limit.")
+
+    final_text = state.get("last_text") if isinstance(state.get("last_text"), str) else current_text
+    final_data = state.get("last_data") if isinstance(state.get("last_data"), dict) else None
+    usage = build_masked_usage(
+        str(state.get("active_provider") or context.get("provider") or "openai"),
+        str(state.get("active_model") or context.get("model") or CODEX_MODEL),
+        f"{_workflow_text_payload(context.get('user_goal'))}\n\n{_workflow_text_payload(context.get('business_plan'))}",
+        final_text,
+    )
+    return {
+        "result_text": final_text,
+        "result_data": _workflow_final_result_data(
+            workflow_definition,
+            final_node_id=final_node_id,
+            final_text=final_text,
+            final_data=final_data,
+            run_id=run_id,
+        ),
+        "usage_masked": usage,
+        "active_profile_id": None,
+        "active_provider": str(state.get("active_provider") or context.get("provider") or "openai"),
+        "active_model": str(state.get("active_model") or context.get("model") or CODEX_MODEL),
+        "active_adapter": None,
+    }
+
 def _compile_orion_dag(context: Dict[str, Any]) -> Dict[str, Any]:
+    workflow_definition = _workflow_definition_from_context(context)
+    if isinstance(workflow_definition, dict) and isinstance(workflow_definition.get("nodes"), list) and workflow_definition.get("nodes"):
+        return {
+            "id": str(context.get("workflow_id") or "workflow-graph"),
+            "type": "workflow_graph",
+            "workflow_id": context.get("workflow_id"),
+            "graph_node_count": len(workflow_definition.get("nodes") or []),
+            "nodes": [
+                {"id": "workflow.graph", "kind": "workflow_graph_execute", "deps": []},
+            ],
+        }
+
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
 
@@ -600,6 +1664,30 @@ def _execute_orion_dag_node(
     kind = str(node.get("kind") or "").strip()
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     user_goal = str(context.get("user_goal") or "Execute the requested business objective.")
+
+    if kind == "workflow_graph_execute":
+        workflow_definition = _workflow_definition_from_context(context)
+        if not isinstance(workflow_definition, dict):
+            raise RuntimeError("Workflow graph execution requested without a workflow definition.")
+        result = _execute_workflow_graph(run_id, context, log_queue, workflow_definition)
+        emit_log(
+            log_queue,
+            "info",
+            "Workflow graph completed.",
+            event="workflow_graph_complete",
+            data={
+                "workflow_id": context.get("workflow_id"),
+                "node_count": len(workflow_definition.get("nodes") or []),
+            },
+        )
+        state["final_result_text"] = result["result_text"]
+        state["final_result_data"] = result.get("result_data")
+        state["final_usage"] = result["usage_masked"]
+        state["active_profile_id"] = result.get("active_profile_id")
+        state["active_provider"] = result.get("active_provider")
+        state["active_model"] = result.get("active_model")
+        state["active_adapter"] = result.get("active_adapter")
+        return {"done": True}
 
     if kind == "pack_prepare":
         outcome_pack = str(state.get("outcome_pack") or "").strip().lower()

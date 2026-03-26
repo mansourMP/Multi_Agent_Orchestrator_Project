@@ -23,6 +23,16 @@ const ACTION_LABELS: Record<string, string> = {
     send_wechat: 'Send WeChat',
     send_telegram: 'Send Telegram',
     write_file: 'Write File',
+    connector_action: 'Tool Action',
+    browser: 'Browser Action',
+    file: 'File Action',
+    shell: 'Shell Action',
+    document: 'Document Action',
+    spreadsheet: 'Spreadsheet Action',
+    approval: 'Human Approval',
+    review: 'Human Review',
+    wait_for_reply: 'Wait for Reply',
+    call_workflow: 'Call Workflow',
 };
 
 const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boolean }) => {

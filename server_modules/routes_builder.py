@@ -5,33 +5,69 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server_modules.auth import enforce_workspace_access
+from server_modules.builder_schema import normalize_builder_generated_workflow
+from server_modules.connector_manifests import list_connector_manifests
 from server_modules.model_router import call_model, resolve_call_credentials
 from server_modules.runtime_common import require_api_key
 
 
 router = APIRouter()
 
-ALLOWED_NODE_TYPES = {"trigger", "agent", "action", "http_request", "condition", "transform", "code"}
-NODE_TYPE_ALIASES = {
-    "start": "trigger",
-    "end": "action",
-    "tool": "http_request",
-}
+ALLOWED_NODE_TYPES = {"trigger", "agent", "tool", "decision", "human", "data", "subflow"}
 BUILDER_SYSTEM_PROMPT = """You are a workflow builder AI for Empyralist, an AI operations platform.
 Given a plain language description of a business outcome, return ONLY valid JSON.
 Structure:
 {
+  "version": "empyralist.workflow.v2",
   "nodes": [
-    {"id": "1", "type": "trigger", "label": "Start", "subtitle": "How the workflow begins", "x": 100, "y": 100},
-    {"id": "2", "type": "agent", "label": "Agent", "subtitle": "Primary worker", "x": 320, "y": 100}
+    {
+      "id": "trigger_1",
+      "type": "trigger",
+      "variant": "manual",
+      "label": "Manual trigger",
+      "subtitle": "Test only",
+      "x": 100,
+      "y": 100,
+      "config": {
+        "test_only": true
+      }
+    },
+    {
+      "id": "agent_1",
+      "type": "agent",
+      "label": "Triage agent",
+      "subtitle": "Classifies the request and decides the next move",
+      "x": 320,
+      "y": 100,
+      "config": {
+        "identity": {
+          "name": "Triage agent",
+          "role": "Triage",
+          "goal": "Classify the request and decide next action"
+        },
+        "runtime": {
+          "execution_target": "auto"
+        }
+      }
+    }
   ],
   "edges": [
-    {"source": "1", "target": "2"}
+    {"source": "trigger_1", "target": "agent_1"}
   ]
 }
-Node types allowed: trigger, agent, action, http_request, condition, transform, code.
-Use concise labels and subtitles.
-Use numeric x/y positions suitable for a left-to-right flow.
+Node types allowed: trigger, agent, tool, decision, human, data, subflow.
+Trigger variants: connector_event, schedule, webhook, workflow, file_watch, manual.
+Tool variants: connector_action, http, browser, file, shell, document, spreadsheet, code.
+Decision variants: if_else, classifier, field_router.
+Human variants: approval, review, wait_for_reply.
+Data variants: transform, compose, validate.
+Subflow variants: call_workflow.
+Manual triggers are test-only.
+Published workflows require at least one non-manual trigger, but drafts may use manual.
+Code is a tool variant, never a top-level node family.
+Memory belongs inside agent config, never as a canvas node.
+Provide concise labels/subtitles and numeric x/y positions suitable for a left-to-right flow.
+If details are unknown, leave explicit placeholders inside config rather than inventing fake IDs.
 No markdown, no prose, no backticks."""
 
 
@@ -51,64 +87,17 @@ def _clean_json_text(raw: str) -> str:
     return text
 
 
-def _sanitize_node_type(raw: Any) -> Optional[str]:
-    value = str(raw or "").strip().lower()
-    value = NODE_TYPE_ALIASES.get(value, value)
-    return value if value in ALLOWED_NODE_TYPES else None
-
-
 def _parse_workflow_payload(raw: str) -> Dict[str, Any]:
     try:
         payload = json.loads(_clean_json_text(raw))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=502, detail=f"Builder returned invalid JSON: {exc.msg}.") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="Builder returned an invalid workflow payload.")
+    return normalize_builder_generated_workflow(payload)
 
-    raw_nodes = payload.get("nodes")
-    if not isinstance(raw_nodes, list):
-        raise HTTPException(status_code=502, detail="Builder workflow is missing a nodes array.")
 
-    nodes = []
-    node_ids = set()
-    for index, item in enumerate(raw_nodes):
-        if not isinstance(item, dict):
-            continue
-        node_id = str(item.get("id") or "").strip() or str(index + 1)
-        node_type = _sanitize_node_type(item.get("type"))
-        if not node_type or node_id in node_ids:
-            continue
-        node_ids.add(node_id)
-        label = str(item.get("label") or "").strip() or node_type.replace("_", " ").title()
-        subtitle = str(item.get("subtitle") or "").strip()
-        raw_x = item.get("x")
-        raw_y = item.get("y")
-        nodes.append(
-            {
-                "id": node_id,
-                "type": node_type,
-                "label": label,
-                "subtitle": subtitle,
-                "x": raw_x if isinstance(raw_x, (int, float)) else 120 + index * 220,
-                "y": raw_y if isinstance(raw_y, (int, float)) else 120,
-            }
-        )
-
-    if not nodes:
-        raise HTTPException(status_code=502, detail="Builder returned no usable workflow nodes.")
-
-    raw_edges = payload.get("edges")
-    edges = []
-    if isinstance(raw_edges, list):
-        for item in raw_edges:
-            if not isinstance(item, dict):
-                continue
-            source = str(item.get("source") or "").strip()
-            target = str(item.get("target") or "").strip()
-            if source and target and source in node_ids and target in node_ids:
-                edges.append({"source": source, "target": target})
-
-    return {"nodes": nodes, "edges": edges}
+@router.get("/api/v1/builder/manifests/connectors", dependencies=[Depends(require_api_key)])
+async def builder_connector_manifests():
+    return list_connector_manifests()
 
 
 @router.post("/api/v1/builder/generate", dependencies=[Depends(require_api_key)])

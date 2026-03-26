@@ -1,8 +1,18 @@
+import os
+from urllib.parse import quote_plus
+
+from fastapi import HTTPException
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
+
+EMPYRALIST_WORKFLOW_API_URL = (
+    str(os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:4000/api/v1")).strip().rstrip("/")
+    or "http://127.0.0.1:4000/api/v1"
+)
 
 def metrics_inc(key: str, amount: float = 1):
     with METRICS_LOCK:
@@ -248,6 +258,40 @@ def http_json_request(
             "json": parsed,
             "headers": dict(getattr(exc, "headers", {}).items()) if getattr(exc, "headers", None) else {},
         }
+
+
+def _workflow_api_headers() -> Dict[str, str]:
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    api_key = str(os.getenv("ORION_API_KEY") or "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
+    return headers
+
+
+def fetch_workflow_snapshot(workflow_id: Any) -> Optional[Dict[str, Any]]:
+    token = str(workflow_id or "").strip()
+    if not token:
+        return None
+    response = http_json_request(
+        f"{EMPYRALIST_WORKFLOW_API_URL}/workflows/{quote_plus(token)}",
+        headers=_workflow_api_headers(),
+        timeout=20,
+    )
+    status = int(response.get("status") or 500)
+    payload = response.get("json") if isinstance(response.get("json"), dict) else {}
+    if status >= 400:
+        detail = str(payload.get("message") or payload.get("detail") or "").strip()
+        raise HTTPException(
+            status_code=status if status in {400, 401, 403, 404, 409} else 502,
+            detail=detail or f"Unable to load workflow '{token}'.",
+        )
+    definition = payload.get("definition") if isinstance(payload.get("definition"), dict) else {}
+    return {
+        "id": str(payload.get("id") or token).strip() or token,
+        "name": str(payload.get("name") or "").strip() or None,
+        "status": str(payload.get("status") or "").strip() or None,
+        "definition": definition,
+    }
 
 _normalize_workspace_id = _normalize_workspace_id_impl
 _workspace_visible = _workspace_visible_impl

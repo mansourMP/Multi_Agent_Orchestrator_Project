@@ -1,9 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { Plus, PlayCircle, Search, Workflow as WorkflowIcon } from 'lucide-react';
+import { Plus, PlayCircle, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageDialog } from '@/components/orion/page/PageDialog';
@@ -42,35 +41,8 @@ export default function WorkflowsPage() {
 
   return (
     <div className="orion-page-shell is-static-entry">
-      <OsPageHeader
-        icon={<WorkflowIcon size={16} />}
-        title="Workflows"
-        subtitle="Save repeatable work as reusable playbooks."
-        meta={
-          workflows.length > 0 ? (
-            <>
-              <span>{workflows.length} saved</span>
-              <span>{statusSummary.active} active</span>
-            </>
-          ) : (
-            <span>Reusable playbooks for repeatable work</span>
-          )
-        }
-        actions={
-          <div className="orion-page-section-actions">
-            <Link href="/setup" className="btn-secondary">
-              <PlayCircle size={14} />
-              New Task
-            </Link>
-            <Link href="/builder/new" className="btn-primary">
-              <Plus size={14} />
-              New Workflow
-            </Link>
-          </div>
-        }
-      />
       <PageHero
-        kicker="Reusable playbooks"
+        kicker="Workflows"
         title="Save the tasks that work well and run them again."
         copy="Start with a task. When the steps are stable, keep it here as a reusable workflow for your team."
         actions={
@@ -135,14 +107,7 @@ export default function WorkflowsPage() {
               {loadError}
             </>
           }
-          actions={
-            <RetryActions onRetry={() => void refresh()}>
-              <Link href="/builder/new" className="btn-primary">
-                <Plus size={14} />
-                New Workflow
-              </Link>
-            </RetryActions>
-          }
+          actions={<RetryActions onRetry={() => void refresh()} />}
         />
       ) : (
         <>
@@ -178,12 +143,7 @@ export default function WorkflowsPage() {
               }
               filtered={workflows.length > 0}
               actions={
-                workflows.length === 0 ? (
-                  <div className="orion-inline-actions">
-                    <Link href="/setup" className="btn-secondary">New Task</Link>
-                    <Link href="/builder/new" className="btn-primary">New Workflow</Link>
-                  </div>
-                ) : hasQuery ? (
+                hasQuery ? (
                   <RetryActions onRetry={clearQuery} retryLabel="Clear search" />
                 ) : undefined
               }

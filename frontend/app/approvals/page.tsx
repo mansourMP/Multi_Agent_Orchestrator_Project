@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, ClipboardCheck, ExternalLink, RefreshCw } from 'lucide-react';
+import { Check, ExternalLink, RefreshCw } from 'lucide-react';
 import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '../page.catalog';
+import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
+import { PageHero } from '@/components/orion/page/PageHero';
+import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
+import { PageSection } from '@/components/orion/page/PageSection';
+import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { MetricStrip } from '@/components/ui/MetricStrip';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 
 type PendingApproval = {
   runId: string;
@@ -316,6 +320,7 @@ export default function ApprovalsPage() {
     [filteredAudit],
   );
   const leadPending = filteredPending[0] ?? null;
+  const latestDecision = filteredAudit[0] ?? audit[0] ?? null;
 
   const renderPendingCard = (row: PendingApproval, featured = false) => {
     const approveKey = `${row.runId}:${row.approvalId}:Proceed`;
@@ -465,21 +470,41 @@ export default function ApprovalsPage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
-        icon={<ClipboardCheck size={18} />}
-        title="Approvals"
-        subtitle="Review actions before Hekor continues."
-        meta={
-          <>
-            <span>{filteredPending.length} pending</span>
-            <span>{filteredAudit.length} in history</span>
-          </>
-        }
+      <PageHero
+        kicker="Approvals"
+        title="Review actions before Hekor continues."
+        copy="Focus on the next blocking approval first, then clear the rest of the queue with the same decision rules."
         actions={
-          <button className="orion-btn orion-btn-ghost" onClick={() => void refresh()}>
+          <button className="orion-btn" onClick={() => void refresh()}>
             <RefreshCw size={14} />
             Refresh
           </button>
+        }
+        aside={
+          <>
+            <PageHeroCard label="Current queue">
+              <div className="orion-home-side-stats">
+                <div>
+                  <div className="orion-home-side-value">{filteredPending.length}</div>
+                  <div className="orion-home-side-note">Waiting now</div>
+                </div>
+                <div>
+                  <div className="orion-home-side-value">{approvalsNeedingAttention}</div>
+                  <div className="orion-home-side-note">Held recently</div>
+                </div>
+              </div>
+              <div className="orion-runs-overview-side-note">
+                {leadPending ? 'One approval is currently blocking work.' : 'Nothing is blocking work right now.'}
+              </div>
+            </PageHeroCard>
+            <PageHeroCard label="Latest decision">
+              <div className="orion-home-side-empty">
+                {latestDecision
+                  ? `${formatDecisionLabel(latestDecision.decision)} · ${fmtTime(latestDecision.ts)}`
+                  : 'No approval history yet.'}
+              </div>
+            </PageHeroCard>
+          </>
         }
       />
 
@@ -494,18 +519,28 @@ export default function ApprovalsPage() {
       />
 
       {error ? (
-        <section className="orion-panel" style={{ borderColor: 'var(--error-border)', background: 'var(--error-bg)' }}>
-          <div style={{ color: 'var(--error-fg)', fontSize: 12 }}>{error}</div>
-        </section>
+        <PageStatePanel
+          variant="error"
+          title="Approvals refresh failed"
+          copy={error}
+          actions={
+            <button type="button" className="orion-btn" onClick={() => void refresh()}>
+              Retry
+            </button>
+          }
+        />
       ) : null}
 
-      <section className="orion-panel muted hekor-approvals-filters">
-        <div className="orion-panel-header" style={{ marginBottom: 0 }}>
-          <div>
-            <div className="orion-panel-title">Filter approvals</div>
-            <div className="orion-panel-copy">Narrow the list by worker or channel, then review the actions that are waiting.</div>
-          </div>
-        </div>
+      <PageFilterBar
+        title="Filter approvals"
+        description="Narrow the queue by worker or channel, then review the blocking items in order."
+        summary={
+          <span className="orion-toolbar-summary">
+            {loading ? 'Refreshing…' : `${filteredPending.length} pending · ${filteredAudit.length} history`}
+          </span>
+        }
+        className="hekor-approvals-filters"
+      >
         <div className="orion-toolbar">
           <div className="orion-toolbar-group">
             <select
@@ -534,55 +569,59 @@ export default function ApprovalsPage() {
                 </option>
               ))}
             </select>
-            {loading ? <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Loading…</span> : null}
           </div>
         </div>
-      </section>
+      </PageFilterBar>
 
       {leadPending ? (
-        <section className="hekor-approval-section">
-          <div className="orion-panel-title">Needs review now</div>
-          <div className="orion-panel-copy">This is the next approval blocking work.</div>
+        <PageSection
+          title="Needs review now"
+          description="This is the next approval currently blocking work."
+          className="hekor-approval-section"
+        >
           {renderPendingCard(leadPending, true)}
-        </section>
+        </PageSection>
       ) : (
-        <section className="orion-panel">
-          <div className="orion-panel-title">
-            {pending.length === 0 ? 'Nothing needs approval right now' : 'No approvals match these filters'}
-          </div>
-          <div className="orion-panel-copy">
-            {pending.length === 0
+        <PageStatePanel
+          variant={pending.length === 0 ? 'empty' : 'filtered-empty'}
+          title={pending.length === 0 ? 'Nothing needs approval right now' : 'No approvals match these filters'}
+          copy={
+            pending.length === 0
               ? 'New approval requests will appear here when a run pauses for review.'
-              : 'Change the filters to see the approvals that match this view.'}
-          </div>
-        </section>
+              : 'Change the filters to see the approvals that match this view.'
+          }
+        />
       )}
 
       {filteredPending.length > 1 ? (
-        <section className="hekor-approval-section">
-          <div className="orion-panel-title">More approvals waiting</div>
-          <div className="orion-panel-copy">Review these after the current top request.</div>
+        <PageSection
+          title="More approvals waiting"
+          description="Review these after the current top request."
+          className="hekor-approval-section"
+        >
           <div className="hekor-approval-card-list">
             {filteredPending.slice(1).map((row) => renderPendingCard(row))}
           </div>
-        </section>
+        </PageSection>
       ) : null}
 
-      <section className="hekor-approval-section">
-        <div className="orion-panel-title">Recent decisions</div>
-        <div className="orion-panel-copy">Audit trail for approved and held actions.</div>
+      <PageSection
+        title="Recent decisions"
+        description="Audit trail for approved and held actions."
+        className="hekor-approval-section"
+      >
         {filteredAudit.length === 0 ? (
-          <section className="orion-panel">
-            <div className="orion-panel-copy">
-              {audit.length === 0 ? 'No approval history is recorded yet.' : 'No history items match these filters.'}
-            </div>
-          </section>
+          <PageStatePanel
+            variant={audit.length === 0 ? 'empty' : 'filtered-empty'}
+            title={audit.length === 0 ? 'No approval history yet' : 'No history items match these filters'}
+            copy={audit.length === 0 ? 'Approved and held actions will appear here once Hekor records them.' : 'Change the filters to see the decision history that matches this view.'}
+          />
         ) : (
           <div className="hekor-approval-audit-list">
             {filteredAudit.slice(0, 40).map((item) => renderAuditCard(item))}
           </div>
         )}
-      </section>
+      </PageSection>
     </div>
   );
 }

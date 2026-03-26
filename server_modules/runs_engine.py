@@ -159,14 +159,21 @@ def requires_human_approval(context: Dict[str, Any], plan_text: str) -> tuple[bo
     return False, ""
 
 
-def wait_for_human_decision(run_id: str, prompt: str) -> bool:
+def wait_for_human_response(
+    run_id: str,
+    prompt: str,
+    *,
+    source: str = "runtime_wait",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     from server_modules.runs_core import _begin_run_pending_approval, emit_log, set_run_status
 
     run = runs[run_id]
     pending_payload = _begin_run_pending_approval(
         run_id,
         prompt,
-        source="runtime_wait",
+        source=source,
+        metadata=metadata,
         emit_pause_required=True,
     )
     approval_id = str(pending_payload.get("approval_id") or "").strip()
@@ -207,12 +214,17 @@ def wait_for_human_decision(run_id: str, prompt: str) -> bool:
             continue
 
         incoming_approval_id: Optional[str] = None
+        decision_raw_text = ""
         decision_text = ""
+        decision_note = ""
         if isinstance(decision_raw, dict):
             incoming_approval_id = str(decision_raw.get("approval_id") or "").strip() or None
-            decision_text = str(decision_raw.get("decision") or "").strip().lower()
+            decision_raw_text = str(decision_raw.get("decision") or "").strip()
+            decision_text = decision_raw_text.lower()
+            decision_note = str(decision_raw.get("note") or "").strip()
         else:
-            decision_text = str(decision_raw or "").strip().lower()
+            decision_raw_text = str(decision_raw or "").strip()
+            decision_text = decision_raw_text.lower()
 
         if incoming_approval_id and incoming_approval_id != approval_id:
             emit_log(
@@ -259,7 +271,7 @@ def wait_for_human_decision(run_id: str, prompt: str) -> bool:
             actor="user",
             source="runtime_wait",
             run_id=run_id,
-            note=str(decision_raw),
+            note=decision_note or str(decision_raw),
             correlation_id=correlation_id,
         )
 
@@ -298,7 +310,21 @@ def wait_for_human_decision(run_id: str, prompt: str) -> bool:
             },
         )
         run["pending_approval"] = None
-        return approved
+        return {
+            "approval_id": approval_id,
+            "correlation_id": correlation_id,
+            "decision": decision_text,
+            "raw_decision": decision_raw_text,
+            "note": decision_note or None,
+            "approved": bool(approved),
+            "rejected": bool(rejected),
+            "escalated": bool(escalated),
+        }
+
+
+def wait_for_human_decision(run_id: str, prompt: str) -> bool:
+    response = wait_for_human_response(run_id, prompt)
+    return bool(response.get("approved"))
 
 def validate_orion_runtime() -> List[str]:
     errors: List[str] = []

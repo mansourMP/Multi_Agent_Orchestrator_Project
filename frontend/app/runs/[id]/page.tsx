@@ -51,6 +51,21 @@ type ExecutionSummary = {
   approval_reason?: string | null;
 } | null;
 
+type RunNodeState = {
+  node_id?: string | null;
+  label?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  error?: string | null;
+};
+
+type RunNodeStatesPayload = {
+  active_node_id?: string | null;
+  final_node_id?: string | null;
+  counts?: Record<string, number> | null;
+  items?: RunNodeState[] | null;
+};
+
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
@@ -99,6 +114,7 @@ type RunDetailPayload = {
   } | null;
   pending_approval?: ApprovalState;
   result_data?: unknown;
+  node_states?: RunNodeStatesPayload | null;
 };
 
 type ReplayEvent = {
@@ -189,6 +205,13 @@ function formatRiskSignal(value: string | null | undefined): string | null {
   if (risk === 'medium') return 'Risk signal: Medium';
   if (risk === 'low') return 'Risk signal: Low';
   return null;
+}
+
+function formatWorkflowNodeStatus(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '--';
+  if (normalized === 'waiting_human') return 'Waiting';
+  return normalized.replace(/_/g, ' ');
 }
 
 function formatExecutionTargetLabel(value: string | null | undefined): string {
@@ -485,6 +508,23 @@ export default function RunDetailPage() {
     runDetail?.active_profile_provider,
     runDetail?.connector_binding,
   ]);
+  const workflowNodeStates = useMemo(() => {
+    const payload = runDetail?.node_states;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const counts = payload?.counts && typeof payload.counts === 'object' ? payload.counts : {};
+    const activeNodeId = String(payload?.active_node_id || '').trim() || null;
+    const finalNodeId = String(payload?.final_node_id || '').trim() || null;
+    const activeNode = items.find((item) => String(item?.node_id || '').trim() === activeNodeId) || null;
+    const finalNode = items.find((item) => String(item?.node_id || '').trim() === finalNodeId) || null;
+    const total = Object.values(counts).reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0) || items.length;
+    return {
+      items,
+      counts,
+      total,
+      activeNode,
+      finalNode,
+    };
+  }, [runDetail?.node_states]);
   const plainLanguageSummary = useMemo(() => {
     if (executionTargetWaitingForCapacity) {
       return compactText(
@@ -690,6 +730,45 @@ export default function RunDetailPage() {
                   <div className="hekor-run-route-note">{compactText(executionTargetFallback, '', 180)}</div>
                 ) : null}
               </div>
+
+              {workflowNodeStates.items.length > 0 ? (
+                <div className="orion-panel muted">
+                  <div className="orion-panel-title">Workflow progress</div>
+                  <div className="hekor-run-info-list">
+                    <div className="hekor-run-info-row">
+                      <span>Active node</span>
+                      <strong>{workflowNodeStates.activeNode?.label || 'No active node'}</strong>
+                    </div>
+                    <div className="hekor-run-info-row">
+                      <span>Final node</span>
+                      <strong>{workflowNodeStates.finalNode?.label || 'Not finished yet'}</strong>
+                    </div>
+                    <div className="hekor-run-info-row">
+                      <span>Nodes tracked</span>
+                      <strong>{String(workflowNodeStates.total)}</strong>
+                    </div>
+                  </div>
+                  <div className="hekor-run-route-note">
+                    {workflowNodeStates.activeNode
+                      ? `${formatWorkflowNodeStatus(workflowNodeStates.activeNode.status)} · ${compactText(workflowNodeStates.activeNode.summary, 'Node is executing.', 120)}`
+                      : workflowNodeStates.finalNode
+                      ? `${formatWorkflowNodeStatus(workflowNodeStates.finalNode.status)} · ${compactText(workflowNodeStates.finalNode.summary, 'Workflow reached its final node.', 120)}`
+                      : 'Open inspect to review node-by-node execution.'}
+                  </div>
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {Object.entries(workflowNodeStates.counts).map(([status, count]) => (
+                      <span key={`run-node-count:${status}`} className="orion-chip">
+                        {count} {formatWorkflowNodeStatus(status)}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <Link href={`/runs/${encodeURIComponent(runId)}/inspect?focus=workflow`} className="btn-secondary">
+                      Open workflow inspect
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {executionTargetWaitingForRuntime || executionTargetWaitingForCapacity ? (

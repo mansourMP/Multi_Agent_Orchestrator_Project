@@ -2,15 +2,33 @@ import queue
 import unittest
 from unittest.mock import patch
 
-from server_modules import runs_execution
+from server_modules import runs_execution, runs_output
 
 
 class RunsExecutionGraphTests(unittest.TestCase):
     def setUp(self) -> None:
         runs_execution.runs.clear()
+        runs_execution.RUN_QUEUE_INDEX.clear()
 
     def tearDown(self) -> None:
         runs_execution.runs.clear()
+        runs_execution.RUN_QUEUE_INDEX.clear()
+
+    def _register_live_run(self, run_id: str) -> queue.Queue:
+        log_queue = queue.Queue()
+        runs_execution.runs[run_id] = {
+            "status": "running",
+            "logs": log_queue,
+            "input_queue": queue.Queue(),
+            "events": [],
+            "_event_seq": 0,
+            "node_states": None,
+            "context": {"metadata": {}},
+            "tool_policy_audit": [],
+            "memory_trace": {},
+        }
+        runs_execution.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+        return log_queue
 
     def test_predict_tool_ids_from_workflow_definition_uses_agent_and_tool_nodes(self):
         definition = {
@@ -80,7 +98,19 @@ class RunsExecutionGraphTests(unittest.TestCase):
             "presentation_update",
         )
 
-    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    @patch(
+        "server_modules.runs_execution.wait_for_human_response",
+        return_value={
+            "approval_id": "approval-1",
+            "correlation_id": "corr-1",
+            "decision": "approve",
+            "raw_decision": "approve",
+            "note": None,
+            "approved": True,
+            "rejected": False,
+            "escalated": False,
+        },
+    )
     def test_execute_workflow_graph_runs_explicit_approval(self, _approval_mock):
         definition = {
             "version": "empyralist.workflow.v2",
@@ -119,6 +149,134 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("Approved and ready", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "data_1")
 
+    @patch(
+        "server_modules.runs_execution.wait_for_human_response",
+        return_value={
+            "approval_id": "approval-1",
+            "correlation_id": "corr-1",
+            "decision": "please add an escalation branch after review",
+            "raw_decision": "Please add an escalation branch after review",
+            "note": None,
+            "approved": False,
+            "rejected": False,
+            "escalated": False,
+        },
+    )
+    def test_execute_workflow_graph_captures_review_reply(self, _response_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "review_1",
+                    "type": "human",
+                    "variant": "review",
+                    "config": {
+                        "title": "Review workflow",
+                        "instructions": "Provide feedback before continuing.",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "review_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-review",
+            {"workflow_id": "wf_review", "user_goal": "Review flow", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertEqual(result["result_text"], "Please add an escalation branch after review")
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "review_1")
+
+    @patch("server_modules.runs_execution.wait_for_human_response")
+    def test_execute_workflow_graph_records_live_node_states(self, approval_mock):
+        def _approve(*_args, **_kwargs):
+            node_states = runs_execution.runs["run-node-state"]["node_states"]
+            approval_state = node_states["items"]["approval_1"]
+            self.assertEqual(approval_state["status"], "waiting_human")
+            self.assertTrue(approval_state["waiting_for_approval"])
+            return {
+                "approval_id": "approval-1",
+                "correlation_id": "corr-1",
+                "decision": "approve",
+                "raw_decision": "approve",
+                "note": None,
+                "approved": True,
+                "rejected": False,
+                "escalated": False,
+            }
+
+        approval_mock.side_effect = _approve
+        log_queue = self._register_live_run("run-node-state")
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "approval_1",
+                    "type": "human",
+                    "variant": "approval",
+                    "config": {"title": "Approve draft", "decision_options": ["approve", "reject"]},
+                },
+                {"id": "data_1", "type": "data", "variant": "compose", "config": {"template": "Ready to send"}},
+            ],
+            "edges": [
+                {"id": "e1", "source": "trigger_1", "target": "approval_1"},
+                {"id": "e2", "source": "approval_1", "target": "data_1"},
+            ],
+        }
+
+        runs_execution._execute_workflow_graph(
+            "run-node-state",
+            {"workflow_id": "wf_live", "user_goal": "Review message", "metadata": {}},
+            log_queue,
+            definition,
+        )
+
+        snapshot = runs_output._serialize_run_snapshot("run-node-state", runs_execution.runs["run-node-state"])
+        node_states = snapshot["node_states"]
+        self.assertEqual(node_states["graph_kind"], "workflow")
+        self.assertEqual(node_states["final_node_id"], "data_1")
+        self.assertEqual(node_states["counts"]["succeeded"], 3)
+        items = {item["node_id"]: item for item in node_states["items"]}
+        self.assertEqual(items["trigger_1"]["status"], "succeeded")
+        self.assertEqual(items["approval_1"]["status"], "succeeded")
+        self.assertEqual(items["data_1"]["status"], "succeeded")
+        self.assertIsNone(node_states["active_node_id"])
+
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    @patch("server_modules.runs_execution._workflow_execute_connector_action", side_effect=RuntimeError("connector offline"))
+    def test_execute_workflow_graph_marks_failed_node_state(self, _connector_action_mock, _approval_mock):
+        log_queue = self._register_live_run("run-node-failure")
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {"connector": "telegram_bot", "action_id": "send_message"},
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        with self.assertRaises(RuntimeError):
+            runs_execution._execute_workflow_graph(
+                "run-node-failure",
+                {"workflow_id": "wf_fail", "user_goal": "Send alert", "metadata": {}},
+                log_queue,
+                definition,
+            )
+
+        snapshot = runs_output._serialize_run_snapshot("run-node-failure", runs_execution.runs["run-node-failure"])
+        items = {item["node_id"]: item for item in snapshot["node_states"]["items"]}
+        self.assertEqual(items["tool_1"]["status"], "failed")
+        self.assertIn("connector offline", (items["tool_1"]["error"] or "").lower())
+
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     @patch("server_modules.runs_execution._workflow_execute_connector_action")
     def test_execute_workflow_graph_runs_connector_action_tool(self, connector_action_mock, _approval_mock):
@@ -156,6 +314,204 @@ class RunsExecutionGraphTests(unittest.TestCase):
         )
 
         self.assertIn("Connector action completed", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-discord", "discord_bot", {"bot_token": "discord-token", "channel_id": "123456"}),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"id": "msg-1", "content": "hello"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_discord_connector_action(self, _approval_mock, _http_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "discord_bot",
+                        "action_id": "send_message",
+                        "message": "Ship it",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-discord",
+            {"workflow_id": "wf_discord", "user_goal": "Send Discord message", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("discord_bot.send_message", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=(
+            "cred-whatsapp",
+            "whatsapp_twilio",
+            {
+                "account_sid": "AC123",
+                "auth_token": "token-123",
+                "from_number": "whatsapp:+10000000000",
+                "to_number": "whatsapp:+19999999999",
+            },
+        ),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 201, "json": {"sid": "SM123"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_whatsapp_connector_action(self, _approval_mock, _http_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "whatsapp_twilio",
+                        "action_id": "send_message",
+                        "message": "Ping from workflow",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-whatsapp",
+            {"workflow_id": "wf_whatsapp", "user_goal": "Send WhatsApp", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("whatsapp_twilio.send_message", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-wechat", "wechat_work", {"webhook_url": "https://example.com/wechat"}),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"errcode": 0, "errmsg": "ok"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_wechat_connector_action(self, _approval_mock, _http_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "wechat_work",
+                        "action_id": "send_message",
+                        "message": "Post update",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-wechat",
+            {"workflow_id": "wf_wechat", "user_goal": "Send WeChat", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("wechat_work.send_message", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"ok": True, "id": "req-1"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_custom_api_http_request(self, _approval_mock, _http_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "custom_api",
+                        "action_id": "http_request",
+                        "method": "POST",
+                        "url": "https://example.com/hook",
+                        "payload": {"hello": "world"},
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-custom-api",
+            {"workflow_id": "wf_custom_api", "user_goal": "Call API", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("custom_api.http_request", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-m365", "microsoft_365", {"access_token": "token"}),
+    )
+    @patch(
+        "server_modules.runs_execution.microsoft_365_upload_drive_file",
+        return_value={"id": "drive-item-1", "name": "report.txt"},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_microsoft_upload_drive_file(self, _approval_mock, _upload_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "microsoft_365",
+                        "action_id": "upload_drive_file",
+                        "path": "reports/report.txt",
+                        "content": "hello onedrive",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-onedrive-upload",
+            {"workflow_id": "wf_onedrive", "user_goal": "Upload file", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("microsoft_365.upload_drive_file", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
@@ -199,6 +555,35 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertIn("Document Studio completed", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    def test_execute_workflow_graph_rejects_code_tool_targeting_cloud(self):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "code",
+                    "config": {
+                        "execution_target": "cloud",
+                        "command": "python",
+                        "argv": ["-c", "print('hi')"],
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        with self.assertRaises(RuntimeError) as ctx:
+            runs_execution._execute_workflow_graph(
+                "run-code-cloud",
+                {"workflow_id": "wf_code_cloud", "user_goal": "Run code", "metadata": {}},
+                queue.Queue(),
+                definition,
+            )
+
+        self.assertIn("cannot target cloud directly", str(ctx.exception))
 
     @patch("server_modules.runs_execution._workflow_execute_local_tool")
     def test_execute_workflow_graph_runs_local_tool_variant(self, local_tool_mock):
@@ -273,6 +658,61 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertEqual(result["result_text"], "Child workflow finished.")
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "subflow_1")
+
+    @patch("server_modules.runs_delegation._create_run_from_request")
+    @patch("server_modules.runs_execution.time.sleep")
+    def test_execute_workflow_graph_waits_for_subflow_human_input_and_resumes(self, sleep_mock, create_child_run_mock):
+        create_child_run_mock.return_value = {
+            "run_id": "child-run-wait",
+            "route": {"selected": "cloud"},
+        }
+        runs_execution.runs["child-run-wait"] = {
+            "status": "waiting_for_input",
+            "pending_approval": {"approval_id": "approval-child-1"},
+            "result": None,
+            "result_data": {},
+        }
+
+        def _sleep(_seconds):
+            runs_execution.runs["child-run-wait"]["status"] = "completed"
+            runs_execution.runs["child-run-wait"]["result"] = "Child workflow finished after approval."
+            runs_execution.runs["child-run-wait"]["result_data"] = {"summary": "Child workflow finished after approval."}
+
+        sleep_mock.side_effect = _sleep
+        log_queue = self._register_live_run("run-parent-wait")
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "subflow_1",
+                    "type": "subflow",
+                    "variant": "call_workflow",
+                    "config": {"workflow_id": "wf_child", "mode": "sync"},
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "subflow_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-parent-wait",
+            {
+                "engine": "orion",
+                "workflow_id": "wf_parent",
+                "workspace_id": "default",
+                "user_goal": "Run child workflow",
+                "metadata": {},
+            },
+            log_queue,
+            definition,
+        )
+
+        self.assertEqual(result["result_text"], "Child workflow finished after approval.")
+        snapshot = runs_output._serialize_run_snapshot("run-parent-wait", runs_execution.runs["run-parent-wait"])
+        items = {item["node_id"]: item for item in snapshot["node_states"]["items"]}
+        self.assertEqual(items["subflow_1"]["status"], "succeeded")
+        self.assertFalse(items["subflow_1"]["waiting_for_approval"])
+        self.assertEqual(items["subflow_1"]["child_run_id"], "child-run-wait")
 
 
 if __name__ == "__main__":

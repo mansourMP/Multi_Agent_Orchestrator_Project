@@ -10,6 +10,7 @@ type AgentNodeData = {
     label?: string;
     modelId?: string;
     description?: string;
+    executionSummary?: string;
 };
 
 const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean }) => {
@@ -17,7 +18,8 @@ const AgentNode = ({ data, selected }: { data: AgentNodeData; selected?: boolean
     const status = String(data.status || 'ready').trim().toUpperCase();
     const model = String(data.modelId || '').trim();
     const description = String(data.description || data.duty || 'Autonomous reasoning').trim();
-    const summary = [model, description].filter(Boolean).join(' · ') || 'Agent';
+    const executionSummary = String(data.executionSummary || '').trim();
+    const summary = executionSummary || [model, description].filter(Boolean).join(' · ') || 'Agent';
 
     return (
         <StandardCanvasNode

@@ -1,6 +1,9 @@
 import logging
 import base64
 import asyncio
+import hashlib
+import hmac
+from urllib.parse import urlencode
 
 from server_modules.builder_runtime_mapping import map_builder_permissions_to_runtime_metadata
 from server_modules import runtime_config as config
@@ -11,10 +14,11 @@ from server_modules.runs_engine import (
     format_agent_summary,
     generate_with_candidate_failover,
     requires_human_approval,
+    wait_for_human_response,
     resolve_run_execution_context,
     wait_for_human_decision,
 )
-from server_modules.runs_output import _json_safe
+from server_modules.runs_output import _compact_event_text, _json_safe
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
 from server_modules.runs_core import set_run_status, emit_log
 
@@ -23,6 +27,7 @@ globals().update({key: value for key, value in vars(shared).items() if not key.s
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
 LOGGER = logging.getLogger(__name__)
+NODE_TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
 
 
 def _log_execution_boundary(log_queue: queue.Queue, run_id: str, phase: str, *, status: Optional[str] = None, timeout_seconds: Optional[int] = None) -> None:
@@ -103,6 +108,196 @@ def _workflow_text_payload(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _node_preview_text(value: Any, *, limit: int = 280) -> Optional[str]:
+    text = _workflow_text_payload(value)
+    if not text:
+        return None
+    return _compact_event_text(text, limit=limit)
+
+
+def _node_detail_payload(value: Any) -> Optional[Any]:
+    if value is None:
+        return None
+    safe = _json_safe(value)
+    if isinstance(safe, (dict, list)):
+        return safe
+    return _node_preview_text(safe, limit=400)
+
+
+def _ensure_run_node_states(
+    run_id: str,
+    *,
+    graph_kind: str,
+    nodes: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    run = runs.get(run_id)
+    if not isinstance(run, dict):
+        return None
+    existing = run.get("node_states") if isinstance(run.get("node_states"), dict) else None
+    if not existing or str(existing.get("graph_kind") or "").strip().lower() != str(graph_kind or "").strip().lower():
+        existing = {
+            "version": 1,
+            "graph_kind": str(graph_kind or "").strip().lower() or "workflow",
+            "active_node_id": None,
+            "final_node_id": None,
+            "order": [],
+            "items": {},
+            "updated_at": _utc_now_iso(),
+        }
+        run["node_states"] = existing
+
+    items = existing.get("items") if isinstance(existing.get("items"), dict) else {}
+    order: List[str] = []
+    for raw_node in nodes:
+        if not isinstance(raw_node, dict):
+            continue
+        node_id = str(raw_node.get("id") or "").strip()
+        if not node_id:
+            continue
+        order.append(node_id)
+        current = items.get(node_id) if isinstance(items.get(node_id), dict) else {}
+        if existing["graph_kind"] == "workflow":
+            node_type = str(raw_node.get("type") or "").strip().lower() or "node"
+            variant = str(raw_node.get("variant") or "").strip().lower() or None
+            label = _workflow_label(raw_node)
+        else:
+            node_type = "dag"
+            variant = str(raw_node.get("kind") or "").strip().lower() or None
+            label = str(raw_node.get("label") or node_id).strip() or node_id
+        items[node_id] = {
+            "node_id": node_id,
+            "label": label,
+            "type": node_type,
+            "variant": variant,
+            "status": str(current.get("status") or "queued").strip().lower() or "queued",
+            "started_at": current.get("started_at"),
+            "completed_at": current.get("completed_at"),
+            "duration_ms": current.get("duration_ms"),
+            "input_preview": current.get("input_preview"),
+            "output_preview": current.get("output_preview"),
+            "summary": current.get("summary"),
+            "error": current.get("error"),
+            "detail": current.get("detail"),
+            "child_run_id": current.get("child_run_id"),
+            "child_workflow_id": current.get("child_workflow_id"),
+            "waiting_for_approval": bool(current.get("waiting_for_approval")),
+            "_started_mono": current.get("_started_mono"),
+        }
+    existing["items"] = items
+    existing["order"] = order
+    existing["updated_at"] = _utc_now_iso()
+    run["node_states"] = existing
+    return existing
+
+
+def _update_run_node_state(
+    run_id: str,
+    node_id: str,
+    *,
+    status: Optional[str] = None,
+    activate: bool = False,
+    finalize: bool = False,
+    label: Optional[str] = None,
+    node_type: Optional[str] = None,
+    variant: Optional[str] = None,
+    input_preview: Optional[str] = None,
+    output_preview: Optional[str] = None,
+    summary: Optional[str] = None,
+    error: Optional[str] = None,
+    detail: Any = None,
+    child_run_id: Optional[str] = None,
+    child_workflow_id: Optional[str] = None,
+    waiting_for_approval: Optional[bool] = None,
+    reset_started: bool = False,
+) -> None:
+    run = runs.get(run_id)
+    if not isinstance(run, dict):
+        return
+    node_states = run.get("node_states") if isinstance(run.get("node_states"), dict) else None
+    if not node_states:
+        return
+    items = node_states.get("items") if isinstance(node_states.get("items"), dict) else {}
+    item = items.get(node_id) if isinstance(items.get(node_id), dict) else {"node_id": node_id}
+    previous_status = str(item.get("status") or "").strip().lower()
+    if label is not None:
+        item["label"] = label
+    if node_type is not None:
+        item["type"] = node_type
+    if variant is not None:
+        item["variant"] = variant or None
+    timestamp = _utc_now_iso()
+    if activate:
+        node_states["active_node_id"] = node_id
+    if status:
+        clean_status = str(status or "").strip().lower()
+        item["status"] = clean_status
+        if clean_status == "running":
+            if reset_started or not item.get("started_at"):
+                item["started_at"] = timestamp
+                item["_started_mono"] = time.monotonic()
+            item["completed_at"] = None
+            item["duration_ms"] = None
+            item["error"] = None
+            if waiting_for_approval is None:
+                item["waiting_for_approval"] = False
+        elif clean_status == "waiting_human":
+            if not item.get("started_at"):
+                item["started_at"] = timestamp
+                item["_started_mono"] = time.monotonic()
+            if waiting_for_approval is None:
+                item["waiting_for_approval"] = True
+        elif clean_status in NODE_TERMINAL_STATUSES:
+            item["completed_at"] = timestamp
+            started_mono = item.get("_started_mono")
+            if isinstance(started_mono, (int, float)):
+                item["duration_ms"] = round(max(0.0, (time.monotonic() - started_mono) * 1000.0), 2)
+            node_states["active_node_id"] = None
+            if finalize:
+                node_states["final_node_id"] = node_id
+            if waiting_for_approval is None:
+                item["waiting_for_approval"] = False
+    if input_preview is not None:
+        item["input_preview"] = input_preview or None
+    if output_preview is not None:
+        item["output_preview"] = output_preview or None
+    if summary is not None:
+        item["summary"] = summary or None
+    if error is not None:
+        item["error"] = error or None
+    if detail is not None:
+        item["detail"] = _node_detail_payload(detail)
+    if child_run_id is not None:
+        item["child_run_id"] = child_run_id or None
+    if child_workflow_id is not None:
+        item["child_workflow_id"] = child_workflow_id or None
+    if waiting_for_approval is not None:
+        item["waiting_for_approval"] = bool(waiting_for_approval)
+    items[node_id] = item
+    node_states["items"] = items
+    node_states["updated_at"] = timestamp
+    run["node_states"] = node_states
+    if status:
+        clean_status = str(status or "").strip().lower()
+        if clean_status and clean_status != previous_status:
+            emit_log(
+                run["logs"],
+                "info" if clean_status not in {"failed"} else "error",
+                f"Node state: {str(item.get('label') or node_id).strip() or node_id} -> {clean_status}",
+                event="node_state",
+                data={
+                    "graph_kind": node_states.get("graph_kind"),
+                    "node_id": node_id,
+                    "label": item.get("label"),
+                    "type": item.get("type"),
+                    "variant": item.get("variant"),
+                    "status": clean_status,
+                    "active_node_id": node_states.get("active_node_id"),
+                    "final_node_id": node_states.get("final_node_id"),
+                    "waiting_for_approval": bool(item.get("waiting_for_approval")),
+                },
+            )
+
+
 def _workflow_variant_default_tool_id(variant: str) -> str:
     mapping = {
         "shell": "execute_shell_command",
@@ -122,6 +317,7 @@ def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
         action_mapping = {
             "send_email": "send_message",
             "send_message": "send_message",
+            "send_embed": "send_message",
             "send_dm": "send_message",
             "publish_reply": "send_message",
             "send_media": "send_message",
@@ -604,6 +800,7 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
         "_archived": False,
         "_event_seq": 0,
         "events": [],
+        "node_states": None,
         "tool_policy_audit": [],
         "memory_trace": {
             "enabled": ORION_MEMORY_ENABLED,
@@ -824,6 +1021,26 @@ def _workflow_tool_connector_headers(secret: Dict[str, Any]) -> Dict[str, str]:
     return {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
 
+def _workflow_whatsapp_number(raw_value: Any) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    if value.lower().startswith("whatsapp:"):
+        return value
+    return f"whatsapp:{value}"
+
+
+def _workflow_http_headers(value: Any) -> Dict[str, str]:
+    headers = value if isinstance(value, dict) else {}
+    normalized: Dict[str, str] = {}
+    for raw_key, raw_header_value in headers.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        normalized[key] = str(raw_header_value or "").strip()
+    return normalized
+
+
 def _workflow_tool_create_child_local_run(
     run_id: str,
     context: Dict[str, Any],
@@ -873,8 +1090,11 @@ def _workflow_wait_for_child_run(
     child_run_id: str,
     *,
     timeout_seconds: int,
+    on_waiting_for_input: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_resumed: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     deadline = time.monotonic() + max(5, int(timeout_seconds or 300))
+    waiting_emitted = False
     while True:
         if time.monotonic() > deadline:
             raise RuntimeError(f"Child run '{child_run_id}' did not finish within {timeout_seconds}s.")
@@ -883,10 +1103,17 @@ def _workflow_wait_for_child_run(
             time.sleep(0.25)
             continue
         child_status = str(child_run.get("status") or "").strip().lower()
+        if child_status == "waiting_for_input":
+            if not waiting_emitted and callable(on_waiting_for_input):
+                on_waiting_for_input(child_run_id, child_run)
+            waiting_emitted = True
+            time.sleep(0.25)
+            continue
+        if waiting_emitted and callable(on_resumed):
+            on_resumed(child_run_id, child_run)
+            waiting_emitted = False
         if child_status == "completed":
             return child_run
-        if child_status == "waiting_for_input":
-            raise RuntimeError(f"Child run '{child_run_id}' is waiting for human input and cannot resume synchronously.")
         if child_status in {"failed", "timeout", "cancelled", "stopped"}:
             raise RuntimeError(f"Child run '{child_run_id}' ended with status '{child_status}'.")
         time.sleep(0.25)
@@ -898,11 +1125,72 @@ def _workflow_execute_connector_action(
     *,
     current_text: str,
 ) -> Dict[str, Any]:
-    credential_id, connector_id, secret = _workflow_tool_connector_secret(context, config)
-    workspace_id = _workflow_tool_workspace_id(context)
+    requested_connector = str(config.get("connector") or "").strip().lower()
     action_id = normalize_action_id(config.get("action_id"))
     if not action_id:
         raise RuntimeError("Connector action tool node is missing action_id.")
+    if not requested_connector:
+        raise RuntimeError("Connector action tool node is missing connector.")
+
+    if requested_connector == "custom_api" and action_id in {"http_request", "signed_webhook"}:
+        method = str(config.get("method") or ("POST" if action_id == "signed_webhook" else "GET")).strip().upper() or "GET"
+        url = str(config.get("url") or "").strip()
+        if not url:
+            raise RuntimeError(f"Connector action '{requested_connector}.{action_id}' requires a URL.")
+        headers = _workflow_http_headers(config.get("headers"))
+        payload_value = config.get("payload")
+        if payload_value is None and method != "GET":
+            payload_value = {"context": _workflow_tool_text_input(config, current_text)}
+        request_payload: Any = payload_value
+        if action_id == "signed_webhook":
+            signing_secret = str(
+                config.get("signing_secret")
+                or config.get("secret")
+                or ""
+            ).strip()
+            if not signing_secret:
+                raise RuntimeError("signed_webhook requires signing_secret.")
+            if isinstance(payload_value, (bytes, bytearray)):
+                body_bytes = bytes(payload_value)
+            else:
+                body_bytes = json.dumps(payload_value if payload_value is not None else {}).encode("utf-8")
+                headers.setdefault("Content-Type", "application/json")
+            signature = hmac.new(
+                signing_secret.encode("utf-8"),
+                body_bytes,
+                hashlib.sha256,
+            ).hexdigest()
+            headers.setdefault("X-Empyralist-Signature-SHA256", signature)
+            request_payload = body_bytes
+        response = http_json_request(
+            url,
+            method=method,
+            headers=headers,
+            payload=request_payload,
+            timeout=max(5, int(config.get("timeout_seconds") or 30)),
+        )
+        status_code = int(response.get("status") or 500)
+        if status_code >= 400:
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            detail = str(body.get("message") or body.get("detail") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"Custom API request failed with status {status_code}.")
+        result = response.get("json") if response.get("json") is not None else response.get("text")
+        return {
+            "summary": f"Connector action completed: custom_api.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": "custom_api",
+                    "credential_id": None,
+                    "action_id": action_id,
+                    "url": url,
+                    "method": method,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    credential_id, connector_id, secret = _workflow_tool_connector_secret(context, config)
+    workspace_id = _workflow_tool_workspace_id(context)
 
     if connector_id == "telegram_bot" and action_id in {"send_message", "send_media", "update_message"}:
         chat_id = str(config.get("chat_id") or secret.get("chat_id") or "").strip()
@@ -924,6 +1212,145 @@ def _workflow_execute_connector_action(
                     "credential_id": credential_id,
                     "action_id": action_id,
                     "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "discord_bot" and action_id in {"send_message", "send_embed"}:
+        bot_token = str(secret.get("bot_token") or "").strip()
+        channel_id = str(config.get("channel_id") or secret.get("channel_id") or "").strip()
+        if not bot_token:
+            raise RuntimeError("Discord connector action requires bot_token.")
+        if not channel_id:
+            raise RuntimeError("Discord connector action requires channel_id.")
+        body_text = _workflow_tool_text_input(config, current_text)
+        if action_id == "send_embed":
+            embeds = config.get("embeds") if isinstance(config.get("embeds"), list) else None
+            if embeds:
+                payload = {"embeds": embeds}
+            else:
+                payload = {
+                    "embeds": [
+                        {
+                            "title": str(
+                                config.get("title")
+                                or context.get("workflow_name")
+                                or context.get("workflow_id")
+                                or "Empyralist"
+                            ).strip() or "Empyralist",
+                            "description": body_text,
+                        }
+                    ]
+                }
+        else:
+            payload = {"content": body_text}
+        response = http_json_request(
+            f"https://discord.com/api/v10/channels/{quote_plus(channel_id)}/messages",
+            method="POST",
+            headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
+            payload=payload,
+        )
+        status_code = int(response.get("status") or 500)
+        if status_code not in {200, 201}:
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            detail = str(body.get("message") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"Discord send failed with status {status_code}.")
+        result = response.get("json") if isinstance(response.get("json"), dict) else response
+        return {
+            "summary": f"Connector action completed: discord_bot.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "channel_id": channel_id,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "whatsapp_twilio" and action_id == "send_message":
+        account_sid = str(secret.get("account_sid") or "").strip()
+        auth_token = str(secret.get("auth_token") or "").strip()
+        from_number = _workflow_whatsapp_number(config.get("from_number") or secret.get("from_number"))
+        to_number = _workflow_whatsapp_number(
+            config.get("to_number")
+            or config.get("recipient")
+            or secret.get("to_number")
+        )
+        if not account_sid or not auth_token:
+            raise RuntimeError("WhatsApp (Twilio) connector action requires account_sid and auth_token.")
+        if not from_number or not to_number:
+            raise RuntimeError("WhatsApp (Twilio) connector action requires from_number and to_number.")
+        basic = base64.b64encode(f"{account_sid}:{auth_token}".encode("utf-8")).decode("ascii")
+        payload = urlencode(
+            {
+                "From": from_number,
+                "To": to_number,
+                "Body": _workflow_tool_text_input(config, current_text),
+            }
+        ).encode("utf-8")
+        response = http_json_request(
+            f"https://api.twilio.com/2010-04-01/Accounts/{quote_plus(account_sid)}/Messages.json",
+            method="POST",
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            payload=payload,
+        )
+        status_code = int(response.get("status") or 500)
+        if status_code not in {200, 201}:
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            detail = str(body.get("message") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"Twilio send failed with status {status_code}.")
+        result = response.get("json") if isinstance(response.get("json"), dict) else response
+        return {
+            "summary": f"Connector action completed: whatsapp_twilio.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "to_number": to_number,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
+    if connector_id == "wechat_work" and action_id == "send_message":
+        webhook_url = str(config.get("webhook_url") or secret.get("webhook_url") or "").strip()
+        if not webhook_url:
+            raise RuntimeError("WeChat Work connector action requires webhook_url.")
+        body_text = _workflow_tool_text_input(config, current_text)
+        payload = config.get("payload") if isinstance(config.get("payload"), dict) else {
+            "msgtype": "text",
+            "text": {
+                "content": body_text,
+            },
+        }
+        response = http_json_request(
+            webhook_url,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            payload=payload,
+        )
+        status_code = int(response.get("status") or 500)
+        body = response.get("json") if isinstance(response.get("json"), dict) else {}
+        if status_code != 200:
+            detail = str(body.get("errmsg") or body.get("message") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"WeChat Work send failed with status {status_code}.")
+        if int(body.get("errcode") or 0) != 0:
+            detail = str(body.get("errmsg") or "").strip()
+            raise RuntimeError(detail or "WeChat Work webhook was rejected.")
+        return {
+            "summary": f"Connector action completed: wechat_work.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "result": _json_safe(body or response),
                 }
             },
         }
@@ -1052,6 +1479,42 @@ def _workflow_execute_connector_action(
             },
         }
 
+    if connector_id == "microsoft_365" and action_id == "upload_drive_file":
+        drive_path = str(config.get("path") or config.get("file_path") or "").strip()
+        if not drive_path:
+            raise RuntimeError("upload_drive_file requires path or file_path.")
+        content_value = config.get("content")
+        if content_value is None:
+            content_value = current_text
+        if isinstance(content_value, (dict, list)):
+            content_bytes = json.dumps(content_value).encode("utf-8")
+            content_type = "application/json"
+        elif isinstance(content_value, (bytes, bytearray)):
+            content_bytes = bytes(content_value)
+            content_type = str(config.get("content_type") or "application/octet-stream").strip() or "application/octet-stream"
+        else:
+            content_bytes = str(content_value or "").encode("utf-8")
+            content_type = str(config.get("content_type") or "text/plain; charset=utf-8").strip() or "text/plain; charset=utf-8"
+        result = microsoft_365_upload_drive_file(
+            secret,
+            drive_path,
+            content_bytes,
+            content_type=content_type,
+        )
+        return {
+            "summary": f"Connector action completed: microsoft_365.upload_drive_file.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "path": drive_path,
+                    "content_type": content_type,
+                    "result": _json_safe(result),
+                }
+            },
+        }
+
     if connector_id == "google_workspace" and action_id in {"create_doc", "create_document"}:
         title = str(config.get("title") or "Empyralist Document").strip() or "Empyralist Document"
         result = google_workspace_create_document(secret, title)
@@ -1138,7 +1601,17 @@ def _workflow_execute_local_tool(
     label: str,
     variant: str,
     current_text: str,
+    on_waiting_for_input: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_resumed: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    execution_target = normalize_execution_target(
+        config.get("execution_target")
+        or context.get("metadata", {}).get("execution_target_selected")
+        or context.get("metadata", {}).get("execution_target")
+        or "auto"
+    )
+    if variant in {"shell", "browser", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
+        raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
     if variant == "file":
         operation = {
             "tool": "read_write_files",
@@ -1185,6 +1658,8 @@ def _workflow_execute_local_tool(
     child_run = _workflow_wait_for_child_run(
         child_run_id,
         timeout_seconds=int(config.get("timeout_seconds") or 300),
+        on_waiting_for_input=on_waiting_for_input,
+        on_resumed=on_resumed,
     )
     result_text = _workflow_text_payload(child_run.get("result") or "")
     result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
@@ -1239,6 +1714,7 @@ def _execute_workflow_graph(
     }
     if not node_map:
         raise RuntimeError("Workflow definition has no usable node ids.")
+    _ensure_run_node_states(run_id, graph_kind="workflow", nodes=nodes)
 
     trigger_nodes = [
         node for node in nodes if isinstance(node, dict) and str(node.get("type") or "").strip().lower() == "trigger"
@@ -1272,265 +1748,517 @@ def _execute_workflow_graph(
         config = current_node.get("config") if isinstance(current_node.get("config"), dict) else {}
         label = _workflow_label(current_node)
         final_node_id = node_id or final_node_id
+        _update_run_node_state(
+            run_id,
+            node_id,
+            status="running",
+            activate=True,
+            label=label,
+            node_type=node_type,
+            variant=variant,
+            input_preview=_node_preview_text(current_text),
+            summary=f"Executing {label}",
+            reset_started=True,
+        )
         emit_log(log_queue, "info", f"Workflow node: {label}", event="workflow_node_start", data={"node_id": node_id, "type": node_type, "variant": variant})
 
         next_handle: Optional[str] = None
-        if node_type == "trigger":
-            emit_log(log_queue, "info", f"Trigger active: {label}", event="workflow_trigger", data={"variant": variant or "manual", "node_id": node_id})
+        try:
+            if node_type == "trigger":
+                emit_log(log_queue, "info", f"Trigger active: {label}", event="workflow_trigger", data={"variant": variant or "manual", "node_id": node_id})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(current_text),
+                    summary=f"Trigger active: {variant or 'manual'}",
+                    detail={"node_id": node_id, "variant": variant or "manual"},
+                )
 
-        elif node_type == "agent":
-            execution_context, agent_state = _resolve_agent_generation_state(context, config)
-            system_prompt = _build_workflow_agent_system_prompt(config)
-            user_input = (
-                f"Workflow context:\n{current_text or 'No previous node output.'}\n\n"
-                f"Current workflow node: {label}\n"
-                "Produce the result for this node only."
-            )
-            text = generate_with_candidate_failover(agent_state, execution_context, log_queue, system_prompt, user_input)
-            current_text = text
-            state["last_text"] = text
-            state["last_data"] = {
-                "node_id": node_id,
-                "node_type": node_type,
-                "variant": variant,
-                "text": text,
-            }
-            state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
-            state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
-            emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
+            elif node_type == "agent":
+                execution_context, agent_state = _resolve_agent_generation_state(context, config)
+                system_prompt = _build_workflow_agent_system_prompt(config)
+                user_input = (
+                    f"Workflow context:\n{current_text or 'No previous node output.'}\n\n"
+                    f"Current workflow node: {label}\n"
+                    "Produce the result for this node only."
+                )
+                text = generate_with_candidate_failover(agent_state, execution_context, log_queue, system_prompt, user_input)
+                current_text = text
+                state["last_text"] = text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "text": text,
+                }
+                state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
+                state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
+                emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(text),
+                    summary=f"Agent completed: {label}",
+                    detail={
+                        "provider": state.get("active_provider"),
+                        "model": state.get("active_model"),
+                    },
+                )
 
-        elif node_type == "decision":
-            expression = str(config.get("expression") or "").strip() or "False"
-            try:
-                decision = _workflow_decision_value(current_text, state, expression)
-            except Exception as exc:
-                raise RuntimeError(f"Decision node '{label}' failed to evaluate expression: {exc}") from exc
-            next_handle = "true" if decision else "false"
-            state["last_data"] = {
-                "node_id": node_id,
-                "node_type": node_type,
-                "variant": variant,
-                "decision": bool(decision),
-                "expression": expression,
-            }
-            current_text = f"{label}: {'true' if decision else 'false'}"
-            state["last_text"] = current_text
-            emit_log(log_queue, "info", current_text, event="workflow_decision", data={"node_id": node_id, "decision": bool(decision), "expression": expression})
+            elif node_type == "decision":
+                expression = str(config.get("expression") or "").strip() or "False"
+                try:
+                    decision = _workflow_decision_value(current_text, state, expression)
+                except Exception as exc:
+                    raise RuntimeError(f"Decision node '{label}' failed to evaluate expression: {exc}") from exc
+                next_handle = "true" if decision else "false"
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "decision": bool(decision),
+                    "expression": expression,
+                }
+                current_text = f"{label}: {'true' if decision else 'false'}"
+                state["last_text"] = current_text
+                emit_log(log_queue, "info", current_text, event="workflow_decision", data={"node_id": node_id, "decision": bool(decision), "expression": expression})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(current_text),
+                    summary=f"Decision: {'true' if decision else 'false'}",
+                    detail={"decision": bool(decision), "expression": expression},
+                )
 
-        elif node_type == "human":
-            title = str(config.get("title") or label or "Approval required").strip() or "Approval required"
-            instructions = str(config.get("instructions") or "").strip()
-            decision_options = config.get("decision_options") if isinstance(config.get("decision_options"), list) else []
-            option_text = ", ".join(str(item).strip() for item in decision_options if str(item).strip()) or "approve / reject"
-            prompt = (
-                f"{title}. {instructions} "
-                f"Current workflow context: {current_text or 'No current output.'} "
-                f"Reply with one of: {option_text}."
-            ).strip()
-            approved = wait_for_human_decision(run_id, prompt)
-            if not approved:
-                raise RuntimeError(f"Workflow stopped at human node '{label}'.")
-            current_text = f"{title}: approved"
-            state["last_text"] = current_text
-            state["last_data"] = {
-                "node_id": node_id,
-                "node_type": node_type,
-                "variant": variant,
-                "decision": "approved",
-            }
-            emit_log(log_queue, "info", current_text, event="workflow_human_resolved", data={"node_id": node_id, "variant": variant or "approval"})
+            elif node_type == "human":
+                title = str(config.get("title") or label or "Approval required").strip() or "Approval required"
+                instructions = str(config.get("instructions") or "").strip()
+                decision_options = config.get("decision_options") if isinstance(config.get("decision_options"), list) else []
+                option_text = ", ".join(str(item).strip() for item in decision_options if str(item).strip()) or "approve / reject"
+                if variant == "wait_for_reply":
+                    prompt = (
+                        f"{title}. {instructions} "
+                        f"Current workflow context: {current_text or 'No current output.'} "
+                        "Reply with the information needed to continue."
+                    ).strip()
+                elif variant == "review":
+                    prompt = (
+                        f"{title}. {instructions} "
+                        f"Current workflow context: {current_text or 'No current output.'} "
+                        f"Reply with feedback or choose one of: {option_text}."
+                    ).strip()
+                else:
+                    prompt = (
+                        f"{title}. {instructions} "
+                        f"Current workflow context: {current_text or 'No current output.'} "
+                        f"Reply with one of: {option_text}."
+                    ).strip()
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="waiting_human",
+                    summary=title,
+                    detail={"variant": variant or "approval", "decision_options": decision_options},
+                    waiting_for_approval=True,
+                )
+                human_response = wait_for_human_response(
+                    run_id,
+                    prompt,
+                    source="workflow_human_node",
+                    metadata={
+                        "node_id": node_id,
+                        "node_label": label,
+                        "variant": variant or "approval",
+                        "decision_options": decision_options,
+                    },
+                )
+                response_decision = str(human_response.get("decision") or "").strip().lower()
+                response_raw_decision = str(human_response.get("raw_decision") or "").strip()
+                response_note = str(human_response.get("note") or "").strip()
+                if variant == "approval":
+                    if not bool(human_response.get("approved")):
+                        raise RuntimeError(f"Workflow stopped at human node '{label}'.")
+                    current_text = f"{title}: approved"
+                    summary_text = f"{title}: approved"
+                    output_preview = _node_preview_text(current_text)
+                else:
+                    reply_text = response_note or response_raw_decision or response_decision
+                    if not reply_text:
+                        raise RuntimeError(f"Human node '{label}' did not receive a usable response.")
+                    current_text = reply_text
+                    summary_text = (
+                        f"Reply received: {title}"
+                        if variant == "wait_for_reply"
+                        else f"Review received: {title}"
+                    )
+                    output_preview = _node_preview_text(reply_text)
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "decision": response_decision or None,
+                    "raw_decision": response_raw_decision or None,
+                    "note": response_note or None,
+                    "human_response": _json_safe(human_response),
+                }
+                emit_log(
+                    log_queue,
+                    "info",
+                    current_text,
+                    event="workflow_human_resolved",
+                    data={"node_id": node_id, "variant": variant or "approval", "decision": response_decision or None},
+                )
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=output_preview,
+                    summary=summary_text,
+                    detail={
+                        "decision": response_decision or None,
+                        "note": response_note or None,
+                        "variant": variant or "approval",
+                        "decision_options": decision_options,
+                    },
+                    waiting_for_approval=False,
+                )
 
-        elif node_type == "data":
-            template = str(config.get("template") or "").strip()
-            mapping = str(config.get("mapping") or "").strip()
-            summary = template or mapping or label
-            current_text = summary if not current_text else f"{summary}\n\n{current_text}"
-            state["last_text"] = current_text
-            state["last_data"] = {
-                "node_id": node_id,
-                "node_type": node_type,
-                "variant": variant,
-                "summary": summary,
-            }
-            emit_log(log_queue, "info", f"Data step: {summary}", event="workflow_data_step", data={"node_id": node_id, "variant": variant})
+            elif node_type == "data":
+                template = str(config.get("template") or "").strip()
+                mapping = str(config.get("mapping") or "").strip()
+                summary = template or mapping or label
+                current_text = summary if not current_text else f"{summary}\n\n{current_text}"
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "summary": summary,
+                }
+                emit_log(log_queue, "info", f"Data step: {summary}", event="workflow_data_step", data={"node_id": node_id, "variant": variant})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(current_text),
+                    summary=summary,
+                    detail={"variant": variant or "transform"},
+                )
 
-        elif node_type == "subflow":
-            child_workflow_id = str(config.get("workflow_id") or "").strip()
-            if not child_workflow_id:
-                raise RuntimeError(f"Subflow node '{label}' is missing workflow_id.")
-            if child_workflow_id == str(context.get("workflow_id") or "").strip():
-                raise RuntimeError("Recursive subflow calls are not allowed.")
-            from server_modules.runtime_models import RunStartRequest
-            from server_modules.runs_delegation import _create_run_from_request as _create_child_run
+            elif node_type == "subflow":
+                child_workflow_id = str(config.get("workflow_id") or "").strip()
+                if not child_workflow_id:
+                    raise RuntimeError(f"Subflow node '{label}' is missing workflow_id.")
+                if child_workflow_id == str(context.get("workflow_id") or "").strip():
+                    raise RuntimeError("Recursive subflow calls are not allowed.")
+                from server_modules.runtime_models import RunStartRequest
+                from server_modules.runs_delegation import _create_run_from_request as _create_child_run
 
-            child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
-            child_metadata["subflow_parent_run_id"] = run_id
-            child_metadata["subflow_parent_workflow_id"] = str(context.get("workflow_id") or "").strip() or None
-            child_req = RunStartRequest(
-                engine=str(context.get("engine") or "orion"),
-                workflow_id=child_workflow_id,
-                workspace_id=context.get("workspace_id"),
-                user_goal=current_text or context.get("user_goal"),
-                business_plan=current_text or context.get("business_plan"),
-                agent_role=context.get("agent_role"),
-                provider=context.get("provider"),
-                model=context.get("model"),
-                credential_id=context.get("credential_id"),
-                parent_run_id=run_id,
-                metadata=child_metadata,
-            )
-            child_result = _create_child_run(child_req)
-            route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
-            if str(route.get("selected") or "").strip().lower() == EXECUTION_TARGET_LOCAL_COMPANION:
-                raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")
-            child_run_id = str(child_result.get("run_id") or "").strip()
-            if not child_run_id:
-                raise RuntimeError("Subflow execution did not return a child run id.")
-            emit_log(log_queue, "info", f"Subflow started: {child_workflow_id}", event="workflow_subflow_start", data={"node_id": node_id, "child_run_id": child_run_id, "workflow_id": child_workflow_id})
-            child_timeout = max(30, int(config.get("timeout_seconds") or 300))
-            deadline = time.monotonic() + child_timeout
-            while True:
-                if time.monotonic() > deadline:
-                    raise RuntimeError(f"Subflow '{child_workflow_id}' did not finish within {child_timeout}s.")
-                child_run = runs.get(child_run_id)
-                if not isinstance(child_run, dict):
-                    time.sleep(0.25)
-                    continue
+                child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
+                child_metadata["subflow_parent_run_id"] = run_id
+                child_metadata["subflow_parent_workflow_id"] = str(context.get("workflow_id") or "").strip() or None
+                child_req = RunStartRequest(
+                    engine=str(context.get("engine") or "orion"),
+                    workflow_id=child_workflow_id,
+                    workspace_id=context.get("workspace_id"),
+                    user_goal=current_text or context.get("user_goal"),
+                    business_plan=current_text or context.get("business_plan"),
+                    agent_role=context.get("agent_role"),
+                    provider=context.get("provider"),
+                    model=context.get("model"),
+                    credential_id=context.get("credential_id"),
+                    parent_run_id=run_id,
+                    metadata=child_metadata,
+                )
+                child_result = _create_child_run(child_req)
+                route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
+                if str(route.get("selected") or "").strip().lower() == EXECUTION_TARGET_LOCAL_COMPANION:
+                    raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")
+                child_run_id = str(child_result.get("run_id") or "").strip()
+                if not child_run_id:
+                    raise RuntimeError("Subflow execution did not return a child run id.")
+                emit_log(log_queue, "info", f"Subflow started: {child_workflow_id}", event="workflow_subflow_start", data={"node_id": node_id, "child_run_id": child_run_id, "workflow_id": child_workflow_id})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    summary=f"Waiting for subflow {child_workflow_id}",
+                    detail={"mode": str(config.get("mode") or "sync").strip() or "sync"},
+                    child_run_id=child_run_id,
+                    child_workflow_id=child_workflow_id,
+                )
+                child_timeout = max(30, int(config.get("timeout_seconds") or 300))
+                child_run = _workflow_wait_for_child_run(
+                    child_run_id,
+                    timeout_seconds=child_timeout,
+                    on_waiting_for_input=lambda active_child_run_id, child_run: _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="waiting_human",
+                        summary=f"Subflow waiting for input: {child_workflow_id}",
+                        detail={
+                            "mode": str(config.get("mode") or "sync").strip() or "sync",
+                            "child_status": "waiting_for_input",
+                            "child_pending_approval_id": str(
+                                ((child_run.get("pending_approval") or {}) if isinstance(child_run, dict) else {}).get("approval_id") or ""
+                            ).strip() or None,
+                        },
+                        child_run_id=active_child_run_id,
+                        child_workflow_id=child_workflow_id,
+                        waiting_for_approval=True,
+                    ),
+                    on_resumed=lambda active_child_run_id, _child_run: _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="running",
+                        activate=True,
+                        summary=f"Subflow resumed: {child_workflow_id}",
+                        child_run_id=active_child_run_id,
+                        child_workflow_id=child_workflow_id,
+                        waiting_for_approval=False,
+                    ),
+                )
                 child_status = str(child_run.get("status") or "").strip().lower()
-                if child_status == "completed":
-                    child_result_text = _workflow_text_payload(child_run.get("result") or "")
-                    child_result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
-                    current_text = child_result_text or current_text
+                child_result_text = _workflow_text_payload(child_run.get("result") or "")
+                child_result_data = child_run.get("result_data") if isinstance(child_run.get("result_data"), dict) else {}
+                current_text = child_result_text or current_text
+                state["last_text"] = current_text
+                state["last_data"] = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "variant": variant,
+                    "child_run_id": child_run_id,
+                    "child_workflow_id": child_workflow_id,
+                    "child_status": child_status,
+                    "child_result_data": child_result_data,
+                }
+                emit_log(log_queue, "info", f"Subflow completed: {child_workflow_id}", event="workflow_subflow_complete", data={"node_id": node_id, "child_run_id": child_run_id})
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(current_text),
+                    summary=f"Subflow completed: {child_workflow_id}",
+                    detail={"child_status": child_status},
+                    child_run_id=child_run_id,
+                    child_workflow_id=child_workflow_id,
+                )
+
+            elif node_type == "tool":
+                execution_target = str(
+                    config.get("execution_target")
+                    or context.get("metadata", {}).get("execution_target_selected")
+                    or context.get("metadata", {}).get("execution_target")
+                    or "auto"
+                ).strip() or "auto"
+                normalized_execution_target = normalize_execution_target(execution_target)
+                if variant in {"shell", "browser", "code"} and normalized_execution_target == EXECUTION_TARGET_CLOUD:
+                    raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
+                permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+                policy_metadata = map_builder_permissions_to_runtime_metadata(permissions, execution_target=execution_target)
+                capability_ids = []
+                if str(config.get("capability") or "").strip():
+                    capability_ids = [str(config.get("capability") or "").strip()]
+                tool_id = _workflow_tool_policy_tool_id(variant, config)
+                if tool_id:
+                    evaluation = evaluate_tool_policy_decision(
+                        tool_id=tool_id,
+                        trust_mode=str(policy_metadata.get("trust_mode") or "guarded"),
+                        target=str(policy_metadata.get("execution_target") or execution_target or "auto"),
+                        metadata=policy_metadata,
+                        capability_ids=capability_ids,
+                    )
+                    _append_run_tool_policy_audit(
+                        run_id,
+                        evaluation,
+                        source="workflow_tool_node",
+                        metadata={"node_id": node_id, "variant": variant},
+                    )
+                    decision = str(evaluation.get("decision") or "").strip().lower()
+                    if decision == "blocked":
+                        raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
+                    if decision == "approval_required":
+                        _update_run_node_state(
+                            run_id,
+                            node_id,
+                            status="waiting_human",
+                            summary=f"Approval required before {label}",
+                            detail={"tool_id": tool_id, "variant": variant, "evaluation": evaluation},
+                            waiting_for_approval=True,
+                        )
+                        approved = wait_for_human_decision(
+                            run_id,
+                            f"Tool node '{label}' requires approval before execution. Reply with Proceed to continue or Hold to stop.",
+                        )
+                        if not approved:
+                            raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
+                        _update_run_node_state(
+                            run_id,
+                            node_id,
+                            status="running",
+                            activate=True,
+                            summary=f"Executing approved tool: {label}",
+                            waiting_for_approval=False,
+                        )
+
+                if variant == "http":
+                    method = str(config.get("method") or "GET").strip().upper() or "GET"
+                    url = str(config.get("url") or "").strip()
+                    if not url:
+                        raise RuntimeError(f"HTTP tool node '{label}' requires a URL.")
+                    payload = None if method == "GET" else {"context": current_text}
+                    response = http_json_request(url, method=method, payload=payload, timeout=30)
+                    if int(response.get("status") or 500) >= 400:
+                        raise RuntimeError(f"HTTP tool node '{label}' failed with status {int(response.get('status') or 500)}.")
+                    tool_output = response.get("json") if response.get("json") is not None else response.get("text")
+                    current_text = _workflow_text_payload(tool_output)
                     state["last_text"] = current_text
                     state["last_data"] = {
                         "node_id": node_id,
                         "node_type": node_type,
                         "variant": variant,
-                        "child_run_id": child_run_id,
-                        "child_workflow_id": child_workflow_id,
-                        "child_status": child_status,
-                        "child_result_data": child_result_data,
+                        "tool_id": tool_id or "http",
+                        "output": _json_safe(tool_output),
                     }
-                    emit_log(log_queue, "info", f"Subflow completed: {child_workflow_id}", event="workflow_subflow_complete", data={"node_id": node_id, "child_run_id": child_run_id})
-                    break
-                if child_status in {"failed", "timeout", "cancelled", "stopped"}:
-                    raise RuntimeError(f"Subflow '{child_workflow_id}' ended with status '{child_status}'.")
-                time.sleep(0.25)
-
-        elif node_type == "tool":
-            execution_target = str(
-                config.get("execution_target")
-                or context.get("metadata", {}).get("execution_target_selected")
-                or context.get("metadata", {}).get("execution_target")
-                or "auto"
-            ).strip() or "auto"
-            permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
-            policy_metadata = map_builder_permissions_to_runtime_metadata(permissions, execution_target=execution_target)
-            capability_ids = []
-            if str(config.get("capability") or "").strip():
-                capability_ids = [str(config.get("capability") or "").strip()]
-            tool_id = _workflow_tool_policy_tool_id(variant, config)
-            if tool_id:
-                evaluation = evaluate_tool_policy_decision(
-                    tool_id=tool_id,
-                    trust_mode=str(policy_metadata.get("trust_mode") or "guarded"),
-                    target=str(policy_metadata.get("execution_target") or execution_target or "auto"),
-                    metadata=policy_metadata,
-                    capability_ids=capability_ids,
-                )
-                _append_run_tool_policy_audit(
-                    run_id,
-                    evaluation,
-                    source="workflow_tool_node",
-                    metadata={"node_id": node_id, "variant": variant},
-                )
-                decision = str(evaluation.get("decision") or "").strip().lower()
-                if decision == "blocked":
-                    raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
-                if decision == "approval_required":
-                    approved = wait_for_human_decision(
+                    emit_log(log_queue, "info", f"HTTP tool completed: {label}", event="workflow_tool_http", data={"node_id": node_id, "url": url, "method": method})
+                    _update_run_node_state(
                         run_id,
-                        f"Tool node '{label}' requires approval before execution. Reply with Proceed to continue or Hold to stop.",
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(current_text),
+                        summary=f"HTTP tool completed: {label}",
+                        detail={"tool_id": tool_id or "http", "url": url, "method": method},
                     )
-                    if not approved:
-                        raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
+                elif variant == "connector_action":
+                    tool_result = _workflow_execute_connector_action(
+                        context,
+                        config,
+                        current_text=current_text,
+                    )
+                    current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                    state["last_text"] = current_text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "tool_id": tool_id or "connector_action",
+                        **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                    }
+                    emit_log(log_queue, "info", current_text, event="workflow_tool_connector_action", data={"node_id": node_id, "tool_id": tool_id})
+                    _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(current_text),
+                        summary=f"Connector action completed: {label}",
+                        detail={"tool_id": tool_id or "connector_action", "result": tool_result.get("result_data")},
+                    )
+                elif variant in {"document", "spreadsheet"}:
+                    tool_result = _workflow_execute_document_or_spreadsheet_tool(
+                        context,
+                        config,
+                        variant=variant,
+                    )
+                    current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                    state["last_text"] = current_text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "tool_id": tool_id or variant,
+                        **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                    }
+                    emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
+                    _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(current_text),
+                        summary=f"{variant.title()} tool completed: {label}",
+                        detail={"tool_id": tool_id or variant, "result": tool_result.get("result_data")},
+                    )
+                elif variant in {"file", "shell", "browser", "code"}:
+                    tool_result = _workflow_execute_local_tool(
+                        run_id,
+                        context,
+                        config,
+                        label=label,
+                        variant=variant,
+                        current_text=current_text,
+                        on_waiting_for_input=lambda active_child_run_id, child_run: _update_run_node_state(
+                            run_id,
+                            node_id,
+                            status="waiting_human",
+                            summary=f"Local tool waiting for input: {label}",
+                            detail={
+                                "tool_id": tool_id or variant,
+                                "variant": variant,
+                                "child_status": "waiting_for_input",
+                                "child_pending_approval_id": str(
+                                    ((child_run.get("pending_approval") or {}) if isinstance(child_run, dict) else {}).get("approval_id") or ""
+                                ).strip() or None,
+                            },
+                            child_run_id=active_child_run_id,
+                            waiting_for_approval=True,
+                        ),
+                        on_resumed=lambda active_child_run_id, _child_run: _update_run_node_state(
+                            run_id,
+                            node_id,
+                            status="running",
+                            activate=True,
+                            summary=f"Local tool resumed: {label}",
+                            child_run_id=active_child_run_id,
+                            waiting_for_approval=False,
+                        ),
+                    )
+                    current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
+                    state["last_text"] = current_text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "tool_id": tool_id or variant,
+                        **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
+                    }
+                    emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
+                    _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(current_text),
+                        summary=f"{variant.title()} tool completed: {label}",
+                        detail={"tool_id": tool_id or variant, "result": tool_result.get("result_data")},
+                    )
+                else:
+                    raise RuntimeError(f"Tool variant '{variant or 'unknown'}' is not executable in the Orion graph runtime yet.")
 
-            if variant == "http":
-                method = str(config.get("method") or "GET").strip().upper() or "GET"
-                url = str(config.get("url") or "").strip()
-                if not url:
-                    raise RuntimeError(f"HTTP tool node '{label}' requires a URL.")
-                payload = None if method == "GET" else {"context": current_text}
-                response = http_json_request(url, method=method, payload=payload, timeout=30)
-                if int(response.get("status") or 500) >= 400:
-                    raise RuntimeError(f"HTTP tool node '{label}' failed with status {int(response.get('status') or 500)}.")
-                tool_output = response.get("json") if response.get("json") is not None else response.get("text")
-                current_text = _workflow_text_payload(tool_output)
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "tool_id": tool_id or "http",
-                    "output": _json_safe(tool_output),
-                }
-                emit_log(log_queue, "info", f"HTTP tool completed: {label}", event="workflow_tool_http", data={"node_id": node_id, "url": url, "method": method})
-            elif variant == "connector_action":
-                tool_result = _workflow_execute_connector_action(
-                    context,
-                    config,
-                    current_text=current_text,
-                )
-                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "tool_id": tool_id or "connector_action",
-                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
-                }
-                emit_log(log_queue, "info", current_text, event="workflow_tool_connector_action", data={"node_id": node_id, "tool_id": tool_id})
-            elif variant in {"document", "spreadsheet"}:
-                tool_result = _workflow_execute_document_or_spreadsheet_tool(
-                    context,
-                    config,
-                    variant=variant,
-                )
-                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "tool_id": tool_id or variant,
-                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
-                }
-                emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
-            elif variant in {"file", "shell", "browser", "code"}:
-                tool_result = _workflow_execute_local_tool(
-                    run_id,
-                    context,
-                    config,
-                    label=label,
-                    variant=variant,
-                    current_text=current_text,
-                )
-                current_text = _workflow_text_payload(tool_result.get("summary") or current_text)
-                state["last_text"] = current_text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "tool_id": tool_id or variant,
-                    **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
-                }
-                emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
             else:
-                raise RuntimeError(f"Tool variant '{variant or 'unknown'}' is not executable in the Orion graph runtime yet.")
-
-        else:
-            raise RuntimeError(f"Unsupported workflow node type '{node_type}'.")
+                raise RuntimeError(f"Unsupported workflow node type '{node_type}'.")
+        except Exception as exc:
+            _update_run_node_state(
+                run_id,
+                node_id,
+                status="failed",
+                finalize=True,
+                error=_node_preview_text(friendly_runtime_error_message(exc), limit=400),
+                summary=f"Failed: {label}",
+                detail={"node_id": node_id, "type": node_type, "variant": variant},
+                waiting_for_approval=False,
+            )
+            raise
 
         next_node_id = _workflow_next_node_id(edges, node_id, preferred_handle=next_handle)
         current_node = node_map.get(next_node_id) if next_node_id else None
@@ -1972,6 +2700,8 @@ def _execute_orion_dag_once(run_id: str, context: Dict[str, Any], log_queue: que
         raise RuntimeError("Compiled DAG has no nodes.")
 
     ordered_nodes = _resolve_dag_order(nodes_raw)
+    if str(dag_spec.get("type") or "").strip().lower() != "workflow_graph":
+        _ensure_run_node_states(run_id, graph_kind="dag", nodes=ordered_nodes)
     emit_log(
         log_queue,
         "info",
@@ -1998,10 +2728,33 @@ def _execute_orion_dag_once(run_id: str, context: Dict[str, Any], log_queue: que
             raise RuntimeError(f"DAG node '{node_id}' has unresolved dependencies: {', '.join(missing)}")
 
         node_started = time.monotonic()
+        if str(dag_spec.get("type") or "").strip().lower() != "workflow_graph":
+            _update_run_node_state(
+                run_id,
+                node_id,
+                status="running",
+                activate=True,
+                label=str(node.get("label") or node_id).strip() or node_id,
+                node_type="dag",
+                variant=str(node.get("kind") or "").strip().lower(),
+                input_preview=_node_preview_text({"deps": deps, "completed": sorted(completed)}),
+                summary=f"Executing DAG node {node_id}",
+                reset_started=True,
+            )
         emit_log(log_queue, "info", f"Node started: {node_id}", event="dag_node_start", data={"node_id": node_id})
         try:
             node_output = _execute_orion_dag_node(run_id, context, log_queue, node, state)
         except Exception as exc:
+            if str(dag_spec.get("type") or "").strip().lower() != "workflow_graph":
+                _update_run_node_state(
+                    run_id,
+                    node_id,
+                    status="failed",
+                    finalize=True,
+                    error=_node_preview_text(friendly_runtime_error_message(exc), limit=400),
+                    summary=f"Failed: {node_id}",
+                    detail={"kind": node.get("kind")},
+                )
             emit_log(
                 log_queue,
                 "error",
@@ -2013,6 +2766,17 @@ def _execute_orion_dag_once(run_id: str, context: Dict[str, Any], log_queue: que
         elapsed_ms = round((time.monotonic() - node_started) * 1000.0, 2)
         state["node_results"][node_id] = node_output
         completed.add(node_id)
+        if str(dag_spec.get("type") or "").strip().lower() != "workflow_graph":
+            node_status = "skipped" if isinstance(node_output, dict) and bool(node_output.get("skipped")) else "succeeded"
+            _update_run_node_state(
+                run_id,
+                node_id,
+                status=node_status,
+                finalize=True,
+                output_preview=_node_preview_text(node_output),
+                summary=(f"Skipped: {node_id}" if node_status == "skipped" else f"Completed: {node_id}"),
+                detail={"kind": node.get("kind"), "result": node_output},
+            )
         emit_log(
             log_queue,
             "info",

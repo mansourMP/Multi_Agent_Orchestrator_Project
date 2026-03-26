@@ -535,7 +535,13 @@ def register_run_routes(app) -> None:
     async def get_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         from server_modules.runs_delegation import _build_delegation_summary, _find_run_relationships
-        from server_modules.runs_output import _get_replay_payload, _resolve_run_connector_binding, _serialize_run_snapshot, redact_sensitive
+        from server_modules.runs_output import (
+            _get_replay_payload,
+            _limited_node_states_view,
+            _resolve_run_connector_binding,
+            _serialize_run_snapshot,
+            redact_sensitive,
+        )
         from server_modules.runtime_memory import _trim_memory_trace
         run_id_str = str(run_id)
         include_sensitive = _can_view_sensitive_run_payload(current_user)
@@ -584,6 +590,7 @@ def register_run_routes(app) -> None:
                 "child_runs": child_runs,
                 "delegation_summary": delegation_summary,
                 "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
+                "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
                 "tool_policy_precheck": snapshot.get("tool_policy_precheck") if include_sensitive else None,
                 "tool_policy_audit": snapshot.get("tool_policy_audit") if include_sensitive else [],
                 "memory_trace": snapshot.get("memory_trace") if include_sensitive else {},
@@ -666,6 +673,7 @@ def register_run_routes(app) -> None:
             "child_runs": child_runs,
             "delegation_summary": delegation_summary,
             "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
+            "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
             "tool_policy_precheck": metadata.get("tool_policy_precheck") if include_sensitive else None,
             "tool_policy_audit": run.get("tool_policy_audit") if include_sensitive and isinstance(run.get("tool_policy_audit"), list) else [],
             "memory_trace": _trim_memory_trace(run.get("memory_trace") if include_sensitive and isinstance(run.get("memory_trace"), dict) else {}),

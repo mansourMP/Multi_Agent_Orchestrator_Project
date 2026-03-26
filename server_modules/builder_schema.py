@@ -9,6 +9,7 @@ from server_modules.builder_runtime_mapping import (
     normalize_file_mount_grants,
     validate_file_mount_grants,
 )
+from server_modules.connector_manifests import CONNECTOR_MANIFESTS
 from server_modules.runtime_policy import normalize_execution_target, normalize_trust_mode
 
 
@@ -38,6 +39,29 @@ HUMAN_VARIANTS: Set[str] = {"approval", "review", "wait_for_reply"}
 DATA_VARIANTS: Set[str] = {"transform", "compose", "validate"}
 SUBFLOW_VARIANTS: Set[str] = {"call_workflow"}
 
+CONNECTOR_ALIAS_MAP = {
+    "google workspace": "google_workspace",
+    "gmail": "google_workspace",
+    "google drive": "google_workspace",
+    "drive": "google_workspace",
+    "calendar": "google_workspace",
+    "telegram": "telegram_bot",
+    "telegram bot": "telegram_bot",
+    "microsoft 365": "microsoft_365",
+    "office 365": "microsoft_365",
+    "outlook": "microsoft_365",
+    "onedrive": "microsoft_365",
+    "discord": "discord_bot",
+    "whatsapp": "whatsapp_twilio",
+    "twilio": "whatsapp_twilio",
+    "wechat": "wechat_work",
+    "wechat work": "wechat_work",
+    "instagram": "instagram_business",
+    "custom api": "custom_api",
+    "api": "custom_api",
+    "webhook": "custom_api",
+}
+
 
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict)
@@ -63,6 +87,121 @@ def _dedupe_strings(value: Any) -> List[str]:
         seen.add(token)
         out.append(token)
     return out
+
+
+def _text_blob(*values: Any) -> str:
+    return " ".join(_clean_text(value, 1200) for value in values if _clean_text(value, 1200)).strip().lower()
+
+
+def _connector_manifest_by_id(connector_id: str) -> Optional[Dict[str, Any]]:
+    token = str(connector_id or "").strip().lower()
+    if not token:
+        return None
+    for item in CONNECTOR_MANIFESTS:
+        if str(item.get("id") or "").strip().lower() == token:
+            return item
+    return None
+
+
+def _infer_connector_manifest(text: str) -> Optional[Dict[str, Any]]:
+    blob = str(text or "").strip().lower()
+    if not blob:
+        return None
+    for alias, connector_id in CONNECTOR_ALIAS_MAP.items():
+        if alias in blob:
+            return _connector_manifest_by_id(connector_id)
+    for item in CONNECTOR_MANIFESTS:
+        connector_id = str(item.get("id") or "").strip().lower()
+        label = str(item.get("label") or "").strip().lower()
+        if connector_id and connector_id in blob:
+            return item
+        if label and label in blob:
+            return item
+    return None
+
+
+def _find_manifest_entry(manifest: Optional[Dict[str, Any]], key: str, text: str) -> Optional[Dict[str, Any]]:
+    if not manifest:
+        return None
+    items = manifest.get(key)
+    if not isinstance(items, list):
+        return None
+    blob = str(text or "").strip().lower()
+    if not blob:
+        return items[0] if items else None
+    scored: List[tuple[int, Dict[str, Any]]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        score = 0
+        item_id = str(item.get("id") or "").strip().lower()
+        label = str(item.get("label") or "").strip().lower()
+        description = str(item.get("description") or "").strip().lower()
+        if item_id and item_id in blob:
+            score += 3
+        if label and label in blob:
+            score += 3
+        if description:
+            for token in label.split():
+                if token and token in blob:
+                    score += 1
+            for token in item_id.replace("_", " ").split():
+                if token and token in blob:
+                    score += 1
+        scored.append((score, item))
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored[0][1] if scored[0][0] > 0 else scored[0][1]
+
+
+def _infer_trigger_variant(raw_node: Dict[str, Any], prompt: str) -> str:
+    blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
+    if any(token in blob for token in ["schedule", "every day", "every morning", "daily", "weekly", "cron"]):
+        return "schedule"
+    if any(token in blob for token in ["webhook", "http post", "http get", "endpoint", "api callback"]):
+        return "webhook"
+    if any(token in blob for token in ["watch file", "watch folder", "folder change", "file change", "watch path"]):
+        return "file_watch"
+    if any(token in blob for token in ["another workflow", "called by workflow", "workflow trigger"]):
+        return "workflow"
+    if _infer_connector_manifest(blob):
+        return "connector_event"
+    return "manual"
+
+
+def _infer_tool_variant(raw_node: Dict[str, Any], prompt: str) -> str:
+    blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
+    if any(token in blob for token in ["http", "api request", "fetch ", "rest "]):
+        return "http"
+    if any(token in blob for token in ["browser", "open page", "visit site", "scrape", "screenshot"]):
+        return "browser"
+    if any(token in blob for token in ["shell", "terminal", "command line", "bash ", "zsh "]):
+        return "shell"
+    if any(token in blob for token in ["spreadsheet", "sheet", "excel", "csv row"]):
+        return "spreadsheet"
+    if any(token in blob for token in ["doc", "document", "slides", "presentation"]):
+        return "document"
+    if any(token in blob for token in ["file", "folder", "write path", "save to disk"]):
+        return "file"
+    if any(token in blob for token in ["code", "python", "javascript", "typescript"]):
+        return "code"
+    return "connector_action"
+
+
+def _default_schedule_config(prompt: str, raw_node: Dict[str, Any]) -> Dict[str, Any]:
+    blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
+    if "weekly" in blob or "every week" in blob:
+        return {"cron": "0 9 * * 1"}
+    if "hourly" in blob or "every hour" in blob:
+        return {"cron": "0 * * * *"}
+    return {"cron": "0 9 * * *"}
+
+
+def _default_webhook_config(raw_node: Dict[str, Any]) -> Dict[str, Any]:
+    label = _clean_text(raw_node.get("label") or "workflow", 80).lower().replace(" ", "-")
+    label = "".join(ch for ch in label if ch.isalnum() or ch == "-").strip("-") or "workflow"
+    return {"path": f"/hooks/{label}", "method": "POST"}
 
 
 def default_agent_config(raw_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -117,13 +256,17 @@ def default_agent_config(raw_config: Optional[Dict[str, Any]] = None) -> Dict[st
 
 def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any], prompt: str) -> Dict[str, Any]:
     if node_type == "trigger":
+        raw_config = raw_node.get("config") if _is_record(raw_node.get("config")) else {}
+        blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
+        manifest = _infer_connector_manifest(blob)
+        inferred_trigger = _find_manifest_entry(manifest, "triggers", blob) if variant == "connector_event" else None
         return {
-            "connector": _clean_text(raw_node.get("config", {}).get("connector") if _is_record(raw_node.get("config")) else "", 120),
-            "event": _clean_text(raw_node.get("config", {}).get("event") if _is_record(raw_node.get("config")) else "", 120),
-            "schedule": raw_node.get("config", {}).get("schedule") if _is_record(raw_node.get("config")) and _is_record(raw_node.get("config", {}).get("schedule")) else {},
-            "webhook": raw_node.get("config", {}).get("webhook") if _is_record(raw_node.get("config")) and _is_record(raw_node.get("config", {}).get("webhook")) else {},
-            "workflow_id": _clean_text(raw_node.get("config", {}).get("workflow_id") if _is_record(raw_node.get("config")) else "", 160),
-            "file_watch": raw_node.get("config", {}).get("file_watch") if _is_record(raw_node.get("config")) and _is_record(raw_node.get("config", {}).get("file_watch")) else {},
+            "connector": _clean_text(raw_config.get("connector"), 120) or (str(manifest.get("id") or "") if manifest else ""),
+            "event": _clean_text(raw_config.get("event"), 120) or (str(inferred_trigger.get("id") or "") if inferred_trigger else ""),
+            "schedule": raw_config.get("schedule") if _is_record(raw_config.get("schedule")) else (_default_schedule_config(prompt, raw_node) if variant == "schedule" else {}),
+            "webhook": raw_config.get("webhook") if _is_record(raw_config.get("webhook")) else (_default_webhook_config(raw_node) if variant == "webhook" else {}),
+            "workflow_id": _clean_text(raw_config.get("workflow_id"), 160),
+            "file_watch": raw_config.get("file_watch") if _is_record(raw_config.get("file_watch")) else ({"path": "/watch/path"} if variant == "file_watch" else {}),
             "test_only": variant == "manual",
         }
     if node_type == "agent":
@@ -137,14 +280,25 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
             }
         return default_agent_config(seed)
     if node_type == "tool":
+        raw_config = raw_node.get("config") if _is_record(raw_node.get("config")) else {}
+        blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
+        manifest = _infer_connector_manifest(blob)
+        inferred_action = _find_manifest_entry(manifest, "actions", blob) if variant == "connector_action" else None
         return {
-            "action_id": _clean_text(raw_node.get("config", {}).get("action_id") if _is_record(raw_node.get("config")) else raw_node.get("label"), 160),
-            "connector": _clean_text(raw_node.get("config", {}).get("connector") if _is_record(raw_node.get("config")) else "", 120),
-            "method": _clean_text(raw_node.get("config", {}).get("method") if _is_record(raw_node.get("config")) else "GET", 12) or "GET",
-            "url": _clean_text(raw_node.get("config", {}).get("url") if _is_record(raw_node.get("config")) else "", 600),
-            "summary": _clean_text(raw_node.get("config", {}).get("summary") if _is_record(raw_node.get("config")) else raw_node.get("subtitle"), 600),
-            "code": _clean_text(raw_node.get("config", {}).get("code") if _is_record(raw_node.get("config")) else "", 8000),
-            "permissions": raw_node.get("config", {}).get("permissions") if _is_record(raw_node.get("config")) and _is_record(raw_node.get("config", {}).get("permissions")) else {},
+            "action_id": _clean_text(raw_config.get("action_id"), 160) or (str(inferred_action.get("id") or "") if inferred_action else _clean_text(raw_node.get("label"), 160)),
+            "connector": _clean_text(raw_config.get("connector"), 120) or (str(manifest.get("id") or "") if manifest else ""),
+            "method": _clean_text(raw_config.get("method"), 12) or ("POST" if "post" in blob else "GET"),
+            "url": _clean_text(raw_config.get("url"), 600),
+            "headers": raw_config.get("headers") if _is_record(raw_config.get("headers")) else {},
+            "payload": raw_config.get("payload") if _is_record(raw_config.get("payload")) or isinstance(raw_config.get("payload"), list) else {},
+            "summary": _clean_text(raw_config.get("summary") or raw_node.get("subtitle"), 600),
+            "path": _clean_text(raw_config.get("path") or raw_config.get("file_path"), 600),
+            "content": raw_config.get("content"),
+            "content_type": _clean_text(raw_config.get("content_type"), 120),
+            "signing_secret": _clean_text(raw_config.get("signing_secret"), 300),
+            "code": _clean_text(raw_config.get("code"), 8000),
+            "permissions": raw_config.get("permissions") if _is_record(raw_config.get("permissions")) else {},
+            "execution_target": _clean_text(raw_config.get("execution_target"), 40) or ("local_companion" if variant in {"shell", "file", "browser", "code"} else "auto"),
         }
     if node_type == "decision":
         return {
@@ -230,8 +384,27 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
                 config.get("execution_target") or "auto",
             )
         )
+        target = normalize_execution_target(config.get("execution_target") or "auto")
         if variant == "shell" and normalize_execution_target(config.get("execution_target") or "auto") != "local_companion":
             issues.append({"code": "shell_requires_local_companion", "message": "Shell tool nodes require the local_companion execution target."})
+        if variant == "code" and target == "cloud":
+            issues.append({"code": "code_requires_local_companion_or_auto", "message": "Code tool nodes cannot target cloud directly; use local_companion or auto."})
+        if variant == "browser" and target == "cloud":
+            issues.append({"code": "browser_requires_local_companion_or_auto", "message": "Browser tool nodes cannot target cloud directly; use local_companion or auto."})
+        if variant == "connector_action":
+            connector = _clean_text(config.get("connector"), 120)
+            action_id = _clean_text(config.get("action_id"), 160)
+            if not connector:
+                issues.append({"code": "tool_connector_missing", "message": "Connector action nodes require a connector id."})
+            if not action_id:
+                issues.append({"code": "tool_action_missing", "message": "Connector action nodes require an action_id."})
+            if connector == "custom_api":
+                if action_id in {"http_request", "signed_webhook"} and not _clean_text(config.get("url"), 600):
+                    issues.append({"code": "custom_api_url_missing", "message": "Custom API connector actions require a URL."})
+                if action_id == "signed_webhook" and not _clean_text(config.get("signing_secret"), 300):
+                    issues.append({"code": "custom_api_signing_secret_missing", "message": "signed_webhook actions require signing_secret."})
+            if connector == "microsoft_365" and action_id == "upload_drive_file" and not _clean_text(config.get("path") or config.get("file_path"), 600):
+                issues.append({"code": "upload_drive_file_path_missing", "message": "upload_drive_file requires a path or file_path."})
     elif node_type == "human":
         if variant not in HUMAN_VARIANTS:
             issues.append({"code": "human_variant_invalid", "message": f"Human node variant '{variant or 'unknown'}' is not supported."})
@@ -271,9 +444,9 @@ def normalize_builder_generated_workflow(payload: Dict[str, Any], *, prompt: str
             continue
         variant = _clean_text(item.get("variant"), 40).lower()
         if node_type == "trigger" and variant not in TRIGGER_VARIANTS:
-            variant = "manual"
+            variant = _infer_trigger_variant(item, prompt)
         elif node_type == "tool" and variant not in TOOL_VARIANTS:
-            variant = "connector_action"
+            variant = _infer_tool_variant(item, prompt)
         elif node_type == "decision" and variant not in DECISION_VARIANTS:
             variant = "if_else"
         elif node_type == "human" and variant not in HUMAN_VARIANTS:

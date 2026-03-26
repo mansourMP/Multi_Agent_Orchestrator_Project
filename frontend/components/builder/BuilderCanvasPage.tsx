@@ -46,7 +46,16 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
-import { createWorkflow, fetchRuntimeMachines, getWorkflow, publishWorkflow, updateWorkflow } from '@/lib/api';
+import {
+  createWorkflow,
+  fetchBuilderConnectorManifests,
+  fetchRuntimeMachines,
+  fetchWorkflows,
+  getWorkflow,
+  publishWorkflow,
+  updateWorkflow,
+  type BuilderConnectorManifestItem,
+} from '@/lib/api';
 import { API_BASE } from '@/lib/config';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { fetchDoctorRunGate, type DoctorRunGateDecision } from '@/lib/doctorPreflight';
@@ -59,6 +68,12 @@ import {
 } from '@/lib/executionTargets';
 import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import {
+  formatWorkflowRunCountsSummary,
+  formatWorkflowRunNodeStatusLabel,
+  useWorkflowRunTelemetry,
+  workflowRunNodeSummary,
+} from '@/hooks/useWorkflowRunTelemetry';
 
 type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
 type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
@@ -88,7 +103,12 @@ type CanvasCompatibilityMeta = {
   __canonicalPolicy?: Record<string, unknown>;
 };
 
-type TriggerCanvasData = CanvasCompatibilityMeta & { label: string; triggerType: TriggerKind };
+type TriggerCanvasData = CanvasCompatibilityMeta & {
+  label: string;
+  triggerType: TriggerKind;
+  status?: string;
+  executionSummary?: string;
+};
 type AgentCanvasData = {
   label: string;
   modelId: string;
@@ -99,12 +119,13 @@ type AgentCanvasData = {
   duty: string;
   status: string;
   description: string;
+  executionSummary?: string;
 } & CanvasCompatibilityMeta;
-type ActionCanvasData = CanvasCompatibilityMeta & { label: string; actionType: ActionKind };
-type HttpRequestCanvasData = CanvasCompatibilityMeta & { label: string; method: string; url: string };
-type ConditionCanvasData = CanvasCompatibilityMeta & { label: string; condition: string };
-type TransformCanvasData = CanvasCompatibilityMeta & { label: string; mapping: string };
-type CodeCanvasData = CanvasCompatibilityMeta & { label: string; summary: string; code: string };
+type ActionCanvasData = CanvasCompatibilityMeta & { label: string; actionType: ActionKind; status?: string; executionSummary?: string };
+type HttpRequestCanvasData = CanvasCompatibilityMeta & { label: string; method: string; url: string; status?: string; executionSummary?: string };
+type ConditionCanvasData = CanvasCompatibilityMeta & { label: string; condition: string; status?: string; executionSummary?: string };
+type TransformCanvasData = CanvasCompatibilityMeta & { label: string; mapping: string; status?: string; executionSummary?: string };
+type CodeCanvasData = CanvasCompatibilityMeta & { label: string; summary: string; code: string; status?: string; executionSummary?: string };
 type CanvasNodeData =
   | TriggerCanvasData
   | AgentCanvasData
@@ -165,6 +186,11 @@ type BuilderRuntimeProfileRow = {
   health?: string | null;
   created_at?: string;
 };
+type BuilderWorkflowListItem = {
+  id: string;
+  name?: string;
+  status?: string;
+};
 
 const CANVAS_NODE_X = 260;
 const CANVAS_NODE_TOP = 64;
@@ -202,14 +228,54 @@ type CanvasLibraryItem = {
 
 const CANVAS_NODE_LIBRARY: CanvasLibraryItem[] = [
   {
-    id: 'trigger',
+    id: 'trigger_manual',
     type: 'trigger',
-    label: 'Trigger',
+    label: 'Manual trigger',
     accent: '#d7f0ea',
     icon: <Play size={14} />,
     canonicalType: 'trigger',
     canonicalVariant: 'manual',
     defaultData: { label: 'Manual trigger', triggerType: 'manual' },
+  },
+  {
+    id: 'trigger_connector',
+    type: 'trigger',
+    label: 'Connector event',
+    accent: '#d7f0ea',
+    icon: <Zap size={14} />,
+    canonicalType: 'trigger',
+    canonicalVariant: 'connector_event',
+    defaultData: { label: 'Connector event', triggerType: 'connector_event' },
+  },
+  {
+    id: 'trigger_schedule',
+    type: 'trigger',
+    label: 'Schedule',
+    accent: '#d7f0ea',
+    icon: <Zap size={14} />,
+    canonicalType: 'trigger',
+    canonicalVariant: 'schedule',
+    defaultData: { label: 'Scheduled trigger', triggerType: 'schedule' },
+  },
+  {
+    id: 'trigger_webhook',
+    type: 'trigger',
+    label: 'Webhook',
+    accent: '#d7f0ea',
+    icon: <Zap size={14} />,
+    canonicalType: 'trigger',
+    canonicalVariant: 'webhook',
+    defaultData: { label: 'Webhook trigger', triggerType: 'webhook' },
+  },
+  {
+    id: 'trigger_workflow',
+    type: 'trigger',
+    label: 'Workflow trigger',
+    accent: '#d7f0ea',
+    icon: <Rocket size={14} />,
+    canonicalType: 'trigger',
+    canonicalVariant: 'workflow',
+    defaultData: { label: 'Workflow trigger', triggerType: 'workflow' },
   },
   {
     id: 'agent',
@@ -302,7 +368,7 @@ const CANVAS_NODE_GROUPS: Array<{
   label: string;
   items: string[];
 }> = [
-  { label: 'Triggers', items: ['trigger'] },
+  { label: 'Triggers', items: ['trigger_manual', 'trigger_connector', 'trigger_schedule', 'trigger_webhook', 'trigger_workflow'] },
   { label: 'Agents', items: ['agent'] },
   { label: 'Tools', items: ['tool', 'http', 'code_tool'] },
   { label: 'Human', items: ['human'] },
@@ -310,6 +376,17 @@ const CANVAS_NODE_GROUPS: Array<{
   { label: 'Data', items: ['data'] },
   { label: 'Subflows', items: ['subflow'] },
 ];
+
+const ACTION_POLICY_OPTIONS = [
+  { value: 'guarded', label: 'Guarded' },
+  { value: 'operator', label: 'Operator' },
+  { value: 'trusted', label: 'Trusted' },
+] as const;
+
+const MEMORY_SCOPE_OPTIONS = ['session', 'project', 'profile'] as const;
+const MEMORY_RETRIEVAL_OPTIONS = ['recent', 'pinned', 'semantic'] as const;
+const FILE_MOUNT_OPTIONS = ['artifacts', 'project', 'shared', 'knowledge', 'local_root', 'connector_files'] as const;
+const FILE_GRANT_OPTIONS = ['none', 'read', 'read_write', 'create_only', 'append_only'] as const;
 
 type GraphSnapshot = {
   nodes: CanvasWorkflowNode[];
@@ -334,6 +411,63 @@ function extractUrl(value: string): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function ensureRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function normalizeCsvList(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toggleStringList(list: string[], token: string, enabled: boolean): string[] {
+  const next = new Set(list);
+  if (enabled) next.add(token);
+  else next.delete(token);
+  return Array.from(next);
+}
+
+function resolveBuilderFileMountGrants(raw: unknown): Array<{ mount: string; grant: string }> {
+  const defaults = new Map<string, string>([
+    ['artifacts', 'read_write'],
+    ['project', 'read'],
+    ['shared', 'read'],
+    ['knowledge', 'read'],
+    ['local_root', 'none'],
+    ['connector_files', 'read'],
+  ]);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!isRecord(item)) continue;
+      const mount = String(item.mount || '').trim().toLowerCase();
+      const grant = String(item.grant || '').trim().toLowerCase();
+      if ((FILE_MOUNT_OPTIONS as readonly string[]).includes(mount) && (FILE_GRANT_OPTIONS as readonly string[]).includes(grant)) {
+        defaults.set(mount, grant);
+      }
+    }
+  }
+  return Array.from(defaults.entries()).map(([mount, grant]) => ({ mount, grant }));
+}
+
+function formatCanonicalTypeLabel(type: CanonicalNodeType): string {
+  if (type === 'trigger') return 'Trigger';
+  if (type === 'agent') return 'Agent';
+  if (type === 'tool') return 'Tool';
+  if (type === 'decision') return 'Decision';
+  if (type === 'human') return 'Human';
+  if (type === 'data') return 'Data';
+  return 'Subflow';
 }
 
 function isCanvasNodeType(value: string): value is CanvasNodeType {
@@ -696,28 +830,33 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: Partial<CanvasNodeDa
   return next as CanvasNodeData;
 }
 
+function parseCanvasNodeRecord(rawItem: unknown, index = 0): CanvasWorkflowNode | null {
+  if (!isRecord(rawItem)) return null;
+  const type = deriveCanvasType(rawItem);
+  if (!type) return null;
+  const position = isRecord(rawItem.position) ? rawItem.position : {};
+  const x = Number(position.x);
+  const y = Number(position.y);
+  const normalizedData = isCanvasNodeType(String(rawItem.type || '').trim().toLowerCase())
+    ? normalizeCanvasNodeData(type, (isRecord(rawItem.data) ? rawItem.data : {}) as Partial<CanvasNodeData>)
+    : normalizeCanvasNodeData(type, deriveCanvasDataFromCanonicalNode(rawItem, type));
+  return {
+    id: String(rawItem.id || makeNodeId(type)).trim() || makeNodeId(type),
+    type,
+    position: {
+      x: Number.isFinite(x) ? x : CANVAS_NODE_X,
+      y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + index * CANVAS_NODE_GAP,
+    },
+    data: normalizedData,
+  };
+}
+
 function parseCanvasNodes(rawNodes: unknown): CanvasWorkflowNode[] {
   if (!Array.isArray(rawNodes)) return [];
   const parsed: CanvasWorkflowNode[] = [];
   for (const item of rawNodes) {
-    if (!isRecord(item)) continue;
-    const type = deriveCanvasType(item);
-    if (!type) continue;
-    const position = isRecord(item.position) ? item.position : {};
-    const x = Number(position.x);
-    const y = Number(position.y);
-    const normalizedData = isCanvasNodeType(String(item.type || '').trim().toLowerCase())
-      ? normalizeCanvasNodeData(type, (isRecord(item.data) ? item.data : {}) as Partial<CanvasNodeData>)
-      : normalizeCanvasNodeData(type, deriveCanvasDataFromCanonicalNode(item, type));
-    parsed.push({
-      id: String(item.id || makeNodeId(type)).trim() || makeNodeId(type),
-      type,
-      position: {
-        x: Number.isFinite(x) ? x : CANVAS_NODE_X,
-        y: Number.isFinite(y) ? y : CANVAS_NODE_TOP + parsed.length * CANVAS_NODE_GAP,
-      },
-      data: normalizedData,
-    });
+    const parsedNode = parseCanvasNodeRecord(item, parsed.length);
+    if (parsedNode) parsed.push(parsedNode);
   }
   return parsed;
 }
@@ -755,12 +894,12 @@ function draftNodeData(type: CanvasNodeType, goal: string, index: number): Parti
   const lowered = text.toLowerCase();
   if (type === 'trigger') {
     if (/(daily|every morning|every day|each day|weekly|every week|schedule)/.test(lowered)) {
-      return { label: 'Scheduled start', triggerType: 'schedule' };
+      return { label: 'Scheduled trigger', triggerType: 'schedule' };
     }
     if (/(webhook|api|endpoint)/.test(lowered)) {
-      return { label: 'Webhook start', triggerType: 'webhook' };
+      return { label: 'Webhook trigger', triggerType: 'webhook' };
     }
-    return { label: text ? 'User request' : 'Start here', triggerType: 'manual' };
+    return { label: text ? 'Manual test' : 'Manual trigger', triggerType: 'manual' };
   }
   if (type === 'condition') {
     return {
@@ -836,7 +975,7 @@ function buildDraftEdges(nodes: CanvasWorkflowNode[]): CanvasWorkflowEdge[] {
 }
 
 function buildStarterGraph(): GraphSnapshot {
-  const triggerItem = CANVAS_NODE_LIBRARY.find((item) => item.id === 'trigger') || CANVAS_NODE_LIBRARY[0]!;
+  const triggerItem = CANVAS_NODE_LIBRARY.find((item) => item.id === 'trigger_manual') || CANVAS_NODE_LIBRARY[0]!;
   const agentItem = CANVAS_NODE_LIBRARY.find((item) => item.id === 'agent') || CANVAS_NODE_LIBRARY[1]!;
   const nodes: CanvasWorkflowNode[] = [
     {
@@ -876,12 +1015,12 @@ function buildNodeDataFromLibraryItem(item: CanvasLibraryItem): CanvasNodeData {
 }
 
 function formatTriggerKindLabel(kind: TriggerKind): string {
-  if (kind === 'schedule') return 'Scheduled start';
-  if (kind === 'webhook') return 'Webhook start';
+  if (kind === 'schedule') return 'Scheduled trigger';
+  if (kind === 'webhook') return 'Webhook trigger';
   if (kind === 'connector_event') return 'Connector event';
   if (kind === 'workflow') return 'Workflow trigger';
   if (kind === 'file_watch') return 'File watcher';
-  return 'Manual start';
+  return 'Manual test';
 }
 
 function formatActionKindLabel(kind: ActionKind): string {
@@ -1147,6 +1286,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [promptInput, setPromptInput] = useState('');
   const [stagedPrompt, setStagedPrompt] = useState('');
   const [aiAssistantPrompt, setAiAssistantPrompt] = useState('');
+  const [aiAssistantBusy, setAiAssistantBusy] = useState(false);
   const [draftGoal, setDraftGoal] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -1170,6 +1310,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
   const [hasLocalRuntime, setHasLocalRuntime] = useState(false);
   const [doctorChecking, setDoctorChecking] = useState(false);
   const [doctorDecision, setDoctorDecision] = useState<DoctorRunGateDecision | null>(null);
+  const [connectorManifests, setConnectorManifests] = useState<BuilderConnectorManifestItem[]>([]);
+  const [availableSubflowTargets, setAvailableSubflowTargets] = useState<BuilderWorkflowListItem[]>([]);
 
   const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
     await ensureControlPlaneSession();
@@ -1203,6 +1345,27 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     [runtimeProfiles, selectedProfileId],
   );
   const currentRuntimeProvider = String(selectedRuntimeProfile?.provider || 'openai').trim() || 'openai';
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.id === selectedNodeId) || null,
+    [nodes, selectedNodeId],
+  );
+  const {
+    runDetail,
+    refreshRunDetail,
+    activeRunNodeId,
+    finalRunNodeId,
+    selectedRunNodeState,
+    renderedNodes,
+  } = useWorkflowRunTelemetry<CanvasWorkflowNode>({
+    runId: messageRunId,
+    nodes,
+    selectedNodeId,
+    controlPlaneFetch,
+  });
+  const selectedCanonicalNode = useMemo(
+    () => (selectedNode ? serializeCanvasNode(selectedNode) : null),
+    [selectedNode],
+  );
 
   const loadDoctorDecision = useCallback(async () => {
     setDoctorChecking(true);
@@ -1295,6 +1458,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setSelectedNodeId(safeNodes[0]?.id || null);
     setSelectedEdgeId(null);
     setSavedWorkflowId(id);
+    setMessageRunId(null);
     setWorkflowName(String(workflow?.name || ''));
     setWorkflowDescription(String(workflow?.description || ''));
     const nextGoal = String(workflow?.definition?.meta?.draft_goal || workflow?.description || workflow?.name || '').trim();
@@ -1367,6 +1531,63 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     };
   }, [controlPlaneFetch]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBuilderResources() {
+      try {
+        const [manifests, workflows] = await Promise.all([
+          fetchBuilderConnectorManifests().catch(() => []),
+          fetchWorkflows(DEFAULT_WORKSPACE_ID).catch(() => []),
+        ]);
+        if (cancelled) return;
+        setConnectorManifests(Array.isArray(manifests) ? manifests : []);
+        const workflowItems = Array.isArray(workflows)
+          ? workflows.reduce<BuilderWorkflowListItem[]>((acc, item) => {
+              if (!isRecord(item) || typeof item.id !== 'string') return acc;
+              acc.push({
+                id: item.id,
+                name: typeof item.name === 'string' ? item.name : undefined,
+                status: typeof item.status === 'string' ? item.status : undefined,
+              });
+              return acc;
+            }, [])
+          : [];
+        setAvailableSubflowTargets(workflowItems);
+      } catch {
+        if (!cancelled) {
+          setConnectorManifests([]);
+          setAvailableSubflowTargets([]);
+        }
+      }
+    }
+
+    void loadBuilderResources();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateSelectedCanonicalNode = useCallback(
+    (updater: (current: Record<string, unknown>) => Record<string, unknown>) => {
+      if (!selectedNodeId) return;
+      setNodes((current) => current.map((node) => {
+        if (node.id !== selectedNodeId) return node;
+        const currentCanonical = serializeCanvasNode(node) as Record<string, unknown>;
+        const nextCanonical = updater(structuredClone(currentCanonical));
+        const rebuilt = parseCanvasNodeRecord({
+          ...nextCanonical,
+          id: node.id,
+          position: node.position,
+        });
+        return rebuilt || node;
+      }));
+      setSaveState('idle');
+      setSaveMessage(null);
+    },
+    [selectedNodeId],
+  );
+
   const handleBuild = (goal?: string) => {
     const next = String(goal || stagedPrompt || promptInput).trim();
     if (!next) return;
@@ -1382,6 +1603,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setSaveState('idle');
     setSaveMessage(null);
     setRunState('idle');
+    setMessageRunId(null);
     setWorkflowName(buildWorkflowName(next));
     setWorkflowDescription(buildWorkflowDescription(next));
   };
@@ -1395,6 +1617,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setSaveMessage(null);
     setSaveState('idle');
     setRunState('idle');
+    setMessageRunId(null);
     setWorkflowName(buildWorkflowName(next));
     setWorkflowDescription(buildWorkflowDescription(next));
     setPromptInput('');
@@ -1413,6 +1636,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     setSaveState('idle');
     setSaveMessage(null);
     setRunState('idle');
+    setMessageRunId(null);
     setWorkflowName('');
     setWorkflowDescription('');
   };
@@ -1442,6 +1666,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
   const addCanvasNode = (item: CanvasLibraryItem) => {
     pushHistory();
+    setAssistantDockOpen(false);
     const position =
       nodeSearch?.insertEdgeId
         ? { x: snapToGrid(nodeSearch.flowX), y: snapToGrid(nodeSearch.flowY) }
@@ -1449,17 +1674,21 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     const insertEdgeId = nodeSearch?.insertEdgeId;
     const edgeToSplit = insertEdgeId ? edges.find((edge) => edge.id === insertEdgeId) || null : null;
     setNodes((current) => {
-      if (item.type === 'trigger') {
-        const existingTrigger = current.find((node) => node.type === 'trigger');
-        if (existingTrigger) {
-          setSelectedNodeId(existingTrigger.id);
-          setSelectedEdgeId(null);
-          return current;
-        }
-      }
       const defaultPosition = current.length === 0
         ? getCenteredStartPosition(canvasHostRef.current)
         : (() => {
+            if (item.type === 'trigger') {
+              const triggerNodes = current.filter((node) => node.type === 'trigger');
+              const anchor = triggerNodes[0] || current[0] || null;
+              const bottomTrigger = triggerNodes.reduce<CanvasWorkflowNode | null>(
+                (winner, node) => (!winner || node.position.y > winner.position.y ? node : winner),
+                null,
+              );
+              return {
+                x: snapToGrid(Number(anchor?.position.x) || CANVAS_NODE_X),
+                y: snapToGrid((Number(bottomTrigger?.position.y) || Number(anchor?.position.y) || CANVAS_NODE_TOP) + 144),
+              };
+            }
             const lastNode = current[current.length - 1] || null;
             return {
               x: snapToGrid((Number(lastNode?.position.x) || CANVAS_NODE_X) + NODE_HORIZONTAL_GAP),
@@ -1679,6 +1908,9 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       });
       }
       setMessageRunId(payload?.run_id || null);
+      if (payload?.run_id) {
+        void refreshRunDetail(payload.run_id);
+      }
       setSavedWorkflowId(workflowId);
       setSaveState('saved');
       setSaveMessage(RUN_STARTED_STATUS_COPY);
@@ -1854,19 +2086,1219 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     return () => window.removeEventListener('mousedown', handlePointerDown);
   }, [settingsOpen]);
 
-  const handleAssistantApply = useCallback((value?: string) => {
+  const handleAssistantApply = useCallback(async (value?: string) => {
     const next = String(value || aiAssistantPrompt).trim();
-    if (!next) return;
-    handleBuild(next);
-    setAiAssistantPrompt('');
-  }, [aiAssistantPrompt, handleBuild]);
+    if (!next || aiAssistantBusy) return;
+    setAiAssistantBusy(true);
+    setSaveMessage(null);
+    try {
+      const response = await controlPlaneFetch(resolveBuilderGenerateUrl(), {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: next,
+          profile_id: selectedProfileId || undefined,
+          workspace_id: DEFAULT_WORKSPACE_ID,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as { workflow?: BuilderGeneratedWorkflow; detail?: string; error?: string } | null;
+      if (!response.ok || !payload?.workflow) {
+        throw new Error(
+          (payload && typeof payload.detail === 'string' && payload.detail) ||
+          (payload && typeof payload.error === 'string' && payload.error) ||
+          'Unable to generate a workflow draft.',
+        );
+      }
+      const graph = parseGeneratedWorkflow(payload.workflow, next);
+      if (graph.nodes.length === 0) {
+        throw new Error('The builder AI returned an empty workflow draft.');
+      }
+      pushHistory();
+      setNodes(graph.nodes);
+      setEdges(graph.edges);
+      setLoadedDefinition(null);
+      setSelectedNodeId(graph.nodes[0]?.id || null);
+      setSelectedEdgeId(null);
+      setNodeSearch(null);
+      setDraftGoal(next);
+      setStagedPrompt(next);
+      setPromptInput('');
+      setWorkflowName(buildWorkflowName(next));
+      setWorkflowDescription(buildWorkflowDescription(next));
+      setMessageRunId(null);
+      setSaveState('idle');
+      setSaveMessage('Draft generated with AI.');
+      setAiAssistantPrompt('');
+    } catch (error) {
+      setSaveState('error');
+      setSaveMessage(error instanceof Error ? error.message : 'Unable to generate a workflow draft.');
+    } finally {
+      setAiAssistantBusy(false);
+    }
+  }, [aiAssistantBusy, aiAssistantPrompt, controlPlaneFetch, pushHistory, selectedProfileId]);
 
   const builderNoticeAction = executionTarget === 'local_companion' && !hasLocalRuntime
     ? { href: '/machines', label: 'Open Machines' }
     : doctorDecision && doctorDecision.status !== 'pass'
       ? { href: '/health', label: 'Open Health' }
       : null;
+  const workflowNodeProgressSummary = useMemo(() => {
+    const counts = isRecord(runDetail?.node_states?.counts) ? runDetail.node_states?.counts || null : null;
+    return formatWorkflowRunCountsSummary(counts);
+  }, [runDetail?.node_states?.counts]);
   const showBuilderNotice = Boolean(builderNoticeAction);
+  const showInspectorDock = Boolean(selectedNode && !assistantDockOpen);
+  const availableSubflowTargetsForInspector = availableSubflowTargets.filter((item) => item.id !== (savedWorkflowId || workflowId || ''));
+
+  const renderFileMountGrantFields = (
+    value: unknown,
+    onChange: (next: Array<{ mount: string; grant: string }>) => void,
+  ) => {
+    const grants = resolveBuilderFileMountGrants(value);
+    return (
+      <div className="orion-builder-inspector">
+        <div className="orion-builder-inspector-title">File access</div>
+        <div className="orion-builder-inspector-grid">
+          {grants.map((item) => (
+            <label key={item.mount} className="orion-builder-field">
+              <span className="orion-builder-field-label">{item.mount}</span>
+              <select
+                className="orion-builder-field-input"
+                value={item.grant}
+                onChange={(event) => {
+                  onChange(grants.map((entry) => (
+                    entry.mount === item.mount ? { ...entry, grant: event.target.value } : entry
+                  )));
+                }}
+              >
+                {FILE_GRANT_OPTIONS.map((grant) => (
+                  <option key={grant} value={grant}>{grant}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const inspectorDock = showInspectorDock && selectedNode && selectedCanonicalNode ? (() => {
+    const canonicalType = String(selectedCanonicalNode.type || '').trim().toLowerCase() as CanonicalNodeType;
+    const canonicalVariant = String(selectedCanonicalNode.variant || '').trim().toLowerCase();
+    const config = ensureRecord(selectedCanonicalNode.config);
+    const agentIdentity = ensureRecord(config.identity);
+    const inspectorLabel = String(
+      canonicalType === 'agent'
+        ? agentIdentity.name || (selectedNode.data as Partial<AgentCanvasData>).label || 'Agent'
+        : canonicalType === 'human'
+          ? config.title || (selectedNode.data as Partial<ActionCanvasData>).label || 'Human step'
+          : (selectedNode.data as Partial<CanvasNodeData>).label || config.summary || formatCanonicalTypeLabel(canonicalType),
+    ).trim();
+    const connectorBindings = Array.isArray(ensureRecord(config.connectors).bindings)
+      ? ensureRecord(config.connectors).bindings as unknown[]
+      : [];
+    const boundConnectorIds = connectorBindings
+      .filter((item) => isRecord(item))
+      .map((item) => String(item.connector_id || '').trim())
+      .filter(Boolean);
+    const permissions = ensureRecord(config.permissions);
+    const connectorPermissions = normalizeStringList(permissions.connector_permissions);
+    const browserPermissions = ensureRecord(permissions.browser_permissions);
+    const agentRuntime = ensureRecord(config.runtime);
+    const agentSkills = ensureRecord(config.skills);
+    const agentTools = ensureRecord(config.tools);
+    const agentMemory = ensureRecord(config.memory);
+    const runNodeSummary = workflowRunNodeSummary(selectedRunNodeState);
+    const runNodeStatusLabel = formatWorkflowRunNodeStatusLabel(selectedRunNodeState?.status);
+    const isActiveRunNode = Boolean(activeRunNodeId && selectedNode.id === activeRunNodeId);
+    const isFinalRunNode = Boolean(finalRunNodeId && selectedNode.id === finalRunNodeId);
+    const toolActions = (() => {
+      const connectorId = String(config.connector || '').trim();
+      const manifest = connectorManifests.find((item) => item.id === connectorId) || null;
+      return Array.isArray(manifest?.actions) ? manifest.actions : [];
+    })();
+    const triggerEvents = (() => {
+      const connectorId = String(config.connector || '').trim();
+      const manifest = connectorManifests.find((item) => item.id === connectorId) || null;
+      return Array.isArray(manifest?.triggers) ? manifest.triggers : [];
+    })();
+
+    return (
+      <aside className="orion-builder-preview-dock is-floating is-inspector">
+        <div className="orion-builder-preview-head">
+          <div className="orion-builder-preview-head-copy">
+            <div className="orion-builder-preview-title">{inspectorLabel || 'Configure node'}</div>
+            <div className="orion-builder-preview-subtitle">
+              {formatCanonicalTypeLabel(canonicalType)} node
+              {canonicalVariant ? ` · ${canonicalVariant.replace(/_/g, ' ')}` : ''}
+            </div>
+          </div>
+          <div className="orion-builder-preview-head-actions">
+            <span className="orion-builder-step-type">{formatCanonicalTypeLabel(canonicalType)}</span>
+            <button
+              type="button"
+              className="orion-builder-preview-close"
+              onClick={() => setSelectedNodeId(null)}
+              aria-label="Close inspector"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        <div className="orion-builder-preview-body is-inspector">
+          {selectedRunNodeState ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Node execution</div>
+              <div className="orion-builder-inspector-grid">
+                <div className="orion-builder-inspector-item">
+                  <div className="orion-builder-field-label">Status</div>
+                  <div className="orion-builder-field-readonly">{runNodeStatusLabel}</div>
+                </div>
+                <div className="orion-builder-inspector-item">
+                  <div className="orion-builder-field-label">Run role</div>
+                  <div className="orion-builder-field-readonly">
+                    {[isActiveRunNode ? 'Active node' : null, isFinalRunNode ? 'Final node' : null].filter(Boolean).join(' · ') || 'Visited in this run'}
+                  </div>
+                </div>
+                {runNodeSummary ? (
+                  <div className="orion-builder-inspector-item is-wide">
+                    <div className="orion-builder-field-label">Summary</div>
+                    <div className="orion-builder-field-readonly is-block">{runNodeSummary}</div>
+                  </div>
+                ) : null}
+                {selectedRunNodeState.input_preview ? (
+                  <div className="orion-builder-inspector-item is-wide">
+                    <div className="orion-builder-field-label">Input preview</div>
+                    <div className="orion-builder-field-readonly is-block">{String(selectedRunNodeState.input_preview)}</div>
+                  </div>
+                ) : null}
+                {selectedRunNodeState.output_preview ? (
+                  <div className="orion-builder-inspector-item is-wide">
+                    <div className="orion-builder-field-label">Output preview</div>
+                    <div className="orion-builder-field-readonly is-block">{String(selectedRunNodeState.output_preview)}</div>
+                  </div>
+                ) : null}
+                {selectedRunNodeState.error ? (
+                  <div className="orion-builder-inspector-item is-wide">
+                    <div className="orion-builder-field-label">Error</div>
+                    <div className="orion-builder-field-readonly is-block is-error">{String(selectedRunNodeState.error)}</div>
+                  </div>
+                ) : null}
+                {selectedRunNodeState.child_run_id ? (
+                  <div className="orion-builder-inspector-item is-wide">
+                    <div className="orion-builder-field-label">Child run</div>
+                    <Link href={`/runs/${encodeURIComponent(String(selectedRunNodeState.child_run_id))}/inspect?focus=workflow`} className="orion-builder-field-link">
+                      Open run {String(selectedRunNodeState.child_run_id)}
+                    </Link>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : messageRunId ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Node execution</div>
+              <div className="orion-builder-preview-subtitle">No execution data for this node in the current run yet.</div>
+            </div>
+          ) : null}
+
+          <div className="orion-builder-inspector">
+            <div className="orion-builder-inspector-title">Node label</div>
+            <label className="orion-builder-field">
+              <span className="orion-builder-field-label">Label</span>
+              <input
+                className="orion-builder-field-input"
+                value={inspectorLabel}
+                onChange={(event) => updateSelectedCanonicalNode((current) => {
+                  const nextConfig = ensureRecord(current.config);
+                  if (canonicalType === 'agent') {
+                    const identity = ensureRecord(nextConfig.identity);
+                    return {
+                      ...current,
+                      config: {
+                        ...nextConfig,
+                        identity: {
+                          ...identity,
+                          name: event.target.value,
+                        },
+                      },
+                    };
+                  }
+                  if (canonicalType === 'human') {
+                    return {
+                      ...current,
+                      config: {
+                        ...nextConfig,
+                        title: event.target.value,
+                      },
+                    };
+                  }
+                  return {
+                    ...current,
+                    label: event.target.value,
+                    config: {
+                      ...nextConfig,
+                      summary: event.target.value,
+                    },
+                  };
+                })}
+              />
+            </label>
+          </div>
+
+          {canonicalType === 'trigger' ? (
+            <>
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Trigger</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Variant</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={canonicalVariant || 'manual'}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      type: 'trigger',
+                      variant: event.target.value,
+                    }))}
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="connector_event">Connector event</option>
+                    <option value="schedule">Schedule</option>
+                    <option value="webhook">Webhook</option>
+                    <option value="workflow">Workflow</option>
+                    <option value="file_watch">File / folder</option>
+                  </select>
+                </label>
+
+                {canonicalVariant === 'connector_event' ? (
+                  <>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Connector</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(config.connector || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            connector: event.target.value,
+                            event: '',
+                          },
+                        }))}
+                      >
+                        <option value="">Choose connector</option>
+                        {connectorManifests.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Event</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(config.event || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            event: event.target.value,
+                          },
+                        }))}
+                        disabled={!String(config.connector || '').trim()}
+                      >
+                        <option value="">{String(config.connector || '').trim() ? 'Choose event' : 'Choose connector first'}</option>
+                        {triggerEvents.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : null}
+
+                {canonicalVariant === 'schedule' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Cron</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={String(ensureRecord(config.schedule).cron || '').trim()}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          schedule: {
+                            ...ensureRecord(ensureRecord(current.config).schedule),
+                            cron: event.target.value,
+                          },
+                        },
+                      }))}
+                      placeholder="0 9 * * 1-5"
+                    />
+                  </label>
+                ) : null}
+
+                {canonicalVariant === 'webhook' ? (
+                  <>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Path</span>
+                      <input
+                        className="orion-builder-field-input"
+                        value={String(ensureRecord(config.webhook).path || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            webhook: {
+                              ...ensureRecord(ensureRecord(current.config).webhook),
+                              path: event.target.value,
+                            },
+                          },
+                        }))}
+                        placeholder="/hooks/lead"
+                      />
+                    </label>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Method</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(ensureRecord(config.webhook).method || 'POST').trim().toUpperCase()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            webhook: {
+                              ...ensureRecord(ensureRecord(current.config).webhook),
+                              method: event.target.value,
+                            },
+                          },
+                        }))}
+                      >
+                        <option value="POST">POST</option>
+                        <option value="GET">GET</option>
+                      </select>
+                    </label>
+                  </>
+                ) : null}
+
+                {canonicalVariant === 'workflow' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Workflow</span>
+                    <select
+                      className="orion-builder-field-input"
+                      value={String(config.workflow_id || '').trim()}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          workflow_id: event.target.value,
+                        },
+                      }))}
+                    >
+                      <option value="">Choose workflow</option>
+                      {availableSubflowTargetsForInspector.map((item) => (
+                        <option key={item.id} value={item.id}>{item.name || item.id}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {canonicalVariant === 'file_watch' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Watch path</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={String(ensureRecord(config.file_watch).path || '').trim()}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          file_watch: {
+                            ...ensureRecord(ensureRecord(current.config).file_watch),
+                            path: event.target.value,
+                          },
+                        },
+                      }))}
+                      placeholder="/watch/invoices"
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+
+          {canonicalType === 'agent' ? (
+            <>
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Identity</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Role</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={String(agentIdentity.role || '').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        identity: {
+                          ...ensureRecord(ensureRecord(current.config).identity),
+                          role: event.target.value,
+                        },
+                      },
+                    }))}
+                    placeholder="Support agent"
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Goal</span>
+                  <textarea
+                    className="orion-builder-field-input is-textarea"
+                    value={String(agentIdentity.goal || '')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        identity: {
+                          ...ensureRecord(ensureRecord(current.config).identity),
+                          goal: event.target.value,
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Success condition</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={String(agentIdentity.success_condition || '').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        identity: {
+                          ...ensureRecord(ensureRecord(current.config).identity),
+                          success_condition: event.target.value,
+                        },
+                      },
+                    }))}
+                    placeholder="Classify and route the request"
+                  />
+                </label>
+              </div>
+
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Runtime</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Provider profile</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={String(agentRuntime.provider_profile_id || '').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        runtime: {
+                          ...ensureRecord(ensureRecord(current.config).runtime),
+                          provider_profile_id: event.target.value || null,
+                        },
+                      },
+                    }))}
+                  >
+                    <option value="">Automatic</option>
+                    {groupedRuntimeProfiles.map(([provider, profiles]) => (
+                      <optgroup key={provider} label={formatProviderLabel(provider)}>
+                        {profiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>{profile.label}{profile.model ? ` · ${profile.model}` : ''}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Model</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={String(agentRuntime.model || '').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        runtime: {
+                          ...ensureRecord(ensureRecord(current.config).runtime),
+                          model: event.target.value,
+                        },
+                      },
+                    }))}
+                    placeholder="gpt-5.4-mini"
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Execution target</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={String(agentRuntime.execution_target || 'auto').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        runtime: {
+                          ...ensureRecord(ensureRecord(current.config).runtime),
+                          execution_target: normalizeExecutionTarget(event.target.value),
+                        },
+                      },
+                    }))}
+                  >
+                    <option value="auto">Automatic</option>
+                    <option value="cloud">Cloud</option>
+                    <option value="local_companion">Local</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Skills and tools</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Skill bundles</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={normalizeStringList(agentSkills.skill_bundle_ids).join(', ')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        skills: {
+                          ...ensureRecord(ensureRecord(current.config).skills),
+                          skill_bundle_ids: normalizeCsvList(event.target.value),
+                        },
+                      },
+                    }))}
+                    placeholder="customer-ops, routing"
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Dynamic allowed tools</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={normalizeStringList(agentTools.dynamic_allowed).join(', ')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        tools: {
+                          ...ensureRecord(ensureRecord(current.config).tools),
+                          dynamic_allowed: normalizeCsvList(event.target.value),
+                        },
+                      },
+                    }))}
+                    placeholder="draft_email, create_calendar_event"
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Explicit required tools</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={normalizeStringList(agentTools.explicit_required).join(', ')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        tools: {
+                          ...ensureRecord(ensureRecord(current.config).tools),
+                          explicit_required: normalizeCsvList(event.target.value),
+                        },
+                      },
+                    }))}
+                    placeholder="send_message"
+                  />
+                </label>
+              </div>
+
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Memory</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Read scopes</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={normalizeStringList(agentMemory.read_scopes).join(', ')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        memory: {
+                          ...ensureRecord(ensureRecord(current.config).memory),
+                          read_scopes: normalizeCsvList(event.target.value),
+                        },
+                      },
+                    }))}
+                    placeholder={MEMORY_SCOPE_OPTIONS.join(', ')}
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Write scopes</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={normalizeStringList(agentMemory.write_scopes).join(', ')}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        memory: {
+                          ...ensureRecord(ensureRecord(current.config).memory),
+                          write_scopes: normalizeCsvList(event.target.value),
+                        },
+                      },
+                    }))}
+                    placeholder={MEMORY_SCOPE_OPTIONS.join(', ')}
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Retrieval policy</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={String(agentMemory.retrieval_policy || 'recent').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        memory: {
+                          ...ensureRecord(ensureRecord(current.config).memory),
+                          retrieval_policy: event.target.value,
+                        },
+                      },
+                    }))}
+                  >
+                    {MEMORY_RETRIEVAL_OPTIONS.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Connectors and permissions</div>
+                <div className="orion-builder-inspector-grid">
+                  {connectorManifests.map((manifest) => (
+                    <div key={manifest.id} className="orion-builder-inspector-item">
+                      <div className="orion-builder-selected-label">{manifest.label}</div>
+                      <label className="orion-builder-copy">
+                        <input
+                          type="checkbox"
+                          checked={boundConnectorIds.includes(manifest.id)}
+                          onChange={(event) => updateSelectedCanonicalNode((current) => {
+                            const currentConfig = ensureRecord(current.config);
+                            const connectorConfig = ensureRecord(currentConfig.connectors);
+                            const currentBindings = Array.isArray(connectorConfig.bindings)
+                              ? connectorConfig.bindings.filter((item) => isRecord(item))
+                              : [];
+                            const nextBindings = event.target.checked
+                              ? [...currentBindings.filter((item) => String(item.connector_id || '').trim() !== manifest.id), { connector_id: manifest.id, binding_id: null, resource: null }]
+                              : currentBindings.filter((item) => String(item.connector_id || '').trim() !== manifest.id);
+                            return {
+                              ...current,
+                              config: {
+                                ...currentConfig,
+                                connectors: {
+                                  ...connectorConfig,
+                                  bindings: nextBindings,
+                                },
+                              },
+                            };
+                          })}
+                        />
+                        {' '}Bind connector
+                      </label>
+                      <label className="orion-builder-copy">
+                        <input
+                          type="checkbox"
+                          checked={connectorPermissions.includes(manifest.id)}
+                          onChange={(event) => updateSelectedCanonicalNode((current) => {
+                            const currentConfig = ensureRecord(current.config);
+                            const currentPermissions = ensureRecord(currentConfig.permissions);
+                            return {
+                              ...current,
+                              config: {
+                                ...currentConfig,
+                                permissions: {
+                                  ...currentPermissions,
+                                  connector_permissions: toggleStringList(
+                                    normalizeStringList(currentPermissions.connector_permissions),
+                                    manifest.id,
+                                    event.target.checked,
+                                  ),
+                                },
+                              },
+                            };
+                          })}
+                        />
+                        {' '}Allow connector
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Policy</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Action policy</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={String(permissions.action_policy || 'guarded').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        permissions: {
+                          ...ensureRecord(ensureRecord(current.config).permissions),
+                          action_policy: event.target.value,
+                        },
+                      },
+                    }))}
+                  >
+                    {ACTION_POLICY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="orion-builder-copy">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(browserPermissions.allow)}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        permissions: {
+                          ...ensureRecord(ensureRecord(current.config).permissions),
+                          browser_permissions: {
+                            ...ensureRecord(ensureRecord(ensureRecord(current.config).permissions).browser_permissions),
+                            allow: event.target.checked,
+                          },
+                        },
+                      },
+                    }))}
+                  />
+                  {' '}Allow browser automation
+                </label>
+              </div>
+
+              {renderFileMountGrantFields(permissions.file_mount_grants, (next) => updateSelectedCanonicalNode((current) => ({
+                ...current,
+                config: {
+                  ...ensureRecord(current.config),
+                  permissions: {
+                    ...ensureRecord(ensureRecord(current.config).permissions),
+                    file_mount_grants: next,
+                  },
+                },
+              })))}
+            </>
+          ) : null}
+
+          {canonicalType === 'tool' ? (
+            <>
+              <div className="orion-builder-inspector">
+                <div className="orion-builder-inspector-title">Tool</div>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Variant</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={canonicalVariant || 'connector_action'}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      type: 'tool',
+                      variant: event.target.value,
+                    }))}
+                  >
+                    <option value="connector_action">Connector action</option>
+                    <option value="http">HTTP</option>
+                    <option value="browser">Browser</option>
+                    <option value="file">File</option>
+                    <option value="shell">Shell</option>
+                    <option value="document">Document</option>
+                    <option value="spreadsheet">Spreadsheet</option>
+                    <option value="code">Code</option>
+                  </select>
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Summary</span>
+                  <input
+                    className="orion-builder-field-input"
+                    value={String(config.summary || '').trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        summary: event.target.value,
+                      },
+                    }))}
+                    placeholder="What this tool does"
+                  />
+                </label>
+                <label className="orion-builder-field">
+                  <span className="orion-builder-field-label">Execution target</span>
+                  <select
+                    className="orion-builder-field-input"
+                    value={String(config.execution_target || (canonicalVariant === 'shell' ? 'local_companion' : 'auto')).trim()}
+                    onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                      ...current,
+                      config: {
+                        ...ensureRecord(current.config),
+                        execution_target: normalizeExecutionTarget(event.target.value),
+                      },
+                    }))}
+                  >
+                    <option value="auto">Automatic</option>
+                    <option value="cloud">Cloud</option>
+                    <option value="local_companion">Local</option>
+                  </select>
+                </label>
+
+                {canonicalVariant === 'connector_action' ? (
+                  <>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Connector</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(config.connector || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            connector: event.target.value,
+                            action_id: '',
+                          },
+                        }))}
+                      >
+                        <option value="">Choose connector</option>
+                        {connectorManifests.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Action</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(config.action_id || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            action_id: event.target.value,
+                          },
+                        }))}
+                        disabled={!String(config.connector || '').trim()}
+                      >
+                        <option value="">{String(config.connector || '').trim() ? 'Choose action' : 'Choose connector first'}</option>
+                        {toolActions.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : null}
+
+                {canonicalVariant === 'http' ? (
+                  <>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">Method</span>
+                      <select
+                        className="orion-builder-field-input"
+                        value={String(config.method || 'GET').trim().toUpperCase()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            method: event.target.value,
+                          },
+                        }))}
+                      >
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="PATCH">PATCH</option>
+                        <option value="DELETE">DELETE</option>
+                      </select>
+                    </label>
+                    <label className="orion-builder-field">
+                      <span className="orion-builder-field-label">URL</span>
+                      <input
+                        className="orion-builder-field-input"
+                        value={String(config.url || '').trim()}
+                        onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                          ...current,
+                          config: {
+                            ...ensureRecord(current.config),
+                            url: event.target.value,
+                          },
+                        }))}
+                        placeholder="https://api.example.com"
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                {canonicalVariant === 'shell' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Command</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={String(config.command || '').trim()}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          command: event.target.value,
+                        },
+                      }))}
+                      placeholder="ls -la"
+                    />
+                  </label>
+                ) : null}
+
+                {canonicalVariant === 'browser' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">URL</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={String(config.url || '').trim()}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          url: event.target.value,
+                        },
+                      }))}
+                      placeholder="https://example.com"
+                    />
+                  </label>
+                ) : null}
+
+                {canonicalVariant === 'code' ? (
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Code</span>
+                    <textarea
+                      className="orion-builder-field-input is-textarea code"
+                      value={String(config.code || '')}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          code: event.target.value,
+                        },
+                      }))}
+                    />
+                  </label>
+                ) : null}
+              </div>
+
+              {renderFileMountGrantFields(permissions.file_mount_grants, (next) => updateSelectedCanonicalNode((current) => ({
+                ...current,
+                config: {
+                  ...ensureRecord(current.config),
+                  permissions: {
+                    ...ensureRecord(ensureRecord(current.config).permissions),
+                    file_mount_grants: next,
+                  },
+                },
+              })))}
+            </>
+          ) : null}
+
+          {canonicalType === 'human' ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Human step</div>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Variant</span>
+                <select
+                  className="orion-builder-field-input"
+                  value={canonicalVariant || 'approval'}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    type: 'human',
+                    variant: event.target.value,
+                  }))}
+                >
+                  <option value="approval">Approval</option>
+                  <option value="review">Review</option>
+                  <option value="wait_for_reply">Wait for reply</option>
+                </select>
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Instructions</span>
+                <textarea
+                  className="orion-builder-field-input is-textarea"
+                  value={String(config.instructions || '')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      instructions: event.target.value,
+                    },
+                  }))}
+                />
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Decision options</span>
+                <input
+                  className="orion-builder-field-input"
+                  value={normalizeStringList(config.decision_options).join(', ')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      decision_options: normalizeCsvList(event.target.value),
+                    },
+                  }))}
+                  placeholder="approve, reject"
+                />
+              </label>
+            </div>
+          ) : null}
+
+          {canonicalType === 'decision' ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Decision</div>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Variant</span>
+                <select
+                  className="orion-builder-field-input"
+                  value={canonicalVariant || 'if_else'}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    type: 'decision',
+                    variant: event.target.value,
+                  }))}
+                >
+                  <option value="if_else">If / else</option>
+                  <option value="classifier">Classifier</option>
+                  <option value="field_router">Field router</option>
+                </select>
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Expression</span>
+                <textarea
+                  className="orion-builder-field-input is-textarea"
+                  value={String(config.expression || '')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      expression: event.target.value,
+                    },
+                  }))}
+                />
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Routes</span>
+                <input
+                  className="orion-builder-field-input"
+                  value={normalizeStringList(config.routes).join(', ')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      routes: normalizeCsvList(event.target.value),
+                    },
+                  }))}
+                  placeholder="high, medium, low"
+                />
+              </label>
+            </div>
+          ) : null}
+
+          {canonicalType === 'data' ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Data step</div>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Variant</span>
+                <select
+                  className="orion-builder-field-input"
+                  value={canonicalVariant || 'transform'}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    type: 'data',
+                    variant: event.target.value,
+                  }))}
+                >
+                  <option value="transform">Transform</option>
+                  <option value="compose">Compose</option>
+                  <option value="validate">Validate</option>
+                </select>
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Mapping</span>
+                <textarea
+                  className="orion-builder-field-input is-textarea"
+                  value={String(config.mapping || '')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      mapping: event.target.value,
+                    },
+                  }))}
+                />
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Template</span>
+                <textarea
+                  className="orion-builder-field-input is-textarea"
+                  value={String(config.template || '')}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      template: event.target.value,
+                    },
+                  }))}
+                />
+              </label>
+            </div>
+          ) : null}
+
+          {canonicalType === 'subflow' ? (
+            <div className="orion-builder-inspector">
+              <div className="orion-builder-inspector-title">Subflow</div>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Workflow</span>
+                <select
+                  className="orion-builder-field-input"
+                  value={String(config.workflow_id || '').trim()}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      workflow_id: event.target.value,
+                    },
+                  }))}
+                >
+                  <option value="">Choose workflow</option>
+                  {availableSubflowTargetsForInspector.map((item) => (
+                    <option key={item.id} value={item.id}>{item.name || item.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="orion-builder-field">
+                <span className="orion-builder-field-label">Mode</span>
+                <select
+                  className="orion-builder-field-input"
+                  value={String(config.mode || 'sync').trim()}
+                  onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                    ...current,
+                    config: {
+                      ...ensureRecord(current.config),
+                      mode: event.target.value,
+                    },
+                  }))}
+                >
+                  <option value="sync">Sync</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
+      </aside>
+    );
+  })() : null;
 
   return (
     <div className="orion-page-shell orion-animate-in is-builder-page">
@@ -1973,7 +3405,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
         <div className="orion-builder-main is-agent-builder">
           <section className="orion-builder-canvas-panel is-agent-builder">
-            <div ref={canvasHostRef} className={`orion-builder-canvas-frame ${assistantDockOpen ? 'has-preview-dock' : ''}`.trim()}>
+            <div ref={canvasHostRef} className={`orion-builder-canvas-frame ${assistantDockOpen || showInspectorDock ? 'has-preview-dock' : ''}`.trim()}>
               <aside className="orion-builder-library is-floating">
                 {groupedNodeLibrary.map((group) => (
                   <div key={group.label} className="orion-builder-library-group">
@@ -1992,6 +3424,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 ))}
               </aside>
 
+              {inspectorDock}
+
               {assistantDockOpen ? (
                 <aside className="orion-builder-preview-dock is-floating">
                 <div className="orion-builder-preview-head">
@@ -2006,6 +3440,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                       type="button"
                       className="orion-builder-preview-reset"
                       onClick={() => setAiAssistantPrompt('')}
+                      disabled={aiAssistantBusy}
                     >
                       Clear
                     </button>
@@ -2014,6 +3449,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                       className="orion-builder-preview-close"
                       onClick={() => setAssistantDockOpen(false)}
                       aria-label="Close assistant"
+                      disabled={aiAssistantBusy}
                     >
                       <X size={15} />
                     </button>
@@ -2036,10 +3472,10 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
                 <form
                   className="orion-builder-preview-composer"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    handleAssistantApply();
-                  }}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleAssistantApply();
+                    }}
                 >
                   <textarea
                     ref={aiAssistantInputRef}
@@ -2047,14 +3483,15 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                     value={aiAssistantPrompt}
                     onChange={(event) => setAiAssistantPrompt(event.target.value)}
                     placeholder="Describe the workflow to generate..."
+                    disabled={aiAssistantBusy}
                   />
                   <button
                     type="submit"
                     className="orion-builder-preview-send"
-                    disabled={!aiAssistantPrompt.trim()}
+                    disabled={!aiAssistantPrompt.trim() || aiAssistantBusy}
                     aria-label="Generate workflow draft"
                   >
-                    <ArrowUp size={15} />
+                    {aiAssistantBusy ? <LoaderCircle size={15} className="spin" /> : <ArrowUp size={15} />}
                   </button>
                 </form>
                 </aside>
@@ -2062,12 +3499,15 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
               {saveMessage ? (
                 <div className={`orion-builder-canvas-message ${saveState === 'error' ? 'is-error' : ''}`}>
-                  <span>{saveMessage}</span>
+                  <span>
+                    {saveMessage}
+                    {workflowNodeProgressSummary ? ` · ${workflowNodeProgressSummary}` : ''}
+                  </span>
                   {messageRunId && saveState === 'saved' ? (
                     <button
                       type="button"
                       className="orion-builder-canvas-message-action"
-                      onClick={() => router.push(`/runs/${encodeURIComponent(messageRunId)}/inspect?focus=timeline`)}
+                      onClick={() => router.push(`/runs/${encodeURIComponent(messageRunId)}/inspect?focus=workflow`)}
                     >
                       {OPEN_LIVE_RUN_LABEL}
                     </button>
@@ -2080,7 +3520,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 onInit={(instance) => {
                   flowRef.current = instance;
                 }}
-                nodes={nodes}
+                nodes={renderedNodes}
                 edges={renderedEdges}
                 nodeTypes={CANVAS_NODE_TYPES}
                 edgeTypes={CANVAS_EDGE_TYPES}
@@ -2092,7 +3532,12 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                 onNodesChange={handleNodesChange}
                 onEdgesChange={handleEdgesChange}
                 onConnect={handleConnect}
-                onNodeClick={(_, node) => setSelectedNodeId(String(node.id))}
+                onNodeClick={(_, node) => {
+                  setAssistantDockOpen(false);
+                  setSelectedNodeId(String(node.id));
+                  setSelectedEdgeId(null);
+                  setNodeSearch(null);
+                }}
                 onPaneClick={(event) => {
                   handlePaneClick({ detail: event.detail, clientX: event.clientX, clientY: event.clientY });
                 }}

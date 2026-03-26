@@ -57,6 +57,82 @@ def _active_profile_snapshot(run: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _serialize_node_states(
+    node_states: Any,
+    *,
+    include_previews: bool = True,
+    include_detail: bool = True,
+) -> Dict[str, Any]:
+    if not isinstance(node_states, dict):
+        return {
+            "version": 1,
+            "graph_kind": None,
+            "active_node_id": None,
+            "final_node_id": None,
+            "updated_at": None,
+            "counts": {},
+            "items": [],
+        }
+
+    items_raw = node_states.get("items")
+    order_raw = node_states.get("order") if isinstance(node_states.get("order"), list) else []
+    if isinstance(items_raw, dict):
+        item_map = items_raw
+        order = [str(item).strip() for item in order_raw if str(item).strip()]
+        for node_id in item_map.keys():
+            token = str(node_id or "").strip()
+            if token and token not in order:
+                order.append(token)
+        ordered_items = [item_map.get(node_id) for node_id in order]
+    elif isinstance(items_raw, list):
+        ordered_items = items_raw
+    else:
+        ordered_items = []
+
+    counts: Dict[str, int] = {}
+    payload_items: List[Dict[str, Any]] = []
+    for raw_item in ordered_items:
+        if not isinstance(raw_item, dict):
+            continue
+        status = str(raw_item.get("status") or "queued").strip().lower() or "queued"
+        counts[status] = counts.get(status, 0) + 1
+        item_payload = {
+            "node_id": str(raw_item.get("node_id") or "").strip() or None,
+            "label": str(raw_item.get("label") or "").strip() or None,
+            "type": str(raw_item.get("type") or "").strip().lower() or None,
+            "variant": str(raw_item.get("variant") or "").strip().lower() or None,
+            "status": status,
+            "started_at": raw_item.get("started_at"),
+            "completed_at": raw_item.get("completed_at"),
+            "duration_ms": raw_item.get("duration_ms"),
+            "summary": _compact_event_text(raw_item.get("summary"), limit=240) if raw_item.get("summary") else None,
+            "error": _compact_event_text(raw_item.get("error"), limit=320) if raw_item.get("error") else None,
+            "child_run_id": str(raw_item.get("child_run_id") or "").strip() or None,
+            "child_workflow_id": str(raw_item.get("child_workflow_id") or "").strip() or None,
+            "waiting_for_approval": bool(raw_item.get("waiting_for_approval")),
+        }
+        if include_previews:
+            item_payload["input_preview"] = _compact_event_text(raw_item.get("input_preview"), limit=280) if raw_item.get("input_preview") else None
+            item_payload["output_preview"] = _compact_event_text(raw_item.get("output_preview"), limit=280) if raw_item.get("output_preview") else None
+        if include_detail:
+            item_payload["detail"] = _json_safe(raw_item.get("detail")) if raw_item.get("detail") is not None else None
+        payload_items.append(item_payload)
+
+    return {
+        "version": int(node_states.get("version") or 1),
+        "graph_kind": str(node_states.get("graph_kind") or "").strip().lower() or None,
+        "active_node_id": str(node_states.get("active_node_id") or "").strip() or None,
+        "final_node_id": str(node_states.get("final_node_id") or "").strip() or None,
+        "updated_at": node_states.get("updated_at"),
+        "counts": counts,
+        "items": payload_items,
+    }
+
+
+def _limited_node_states_view(node_states: Any) -> Dict[str, Any]:
+    return _serialize_node_states(node_states, include_previews=False, include_detail=False)
+
+
 def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -69,6 +145,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     trimmed_memory_trace = _trim_memory_trace(memory_trace)
     result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else None
     active_profile = _active_profile_snapshot(run)
+    node_states = _serialize_node_states(run.get("node_states"))
     result_summary = run.get("result")
     if isinstance(result_summary, str):
         summary_text = result_summary.strip()
@@ -136,6 +213,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "usage_total_tokens_est": usage_masked.get("total_tokens_est"),
         "usage_cost_band": usage_masked.get("cost_band"),
         "result_data": result_data,
+        "node_states": node_states,
         "tool_policy_precheck": metadata.get("tool_policy_precheck"),
         "tool_policy_audit": trimmed_tool_policy_audit,
         "memory_trace": trimmed_memory_trace,
@@ -353,6 +431,8 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
     blocked_count = 0
     approval_required_count = 0
     allow_count = 0
+    node_states = item.get("node_states") if isinstance(item.get("node_states"), dict) else {}
+    node_items = node_states.get("items") if isinstance(node_states.get("items"), list) else []
     for entry in policy_audit:
         if not isinstance(entry, dict):
             continue
@@ -405,6 +485,11 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "usage_model": item.get("usage_model"),
         "usage_total_tokens_est": item.get("usage_total_tokens_est"),
         "usage_cost_band": item.get("usage_cost_band"),
+        "graph_kind": node_states.get("graph_kind"),
+        "active_node_id": node_states.get("active_node_id"),
+        "final_node_id": node_states.get("final_node_id"),
+        "workflow_node_count": len(node_items),
+        "node_state_counts": node_states.get("counts") if isinstance(node_states.get("counts"), dict) else {},
         "tool_policy_precheck": item.get("tool_policy_precheck"),
         "tool_policy_audit_count": len(policy_audit),
         "tool_policy_blocked_count": blocked_count,

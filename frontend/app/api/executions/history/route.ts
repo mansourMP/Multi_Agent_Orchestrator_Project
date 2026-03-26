@@ -62,6 +62,14 @@ function normalizeHistoryPayload(payload: unknown) {
         execution_target_selected: typeof record.execution_target_selected === 'string' ? record.execution_target_selected : null,
         execution_target_reason: typeof record.execution_target_reason === 'string' ? record.execution_target_reason : null,
         execution_target_fallback: typeof record.execution_target_fallback === 'string' ? record.execution_target_fallback : null,
+        graph_kind: typeof record.graph_kind === 'string' ? record.graph_kind : null,
+        active_node_id: typeof record.active_node_id === 'string' ? record.active_node_id : null,
+        final_node_id: typeof record.final_node_id === 'string' ? record.final_node_id : null,
+        workflow_node_count: typeof record.workflow_node_count === 'number' ? record.workflow_node_count : 0,
+        node_state_counts:
+          record.node_state_counts && typeof record.node_state_counts === 'object'
+            ? record.node_state_counts as Record<string, unknown>
+            : null,
         delegation_summary: delegationSummary
           ? {
               retryable_failed_children:

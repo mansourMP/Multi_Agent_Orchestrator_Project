@@ -80,6 +80,94 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             any(issue.get("code") == "file_watch_not_executable_yet" for issue in payload.get("issues", []))
         )
 
+    def test_parse_workflow_payload_infers_connector_trigger_config(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "trigger_1",
+                  "type": "trigger",
+                  "label": "Telegram inbound message",
+                  "subtitle": "When a Telegram user sends a message"
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        node = payload["nodes"][0]
+        self.assertEqual(node["variant"], "connector_event")
+        self.assertEqual(node["config"]["connector"], "telegram_bot")
+        self.assertEqual(node["config"]["event"], "inbound_message")
+
+    def test_parse_workflow_payload_infers_connector_action_config(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "label": "Send Telegram update",
+                  "subtitle": "Reply back in Telegram with the result"
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        node = payload["nodes"][0]
+        self.assertEqual(node["variant"], "connector_action")
+        self.assertEqual(node["config"]["connector"], "telegram_bot")
+        self.assertEqual(node["config"]["action_id"], "send_message")
+
+    def test_parse_workflow_payload_flags_custom_api_signed_webhook_without_secret(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "connector_action",
+                  "config": {
+                    "connector": "custom_api",
+                    "action_id": "signed_webhook",
+                    "url": "https://example.com/webhook"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(
+            any(issue.get("code") == "custom_api_signing_secret_missing" for issue in payload.get("issues", []))
+        )
+
+    def test_parse_workflow_payload_flags_code_tool_targeting_cloud(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "code",
+                  "config": {
+                    "execution_target": "cloud"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(
+            any(issue.get("code") == "code_requires_local_companion_or_auto" for issue in payload.get("issues", []))
+        )
+
     async def test_builder_generate_returns_parsed_workflow(self):
         with (
             patch("server_modules.routes_builder.resolve_call_credentials") as resolve_mock,
@@ -138,6 +226,8 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["workflow"]["nodes"][0]["variant"], "schedule")
         self.assertEqual(result["workflow"]["nodes"][1]["config"]["identity"]["name"], "Planner")
         self.assertEqual(result["workflow"]["edges"][0]["source"], "trigger_1")
+        messages = call_model_mock.call_args.kwargs["messages"]
+        self.assertTrue(any("Connector registry:" in str(item.get("content") or "") for item in messages))
 
     async def test_builder_generate_rejects_empty_prompt(self):
         with self.assertRaises(HTTPException) as ctx:

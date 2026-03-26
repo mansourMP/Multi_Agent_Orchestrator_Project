@@ -65,6 +65,11 @@ type RuntimeRunMeta = {
   active_profile_label?: string | null;
   active_profile_provider?: string | null;
   active_profile_model?: string | null;
+  graph_kind?: string | null;
+  active_node_id?: string | null;
+  final_node_id?: string | null;
+  workflow_node_count?: number;
+  node_state_counts?: Record<string, unknown> | null;
 };
 
 function toSeededRunMeta(seed: RuntimeRunSeed): RuntimeRunMeta {
@@ -152,6 +157,11 @@ type RuntimeHistoryItem = {
   active_profile_label?: unknown;
   active_profile_provider?: unknown;
   active_profile_model?: unknown;
+  graph_kind?: unknown;
+  active_node_id?: unknown;
+  final_node_id?: unknown;
+  workflow_node_count?: unknown;
+  node_state_counts?: unknown;
 };
 
 type ExecutionStep = {
@@ -329,6 +339,29 @@ function startedFromLabel(execution: ExecutionRecord, meta?: RuntimeRunMeta | nu
   return titleCaseWords(triggeredBy);
 }
 
+function formatNodeStateLabel(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '--';
+  if (normalized === 'waiting_human') return 'Waiting';
+  return normalized.replace(/_/g, ' ');
+}
+
+function workflowProgressSummary(meta?: RuntimeRunMeta | null): string {
+  if (!meta || Number(meta.workflow_node_count || 0) <= 0) return '';
+  const counts = meta.node_state_counts && typeof meta.node_state_counts === 'object' ? meta.node_state_counts : null;
+  if (!counts) return `${meta.workflow_node_count} workflow nodes tracked.`;
+  const ordered = ['running', 'waiting_human', 'failed', 'succeeded', 'skipped']
+    .map((key) => {
+      const value = Number((counts as Record<string, unknown>)[key] || 0);
+      if (!value) return '';
+      return `${value} ${formatNodeStateLabel(key)}`;
+    })
+    .filter(Boolean);
+  return ordered.length > 0
+    ? `${ordered.join(' · ')}`
+    : `${meta.workflow_node_count} workflow nodes tracked.`;
+}
+
 export default function ExecutionsPage() {
   const router = useRouter();
   const [focusedRunId, setFocusedRunId] = useState('');
@@ -425,6 +458,14 @@ export default function ExecutionsPage() {
           active_profile_label: String(item?.active_profile_label || '').trim() || null,
           active_profile_provider: String(item?.active_profile_provider || '').trim() || null,
           active_profile_model: String(item?.active_profile_model || '').trim() || null,
+          graph_kind: String(item?.graph_kind || '').trim() || null,
+          active_node_id: String(item?.active_node_id || '').trim() || null,
+          final_node_id: String(item?.final_node_id || '').trim() || null,
+          workflow_node_count: typeof item?.workflow_node_count === 'number' ? item.workflow_node_count : 0,
+          node_state_counts:
+            item?.node_state_counts && typeof item.node_state_counts === 'object'
+              ? item.node_state_counts as Record<string, unknown>
+              : null,
         });
       });
       setRuntimeRunMeta(metaByRunId);
@@ -837,6 +878,7 @@ export default function ExecutionsPage() {
             const readyForMerge = Boolean(runMeta?.delegation_summary?.ready_for_merge || runMeta?.delegation_ready);
             const delegationNextAction = String(runMeta?.delegation_next_action || '').trim();
             const runtimeProfile = runtimeProfileText(runMeta);
+            const workflowProgress = workflowProgressSummary(runMeta);
             const isOrchestrator = String(execution.workflow?.definition?.meta?.operator?.agentRole || '').trim() === 'orchestrator';
             const isRecent = isRecentExecution(execution);
             const routeLabel = startedFromLabel(execution, runMeta);
@@ -904,6 +946,11 @@ export default function ExecutionsPage() {
                         Ready to wrap up
                       </div>
                     ) : null}
+                    {workflowProgress ? (
+                      <div className="orion-run-note">
+                        Workflow: {workflowProgress}
+                      </div>
+                    ) : null}
                   </div>
                 </button>
 
@@ -963,9 +1010,9 @@ export default function ExecutionsPage() {
                     )}
                     <Link
                       className="orion-btn orion-btn-ghost orion-run-action-btn"
-                      href={`/runs/${encodeURIComponent(execution.id)}/inspect?focus=timeline`}
+                      href={`/runs/${encodeURIComponent(execution.id)}/inspect?focus=${encodeURIComponent(workflowProgress ? 'workflow' : 'timeline')}`}
                     >
-                      Full timeline
+                      {workflowProgress ? 'Workflow inspect' : 'Full timeline'}
                     </Link>
                   </div>
                 </div>

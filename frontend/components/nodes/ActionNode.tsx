@@ -7,6 +7,8 @@ import StandardCanvasNode from '@/components/nodes/StandardCanvasNode';
 type ActionNodeData = {
     label?: string;
     actionType?: string;
+    status?: string;
+    executionSummary?: string;
 };
 
 function actionIcon(actionType: string) {
@@ -39,16 +41,20 @@ const ActionNode = ({ data, selected }: { data: ActionNodeData; selected?: boole
     const actionType = String(data?.actionType || 'write_file').trim().toLowerCase();
     const accentColor = '#10b981';
     const label = data.label || ACTION_LABELS[actionType] || 'Action';
+    const status = String(data.status || '').trim().toLowerCase();
+    const executionSummary = String(data.executionSummary || '').trim();
+    const subtitle = executionSummary || ACTION_LABELS[actionType] || 'Send the result to a destination';
 
     return (
         <StandardCanvasNode
             kindLabel="Action"
             title={label}
-            subtitle={ACTION_LABELS[actionType] || 'Send the result to a destination'}
+            subtitle={subtitle}
             accentColor={accentColor}
             icon={actionIcon(actionType)}
             selected={selected}
-            badge="OUTPUT"
+            badge={status ? status.replace(/_/g, ' ').toUpperCase() : 'OUTPUT'}
+            status={status}
         />
     );
 };

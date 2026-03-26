@@ -37,6 +37,11 @@ import {
 } from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import {
+    formatWorkflowRunNodeStatusLabel,
+    useWorkflowRunTelemetry,
+    workflowRunNodeSummary,
+} from '@/hooks/useWorkflowRunTelemetry';
 import DoctorPreflightNotice from '@/components/orion/DoctorPreflightNotice';
 import LocalRuntimeRecoveryCard from '@/components/orion/LocalRuntimeRecoveryCard';
 import AgentNode from '@/components/nodes/AgentNode';
@@ -187,6 +192,8 @@ type CanvasCompatibilityMeta = {
 type TriggerCanvasData = {
     label: string;
     triggerType: TriggerKind;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type AgentCanvasData = {
@@ -199,33 +206,44 @@ type AgentCanvasData = {
     duty: string;
     status: string;
     description: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type ActionCanvasData = {
     label: string;
     actionType: ActionKind;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type HttpRequestCanvasData = {
     label: string;
     method: string;
     url: string;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type ConditionCanvasData = {
     label: string;
     condition: string;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type TransformCanvasData = {
     label: string;
     mapping: string;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type CodeCanvasData = {
     label: string;
     summary: string;
     code: string;
+    status?: string;
+    executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
 type CanvasNodeData =
@@ -918,6 +936,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             triggerType,
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     if (type === 'action') {
@@ -927,6 +947,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             actionType,
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     if (type === 'http_request') {
@@ -936,6 +958,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             label: String(raw.label || base.label).trim() || base.label,
             method: String(raw.method || base.method).trim().toUpperCase() || base.method,
             url: String(raw.url || base.url).trim() || base.url,
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     if (type === 'condition') {
@@ -944,6 +968,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             condition: String(raw.condition || base.condition).trim() || base.condition,
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     if (type === 'transform') {
@@ -952,6 +978,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             ...(raw as CanvasCompatibilityMeta),
             label: String(raw.label || base.label).trim() || base.label,
             mapping: String(raw.mapping || base.mapping).trim() || base.mapping,
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     if (type === 'code') {
@@ -961,6 +989,8 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             label: String(raw.label || base.label).trim() || base.label,
             summary: String(raw.summary || base.summary).trim() || base.summary,
             code: String(raw.code || base.code),
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
     }
     const base: AgentCanvasData = {
@@ -985,6 +1015,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
         duty: String(raw.duty || base.duty).trim() || base.duty,
         status: String(raw.status || base.status).trim() || base.status,
         description: String(raw.description || base.description).trim() || base.description,
+        executionSummary: String(raw.executionSummary || '').trim() || undefined,
     };
 }
 
@@ -1839,6 +1870,18 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         () => canvasNodes.find((node) => node.id === selectedNodeId) || null,
         [canvasNodes, selectedNodeId],
     );
+    const {
+        refreshRunDetail,
+        activeRunNodeId,
+        finalRunNodeId,
+        selectedRunNodeState,
+        renderedNodes: renderedCanvasNodes,
+    } = useWorkflowRunTelemetry<CanvasWorkflowNode>({
+        runId,
+        nodes: canvasNodes,
+        selectedNodeId,
+        controlPlaneFetch,
+    });
     const selectedCanonicalNode = useMemo(
         () => (selectedNode ? readCanonicalInspectorNode(selectedNode) : null),
         [selectedNode],
@@ -2025,9 +2068,84 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         const canonicalType = selectedCanonicalNode.canonicalType;
         const canonicalVariant = selectedCanonicalNode.canonicalVariant || '';
         const config = selectedCanonicalNode.config;
+        const executionSummary = workflowRunNodeSummary(selectedRunNodeState);
+        const executionStatusLabel = formatWorkflowRunNodeStatusLabel(selectedRunNodeState?.status);
+        const isActiveRunNode = Boolean(activeRunNodeId && selectedNode.id === activeRunNodeId);
+        const isFinalRunNode = Boolean(finalRunNodeId && selectedNode.id === finalRunNodeId);
+        const executionSurfaceStyle = {
+            ...workflowInputSurfaceStyle,
+            minHeight: 0,
+            padding: '10px 12px',
+            whiteSpace: 'pre-wrap' as const,
+            lineHeight: 1.5,
+        };
 
         return (
             <>
+                {selectedRunNodeState ? (
+                    <div style={workflowSectionDividerStyle}>
+                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Node execution</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                            <div>
+                                <label style={workflowLabelStyle}>Status</label>
+                                <div style={executionSurfaceStyle}>{executionStatusLabel}</div>
+                            </div>
+                            <div>
+                                <label style={workflowLabelStyle}>Run role</label>
+                                <div style={executionSurfaceStyle}>
+                                    {[isActiveRunNode ? 'Active node' : null, isFinalRunNode ? 'Final node' : null].filter(Boolean).join(' · ') || 'Visited in this run'}
+                                </div>
+                            </div>
+                        </div>
+                        {executionSummary ? (
+                            <div>
+                                <label style={workflowLabelStyle}>Summary</label>
+                                <div style={executionSurfaceStyle}>{executionSummary}</div>
+                            </div>
+                        ) : null}
+                        {selectedRunNodeState.input_preview ? (
+                            <div>
+                                <label style={workflowLabelStyle}>Input preview</label>
+                                <div style={executionSurfaceStyle}>{String(selectedRunNodeState.input_preview)}</div>
+                            </div>
+                        ) : null}
+                        {selectedRunNodeState.output_preview ? (
+                            <div>
+                                <label style={workflowLabelStyle}>Output preview</label>
+                                <div style={executionSurfaceStyle}>{String(selectedRunNodeState.output_preview)}</div>
+                            </div>
+                        ) : null}
+                        {selectedRunNodeState.error ? (
+                            <div>
+                                <label style={workflowLabelStyle}>Error</label>
+                                <div style={{ ...executionSurfaceStyle, color: 'var(--danger-fg)', borderColor: 'var(--danger-border)', background: 'var(--danger-bg)' }}>
+                                    {String(selectedRunNodeState.error)}
+                                </div>
+                            </div>
+                        ) : null}
+                        {selectedRunNodeState.child_run_id ? (
+                            <div>
+                                <label style={workflowLabelStyle}>Child run</label>
+                                <div style={executionSurfaceStyle}>
+                                    <a
+                                        href={`/runs/${encodeURIComponent(String(selectedRunNodeState.child_run_id))}?focus=workflow`}
+                                        style={{ color: 'var(--text-primary)', fontWeight: 600, textDecoration: 'none' }}
+                                    >
+                                        Open run {String(selectedRunNodeState.child_run_id)}
+                                    </a>
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
+                ) : runId ? (
+                    <div style={workflowSectionDividerStyle}>
+                        <div className="workflow-pro-section-title" style={{ marginBottom: 0 }}>Node execution</div>
+                        <div style={workflowMutedCopyStyle}>
+                            No execution data for this node in run {runId} yet.
+                        </div>
+                    </div>
+                ) : null}
+
                 <div>
                     <label style={workflowLabelStyle}>Node label</label>
                     <input
@@ -3253,12 +3371,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         models,
         operator.modelId,
         providerOptions,
+        activeRunNodeId,
+        finalRunNodeId,
         renderFileMountGrantFields,
         selectedCanonicalNode,
         selectedNode,
+        selectedRunNodeState,
         showAdvancedSettings,
         updateSelectedCanonicalNode,
         connection.provider,
+        runId,
     ]);
 
     const handleCanvasNodesChange = useCallback((changes: NodeChange<CanvasWorkflowNode>[]) => {
@@ -3757,6 +3879,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             });
             setRunId(nextRunId);
             appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
+            void refreshRunDetail(nextRunId);
 
             const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
             const eventSource = openAuthenticatedEventStream({
@@ -3765,6 +3888,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     if (event.event === 'pause') {
                         setRunStatus('waiting');
                         appendLog(RUN_WAITING_STATUS_COPY, 'warn');
+                        void refreshRunDetail(nextRunId);
                         return;
                     }
                     if (event.event !== 'log') {
@@ -3777,8 +3901,17 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         const rawMessage = String(parsed.message || event.data);
                         const prettyMessage = evt === 'run_error' ? humanizeRuntimeError(rawMessage) : rawMessage;
                         appendLog(prettyMessage, (parsed.level as LogLevel) || 'info');
-                        if (evt === 'run_complete') setRunStatus('completed');
-                        if (evt === 'run_error') setRunStatus('error');
+                        if (evt === 'run_complete') {
+                            setRunStatus('completed');
+                            void refreshRunDetail(nextRunId);
+                        }
+                        if (evt === 'run_error') {
+                            setRunStatus('error');
+                            void refreshRunDetail(nextRunId);
+                        }
+                        if (evt === 'run_stopped' || evt === 'timeout' || evt.startsWith('approval_') || evt === 'node_state') {
+                            void refreshRunDetail(nextRunId);
+                        }
                         if (evt === 'usage_masked' && parsed.data && typeof parsed.data === 'object') {
                             const usage = parsed.data as Partial<MaskedUsageTelemetry>;
                             if (
@@ -3809,6 +3942,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     eventSource.close();
                     if (streamRef.current === eventSource) streamRef.current = null;
                     setRunStatus((prev) => (prev === 'running' ? 'completed' : prev));
+                    void refreshRunDetail(nextRunId);
                 },
                 onClose: () => {
                     if (streamRef.current === eventSource) streamRef.current = null;
@@ -3823,7 +3957,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsPreflightChecking(false);
         }
-    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, controlPlaneFetch, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, selectedProfileId, selectedRuntimeProfile]);
+    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, controlPlaneFetch, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, refreshRunDetail, selectedProfileId, selectedRuntimeProfile]);
 
     const runBadge = useMemo(() => {
         if (runStatus === 'running') return { label: 'Running', color: 'var(--success-fg)', bg: 'var(--success-bg)', border: 'var(--success-border)' };
@@ -4064,7 +4198,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         <section ref={canvasHostRef} className="workflow-pro-panel workflow-canvas-panel" style={{ padding: 0, overflow: 'hidden', height: '100%', display: 'flex', position: 'relative' }}>
                             <ReactFlow
                                 style={{ flex: 1, minHeight: 0, height: 'calc(100vh - 120px)' }}
-                                nodes={canvasNodes}
+                                nodes={renderedCanvasNodes}
                                 edges={renderedCanvasEdges}
                                 nodeTypes={CANVAS_NODE_TYPES}
                                 edgeTypes={CANVAS_EDGE_TYPES}

@@ -67,6 +67,9 @@ Published workflows require at least one non-manual trigger, but drafts may use 
 Code is a tool variant, never a top-level node family.
 Memory belongs inside agent config, never as a canvas node.
 Provide concise labels/subtitles and numeric x/y positions suitable for a left-to-right flow.
+Prefer a real trigger variant when the prompt clearly implies one.
+Use real connector ids, trigger ids, and action ids from the connector registry when possible.
+When a deterministic external step is needed, prefer a Tool node over hiding it inside the agent.
 If details are unknown, leave explicit placeholders inside config rather than inventing fake IDs.
 No markdown, no prose, no backticks."""
 
@@ -93,6 +96,28 @@ def _parse_workflow_payload(raw: str) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=502, detail=f"Builder returned invalid JSON: {exc.msg}.") from exc
     return normalize_builder_generated_workflow(payload)
+
+
+def _connector_registry_prompt() -> str:
+    parts = []
+    manifests = list_connector_manifests().get("items") or []
+    for item in manifests:
+        if not isinstance(item, dict):
+            continue
+        connector_id = str(item.get("id") or "").strip()
+        label = str(item.get("label") or connector_id).strip() or connector_id
+        triggers = ", ".join(
+            str(entry.get("id") or "").strip()
+            for entry in (item.get("triggers") if isinstance(item.get("triggers"), list) else [])
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip()
+        ) or "none"
+        actions = ", ".join(
+            str(entry.get("id") or "").strip()
+            for entry in (item.get("actions") if isinstance(item.get("actions"), list) else [])
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip()
+        ) or "none"
+        parts.append(f"- {connector_id} ({label}) | triggers: {triggers} | actions: {actions}")
+    return "Connector registry:\n" + "\n".join(parts)
 
 
 @router.get("/api/v1/builder/manifests/connectors", dependencies=[Depends(require_api_key)])
@@ -126,6 +151,7 @@ async def builder_generate(body: BuilderGenerateRequest, current_user=Depends(re
         result = await call_model(
             messages=[
                 {"role": "system", "content": BUILDER_SYSTEM_PROMPT},
+                {"role": "system", "content": _connector_registry_prompt()},
                 {"role": "user", "content": prompt},
             ],
             model=resolved_model,

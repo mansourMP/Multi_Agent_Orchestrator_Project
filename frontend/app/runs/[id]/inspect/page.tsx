@@ -107,6 +107,35 @@ type ReplayPayload = {
   };
 };
 
+type RunNodeState = {
+  node_id?: string | null;
+  label?: string | null;
+  type?: string | null;
+  variant?: string | null;
+  status?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  summary?: string | null;
+  error?: string | null;
+  child_run_id?: string | null;
+  child_workflow_id?: string | null;
+  waiting_for_approval?: boolean;
+  input_preview?: string | null;
+  output_preview?: string | null;
+  detail?: unknown;
+};
+
+type RunNodeStatesPayload = {
+  version?: number;
+  graph_kind?: string | null;
+  active_node_id?: string | null;
+  final_node_id?: string | null;
+  updated_at?: string | null;
+  counts?: Record<string, number> | null;
+  items?: RunNodeState[] | null;
+};
+
 type RunDetailPayload = {
   run_id?: string;
   status?: string;
@@ -184,6 +213,7 @@ type RunDetailPayload = {
     identity_label?: string | null;
     routing_scope?: string | null;
   } | null;
+  node_states?: RunNodeStatesPayload | null;
 };
 
 type DesktopBridge = {
@@ -231,7 +261,7 @@ type LocalExecutionStepView = {
 
 type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'closed';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'error', 'stopped', 'timeout', 'cancelled']);
-type InspectFocusTarget = 'timeline' | 'logs' | 'approvals' | 'screenshots' | 'artifacts' | null;
+type InspectFocusTarget = 'workflow' | 'timeline' | 'logs' | 'approvals' | 'screenshots' | 'artifacts' | null;
 type InspectSectionTarget = Exclude<InspectFocusTarget, null>;
 
 function compactText(value: string | null | undefined, fallback = '--', maxLength = 180): string {
@@ -303,8 +333,58 @@ function localExecutionStepTone(status?: string): { color: string; label: string
   return { color: 'var(--text-tertiary)', label: value || '--', background: 'var(--bg-element)', border: 'var(--border-default)' };
 }
 
+function workflowNodeTone(status?: string): { color: string; label: string; background: string; border: string } {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'succeeded' || value === 'completed' || value === 'success') {
+    return {
+      color: 'var(--success-fg)',
+      label: 'Succeeded',
+      background: 'var(--success-bg)',
+      border: 'var(--success-border)',
+    };
+  }
+  if (value === 'failed' || value === 'error' || value === 'timeout') {
+    return {
+      color: 'var(--error-fg)',
+      label: 'Failed',
+      background: 'var(--error-bg)',
+      border: 'var(--error-border)',
+    };
+  }
+  if (value === 'running' || value === 'starting') {
+    return {
+      color: '#1d4ed8',
+      label: 'Running',
+      background: 'rgba(147,197,253,0.14)',
+      border: 'rgba(147,197,253,0.32)',
+    };
+  }
+  if (value === 'waiting_human' || value === 'waiting' || value === 'waiting_for_input') {
+    return {
+      color: 'var(--warning-fg)',
+      label: 'Waiting',
+      background: 'var(--warning-bg)',
+      border: 'var(--warning-border)',
+    };
+  }
+  if (value === 'skipped') {
+    return {
+      color: 'var(--text-secondary)',
+      label: 'Skipped',
+      background: 'var(--bg-element)',
+      border: 'var(--border-default)',
+    };
+  }
+  return {
+    color: 'var(--text-tertiary)',
+    label: value ? value.replace(/_/g, ' ') : '--',
+    background: 'var(--bg-element)',
+    border: 'var(--border-default)',
+  };
+}
+
 function normalizeInspectFocus(value: string | null): InspectFocusTarget {
-  if (value === 'timeline' || value === 'logs' || value === 'approvals' || value === 'screenshots' || value === 'artifacts') {
+  if (value === 'workflow' || value === 'timeline' || value === 'logs' || value === 'approvals' || value === 'screenshots' || value === 'artifacts') {
     return value;
   }
   return null;
@@ -322,6 +402,52 @@ function formatApprovalDecisionLabel(value?: string | null): string {
   if (normalized === 'approved' || normalized === 'allow' || normalized === 'proceed') return 'Approved';
   if (normalized === 'hold' || normalized === 'blocked' || normalized === 'denied' || normalized === 'reject') return 'Held';
   return normalized.replace(/_/g, ' ');
+}
+
+function formatWorkflowNodeKind(type?: string | null, variant?: string | null): string {
+  const family = String(type || '').trim().toLowerCase();
+  const kind = String(variant || '').trim().toLowerCase();
+  if (family === 'trigger') {
+    if (kind === 'connector_event') return 'Connector trigger';
+    if (kind === 'schedule') return 'Schedule trigger';
+    if (kind === 'webhook') return 'Webhook trigger';
+    if (kind === 'workflow') return 'Workflow trigger';
+    if (kind === 'file_watch') return 'File trigger';
+    if (kind === 'manual') return 'Manual trigger';
+    return 'Trigger';
+  }
+  if (family === 'agent') return 'Agent';
+  if (family === 'tool') {
+    if (kind === 'connector_action') return 'Connector action';
+    if (kind === 'http') return 'HTTP tool';
+    if (kind === 'browser') return 'Browser tool';
+    if (kind === 'file') return 'File tool';
+    if (kind === 'shell') return 'Shell tool';
+    if (kind === 'document') return 'Document tool';
+    if (kind === 'spreadsheet') return 'Spreadsheet tool';
+    if (kind === 'code') return 'Code tool';
+    return 'Tool';
+  }
+  if (family === 'decision') {
+    if (kind === 'if_else') return 'If / else';
+    if (kind === 'classifier') return 'Classifier';
+    if (kind === 'field_router') return 'Field router';
+    return 'Decision';
+  }
+  if (family === 'human') {
+    if (kind === 'approval') return 'Approval';
+    if (kind === 'review') return 'Review';
+    if (kind === 'wait_for_reply') return 'Wait for reply';
+    return 'Human step';
+  }
+  if (family === 'data') {
+    if (kind === 'transform') return 'Transform';
+    if (kind === 'compose') return 'Compose';
+    if (kind === 'validate') return 'Validate';
+    return 'Data step';
+  }
+  if (family === 'subflow') return 'Subflow';
+  return family || '--';
 }
 
 function classifyArtifactForInspect(path: string): 'deliverable' | 'evidence' | 'system' {
@@ -596,6 +722,7 @@ export default function RunInspectPage() {
   const [delegateError, setDelegateError] = useState<string | null>(null);
   const [delegateNotice, setDelegateNotice] = useState<string | null>(null);
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
+  const workflowSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const approvalsSectionRef = useRef<HTMLElement | null>(null);
   const screenshotsSectionRef = useRef<HTMLElement | null>(null);
@@ -841,7 +968,9 @@ export default function RunInspectPage() {
     }
     setActiveSection(target);
     const targetRef =
-      target === 'approvals'
+      target === 'workflow'
+        ? workflowSectionRef
+        : target === 'approvals'
         ? approvalsSectionRef
         : target === 'screenshots'
         ? screenshotsSectionRef
@@ -1169,6 +1298,27 @@ export default function RunInspectPage() {
     }
     return notes;
   }, [runDetail?.tool_policy_precheck, runSkillSummary.scope]);
+  const workflowNodeStates = useMemo(() => {
+    const payload = runDetail?.node_states;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const counts = payload?.counts && typeof payload.counts === 'object' ? payload.counts : {};
+    const activeNodeId = String(payload?.active_node_id || '').trim() || null;
+    const finalNodeId = String(payload?.final_node_id || '').trim() || null;
+    const activeNode = items.find((item) => String(item?.node_id || '').trim() === activeNodeId) || null;
+    const finalNode = items.find((item) => String(item?.node_id || '').trim() === finalNodeId) || null;
+    const total = Object.values(counts).reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0) || items.length;
+    return {
+      graphKind: String(payload?.graph_kind || '').trim().toLowerCase() || null,
+      items,
+      counts,
+      total,
+      activeNodeId,
+      finalNodeId,
+      activeNode,
+      finalNode,
+      updatedAt: payload?.updated_at || null,
+    };
+  }, [runDetail?.node_states]);
   const logRows = useMemo(
     () =>
       timelineEvents.map((item) => ({
@@ -1315,6 +1465,7 @@ export default function RunInspectPage() {
             Jump to
           </span>
           {([
+            ...(workflowNodeStates.items.length > 0 ? [['workflow', `Workflow ${workflowNodeStates.total}`] as [InspectSectionTarget, string]] : []),
             ['timeline', `Timeline ${timelineEvents.length}`],
             ['logs', `Logs ${logRows.length}`],
             ['approvals', `Approvals ${approvalAudit.length}`],
@@ -1494,6 +1645,267 @@ export default function RunInspectPage() {
               </article>
             ) : null}
           </section>
+
+          {workflowNodeStates.items.length > 0 ? (
+            <section
+              ref={workflowSectionRef}
+              className="orion-panel"
+              style={{
+                minHeight: 260,
+                scrollMarginTop: 92,
+                ...(activeSection === 'workflow' ? focusedSectionStyle : null),
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div className="orion-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <Route size={14} />
+                  Workflow execution
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="orion-chip">
+                    {workflowNodeStates.graphKind === 'workflow' ? 'Workflow graph' : workflowNodeStates.graphKind || 'Graph'}
+                  </span>
+                  <span className="orion-chip">{workflowNodeStates.total} nodes</span>
+                  {workflowNodeStates.updatedAt ? <span className="orion-chip">Updated {fmtTime(workflowNodeStates.updatedAt)}</span> : null}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 10,
+                  display: 'grid',
+                  gap: 10,
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-element)',
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Active node
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {workflowNodeStates.activeNode?.label || workflowNodeStates.activeNodeId || 'No active node'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {workflowNodeStates.activeNode
+                      ? formatWorkflowNodeKind(workflowNodeStates.activeNode.type, workflowNodeStates.activeNode.variant)
+                      : TERMINAL_RUN_STATUSES.has(effectiveRunStatus)
+                      ? 'Run is no longer active.'
+                      : 'Waiting for the next execution transition.'}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-element)',
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Final node
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {workflowNodeStates.finalNode?.label || workflowNodeStates.finalNodeId || 'Not finished yet'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {workflowNodeStates.finalNode
+                      ? formatWorkflowNodeKind(workflowNodeStates.finalNode.type, workflowNodeStates.finalNode.variant)
+                      : 'The graph has not reached a terminal node yet.'}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-element)',
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Node states
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {Object.entries(workflowNodeStates.counts).map(([status, count]) => {
+                      const tone = workflowNodeTone(status);
+                      return (
+                        <span
+                          key={`workflow-count:${status}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            minHeight: 24,
+                            padding: '0 9px',
+                            borderRadius: 999,
+                            border: `1px solid ${tone.border}`,
+                            background: tone.background,
+                            fontSize: 11,
+                            color: tone.color,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {count} {tone.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 12,
+                  borderTop: '1px solid var(--border-default)',
+                  borderBottom: '1px solid var(--border-default)',
+                  overflowX: 'auto',
+                  maxHeight: 420,
+                  overflowY: 'auto',
+                }}
+              >
+                <div
+                  style={{
+                    minWidth: 860,
+                    display: 'grid',
+                    gridTemplateColumns: '180px 150px 120px minmax(260px, 1fr) 120px',
+                    gap: 8,
+                    padding: '8px 10px',
+                    borderBottom: '1px solid var(--border-default)',
+                    fontSize: 10,
+                    color: 'var(--text-tertiary)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    fontWeight: 800,
+                  }}
+                >
+                  <span>Node</span>
+                  <span>Kind</span>
+                  <span>Status</span>
+                  <span>What happened</span>
+                  <span>Duration</span>
+                </div>
+                {workflowNodeStates.items.map((item, index) => {
+                  const tone = workflowNodeTone(item.status || undefined);
+                  const isActiveNode = String(item.node_id || '').trim() === workflowNodeStates.activeNodeId;
+                  const isFinalNode = String(item.node_id || '').trim() === workflowNodeStates.finalNodeId;
+                  return (
+                    <div
+                      key={`workflow-node:${item.node_id || index}`}
+                      className="orion-log-entry"
+                      style={{
+                        minWidth: 860,
+                        display: 'grid',
+                        gridTemplateColumns: '180px 150px 120px minmax(260px, 1fr) 120px',
+                        gap: 8,
+                        padding: '10px 10px',
+                        borderBottom: '1px solid var(--border-default)',
+                        alignItems: 'start',
+                        background: isActiveNode ? 'rgba(139,92,246,0.06)' : 'transparent',
+                      }}
+                    >
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 700 }}>
+                          {item.label || item.node_id || '--'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {isActiveNode ? <span className="orion-chip">Active</span> : null}
+                          {isFinalNode ? <span className="orion-chip">Final</span> : null}
+                          {item.child_run_id ? (
+                            <Link
+                              className="orion-btn orion-btn-ghost"
+                              href={`/runs/${encodeURIComponent(String(item.child_run_id))}/inspect?focus=workflow`}
+                              style={{ minHeight: 24, paddingInline: 8, fontSize: 10 }}
+                            >
+                              Child run
+                            </Link>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                          {formatWorkflowNodeKind(item.type, item.variant)}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                          {String(item.node_id || '').trim() || '--'}
+                        </div>
+                      </div>
+                      <div>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            minHeight: 22,
+                            padding: '0 8px',
+                            borderRadius: 999,
+                            border: `1px solid ${tone.border}`,
+                            background: tone.background,
+                            fontSize: 10,
+                            color: tone.color,
+                            fontWeight: 800,
+                            letterSpacing: '0.03em',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          {tone.label}
+                        </span>
+                        {item.waiting_for_approval ? (
+                          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--warning-fg)' }}>
+                            Waiting for approval
+                          </div>
+                        ) : null}
+                      </div>
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {item.summary ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{item.summary}</div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No node summary recorded.</div>
+                        )}
+                        {item.input_preview ? (
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                            In {item.input_preview}
+                          </div>
+                        ) : null}
+                        {item.output_preview ? (
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                            Out {item.output_preview}
+                          </div>
+                        ) : null}
+                        {item.error ? (
+                          <div style={{ fontSize: 11, color: 'var(--error-fg)', wordBreak: 'break-word' }}>
+                            {item.error}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div style={{ display: 'grid', gap: 4, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                        <div>{fmtMs(item.duration_ms)}</div>
+                        {item.started_at ? <div>Start {fmtTime(item.started_at)}</div> : null}
+                        {item.completed_at ? <div>Done {fmtTime(item.completed_at)}</div> : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
 
           {(parentRun || childRuns.length > 0 || canDelegate) ? (
             <section className="orion-panel">

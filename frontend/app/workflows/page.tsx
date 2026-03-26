@@ -47,9 +47,9 @@ export default function WorkflowsPage() {
         copy="Start with a task. When the steps are stable, keep it here as a reusable workflow for your team."
         actions={
           <>
-            <Link href="/builder/new" className="btn-primary">
+            <Link href="/workflows/new" className="btn-primary">
               <Plus size={14} />
-              New Workflow Draft
+              New Workflow
             </Link>
             <Link href="/setup" className="btn-secondary">
               <PlayCircle size={14} />
@@ -145,6 +145,11 @@ export default function WorkflowsPage() {
               actions={
                 hasQuery ? (
                   <RetryActions onRetry={clearQuery} retryLabel="Clear search" />
+                ) : workflows.length === 0 ? (
+                  <Link href="/workflows/new" className="btn-primary">
+                    <Plus size={14} />
+                    New Workflow
+                  </Link>
                 ) : undefined
               }
             />

@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
     fetchBuilderConnectorManifests,
     fetchWorkflows,
+    createWorkflow,
     getWorkflow,
     publishWorkflow,
     updateWorkflow,
@@ -1221,6 +1222,47 @@ function formatConnectionModeLabel(mode: ConnectionMode): string {
     return mode === 'managed' ? 'Hekor-managed access' : 'Your API key';
 }
 
+function buildWorkflowDraftName(nodes: CanvasWorkflowNode[], fallbackGoal = ''): string {
+    const goal = String(fallbackGoal || '').replace(/\s+/g, ' ').trim();
+    if (goal) {
+        return goal.length <= 60 ? goal : `${goal.slice(0, 59).trimEnd()}…`;
+    }
+    const agentNode = nodes.find((node) => node.type === 'agent') || null;
+    const agentData = agentNode && typeof agentNode.data === 'object' && agentNode.data ? agentNode.data as Record<string, unknown> : {};
+    const label = String(agentData.label || '').replace(/\s+/g, ' ').trim();
+    if (label) return `${label} workflow`;
+    return 'New workflow';
+}
+
+function buildWorkflowDraftDescription(nodes: CanvasWorkflowNode[], fallbackGoal = ''): string {
+    const goal = String(fallbackGoal || '').replace(/\s+/g, ' ').trim();
+    if (goal) return goal;
+    const triggerNode = nodes.find((node) => node.type === 'trigger') || null;
+    const triggerData = triggerNode && typeof triggerNode.data === 'object' && triggerNode.data ? triggerNode.data as Record<string, unknown> : {};
+    const triggerLabel = String(triggerData.label || '').replace(/\s+/g, ' ').trim();
+    if (triggerLabel) return `Workflow starting from ${triggerLabel.toLowerCase()}.`;
+    return 'Reusable workflow draft.';
+}
+
+function buildEmptyWorkflowShape(): WorkflowShape {
+    return {
+        name: 'New workflow',
+        workspaceId: 'default',
+        status: 'draft',
+        definition: {
+            version: 'empyralist.workflow.v2',
+            nodes: [],
+            edges: [],
+            defaults: {},
+            resources: {},
+            policy: {},
+            meta: {
+                mode: 'visual_builder',
+            },
+        },
+    };
+}
+
 export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInnerProProps) {
     const { addToast } = useToast();
     const router = useRouter();
@@ -1747,6 +1789,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
     const loadWorkflow = useCallback(async () => {
         if (!workflowId) {
+            const nextNodes = buildDefaultCanvasNodes();
+            setWorkflow(buildEmptyWorkflowShape());
+            setWorkspaceId('default');
+            setCanvasNodes(nextNodes);
+            setCanvasEdges([]);
+            setSelectedNodeId(nextNodes[0]?.id || null);
+            setSelectedEdgeId(null);
+            setLastSavedAt(null);
             setIsLoading(false);
             return;
         }
@@ -1839,23 +1889,34 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     }, [addToast, searchParams]);
 
     const saveWorkflowState = useCallback(async () => {
-        if (!workflowId) return;
         setIsSaving(true);
         try {
             const nextDefinition = Array.isArray(workflow?.definition?.nodes)
                 ? buildCanvasDefinition(workflow?.definition, canvasNodes, canvasEdges)
                 : buildDefinition(workflow?.definition, operator, connection);
-            const savedWorkflow = await updateWorkflow(workflowId, nextDefinition);
+            const savedWorkflow = workflowId
+                ? await updateWorkflow(workflowId, nextDefinition)
+                : await createWorkflow(
+                    buildWorkflowDraftName(canvasNodes, operator.userGoal),
+                    buildWorkflowDraftDescription(canvasNodes, operator.userGoal),
+                    workspaceId || 'default',
+                    nextDefinition,
+                );
             setWorkflow(savedWorkflow);
             const now = new Date().toISOString();
             setLastSavedAt(now);
-            addToast({ type: 'success', title: 'Saved', message: 'Workflow saved.' });
+            if (!workflowId && savedWorkflow?.id) {
+                router.replace(`/workflows/${encodeURIComponent(savedWorkflow.id)}`);
+            }
+            addToast({ type: 'success', title: workflowId ? 'Saved' : 'Created', message: workflowId ? 'Workflow saved.' : 'Workflow draft created.' });
+            return savedWorkflow;
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Save Failed', message: getErrorMessage(error, 'Unable to save workflow.') });
+            return null;
         } finally {
             setIsSaving(false);
         }
-    }, [workflowId, workflow, operator, connection, canvasNodes, canvasEdges, buildDefinition, buildCanvasDefinition, addToast]);
+    }, [workflowId, workflow, operator, connection, canvasNodes, canvasEdges, buildDefinition, buildCanvasDefinition, addToast, router, workspaceId]);
 
     const isCanvasMode = Array.isArray(workflow?.definition?.nodes);
     const isOnboardingWorkflow = Boolean(workflow?.definition?.meta && typeof workflow.definition.meta === 'object' && 'onboarding_request' in workflow.definition.meta);
@@ -3509,10 +3570,11 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     }, [isCanvasMode, selectedEdgeId, selectedNodeId]);
 
     const handlePublish = useCallback(async () => {
-        if (!workflowId) return;
         try {
-            await saveWorkflowState();
-            const publishedWorkflow = await publishWorkflow(workflowId);
+            const savedWorkflow = await saveWorkflowState();
+            const nextWorkflowId = String(savedWorkflow?.id || workflowId || '').trim();
+            if (!nextWorkflowId) return;
+            const publishedWorkflow = await publishWorkflow(nextWorkflowId);
             setWorkflow(publishedWorkflow);
             addToast({ type: 'success', title: 'Published', message: 'Workflow published.' });
         } catch (error: unknown) {
@@ -4022,7 +4084,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             <div className="workflow-pro-toolbar">
                 <div style={{ display: 'grid', gap: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <div className="workflow-pro-log-title">{workflow?.name || 'Automation'}</div>
+                        <div className="workflow-pro-log-title">{workflow?.name || (workflowId ? 'Workflow' : 'New workflow')}</div>
                         <span style={{
                             borderRadius: 10,
                             padding: '4px 10px',
@@ -4091,7 +4153,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 className="orion-btn orion-btn-ghost"
                             >
                                 <Save size={14} />
-                                {isSaving ? 'Saving...' : 'Save'}
+                                {isSaving ? 'Saving...' : workflowId ? 'Save' : 'Create draft'}
                             </button>
                             <button
                                 onClick={handlePublish}
@@ -4189,7 +4251,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             className="orion-btn orion-btn-ghost"
                         >
                             <Save size={14} />
-                            {isSaving ? 'Saving...' : 'Save'}
+                            {isSaving ? 'Saving...' : workflowId ? 'Save' : 'Create draft'}
                         </button>
                     </div>
                 </div>

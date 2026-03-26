@@ -168,6 +168,83 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             any(issue.get("code") == "code_requires_local_companion_or_auto" for issue in payload.get("issues", []))
         )
 
+    def test_parse_workflow_payload_flags_shell_tool_without_command(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "shell",
+                  "config": {}
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "shell_command_missing" for issue in payload.get("issues", [])))
+
+    def test_parse_workflow_payload_flags_browser_tool_without_url(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "browser",
+                  "config": {}
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "browser_url_missing" for issue in payload.get("issues", [])))
+
+    def test_parse_workflow_payload_flags_instagram_reply_without_comment_id(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "connector_action",
+                  "config": {
+                    "connector": "instagram_business",
+                    "action_id": "publish_reply"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "instagram_comment_id_missing" for issue in payload.get("issues", [])))
+
+    def test_parse_workflow_payload_flags_connector_trigger_without_event(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "trigger_1",
+                  "type": "trigger",
+                  "variant": "connector_event",
+                  "config": {
+                    "connector": "telegram_bot"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "trigger_event_missing" for issue in payload.get("issues", [])))
+
     async def test_builder_generate_returns_parsed_workflow(self):
         with (
             patch("server_modules.routes_builder.resolve_call_credentials") as resolve_mock,

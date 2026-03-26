@@ -138,8 +138,12 @@ export function useWorkflowLibrary() {
     const copyName = `${original.name || 'Workflow'} Copy`;
     const copyDesc = original.description || '';
     const created = await createWorkflow(copyName, copyDesc);
+    const createdId = typeof created.id === 'string' ? created.id : '';
+    if (!createdId) {
+      throw new Error('Unable to duplicate workflow right now.');
+    }
     if (original.definition) {
-      await updateWorkflow(created.id, original.definition);
+      await updateWorkflow(createdId, original.definition);
     }
     await refresh();
   };

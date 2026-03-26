@@ -49,7 +49,7 @@ export default function WorkflowsPage() {
           <>
             <Link href="/builder/new" className="btn-primary">
               <Plus size={14} />
-              New Workflow
+              New Workflow Draft
             </Link>
             <Link href="/setup" className="btn-secondary">
               <PlayCircle size={14} />
@@ -158,7 +158,7 @@ export default function WorkflowsPage() {
                   <WorkflowListRow
                     key={workflow.id}
                     workflow={workflow}
-                    onOpen={() => router.push(`/builder/${workflow.id}`)}
+                    onOpen={() => router.push(`/workflows/${workflow.id}`)}
                     onDelete={() => setDeleteTarget(workflow)}
                     onDuplicate={() => {
                       void duplicateWorkflow(workflow.id).catch((error) => {

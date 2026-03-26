@@ -3,13 +3,12 @@
 import { useEffect, useMemo, type CSSProperties, type ComponentType } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  GitBranch,
+  Bot,
   Home,
   PanelLeft,
   Workflow,
   Activity,
   Server,
-  FileStack,
   Key,
   MessageSquare,
   Settings,
@@ -32,16 +31,11 @@ type NavSection = {
 
 const PRIMARY_NAV: NavItem[] = [
   { label: 'Chat', href: '/', icon: MessageSquare },
-  { label: 'Builder', href: '/builder', icon: GitBranch },
+  { label: 'Agents', href: '/agents', icon: Bot },
   { label: 'Workflows', href: '/workflows', icon: Workflow },
   { label: 'Runs', href: '/executions', icon: Activity },
-  { label: 'Machines', href: '/machines', icon: Server },
   { label: 'Integrations', href: '/credentials', icon: Key },
-  { label: 'Usage', href: '/usage', icon: Activity },
-];
-
-const SECONDARY_NAV: NavItem[] = [
-  { label: 'Assets', href: '/artifacts', icon: FileStack },
+  { label: 'Machines', href: '/machines', icon: Server },
 ];
 
 const BOTTOM_NAV: NavItem[] = [
@@ -54,7 +48,7 @@ const HOME_NAV_ITEM: NavItem = { label: 'Home', href: '/home', icon: Home };
 function isActivePath(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/';
   if (href === '/home') return pathname === '/home';
-  if (href === '/builder') return pathname === '/builder' || pathname.startsWith('/builder/');
+  if (href === '/agents') return pathname === '/agents' || pathname === '/builder' || pathname.startsWith('/builder/');
   if (href === '/workflows') return pathname === '/workflows' || pathname.startsWith('/workflows/');
   if (href === '/executions') return pathname === '/executions' || pathname.startsWith('/runs/');
   if (href === '/machines') return pathname === '/machines';
@@ -152,30 +146,6 @@ export default function Sidebar() {
             </div>
           </section>
         ))}
-
-        <div className="sidebar-v2-divider" aria-hidden />
-
-        <section className="sidebar-v2-section">
-          <div className="sidebar-v2-section-label">Resources</div>
-          <div className="sidebar-v2-list">
-            {SECONDARY_NAV.map((item) => {
-              const active = isActivePath(pathname, item.href);
-              return (
-                <button
-                  key={item.href}
-                  type="button"
-                  className={`sidebar-v2-item${active ? ' is-active' : ''}`}
-                  onClick={() => router.push(item.href)}
-                  aria-label={item.label}
-                  title={item.label}
-                >
-                  <item.icon size={16} strokeWidth={active ? 2.2 : 1.9} />
-                  <span className="sidebar-v2-item-label">{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
       </div>
 
       <div className="sidebar-v2-bottom">

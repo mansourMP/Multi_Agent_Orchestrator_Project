@@ -3,9 +3,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import {
+    type WorkflowValidationIssue,
     normalizeWorkflowDefinition,
     validateWorkflowDefinition,
 } from './workflow-schema';
+
+type WorkflowValidationSummary = {
+    draftIssues: WorkflowValidationIssue[];
+    publishIssues: WorkflowValidationIssue[];
+    hasDraftErrors: boolean;
+    hasPublishErrors: boolean;
+    draftErrorCount: number;
+    publishErrorCount: number;
+    draftWarningCount: number;
+    publishWarningCount: number;
+};
 
 @Injectable()
 export class WorkflowsService {
@@ -163,16 +175,38 @@ export class WorkflowsService {
         return this.deserializeWorkflow(workflow);
     }
 
+    private buildWorkflowValidationSummary(definitionInput: unknown): WorkflowValidationSummary {
+        const draftIssues = validateWorkflowDefinition(definitionInput, { forPublish: false });
+        const publishIssues = validateWorkflowDefinition(definitionInput, { forPublish: true });
+        const draftErrorCount = draftIssues.filter((item) => item.level === 'error').length;
+        const publishErrorCount = publishIssues.filter((item) => item.level === 'error').length;
+        const draftWarningCount = draftIssues.filter((item) => item.level === 'warning').length;
+        const publishWarningCount = publishIssues.filter((item) => item.level === 'warning').length;
+        return {
+            draftIssues,
+            publishIssues,
+            hasDraftErrors: draftErrorCount > 0,
+            hasPublishErrors: publishErrorCount > 0,
+            draftErrorCount,
+            publishErrorCount,
+            draftWarningCount,
+            publishWarningCount,
+        };
+    }
+
     private deserializeWorkflow(workflow: any) {
+        let normalizedDefinition = normalizeWorkflowDefinition({});
         if (workflow && workflow.definition && typeof workflow.definition === 'string') {
             try {
-                workflow.definition = normalizeWorkflowDefinition(JSON.parse(workflow.definition));
+                normalizedDefinition = normalizeWorkflowDefinition(JSON.parse(workflow.definition));
             } catch (e) {
-                workflow.definition = normalizeWorkflowDefinition({});
+                normalizedDefinition = normalizeWorkflowDefinition({});
             }
         } else if (workflow && workflow.definition) {
-            workflow.definition = normalizeWorkflowDefinition(workflow.definition);
+            normalizedDefinition = normalizeWorkflowDefinition(workflow.definition);
         }
+        workflow.definition = normalizedDefinition;
+        workflow.validation = this.buildWorkflowValidationSummary(normalizedDefinition);
         return workflow;
     }
 
@@ -191,10 +225,15 @@ export class WorkflowsService {
         const normalizedDefinition = normalizeWorkflowDefinition(
             typeof workflow.definition === 'string' ? JSON.parse(workflow.definition) : workflow.definition,
         );
-        const issues = validateWorkflowDefinition(normalizedDefinition, { forPublish: true })
+        const validation = this.buildWorkflowValidationSummary(normalizedDefinition);
+        const issues = validation.publishIssues
             .filter((item) => item.level === 'error');
         if (issues.length > 0) {
-            throw new BadRequestException(issues.map((item) => item.message).join(' '));
+            throw new BadRequestException({
+                detail: 'Workflow has blocking issues.',
+                issues,
+                validation,
+            });
         }
         const published = await this.prisma.workflow.update({
             where: { id },

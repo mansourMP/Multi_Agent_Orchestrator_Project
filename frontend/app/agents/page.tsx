@@ -1,190 +1,230 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { Bot, MessageSquare, Plus } from 'lucide-react';
+import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
-import { PageSection } from '@/components/orion/page/PageSection';
-import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
-import { MetricStrip } from '@/components/ui/MetricStrip';
-import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { EmptyState } from '@/components/orion/state/EmptyState';
+import { ErrorState } from '@/components/orion/state/ErrorState';
+import { LoadingState } from '@/components/orion/state/LoadingState';
+import { fetchWorkflows } from '@/lib/api';
 
-type InstalledSkill = {
+type AgentRecord = {
   id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  has_query_handler?: boolean;
-  has_snapshot_worker?: boolean;
-  config?: Record<string, unknown>;
+  name?: string;
+  description?: string;
+  updatedAt?: string;
+  updated_at?: string;
 };
 
-type SkillsStateResponse = {
-  installed?: InstalledSkill[];
-};
+type AgentTab = 'drafts' | 'templates';
 
-const BUILT_IN_SKILLS = [
-  'Summarize emails',
-  'Draft replies',
-  'Research topics',
-  'Organize tasks',
-  'Monitor and alert',
+const AGENT_TEMPLATES = [
+  {
+    id: 'support',
+    title: 'Support agent',
+    description: 'Handle inbound requests, classify urgency, and draft the next best reply or handoff.',
+  },
+  {
+    id: 'research',
+    title: 'Research agent',
+    description: 'Investigate a topic, gather findings, and return a clear summary with follow-up actions.',
+  },
+  {
+    id: 'operations',
+    title: 'Operations agent',
+    description: 'Coordinate updates, summarize blockers, and keep recurring work moving without manual chasing.',
+  },
 ];
 
-function capabilitySummary(skill: InstalledSkill): string {
-  if (skill.id === 'vision-monitor') {
-    return 'Capture snapshots, count people, write live space state, and answer operational questions from the latest camera state.';
-  }
-  return skill.description || 'Installed skill available to your assistant.';
+function compactText(value?: string, maxLength = 72) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'No description provided';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function configuredSpaces(skill: InstalledSkill): string[] {
-  const config = skill.config && typeof skill.config === 'object' ? skill.config : {};
-  const spaces = Array.isArray(config.spaces) ? config.spaces : [];
-  return spaces
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item) => String(item.name || item.id || '').trim())
-    .filter(Boolean);
+function formatDate(value?: string) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString();
 }
 
-export default function SkillsPage() {
-  const [skills, setSkills] = useState<InstalledSkill[]>([]);
+export default function AgentsPage() {
+  const [activeTab, setActiveTab] = useState<AgentTab>('drafts');
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const loadSkills = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      await ensureControlPlaneSession();
-      const res = await fetch('/api/skills/state', { cache: 'no-store' });
-      const body = (await res.json().catch(() => ({}))) as SkillsStateResponse & { detail?: string; message?: string };
-      if (!res.ok) {
-        throw new Error(String(body?.detail || body?.message || 'Failed to load skills.'));
+  useEffect(() => {
+    let alive = true;
+
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const data = await fetchWorkflows();
+        const items = Array.isArray(data)
+          ? data
+          : Array.isArray((data as { items?: AgentRecord[] } | null | undefined)?.items)
+            ? (data as { items: AgentRecord[] }).items
+            : [];
+        if (!alive) return;
+        setAgents(items);
+      } catch (loadError) {
+        if (!alive) return;
+        setAgents([]);
+        setError(loadError instanceof Error ? loadError.message : 'Failed to load agents.');
+      } finally {
+        if (alive) setLoading(false);
       }
-      const items = Array.isArray(body.installed) ? body.installed : [];
-      setSkills(items.filter((item) => item && typeof item === 'object' && String(item.id || '').trim()));
-    } catch (fetchError) {
-      setSkills([]);
-      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load skills.');
-    } finally {
-      setLoading(false);
-    }
+    };
+
+    void load();
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  useEffect(() => {
-    void loadSkills();
-  }, [loadSkills]);
-
-  const activeCount = skills.filter((item) => item.enabled).length;
+  const draftAgents = useMemo(
+    () =>
+      [...agents]
+        .sort((left, right) => {
+          const leftTs = new Date(left.updatedAt || left.updated_at || 0).getTime();
+          const rightTs = new Date(right.updatedAt || right.updated_at || 0).getTime();
+          return rightTs - leftTs;
+        })
+        .slice(0, 8),
+    [agents],
+  );
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
+    <div className="orion-page-shell is-static-entry">
       <PageHero
-        kicker="Skills"
-        title="Installed capability modules available to this deployment."
-        copy="Use this page to confirm which skill modules are active, what they do, and which built-in assistant capabilities remain available by default."
+        kicker="Agents"
+        title="Create and manage reusable agents."
+        copy="Use this page for reusable agent systems. Chat stays separate, so you can build here and then talk to your assistant when you need live help."
+        actions={
+          <>
+            <Link href="/builder/new" className="btn-primary">
+              <Plus size={14} />
+              Create agent
+            </Link>
+            <Link href="/" className="btn-secondary">
+              <MessageSquare size={14} />
+              Open chat
+            </Link>
+          </>
+        }
         aside={
-          <PageHeroCard label="Current status">
+          <PageHeroCard label="Agent library">
             <div className="orion-home-side-stats">
               <div>
-                <div className="orion-home-side-value">{activeCount}</div>
-                <div className="orion-home-side-note">Active skills</div>
+                <div className="orion-home-side-value">{draftAgents.length}</div>
+                <div className="orion-home-side-note">Draft agents</div>
               </div>
               <div>
-                <div className="orion-home-side-value">{skills.length}</div>
-                <div className="orion-home-side-note">Installed skills</div>
+                <div className="orion-home-side-value">{AGENT_TEMPLATES.length}</div>
+                <div className="orion-home-side-note">Templates</div>
               </div>
+            </div>
+            <div className="orion-runs-overview-side-note">
+              Keep reusable agent systems here. Use chat when you want to talk to an assistant directly.
             </div>
           </PageHeroCard>
         }
       />
 
-      <MetricStrip
-        items={[
-          { label: 'Installed skills', value: String(skills.length) },
-          { label: 'Active skills', value: String(activeCount) },
-          { label: 'Built-in skills', value: String(BUILT_IN_SKILLS.length) },
-        ]}
-        minWidth={180}
-      />
-
-      <PageSection title="Installed skills" description="These skills are loaded from the backend `/skills/state` endpoint.">
-
-        {loading ? (
-          <PageStatePanel variant="loading" title="Loading skills…" />
-        ) : error ? (
-          <PageStatePanel variant="error" title="Could not load skills" copy={error} />
-        ) : skills.length === 0 ? (
-          <PageStatePanel
-            variant="empty"
-            title="No installed skills found"
-            copy="Add a skill directory under `/skills` on the runtime host and it will appear here automatically."
-          />
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-            {skills.map((skill) => {
-              const spaces = configuredSpaces(skill);
-              return (
-                <article
-                  key={skill.id}
-                  style={{
-                    display: 'grid',
-                    gap: 10,
-                    padding: 16,
-                    borderRadius: 16,
-                    border: '1px solid var(--border-default)',
-                    background: 'var(--bg-surface)',
-                  }}
+      <PageCollection
+        title="Agent library"
+        description="Open saved agents or start from a reusable template."
+        actions={
+          <div className="orion-segmented orion-builder-hub-tabbar" role="tablist" aria-label="Agent library tabs">
+            <button
+              type="button"
+              className={`orion-segmented-btn${activeTab === 'drafts' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('drafts')}
+            >
+              Drafts
+            </button>
+            <button
+              type="button"
+              className={`orion-segmented-btn${activeTab === 'templates' ? ' is-active' : ''}`}
+              onClick={() => setActiveTab('templates')}
+            >
+              Templates
+            </button>
+          </div>
+        }
+      >
+        {activeTab === 'drafts' ? (
+          loading ? (
+            <LoadingState
+              title="Loading agents…"
+              copy="Reading saved agent drafts."
+            />
+          ) : error ? (
+            <ErrorState
+              title="Couldn't load agents."
+              copy={error}
+            />
+          ) : draftAgents.length === 0 ? (
+            <EmptyState
+              title="No agents yet"
+              copy="Create your first reusable agent here, then use chat separately when you want to interact with it."
+              actions={
+                <Link href="/builder/new" className="btn-primary">
+                  <Plus size={14} />
+                  Create agent
+                </Link>
+              }
+            />
+          ) : (
+            <div className="orion-builder-hub-grid">
+              {draftAgents.map((agent) => (
+                <Link
+                  key={agent.id}
+                  href={`/builder/${agent.id}`}
+                  className="orion-stat-card orion-control-card orion-builder-hub-card"
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                    <div style={{ display: 'grid', gap: 4 }}>
-                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{skill.name}</div>
-                      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{skill.id}</div>
-                    </div>
-                    <span className="orion-chip">{skill.enabled ? 'Active' : 'Inactive'}</span>
+                  <div className="orion-builder-hub-card-icon">
+                    <Bot size={16} />
                   </div>
-
-                  <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-                    {capabilitySummary(skill)}
+                  <div className="orion-builder-hub-card-title">{agent.name || 'Untitled agent'}</div>
+                  <div className="orion-builder-hub-card-copy">{compactText(agent.description)}</div>
+                  <div className="orion-builder-hub-card-meta">
+                    <span>{formatDate(agent.updatedAt || agent.updated_at)}</span>
+                    <span>You</span>
                   </div>
-
-                  {spaces.length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {spaces.slice(0, 4).map((space) => (
-                        <span key={`${skill.id}:${space}`} className="orion-chip">
-                          {space}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {skill.has_snapshot_worker ? <span className="orion-chip">Worker</span> : null}
-                    {skill.has_query_handler ? <span className="orion-chip">Query handler</span> : null}
-                  </div>
-                </article>
-              );
-            })}
+                </Link>
+              ))}
+            </div>
+          )
+        ) : (
+          <div className="orion-builder-hub-grid">
+            {AGENT_TEMPLATES.map((template) => (
+              <Link
+                key={template.id}
+                href="/builder/new"
+                className="orion-stat-card orion-control-card orion-builder-hub-card"
+              >
+                <div className="orion-builder-hub-card-icon">
+                  <Bot size={16} />
+                </div>
+                <div className="orion-builder-hub-card-title">{template.title}</div>
+                <div className="orion-builder-hub-card-copy">{template.description}</div>
+                <div className="orion-builder-hub-card-meta">
+                  <span>Template</span>
+                  <span>Start here</span>
+                </div>
+              </Link>
+            ))}
           </div>
         )}
-      </PageSection>
-
-      <PageSection title="Built-in skills" description="Core assistant abilities available independently of installed plugins.">
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
-          {BUILT_IN_SKILLS.map((skill) => (
-            <div key={skill} className="orion-list-row" style={{ minHeight: 76, alignItems: 'center' }}>
-              <div className="orion-list-row-main">
-                <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <Sparkles size={14} />
-                  {skill}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </PageSection>
+      </PageCollection>
     </div>
   );
 }

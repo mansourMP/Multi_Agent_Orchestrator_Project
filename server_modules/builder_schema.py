@@ -359,6 +359,25 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
     if node_type == "trigger":
         if variant not in TRIGGER_VARIANTS:
             issues.append({"code": "trigger_variant_invalid", "message": f"Trigger variant '{variant or 'unknown'}' is not supported."})
+        if variant == "connector_event":
+            if not _clean_text(config.get("connector"), 120):
+                issues.append({"code": "trigger_connector_missing", "message": "Connector event triggers require a connector id."})
+            if not _clean_text(config.get("event"), 160):
+                issues.append({"code": "trigger_event_missing", "message": "Connector event triggers require an event id."})
+        if variant == "schedule":
+            schedule = config.get("schedule") if isinstance(config.get("schedule"), dict) else {}
+            if not _clean_text(schedule.get("cron") or config.get("cron"), 200):
+                issues.append({"code": "trigger_schedule_missing", "message": "Schedule triggers require a cron expression."})
+        if variant == "webhook":
+            webhook = config.get("webhook") if isinstance(config.get("webhook"), dict) else {}
+            if not _clean_text(webhook.get("path") or config.get("path") or webhook.get("url") or config.get("url"), 500):
+                issues.append({"code": "trigger_webhook_path_missing", "message": "Webhook triggers require a path or URL."})
+        if variant == "workflow" and not _clean_text(config.get("workflow_id"), 160):
+            issues.append({"code": "trigger_workflow_id_missing", "message": "Workflow triggers require workflow_id."})
+        if variant == "file_watch":
+            file_watch = config.get("file_watch") if isinstance(config.get("file_watch"), dict) else {}
+            if not _clean_text(file_watch.get("path") or config.get("path"), 600):
+                issues.append({"code": "trigger_file_watch_path_missing", "message": "file_watch triggers require a path."})
         if variant == "file_watch":
             issues.append(
                 {
@@ -385,12 +404,21 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             )
         )
         target = normalize_execution_target(config.get("execution_target") or "auto")
-        if variant == "shell" and normalize_execution_target(config.get("execution_target") or "auto") != "local_companion":
-            issues.append({"code": "shell_requires_local_companion", "message": "Shell tool nodes require the local_companion execution target."})
+        if variant == "shell" and target == "cloud":
+            issues.append({"code": "shell_requires_local_companion_or_auto", "message": "Shell tool nodes cannot target cloud directly; use local_companion or auto."})
         if variant == "code" and target == "cloud":
             issues.append({"code": "code_requires_local_companion_or_auto", "message": "Code tool nodes cannot target cloud directly; use local_companion or auto."})
         if variant == "browser" and target == "cloud":
             issues.append({"code": "browser_requires_local_companion_or_auto", "message": "Browser tool nodes cannot target cloud directly; use local_companion or auto."})
+        if variant in {"shell", "code"}:
+            command = _clean_text(config.get("command"), 2000)
+            argv = config.get("argv") if isinstance(config.get("argv"), list) else []
+            if not command and not any(_clean_text(item, 400) for item in argv):
+                issues.append({"code": f"{variant}_command_missing", "message": f"{variant} tool nodes require command or argv."})
+        if variant == "browser" and not _clean_text(config.get("url"), 1200):
+            issues.append({"code": "browser_url_missing", "message": "Browser tool nodes require a URL."})
+        if variant == "file" and not _clean_text(config.get("path") or config.get("file_path"), 1200):
+            issues.append({"code": "file_path_missing", "message": "File tool nodes require path or file_path."})
         if variant == "connector_action":
             connector = _clean_text(config.get("connector"), 120)
             action_id = _clean_text(config.get("action_id"), 160)
@@ -405,6 +433,11 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
                     issues.append({"code": "custom_api_signing_secret_missing", "message": "signed_webhook actions require signing_secret."})
             if connector == "microsoft_365" and action_id == "upload_drive_file" and not _clean_text(config.get("path") or config.get("file_path"), 600):
                 issues.append({"code": "upload_drive_file_path_missing", "message": "upload_drive_file requires a path or file_path."})
+            if connector == "instagram_business":
+                if action_id == "publish_reply" and not _clean_text(config.get("comment_id") or config.get("media_comment_id"), 160):
+                    issues.append({"code": "instagram_comment_id_missing", "message": "instagram_business.publish_reply requires comment_id."})
+                if action_id == "send_dm" and not _clean_text(config.get("recipient_id") or config.get("recipient") or config.get("user_id") or config.get("instagram_user_id"), 160):
+                    issues.append({"code": "instagram_recipient_missing", "message": "instagram_business.send_dm requires recipient_id."})
     elif node_type == "human":
         if variant not in HUMAN_VARIANTS:
             issues.append({"code": "human_variant_invalid", "message": f"Human node variant '{variant or 'unknown'}' is not supported."})

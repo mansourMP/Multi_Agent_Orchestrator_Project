@@ -12,7 +12,6 @@ type ShellRouteDef = ShellRouteMeta & {
 };
 
 const AGENT_SURFACE_TITLE = SINGLE_AGENT_MODE ? 'Assistant' : 'Agents';
-const AGENT_SURFACE_SLOT = SINGLE_AGENT_MODE ? 'Inbox, channels, and live work' : 'Workers and live collaborations';
 
 const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
@@ -31,28 +30,28 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   },
   {
     id: 'builder',
-    title: 'Agent Builder',
-    breadcrumb: 'Builder',
-    slotLabel: 'Create and manage workflows',
+    title: 'Agents',
+    breadcrumb: 'Agents',
+    slotLabel: 'Reusable agents and templates',
     match: (pathname: string) => pathname === '/builder',
   },
   {
     id: 'builder-editor',
-    title: 'Workflow Editor',
-    breadcrumb: 'Builder',
-    slotLabel: 'Design workflows visually',
+    title: 'Agent Editor',
+    breadcrumb: 'Agents',
+    slotLabel: 'Design reusable agent systems visually',
     match: (pathname: string) => pathname.startsWith('/builder/'),
   },
   {
     id: 'automations',
     title: 'Workflows',
     breadcrumb: 'Workflows',
-    slotLabel: 'Build and run workflows',
+    slotLabel: 'Reusable workflows and playbooks',
     match: (pathname: string) => pathname === '/workflows',
   },
   {
     id: 'automation-editor',
-    title: 'Automation',
+    title: 'Workflow Editor',
     breadcrumb: 'Workflows',
     slotLabel: 'Edit workflow graph',
     match: (pathname: string) => pathname.startsWith('/workflows/'),
@@ -60,8 +59,8 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   {
     id: 'agents',
     title: AGENT_SURFACE_TITLE,
-    breadcrumb: 'Workspace',
-    slotLabel: AGENT_SURFACE_SLOT,
+    breadcrumb: 'Agents',
+    slotLabel: 'Reusable agents and templates',
     match: (pathname: string) => pathname === '/agents',
   },
   {
@@ -123,13 +122,6 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     breadcrumb: 'Integrations',
     slotLabel: 'Connect tools and channels',
     match: (pathname: string) => pathname === '/credentials',
-  },
-  {
-    id: 'usage',
-    title: 'Usage',
-    breadcrumb: 'Usage',
-    slotLabel: 'Track platform consumption and limits',
-    match: (pathname: string) => pathname === '/usage',
   },
   {
     id: 'setup',

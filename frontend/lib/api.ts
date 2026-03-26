@@ -9,20 +9,29 @@ import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 export class ApiError extends Error {
     /** HTTP status code returned by the backend */
     readonly status: number;
+    readonly details?: unknown;
 
-    constructor(message: string, status: number) {
+    constructor(message: string, status: number, details?: unknown) {
         super(message);
         this.name = 'ApiError';
         this.status = status;
+        this.details = details;
         // Ensure proper prototype chain for instanceof checks
         Object.setPrototypeOf(this, new.target.prototype);
     }
 }
 
-async function parseApiError(res: Response): Promise<string> {
+type ParsedApiError = {
+    message: string;
+    details?: unknown;
+};
+
+async function parseApiError(res: Response): Promise<ParsedApiError> {
     let errorMsg = `API Error: ${res.status} ${res.statusText}`;
+    let details: unknown;
     try {
         const body = await res.json();
+        details = body;
         if (body && typeof body.detail === 'string' && body.detail.trim()) {
             errorMsg = body.detail.trim();
         } else if (body && typeof body.error === 'string' && body.error.trim()) {
@@ -33,7 +42,10 @@ async function parseApiError(res: Response): Promise<string> {
     } catch {
         // No JSON body, use default status text
     }
-    return errorMsg;
+    return {
+        message: errorMsg,
+        details,
+    };
 }
 
 async function jsonFetch(url: string, options: RequestInit = {}, connectionError: string) {
@@ -45,7 +57,8 @@ async function jsonFetch(url: string, options: RequestInit = {}, connectionError
     }
 
     if (!res.ok) {
-        throw new ApiError(await parseApiError(res), res.status);
+        const parsed = await parseApiError(res);
+        throw new ApiError(parsed.message, res.status, parsed.details);
     }
 
     return res.json();
@@ -74,7 +87,36 @@ type WorkflowExecutionShape = {
         policy?: Record<string, unknown>;
         meta?: Record<string, unknown>;
     };
+    validation?: WorkflowValidationSummary;
 };
+
+export interface WorkflowValidationIssue {
+    code: string;
+    message: string;
+    level: 'error' | 'warning';
+    nodeId?: string;
+}
+
+export interface WorkflowValidationSummary {
+    draftIssues: WorkflowValidationIssue[];
+    publishIssues: WorkflowValidationIssue[];
+    hasDraftErrors: boolean;
+    hasPublishErrors: boolean;
+    draftErrorCount: number;
+    publishErrorCount: number;
+    draftWarningCount: number;
+    publishWarningCount: number;
+}
+
+export interface WorkflowRecordShape {
+    id?: string;
+    name?: string;
+    description?: string;
+    workspaceId?: string;
+    status?: string;
+    definition?: WorkflowExecutionShape['definition'];
+    validation?: WorkflowValidationSummary;
+}
 
 function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: string) {
     const definition = isRecord(workflow.definition) ? workflow.definition : {};
@@ -195,7 +237,7 @@ export async function createWorkflow(
     description: string,
     workspaceId: string = 'default',
     definition: unknown = { nodes: [], edges: [] }
-) {
+) : Promise<WorkflowRecordShape> {
     return internalApiFetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -207,11 +249,11 @@ export async function createWorkflow(
     });
 }
 
-export async function getWorkflow(id: string) {
+export async function getWorkflow(id: string): Promise<WorkflowRecordShape> {
     return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`);
 }
 
-export async function updateWorkflow(id: string, definition: unknown) {
+export async function updateWorkflow(id: string, definition: unknown): Promise<WorkflowRecordShape> {
     return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -307,7 +349,7 @@ export async function resumeWorkflow(executionId: string, data: unknown = {}) {
     });
 }
 
-export async function publishWorkflow(id: string) {
+export async function publishWorkflow(id: string): Promise<WorkflowRecordShape> {
     return internalApiFetch(`/api/workflows/${encodeURIComponent(id)}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

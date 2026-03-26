@@ -11,6 +11,7 @@ import {
     publishWorkflow,
     updateWorkflow,
     type BuilderConnectorManifestItem,
+    type WorkflowValidationSummary,
 } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import {
@@ -37,6 +38,7 @@ import {
 } from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import { buildDefaultCanonicalConfig, resetCanonicalConfigForVariant } from '@/lib/workflowNodeDefaults';
 import {
     formatWorkflowRunNodeStatusLabel,
     useWorkflowRunTelemetry,
@@ -53,6 +55,7 @@ import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
+import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPanel';
 
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -97,6 +100,7 @@ interface WorkflowShape {
         policy?: Record<string, unknown>;
         meta?: Record<string, unknown>;
     };
+    validation?: WorkflowValidationSummary;
 }
 
 interface ProviderInfo {
@@ -742,7 +746,10 @@ function canonicalConfigFromCanvasNode(
     data: CanvasNodeData,
     seed: Record<string, unknown> | undefined,
 ): Record<string, unknown> {
-    const next = isRecord(seed) ? structuredClone(seed) : {};
+    const meta = deriveCanvasMeta(data);
+    const canonicalType = meta.__canonicalType ?? canonicalTypeForCanvasType(type);
+    const canonicalVariant = meta.__canonicalVariant || canonicalVariantForCanvasNode(type, data) || '';
+    const next = resetCanonicalConfigForVariant(canonicalType, canonicalVariant, seed);
     if (type === 'trigger') {
         next.test_only = normalizeTriggerKind((data as TriggerCanvasData).triggerType) === 'manual';
         if (!isRecord(next.schedule)) next.schedule = {};
@@ -919,7 +926,7 @@ function buildNodeDataFromLibraryItem(item: CanvasLibraryItem): CanvasNodeData {
             ? {
                 __canonicalType: item.canonicalType,
                 __canonicalVariant: item.canonicalVariant,
-                __canonicalConfig: {},
+                __canonicalConfig: buildDefaultCanonicalConfig(item.canonicalType, item.canonicalVariant || ''),
                 __canonicalResources: {},
                 __canonicalPolicy: {},
             }
@@ -1838,8 +1845,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const nextDefinition = Array.isArray(workflow?.definition?.nodes)
                 ? buildCanvasDefinition(workflow?.definition, canvasNodes, canvasEdges)
                 : buildDefinition(workflow?.definition, operator, connection);
-            await updateWorkflow(workflowId, nextDefinition);
-            setWorkflow((prev) => ({ ...(prev || {}), definition: nextDefinition }));
+            const savedWorkflow = await updateWorkflow(workflowId, nextDefinition);
+            setWorkflow(savedWorkflow);
             const now = new Date().toISOString();
             setLastSavedAt(now);
             addToast({ type: 'success', title: 'Saved', message: 'Workflow saved.' });
@@ -1885,6 +1892,19 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const selectedCanonicalNode = useMemo(
         () => (selectedNode ? readCanonicalInspectorNode(selectedNode) : null),
         [selectedNode],
+    );
+    const workflowNodeLabels = useMemo(
+        () => Object.fromEntries(canvasNodes.map((node) => [node.id, String((node.data as Record<string, unknown>)?.label || node.id).trim() || node.id])),
+        [canvasNodes],
+    );
+    const hasWorkflowValidationIssues = Boolean(
+        workflow?.validation
+        && (
+            workflow.validation.publishErrorCount > 0
+            || workflow.validation.publishWarningCount > 0
+            || workflow.validation.draftErrorCount > 0
+            || workflow.validation.draftWarningCount > 0
+        ),
     );
     const availableSubflowTargets = useMemo(
         () => availableWorkflows.filter((item) => item.id !== workflowId),
@@ -2172,15 +2192,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 <label style={workflowLabelStyle}>Trigger type</label>
                                 <select
                                     value={canonicalVariant || 'manual'}
-                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
-                                        ...current,
-                                        canonicalType: 'trigger',
-                                        canonicalVariant: e.target.value,
-                                        config: {
-                                            ...current.config,
-                                            test_only: e.target.value === 'manual',
-                                        },
-                                    }))}
+                                    onChange={(e) => {
+                                        const nextVariant = e.target.value;
+                                        updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            canonicalType: 'trigger',
+                                            canonicalVariant: nextVariant,
+                                            config: resetCanonicalConfigForVariant('trigger', nextVariant, current.config),
+                                        }));
+                                    }}
                                     style={workflowInputSurfaceStyle}
                                 >
                                     <option value="manual">Manual</option>
@@ -2940,17 +2960,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 <label style={workflowLabelStyle}>Tool type</label>
                                 <select
                                     value={toolVariant}
-                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
-                                        ...current,
-                                        canonicalType: 'tool',
-                                        canonicalVariant: e.target.value,
-                                        config: {
-                                            ...current.config,
-                                            execution_target: e.target.value === 'shell'
-                                                ? 'local_companion'
-                                                : current.config.execution_target,
-                                        },
-                                    }))}
+                                    onChange={(e) => {
+                                        const nextVariant = e.target.value;
+                                        updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            canonicalType: 'tool',
+                                            canonicalVariant: nextVariant,
+                                            config: resetCanonicalConfigForVariant('tool', nextVariant, current.config),
+                                        }));
+                                    }}
                                     style={workflowInputSurfaceStyle}
                                 >
                                     <option value="connector_action">Connector action</option>
@@ -3127,11 +3145,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 <label style={workflowLabelStyle}>Checkpoint type</label>
                                 <select
                                     value={canonicalVariant || 'approval'}
-                                    onChange={(e) => updateSelectedCanonicalNode((current) => ({
-                                        ...current,
-                                        canonicalType: 'human',
-                                        canonicalVariant: e.target.value,
-                                    }))}
+                                    onChange={(e) => {
+                                        const nextVariant = e.target.value;
+                                        updateSelectedCanonicalNode((current) => ({
+                                            ...current,
+                                            canonicalType: 'human',
+                                            canonicalVariant: nextVariant,
+                                            config: resetCanonicalConfigForVariant('human', nextVariant, current.config),
+                                        }));
+                                    }}
                                     style={workflowInputSurfaceStyle}
                                 >
                                     <option value="approval">Approval</option>
@@ -3209,11 +3231,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             <label style={workflowLabelStyle}>Decision type</label>
                             <select
                                 value={canonicalVariant || 'if_else'}
-                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
-                                    ...current,
-                                    canonicalType: 'decision',
-                                    canonicalVariant: e.target.value,
-                                }))}
+                                onChange={(e) => {
+                                    const nextVariant = e.target.value;
+                                    updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        canonicalType: 'decision',
+                                        canonicalVariant: nextVariant,
+                                        config: resetCanonicalConfigForVariant('decision', nextVariant, current.config),
+                                    }));
+                                }}
                                 style={workflowInputSurfaceStyle}
                             >
                                 <option value="if_else">If / else</option>
@@ -3275,11 +3301,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             <label style={workflowLabelStyle}>Data step</label>
                             <select
                                 value={canonicalVariant || 'transform'}
-                                onChange={(e) => updateSelectedCanonicalNode((current) => ({
-                                    ...current,
-                                    canonicalType: 'data',
-                                    canonicalVariant: e.target.value,
-                                }))}
+                                onChange={(e) => {
+                                    const nextVariant = e.target.value;
+                                    updateSelectedCanonicalNode((current) => ({
+                                        ...current,
+                                        canonicalType: 'data',
+                                        canonicalVariant: nextVariant,
+                                        config: resetCanonicalConfigForVariant('data', nextVariant, current.config),
+                                    }));
+                                }}
                                 style={workflowInputSurfaceStyle}
                             >
                                 <option value="transform">Transform</option>
@@ -3482,8 +3512,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         if (!workflowId) return;
         try {
             await saveWorkflowState();
-            await publishWorkflow(workflowId);
-            setWorkflow((prev) => ({ ...(prev || {}), status: 'published' }));
+            const publishedWorkflow = await publishWorkflow(workflowId);
+            setWorkflow(publishedWorkflow);
             addToast({ type: 'success', title: 'Published', message: 'Workflow published.' });
         } catch (error: unknown) {
             addToast({ type: 'error', title: 'Publish Failed', message: getErrorMessage(error, 'Unable to publish workflow.') });
@@ -4077,6 +4107,14 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             <div className={`workflow-pro-toolbar-note${routeBlocked ? ' is-warning' : ''}`.trim()}>
                 Route: {formatExecutionTargetLabel(executionTarget)}. {describeExecutionTarget(executionTarget, hasLocalRuntime)}
             </div>
+            {hasWorkflowValidationIssues ? (
+                <div style={{ padding: '0 12px 12px' }}>
+                    <WorkflowValidationPanel
+                        validation={workflow?.validation}
+                        nodeLabels={workflowNodeLabels}
+                    />
+                </div>
+            ) : null}
             <div style={{ padding: '0 12px' }}>
                 <DoctorPreflightNotice decision={doctorDecision} />
             </div>

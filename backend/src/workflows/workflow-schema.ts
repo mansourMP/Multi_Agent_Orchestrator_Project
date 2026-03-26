@@ -347,6 +347,31 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
         url: compactText(rawConfig.url ?? rawData.url ?? '', 500),
         summary: compactText(rawConfig.summary ?? rawData.summary ?? '', 300),
         code: compactText(rawConfig.code ?? rawData.code ?? '', 4000),
+        execution_target: normalizeExecutionTarget(rawConfig.execution_target),
+        command: compactText(rawConfig.command ?? '', 4000),
+        argv: asArray(rawConfig.argv).map((item) => compactText(item, 400)).filter(Boolean),
+        cwd: compactText(rawConfig.cwd ?? '', 400),
+        timeout_seconds: rawConfig.timeout_seconds == null ? null : parseInteger(rawConfig.timeout_seconds, 0),
+        path: compactText(rawConfig.path ?? '', 600),
+        file_path: compactText(rawConfig.file_path ?? '', 600),
+        content: rawConfig.content ?? null,
+        content_type: compactText(rawConfig.content_type ?? '', 160),
+        payload: isRecord(rawConfig.payload) || Array.isArray(rawConfig.payload) ? rawConfig.payload : rawConfig.payload ?? null,
+        headers: isRecord(rawConfig.headers) ? rawConfig.headers : {},
+        signing_secret: compactText(rawConfig.signing_secret ?? '', 300),
+        capability: compactText(rawConfig.capability ?? '', 160),
+        mode: compactText(rawConfig.mode ?? rawConfig.operation ?? '', 80),
+        title: compactText(rawConfig.title ?? '', 160),
+        to_email: compactText(rawConfig.to_email ?? rawConfig.to ?? rawConfig.email ?? rawConfig.recipient ?? '', 200),
+        subject: compactText(rawConfig.subject ?? '', 240),
+        chat_id: compactText(rawConfig.chat_id ?? '', 160),
+        channel_id: compactText(rawConfig.channel_id ?? '', 160),
+        from_number: compactText(rawConfig.from_number ?? '', 80),
+        to_number: compactText(rawConfig.to_number ?? rawConfig.recipient ?? '', 80),
+        webhook_url: compactText(rawConfig.webhook_url ?? '', 500),
+        page_id: compactText(rawConfig.page_id ?? '', 120),
+        recipient_id: compactText(rawConfig.recipient_id ?? rawConfig.recipient ?? rawConfig.user_id ?? rawConfig.instagram_user_id ?? '', 160),
+        comment_id: compactText(rawConfig.comment_id ?? rawConfig.media_comment_id ?? '', 160),
         permissions: isRecord(rawConfig.permissions) ? rawConfig.permissions : {},
     };
 
@@ -633,6 +658,30 @@ function validateTriggerNode(node: CanonicalWorkflowNode, issues: WorkflowValida
         issues.push({ code: 'trigger_variant_invalid', message: `Trigger variant '${variant || 'unknown'}' is not supported.`, level: 'error', nodeId: node.id });
         return;
     }
+    const config = isRecord(node.config) ? node.config : {};
+    const schedule = isRecord(config.schedule) ? config.schedule : {};
+    const webhook = isRecord(config.webhook) ? config.webhook : {};
+    const fileWatch = isRecord(config.file_watch) ? config.file_watch : {};
+    if (variant === 'connector_event') {
+        if (!compactText(config.connector ?? '', 120)) {
+            issues.push({ code: 'trigger_connector_missing', message: 'Connector event triggers require a connector id.', level: 'error', nodeId: node.id });
+        }
+        if (!compactText(config.event ?? '', 160)) {
+            issues.push({ code: 'trigger_event_missing', message: 'Connector event triggers require an event id.', level: 'error', nodeId: node.id });
+        }
+    }
+    if (variant === 'schedule' && !compactText(schedule.cron ?? config.cron ?? '', 200)) {
+        issues.push({ code: 'trigger_schedule_missing', message: 'Schedule triggers require a cron expression.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'webhook' && !compactText(webhook.path ?? config.path ?? webhook.url ?? config.url ?? '', 500)) {
+        issues.push({ code: 'trigger_webhook_path_missing', message: 'Webhook triggers require a path or URL.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'workflow' && !compactText(config.workflow_id ?? '', 160)) {
+        issues.push({ code: 'trigger_workflow_id_missing', message: 'Workflow triggers require workflow_id.', level: 'error', nodeId: node.id });
+    }
+    if (variant === 'file_watch' && !compactText(fileWatch.path ?? config.path ?? '', 600)) {
+        issues.push({ code: 'trigger_file_watch_path_missing', message: 'file_watch triggers require a path.', level: 'error', nodeId: node.id });
+    }
     if (variant === 'file_watch') {
         issues.push({
             code: 'file_watch_not_executable_yet',
@@ -690,13 +739,124 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             nodeId: node.id,
         });
     }
-    if (variant === 'shell' && target !== 'local_companion') {
+    if (variant === 'shell' && target === 'cloud') {
         issues.push({
-            code: 'shell_requires_local_companion',
-            message: 'Shell tool nodes require the local_companion execution target.',
+            code: 'shell_requires_local_companion_or_auto',
+            message: 'Shell tool nodes cannot target cloud directly; use local_companion or auto.',
             level: 'error',
             nodeId: node.id,
         });
+    }
+    if (variant === 'code' && target === 'cloud') {
+        issues.push({
+            code: 'code_requires_local_companion_or_auto',
+            message: 'Code tool nodes cannot target cloud directly; use local_companion or auto.',
+            level: 'error',
+            nodeId: node.id,
+        });
+    }
+    if (variant === 'browser' && target === 'cloud') {
+        issues.push({
+            code: 'browser_requires_local_companion_or_auto',
+            message: 'Browser tool nodes cannot target cloud directly; use local_companion or auto.',
+            level: 'error',
+            nodeId: node.id,
+        });
+    }
+    if (variant === 'shell' || variant === 'code') {
+        const command = compactText(config.command ?? '', 2000);
+        const argv = dedupeStrings(config.argv);
+        if (!command && argv.length === 0) {
+            issues.push({
+                code: `${variant}_command_missing`,
+                message: `${variant} tool nodes require command or argv.`,
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+    }
+    if (variant === 'browser' && !compactText(config.url ?? '', 1200)) {
+        issues.push({
+            code: 'browser_url_missing',
+            message: 'Browser tool nodes require a URL.',
+            level: 'error',
+            nodeId: node.id,
+        });
+    }
+    if (variant === 'file' && !compactText(config.path ?? config.file_path ?? '', 1200)) {
+        issues.push({
+            code: 'file_path_missing',
+            message: 'File tool nodes require path or file_path.',
+            level: 'error',
+            nodeId: node.id,
+        });
+    }
+    if (variant === 'connector_action') {
+        const connector = compactText(config.connector ?? '', 120);
+        const actionId = compactText(config.action_id ?? '', 160);
+        if (!connector) {
+            issues.push({
+                code: 'tool_connector_missing',
+                message: 'Connector action nodes require a connector id.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        if (!actionId) {
+            issues.push({
+                code: 'tool_action_missing',
+                message: 'Connector action nodes require an action_id.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        if (connector === 'custom_api') {
+            if ((actionId === 'http_request' || actionId === 'signed_webhook') && !compactText(config.url ?? '', 600)) {
+                issues.push({
+                    code: 'custom_api_url_missing',
+                    message: 'Custom API connector actions require a URL.',
+                    level: 'error',
+                    nodeId: node.id,
+                });
+            }
+            if (actionId === 'signed_webhook' && !compactText(config.signing_secret ?? '', 300)) {
+                issues.push({
+                    code: 'custom_api_signing_secret_missing',
+                    message: 'signed_webhook actions require signing_secret.',
+                    level: 'error',
+                    nodeId: node.id,
+                });
+            }
+        }
+        if (connector === 'microsoft_365' && actionId === 'upload_drive_file' && !compactText(config.path ?? config.file_path ?? '', 600)) {
+            issues.push({
+                code: 'upload_drive_file_path_missing',
+                message: 'upload_drive_file requires a path or file_path.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        if (connector === 'instagram_business') {
+            if (actionId === 'publish_reply' && !compactText(config.comment_id ?? config.media_comment_id ?? '', 160)) {
+                issues.push({
+                    code: 'instagram_comment_id_missing',
+                    message: 'instagram_business.publish_reply requires comment_id.',
+                    level: 'error',
+                    nodeId: node.id,
+                });
+            }
+            if (
+                actionId === 'send_dm'
+                && !compactText(config.recipient_id ?? config.recipient ?? config.user_id ?? config.instagram_user_id ?? '', 160)
+            ) {
+                issues.push({
+                    code: 'instagram_recipient_missing',
+                    message: 'instagram_business.send_dm requires recipient_id.',
+                    level: 'error',
+                    nodeId: node.id,
+                });
+            }
+        }
     }
 }
 

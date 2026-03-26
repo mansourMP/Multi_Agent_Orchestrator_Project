@@ -150,6 +150,46 @@ describe('workflow schema normalization', () => {
     expect(issues.filter((issue) => issue.level === 'error')).toEqual([]);
   });
 
+  it('blocks connector triggers without event metadata', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'connector_event',
+            config: { connector: 'telegram_bot' },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'trigger_event_missing' && issue.level === 'error')).toBe(true);
+  });
+
+  it('blocks schedule triggers without cron config', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'schedule',
+            config: {},
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'trigger_schedule_missing' && issue.level === 'error')).toBe(true);
+  });
+
   it('normalizes human approval nodes with default decision options', () => {
     const normalized = normalizeWorkflowDefinition(
       {
@@ -204,5 +244,117 @@ describe('workflow schema normalization', () => {
     );
 
     expect(issues.some((issue) => issue.code === 'subflow_target_missing' && issue.level === 'error')).toBe(true);
+  });
+
+  it('blocks browser tools without url', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'manual',
+            config: {},
+          },
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'browser',
+            config: {},
+          },
+        ],
+        edges: [{ id: 'edge-1', source: 'trigger_1', target: 'tool_1' }],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'browser_url_missing' && issue.level === 'error')).toBe(true);
+  });
+
+  it('blocks shell tools targeting cloud or missing command', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'manual',
+            config: {},
+          },
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'shell',
+            config: { execution_target: 'cloud' },
+          },
+        ],
+        edges: [{ id: 'edge-1', source: 'trigger_1', target: 'tool_1' }],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'shell_requires_local_companion_or_auto' && issue.level === 'error')).toBe(true);
+    expect(issues.some((issue) => issue.code === 'shell_command_missing' && issue.level === 'error')).toBe(true);
+  });
+
+  it('blocks custom api webhooks without required signing secret', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'manual',
+            config: {},
+          },
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'connector_action',
+            config: {
+              connector: 'custom_api',
+              action_id: 'signed_webhook',
+              url: 'https://example.com/hook',
+            },
+          },
+        ],
+        edges: [{ id: 'edge-1', source: 'trigger_1', target: 'tool_1' }],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'custom_api_signing_secret_missing' && issue.level === 'error')).toBe(true);
+  });
+
+  it('blocks instagram reply actions without comment id', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'manual',
+            config: {},
+          },
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'connector_action',
+            config: {
+              connector: 'instagram_business',
+              action_id: 'publish_reply',
+            },
+          },
+        ],
+        edges: [{ id: 'edge-1', source: 'trigger_1', target: 'tool_1' }],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'instagram_comment_id_missing' && issue.level === 'error')).toBe(true);
   });
 });

@@ -440,6 +440,84 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
     @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-instagram", "instagram_business", {"access_token": "ig-token", "page_id": "998877"}),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"id": "reply-1"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_instagram_publish_reply(self, _approval_mock, _http_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "instagram_business",
+                        "action_id": "publish_reply",
+                        "comment_id": "112233",
+                        "message": "Thanks for the comment.",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-instagram-reply",
+            {"workflow_id": "wf_instagram_reply", "user_goal": "Reply to comment", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("instagram_business.publish_reply", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-instagram", "instagram_business", {"access_token": "ig-token", "page_id": "998877"}),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"message_id": "dm-1"}, "text": ""},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_runs_instagram_send_dm(self, _approval_mock, _http_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "instagram_business",
+                        "action_id": "send_dm",
+                        "recipient_id": "445566",
+                        "message": "Thanks for reaching out.",
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-instagram-dm",
+            {"workflow_id": "wf_instagram_dm", "user_goal": "Reply in DM", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("instagram_business.send_dm", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
         "server_modules.runs_execution.http_json_request",
         return_value={"status": 200, "json": {"ok": True, "id": "req-1"}, "text": ""},
     )
@@ -584,6 +662,173 @@ class RunsExecutionGraphTests(unittest.TestCase):
             )
 
         self.assertIn("cannot target cloud directly", str(ctx.exception))
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-telegram", "telegram_bot", {"chat_id": "12345"}),
+    )
+    @patch(
+        "server_modules.runs_execution.handle_telegram_send_message",
+        return_value={"ok": True, "message_id": "tg-1"},
+    )
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    @patch(
+        "server_modules.runs_execution.generate_with_candidate_failover",
+        return_value="Thanks, your request has been triaged and assigned.",
+    )
+    def test_launch_gate_connector_triage_workflow(self, _generate_mock, _approval_mock, _telegram_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {
+                    "id": "trigger_1",
+                    "type": "trigger",
+                    "variant": "connector_event",
+                    "config": {"connector": "telegram_bot", "event": "inbound_message"},
+                },
+                {
+                    "id": "agent_1",
+                    "type": "agent",
+                    "config": {"identity": {"name": "Triage", "goal": "Classify and respond"}},
+                },
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {"connector": "telegram_bot", "action_id": "send_message"},
+                },
+            ],
+            "edges": [
+                {"id": "e1", "source": "trigger_1", "target": "agent_1"},
+                {"id": "e2", "source": "agent_1", "target": "tool_1"},
+            ],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "launch-connector-triage",
+            {"workflow_id": "wf_launch_message", "user_goal": "Customer asked for help", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("telegram_bot.send_message", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-gws", "google_workspace", {"auth_mode": "gws_local"}),
+    )
+    @patch(
+        "server_modules.runs_execution.google_workspace_local_create_draft",
+        return_value={"id": "draft-1", "message": {"id": "msg-1"}},
+    )
+    @patch("server_modules.runs_execution.google_workspace_uses_local_cli", return_value=True)
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    @patch(
+        "server_modules.runs_execution.wait_for_human_response",
+        return_value={
+            "approval_id": "approval-1",
+            "correlation_id": "corr-1",
+            "decision": "approve",
+            "raw_decision": "approve",
+            "note": "",
+            "approved": True,
+            "rejected": False,
+            "escalated": False,
+        },
+    )
+    def test_launch_gate_scheduled_approval_workflow(self, _human_mock, _approval_mock, _local_cli_mock, _draft_mock, _secret_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "schedule", "config": {"cron": "0 9 * * 1-5"}},
+                {"id": "data_1", "type": "data", "variant": "compose", "config": {"template": "Daily brief ready"}},
+                {
+                    "id": "approval_1",
+                    "type": "human",
+                    "variant": "approval",
+                    "config": {"title": "Approve daily brief", "decision_options": ["approve", "reject"]},
+                },
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "connector_action",
+                    "config": {
+                        "connector": "google_workspace",
+                        "action_id": "draft_email",
+                        "to_email": "ops@example.com",
+                        "subject": "Daily brief",
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "e1", "source": "trigger_1", "target": "data_1"},
+                {"id": "e2", "source": "data_1", "target": "approval_1"},
+                {"id": "e3", "source": "approval_1", "target": "tool_1"},
+            ],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "launch-scheduled-approval",
+            {"workflow_id": "wf_launch_schedule", "user_goal": "Send daily brief", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertIn("google_workspace.draft_email", result["result_text"])
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch("server_modules.runs_execution.wait_for_human_response")
+    @patch("server_modules.runs_execution._workflow_wait_for_child_run")
+    @patch("server_modules.runs_delegation._create_run_from_request")
+    def test_launch_gate_subflow_review_workflow(self, create_child_mock, wait_child_mock, human_mock):
+        create_child_mock.return_value = {"run_id": "child-1", "route": {"selected": "cloud"}}
+        wait_child_mock.return_value = {
+            "status": "completed",
+            "result": "Subflow prepared a draft response.",
+            "result_data": {"summary": "child complete"},
+        }
+        human_mock.return_value = {
+            "approval_id": "approval-review",
+            "correlation_id": "corr-review",
+            "decision": "Please publish after legal review",
+            "raw_decision": "Please publish after legal review",
+            "note": "",
+            "approved": False,
+            "rejected": False,
+            "escalated": False,
+        }
+
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "workflow", "config": {"workflow_id": "parent"}},
+                {"id": "subflow_1", "type": "subflow", "variant": "call_workflow", "config": {"workflow_id": "child_wf"}},
+                {
+                    "id": "review_1",
+                    "type": "human",
+                    "variant": "review",
+                    "config": {"title": "Review child result", "instructions": "Share final note"},
+                },
+                {"id": "data_1", "type": "data", "variant": "compose", "config": {"template": "Final handoff"}},
+            ],
+            "edges": [
+                {"id": "e1", "source": "trigger_1", "target": "subflow_1"},
+                {"id": "e2", "source": "subflow_1", "target": "review_1"},
+                {"id": "e3", "source": "review_1", "target": "data_1"},
+            ],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "launch-subflow-review",
+            {"workflow_id": "wf_launch_subflow", "user_goal": "Run child workflow then review", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "data_1")
+        self.assertIn("Final handoff", result["result_text"])
+        self.assertIn("Please publish after legal review", result["result_text"])
 
     @patch("server_modules.runs_execution._workflow_execute_local_tool")
     def test_execute_workflow_graph_runs_local_tool_variant(self, local_tool_mock):

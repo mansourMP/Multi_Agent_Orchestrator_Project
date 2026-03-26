@@ -1868,6 +1868,179 @@ input:focus-visible {
   text-decoration: none;
 }
 
+.orion-builder-inspector.is-collapsible {
+  gap: 10px;
+}
+
+.orion-builder-inspector-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.orion-builder-inspector-toggle-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.orion-builder-inspector-toggle-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.orion-builder-inspector-toggle:hover .orion-builder-inspector-toggle-icon,
+.orion-builder-inspector-toggle:focus-visible .orion-builder-inspector-toggle-icon {
+  color: var(--text-primary);
+}
+
+.orion-builder-inspector-toggle-icon.is-open {
+  transform: rotate(180deg);
+}
+
+.orion-builder-inspector-collapsible-body {
+  display: grid;
+  gap: 12px;
+}
+
+.orion-builder-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 88%, white 12%);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-builder-inline-badge.is-error {
+  color: var(--error-fg, #b42318);
+  border-color: var(--error-border, rgba(240, 68, 56, 0.2));
+  background: var(--error-bg, rgba(254, 226, 226, 0.72));
+}
+
+.orion-builder-inline-badge.is-warning {
+  color: var(--warning-fg, #9a6700);
+  border-color: var(--warning-border, rgba(245, 158, 11, 0.24));
+  background: var(--warning-bg, rgba(255, 248, 235, 0.92));
+}
+
+.orion-builder-inline-issues {
+  display: grid;
+  gap: 6px;
+}
+
+.orion-builder-inline-issue {
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 88%, white 12%);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.orion-builder-inline-issue.is-error {
+  color: var(--error-fg, #b42318);
+  border-color: var(--error-border, rgba(240, 68, 56, 0.2));
+  background: var(--error-bg, rgba(254, 226, 226, 0.72));
+}
+
+.orion-builder-inline-issue.is-warning {
+  color: var(--warning-fg, #9a6700);
+  border-color: var(--warning-border, rgba(245, 158, 11, 0.24));
+  background: var(--warning-bg, rgba(255, 248, 235, 0.92));
+}
+
+.orion-builder-inline-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.orion-builder-array-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.orion-builder-array-row,
+.orion-builder-array-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+}
+
+.orion-builder-array-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.orion-builder-array-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.orion-builder-array-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.orion-builder-checkbox-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.orion-builder-checkbox-grid.is-compact {
+  gap: 6px;
+}
+
+.orion-builder-checkbox-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--bg-element) 82%, white 18%);
+}
+
+.orion-builder-checkbox-option.is-compact {
+  padding: 8px 10px;
+}
+
+.orion-builder-checkbox-option input {
+  margin-top: 2px;
+}
+
+.orion-builder-checkbox-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
 .orion-builder-drawer-actions {
   display: flex;
   gap: 8px;
@@ -2590,6 +2763,27 @@ input:focus-visible {
   box-shadow: 0 8px 16px rgba(15, 23, 42, 0.05);
 }
 
+.orion-builder-canvas-overlays {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(560px, calc(100% - 48px));
+  pointer-events: none;
+}
+
+.orion-builder-canvas-overlays .orion-builder-canvas-message {
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  pointer-events: auto;
+}
+
 .orion-builder-canvas-message.is-error {
   color: #b42318;
 }
@@ -2602,6 +2796,111 @@ input:focus-visible {
   color: #171717;
   font-size: 12px;
   font-weight: 600;
+}
+
+.orion-builder-canvas-validation {
+  width: 100%;
+  pointer-events: auto;
+}
+
+.workflow-validation-panel {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--warning-border, #f5d7a1) 70%, var(--border-subtle) 30%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 90%, #fff7e8 10%) 0%, var(--bg-surface) 100%);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
+}
+
+.workflow-validation-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workflow-validation-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workflow-validation-panel-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.workflow-validation-panel-group {
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-validation-panel-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--error-fg, #b42318);
+}
+
+.workflow-validation-panel-group-title.is-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warning-fg, #9a6700);
+}
+
+.workflow-validation-panel-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-validation-panel-item {
+  display: grid;
+  gap: 4px;
+}
+
+.workflow-validation-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.workflow-validation-panel-badge.is-error {
+  background: var(--error-bg, rgba(254, 226, 226, 0.9));
+  color: var(--error-fg, #b42318);
+  border: 1px solid var(--error-border, rgba(240, 68, 56, 0.2));
+}
+
+.workflow-validation-panel-badge.is-warning {
+  background: var(--warning-bg, rgba(255, 248, 235, 0.95));
+  color: var(--warning-fg, #9a6700);
+  border: 1px solid var(--warning-border, rgba(245, 158, 11, 0.24));
+}
+
+.workflow-validation-panel-copy {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.workflow-validation-panel-node {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .orion-builder-empty-state {

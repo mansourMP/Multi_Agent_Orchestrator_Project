@@ -1355,6 +1355,92 @@ def _workflow_execute_connector_action(
             },
         }
 
+    if connector_id == "instagram_business" and action_id == "publish_reply":
+        comment_id = str(config.get("comment_id") or config.get("media_comment_id") or "").strip()
+        if not comment_id:
+            raise RuntimeError("Instagram Business publish_reply requires comment_id.")
+        payload = config.get("payload") if isinstance(config.get("payload"), dict) else {
+            "message": _workflow_tool_text_input(config, current_text),
+        }
+        response = http_json_request(
+            f"https://graph.facebook.com/v23.0/{quote_plus(comment_id)}/replies",
+            method="POST",
+            headers=_workflow_tool_connector_headers(secret),
+            payload=payload,
+        )
+        status_code = int(response.get("status") or 500)
+        body = response.get("json") if isinstance(response.get("json"), dict) else {}
+        if status_code not in {200, 201}:
+            error_obj = body.get("error") if isinstance(body, dict) else {}
+            detail = (
+                str(error_obj.get("message") or "").strip()
+                if isinstance(error_obj, dict)
+                else ""
+            ) or str(body.get("message") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"Instagram publish_reply failed with status {status_code}.")
+        return {
+            "summary": f"Connector action completed: instagram_business.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "comment_id": comment_id,
+                    "result": _json_safe(body or response),
+                }
+            },
+        }
+
+    if connector_id == "instagram_business" and action_id == "send_dm":
+        page_id = str(config.get("page_id") or secret.get("page_id") or "").strip()
+        recipient_id = str(
+            config.get("recipient_id")
+            or config.get("recipient")
+            or config.get("user_id")
+            or config.get("instagram_user_id")
+            or ""
+        ).strip()
+        if not page_id:
+            raise RuntimeError("Instagram Business send_dm requires page_id from config or binding.")
+        if not recipient_id:
+            raise RuntimeError("Instagram Business send_dm requires recipient_id.")
+        payload = config.get("payload") if isinstance(config.get("payload"), dict) else {
+            "messaging_product": "instagram",
+            "recipient": {"id": recipient_id},
+            "message": {"text": _workflow_tool_text_input(config, current_text)},
+        }
+        if isinstance(payload, dict):
+            payload.setdefault("messaging_product", "instagram")
+        response = http_json_request(
+            f"https://graph.facebook.com/v23.0/{quote_plus(page_id)}/messages",
+            method="POST",
+            headers=_workflow_tool_connector_headers(secret),
+            payload=payload,
+        )
+        status_code = int(response.get("status") or 500)
+        body = response.get("json") if isinstance(response.get("json"), dict) else {}
+        if status_code not in {200, 201}:
+            error_obj = body.get("error") if isinstance(body, dict) else {}
+            detail = (
+                str(error_obj.get("message") or "").strip()
+                if isinstance(error_obj, dict)
+                else ""
+            ) or str(body.get("message") or response.get("text") or "").strip()
+            raise RuntimeError(detail or f"Instagram send_dm failed with status {status_code}.")
+        return {
+            "summary": f"Connector action completed: instagram_business.{action_id}.",
+            "result_data": {
+                "connector_action": {
+                    "connector": connector_id,
+                    "credential_id": credential_id,
+                    "action_id": action_id,
+                    "page_id": page_id,
+                    "recipient_id": recipient_id,
+                    "result": _json_safe(body or response),
+                }
+            },
+        }
+
     if connector_id in {"google_workspace", "microsoft_365"} and action_id in {"send_email", "send_message", "draft_email"}:
         to_email = str(
             config.get("to_email")

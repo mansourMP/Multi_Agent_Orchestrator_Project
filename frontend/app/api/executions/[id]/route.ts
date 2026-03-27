@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
-import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
+import { backendJsonRequest } from '@/lib/server/backendControlPlane';
 import { requireOwnedRun } from '@/lib/server/runOwnership';
 
 export const dynamic = 'force-dynamic';
@@ -126,7 +126,7 @@ export async function GET(
   if (owned.response) return owned.response;
 
   try {
-    const { status, payload } = await runtimeJsonRequest(`/executions/${encodeURIComponent(id)}`, { method: 'GET' });
+    const { status, payload } = await backendJsonRequest(`/executions/${encodeURIComponent(id)}`, { method: 'GET' });
     return Response.json(normalizeExecutionDetail(payload), { status });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Execution detail proxy failed.';

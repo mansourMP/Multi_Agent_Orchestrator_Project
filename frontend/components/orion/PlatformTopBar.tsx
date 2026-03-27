@@ -3,9 +3,10 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Laptop, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
+import { ChevronDown, Edit3, Laptop, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
+import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 
 export const EMPYRALIS_NEW_CHAT_EVENT = 'empyralis:new-chat';
@@ -72,9 +73,10 @@ export default function PlatformTopBar() {
   }
 
   const RuntimeStatusIcon = runtimeStatus.icon;
+  const showNewChatAction = pathname === '/';
 
   return (
-    <header className="orion-shellbar">
+    <header className="orion-shellbar" onWheel={forwardWheelToMainScroll}>
       <div className="orion-shellbar-section orion-shellbar-section-left">
         <button type="button" className="orion-shellbar-workspace" onClick={() => safeNavigate('/home')}>
           <span>Personal workspace</span>
@@ -85,6 +87,16 @@ export default function PlatformTopBar() {
       <div className="orion-shellbar-section orion-shellbar-section-center" />
 
       <div className="orion-shellbar-section orion-shellbar-section-right">
+        {showNewChatAction ? (
+          <button
+            type="button"
+            className="orion-shellbar-action"
+            onClick={() => window.dispatchEvent(new Event(EMPYRALIS_NEW_CHAT_EVENT))}
+          >
+            <Edit3 size={13} />
+            <span>New chat</span>
+          </button>
+        ) : null}
         <button
           type="button"
           className={`orion-shellbar-status-inline is-runtime is-${runtimeStatus.tone}`}

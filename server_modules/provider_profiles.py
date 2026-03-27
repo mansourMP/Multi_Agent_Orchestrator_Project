@@ -104,12 +104,13 @@ PROVIDER_CATALOG = {
         "label": "OpenAI",
         "auth": ["oauth_token", "access_token", "api_key"],
         "auth_modes": [
-            {"id": "oauth_token", "label": "OAuth Token", "secret_required": True},
-            {"id": "access_token", "label": "Access Token", "secret_required": True},
+            {"id": "oauth_token", "label": "Saved OpenAI / Codex token", "secret_required": True},
+            {"id": "access_token", "label": "OpenAI access token", "secret_required": True},
             {"id": "api_key", "label": "API Key", "secret_required": True},
         ],
         "default_auth_mode": "api_key",
         "default_model": "gpt-4.1",
+        "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
     },
     "anthropic": {
         "label": "Anthropic",
@@ -120,6 +121,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "api_key",
         "default_model": "claude-3-5-sonnet-20241022",
+        "note": "Use a direct Anthropic API key or the local Claude subscription already signed into the Claude CLI on this machine.",
     },
     "claude_code_cli": {
         "label": "Claude Code (Subscription)",
@@ -140,6 +142,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "api_key",
         "default_model": "gemini-2.0-flash",
+        "note": "Direct Gemini API key only.",
     },
     "vertex": {
         "label": "Google Vertex AI",
@@ -149,6 +152,7 @@ PROVIDER_CATALOG = {
         ],
         "default_auth_mode": "access_token",
         "default_model": "gemini-2.0-flash-001",
+        "note": "Direct Vertex AI access token with project and region.",
     },
 }
 

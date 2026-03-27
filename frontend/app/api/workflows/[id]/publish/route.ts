@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
-import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
+import { backendJsonRequest } from '@/lib/server/backendControlPlane';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest, { params }: Params) {
   const workflowId = encodeURIComponent(String(id || '').trim());
 
   try {
-    const { status, payload } = await runtimeJsonRequest(`/workflows/${workflowId}/publish`, {
+    const { status, payload } = await backendJsonRequest(`/workflows/${workflowId}/publish`, {
       method: 'POST',
     });
     return Response.json(payload, { status });

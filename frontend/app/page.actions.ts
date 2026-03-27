@@ -100,6 +100,7 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
     testConnection,
     setupAction,
     appendLog,
+    hasRuntimeProviderAccount,
     refreshCredentials,
     refreshConnectors,
     refreshProviderModels,
@@ -207,9 +208,9 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
             ? 'Save your AI account in step 2'
             : connectionMode === 'local_companion'
             ? 'Confirm Local Companion mode in step 2'
-            : 'Select connection mode in step 2',
-        action: null,
-        blocked: true,
+            : 'Verify workspace account',
+        action: connectionMode === 'managed' ? testConnection : null,
+        blocked: connectionMode === 'managed' ? !setupStatus.runtimeReady : true,
       };
     }
     if (!setupStatus.connectionTested) {
@@ -269,19 +270,36 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
   }, [refreshProviderCatalog]);
 
   useEffect(() => {
-    if (connectionMode !== 'byok' && provider !== 'openai') {
-      setProvider('openai');
-    }
-  }, [connectionMode, provider, setProvider]);
-
-  useEffect(() => {
+    let cancelled = false;
     if (connectionMode === 'byok') {
       refreshCredentials();
+    } else if (connectionMode === 'managed') {
+      void (async () => {
+        try {
+          const ready = await hasRuntimeProviderAccount(provider);
+          if (cancelled) return;
+          setSetupStatus((prev) => ({
+            ...prev,
+            accountConnected: ready,
+            connectionTested: ready ? prev.connectionTested : false,
+          }));
+        } catch {
+          if (cancelled) return;
+          setSetupStatus((prev) => ({ ...prev, accountConnected: false, connectionTested: false }));
+        }
+      })();
     } else {
-      setSetupStatus((prev) => ({ ...prev, accountConnected: true }));
+      setSetupStatus((prev) => ({
+        ...prev,
+        accountConnected: connectionMode === 'local_companion',
+        connectionTested: false,
+      }));
     }
     refreshConnectors();
-  }, [connectionMode, refreshCredentials, refreshConnectors, setSetupStatus]);
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionMode, hasRuntimeProviderAccount, provider, refreshCredentials, refreshConnectors, setSetupStatus]);
 
   useEffect(() => {
     if (connectionMode !== 'byok') return;

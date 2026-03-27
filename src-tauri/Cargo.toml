@@ -1,0 +1,18 @@
+[package]
+name = "empyralis-tauri-shell"
+version = "0.1.0"
+description = "Tauri shell for the Empyralis Next.js app"
+authors = ["Empyralis"]
+edition = "2021"
+
+[lib]
+name = "empyralis_tauri_shell"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+ureq = "3"
+rand = "0.8"

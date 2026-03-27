@@ -227,6 +227,43 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
     providerAuthMode || selectedProviderOption.defaultAuthMode || providerAuthModes[0]?.id || 'api_key';
   const selectedProviderAuthConfig = providerAuthModes.find((item) => item.id === selectedProviderAuthMode);
   const providerAuthNeedsSecret = selectedProviderAuthConfig?.secretRequired !== false;
+  const filteredProviderCredentialOptions = providerCredentialOptions.filter((item) => item.provider === provider);
+  const providerLabel = selectedProviderOption.label || provider;
+  const connectionModeGuidance =
+    connectionMode === 'byok'
+      ? 'Recommended. Save a direct provider account in Empyralis and reuse it in chat, runs, and workflows.'
+      : connectionMode === 'local_companion'
+        ? 'Run on this machine with local-first tooling and guarded permissions.'
+        : setupStatusObj.accountConnected
+          ? `Use the workspace ${providerLabel} runtime account already configured for this environment.`
+          : `No ${providerLabel} runtime account is ready yet. Connect a direct ${providerLabel} account or switch to Saved AI account.`;
+  const providerSetupGuidance = (() => {
+    if (provider === 'openai') {
+      if (selectedProviderAuthMode === 'oauth_token') {
+        return 'Paste a saved OpenAI or Codex token you already control. Empyralis does not open a ChatGPT or Codex login flow for you.';
+      }
+      if (selectedProviderAuthMode === 'access_token') {
+        return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
+      }
+      return selectedProviderOption.note || 'Use a direct OpenAI API key. Empyralis does not route requests through model proxy services.';
+    }
+    if (provider === 'anthropic' && selectedProviderAuthMode === 'local_cli') {
+      return selectedProviderOption.note || 'Use the Claude subscription already signed into the local Claude CLI on this machine.';
+    }
+    return selectedProviderOption.note || 'Use direct provider credentials only.';
+  })();
+  const providerSecretPlaceholder =
+    provider === 'openai'
+      ? selectedProviderAuthMode === 'oauth_token'
+        ? 'Saved OpenAI or Codex token'
+        : selectedProviderAuthMode === 'access_token'
+          ? 'OpenAI access token'
+          : 'OpenAI API key'
+      : provider === 'anthropic' && selectedProviderAuthMode === 'api_key'
+        ? 'Anthropic API key'
+        : provider === 'vertex'
+          ? 'Vertex access token'
+          : `${selectedProviderOption.label} API key`;
 
   return (
     <div style={{ marginBottom: 14, borderRadius: 12, border: `1px solid ${UI.border}`, background: UI.surfaceAlt, padding: 12 }}>
@@ -442,7 +479,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
           <div style={{ display: 'grid', gap: 8, borderTop: `1px dashed ${UI.borderSoft}`, paddingTop: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
               <span style={{ fontSize: 12, color: UI.textSoft }}>
-                2. Choose runtime and account mode
+                2. Choose execution and account source
                 {' '}
                 {setupSteps[1].done ? '✓' : ''}
               </span>
@@ -453,7 +490,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                   setConnectionMode(value);
                   setSetupStatus((prev) => ({
                     ...prev,
-                    accountConnected: value === 'managed' || value === 'local_companion',
+                    accountConnected: value === 'local_companion',
                     connectionTested: false,
                   }));
                 }}
@@ -467,10 +504,13 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                   fontWeight: 700,
                 }}
               >
-                <option value="managed">Automatic route</option>
-                <option value="byok">Use my own key</option>
+                <option value="managed">Runtime account</option>
+                <option value="byok">Saved AI account</option>
                 <option value="local_companion">Local machine</option>
               </select>
+            </div>
+            <div style={{ fontSize: 11.5, color: UI.textMuted, lineHeight: 1.55 }}>
+              {connectionModeGuidance}
             </div>
 
             <div style={{ display: 'grid', gap: 8, borderTop: `1px dashed ${UI.borderSoft}`, paddingTop: 8 }}>
@@ -485,7 +525,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                       void setupAction('select_provider', { provider: next });
                     }
                   }}
-                  disabled={connectionMode !== 'byok' || !canSetupAction('select_provider')}
+                  disabled={connectionMode === 'local_companion' || !canSetupAction('select_provider')}
                   style={{
                     borderRadius: 8,
                     border: `1px solid ${UI.border}`,
@@ -493,8 +533,8 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     color: UI.text,
                     padding: '6px 8px',
                     fontSize: 12,
-                    cursor: connectionMode !== 'byok' || !canSetupAction('select_provider') ? 'not-allowed' : 'pointer',
-                    opacity: connectionMode !== 'byok' || !canSetupAction('select_provider') ? 0.7 : 1,
+                    cursor: connectionMode === 'local_companion' || !canSetupAction('select_provider') ? 'not-allowed' : 'pointer',
+                    opacity: connectionMode === 'local_companion' || !canSetupAction('select_provider') ? 0.7 : 1,
                   }}
                 >
                   {providerOptions.map((item) => (
@@ -561,8 +601,12 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     fontSize: 12,
                   }}
                 >
-                  <option value="">Select saved account</option>
-                  {providerCredentialOptions.map((item) => (
+                  <option value="">
+                    {filteredProviderCredentialOptions.length > 0
+                      ? `Select saved ${selectedProviderOption.label} account`
+                      : `No saved ${selectedProviderOption.label} account yet`}
+                  </option>
+                  {filteredProviderCredentialOptions.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.label}
                       {provider === 'anthropic' && item.authMode === 'local_cli' ? ' (Claude subscription)' : ''}
@@ -598,26 +642,35 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                     No API key is needed. Save this account to use the Claude subscription already signed into the local `claude` CLI.
                   </div>
                 ) : (
-                  <input
-                    type="password"
-                    value={openaiKeyInput}
-                    onChange={(e) => setOpenaiKeyInput(e.target.value)}
-                    placeholder={
-                      provider === 'openai'
-                        ? 'OpenAI API key or Codex OAuth access token'
-                        : provider === 'anthropic' && selectedProviderAuthMode === 'api_key'
-                        ? 'Anthropic API key'
-                        : `${selectedProviderOption.label} API key`
-                    }
-                    style={{
-                      borderRadius: 8,
-                      border: `1px solid ${UI.border}`,
-                      background: 'var(--bg-element)',
-                      color: UI.text,
-                      padding: '6px 8px',
-                      fontSize: 12,
-                    }}
-                  />
+                  <>
+                    <input
+                      type="password"
+                      value={openaiKeyInput}
+                      onChange={(e) => setOpenaiKeyInput(e.target.value)}
+                      placeholder={providerSecretPlaceholder}
+                      style={{
+                        borderRadius: 8,
+                        border: `1px solid ${UI.border}`,
+                        background: 'var(--bg-element)',
+                        color: UI.text,
+                        padding: '6px 8px',
+                        fontSize: 12,
+                      }}
+                    />
+                    <div
+                      style={{
+                        borderRadius: 8,
+                        border: `1px solid ${UI.borderSoft}`,
+                        background: 'var(--bg-element)',
+                        color: UI.textSoft,
+                        padding: '8px 10px',
+                        fontSize: 11.5,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {providerSetupGuidance}
+                    </div>
+                  </>
                 )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button

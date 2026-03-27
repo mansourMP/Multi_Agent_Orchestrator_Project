@@ -1,10 +1,34 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from server_modules import runtime_config as config
+LOCAL_COMPANION_TARGET = "local_companion"
+LOCAL_COMPANION_BLOCKING_FAIL_CHECKS = {
+    "auth_policy",
+    "runtime_contract",
+    "runtime_validation",
+}
 
-globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
+
+def _safe_read_json(path: Path, fallback: Dict[str, Any]) -> Dict[str, Any]:
+    if not path.exists():
+        return fallback
+    try:
+        raw = path.read_text(encoding="utf-8")
+        parsed = json.loads(raw) if raw else {}
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return fallback
+
+
+def _doctor_report_file() -> Path:
+    from server_modules import runtime_config as config
+
+    return config.ORION_DOCTOR_REPORT_FILE
 
 
 def _normalize_status(value: Any) -> str:
@@ -75,6 +99,18 @@ def _first_check_by_status(report: Dict[str, Any], status: str) -> Optional[Dict
     return None
 
 
+def _first_blocking_local_fail(report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for item in report.get("checks") if isinstance(report.get("checks"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_status(item.get("status")) != "fail":
+            continue
+        name = str(item.get("name") or "").strip().lower()
+        if name in LOCAL_COMPANION_BLOCKING_FAIL_CHECKS:
+            return item
+    return None
+
+
 def _resolve_runtime_provider(metadata: Dict[str, Any], provider: Optional[str] = None) -> str:
     candidates = [
         metadata.get("runtime_profile_provider"),
@@ -141,22 +177,37 @@ def evaluate_doctor_run_gate(
             "blocking": True,
             "title": "OpenAI connection needs attention",
             "detail": str(openai_connectivity_warning.get("detail") or "").strip()
-            or "Managed OpenAI access is not ready for this run.",
+            or "OpenAI credentials are not ready for this run.",
             "recommendation": str(openai_connectivity_warning.get("recommendation") or "").strip()
-            or "Open Health and reconnect the managed OpenAI account before running.",
+            or "Open Health and add a direct OpenAI API key or access token before running.",
             "report_generated_at": report.get("generated_at"),
             "report_summary": report.get("summary"),
         }
 
     first_fail = _first_check_by_status(report, "fail")
     if first_fail:
-        if execution_target == EXECUTION_TARGET_LOCAL_COMPANION:
+        if str(execution_target or "").strip().lower() == LOCAL_COMPANION_TARGET:
+            blocking_local_fail = _first_blocking_local_fail(report)
+            if not blocking_local_fail:
+                return {
+                    "status": "warn",
+                    "blocking": False,
+                    "title": "Local runtime has warnings",
+                    "detail": (
+                        f"{str(first_fail.get('detail') or '').strip() or report['overview']['detail']} "
+                        "This does not block local runs, but you should review Health."
+                    ).strip(),
+                    "recommendation": str(first_fail.get("recommendation") or "").strip()
+                    or "Open Health to review the warning before you run.",
+                    "report_generated_at": report.get("generated_at"),
+                    "report_summary": report.get("summary"),
+                }
             return {
                 "status": "fail",
                 "blocking": True,
                 "title": "Local runtime needs attention",
-                "detail": str(first_fail.get("detail") or "").strip() or report["overview"]["detail"],
-                "recommendation": str(first_fail.get("recommendation") or "").strip()
+                "detail": str(blocking_local_fail.get("detail") or "").strip() or report["overview"]["detail"],
+                "recommendation": str(blocking_local_fail.get("recommendation") or "").strip()
                 or "Open Health and fix the runtime before running locally.",
                 "report_generated_at": report.get("generated_at"),
                 "report_summary": report.get("summary"),
@@ -200,7 +251,7 @@ def evaluate_doctor_run_gate(
 
 
 def latest_doctor_report() -> Dict[str, Any]:
-    payload = _safe_read_json(ORION_DOCTOR_REPORT_FILE, {})
+    payload = _safe_read_json(_doctor_report_file(), {})
     return _coerce_report(payload)
 
 

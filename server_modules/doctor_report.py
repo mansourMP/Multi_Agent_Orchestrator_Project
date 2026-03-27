@@ -246,7 +246,7 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
             "codex_signin_mode",
             "warn",
             "Interactive Codex OAuth sign-in is not enabled in this runtime build.",
-            "Use Empyralis Setup -> Provider/Auth and store an OpenAI API key or OAuth access token in vault.",
+            "Use Empyralis Setup -> Provider/Auth and store a direct OpenAI API key or a saved OpenAI/Codex access token in vault.",
         )
 
     runtime_valid = bool(health_data.get("runtime_valid"))

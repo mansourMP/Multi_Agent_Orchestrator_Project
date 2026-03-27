@@ -21,6 +21,8 @@ type CompletionResult = {
     usage?: UsageInfo;
 };
 
+const SUPPORTED_DIRECT_PROVIDERS = new Set(['openai', 'anthropic', 'gemini', 'vertex']);
+
 @Injectable()
 export class LlmService {
     private readonly logger = new Logger(LlmService.name);
@@ -57,25 +59,28 @@ export class LlmService {
             modelName = parts.slice(1).join('/');
         }
 
+        provider = provider.trim().toLowerCase();
+        if (provider === 'google') {
+            provider = 'gemini';
+        }
+
         this.logger.log(`Generating completion with ${provider}/${modelName}`);
 
-        // Route to appropriate provider
+        if (!SUPPORTED_DIRECT_PROVIDERS.has(provider)) {
+            throw new Error(`Unsupported provider "${provider}". Empyralis only supports direct provider integrations.`);
+        }
+
         switch (provider) {
             case 'openai':
                 return this.generateOpenAICompletion(prompt, systemPrompt, modelName, options.apiKey);
             case 'anthropic':
                 return this.generateClaudeCompletion(prompt, systemPrompt, modelName, options.apiKey);
-            case 'google':
-                return this.generateGoogleCompletion(prompt, systemPrompt, modelName, options.apiKey);
-            case 'groq':
-                return this.generateGroqCompletion(prompt, systemPrompt, modelName, options.apiKey);
-            case 'together':
-                return this.generateTogetherCompletion(prompt, systemPrompt, modelName, options.apiKey);
-            case 'openrouter':
-                return this.generateOpenRouterCompletion(prompt, systemPrompt, modelName, options.apiKey);
+            case 'gemini':
+                return this.generateGeminiCompletion(prompt, systemPrompt, modelName, options.apiKey);
+            case 'vertex':
+                return this.generateVertexCompletion(prompt, systemPrompt, modelName, options.apiKey);
             default:
-                // Fallback to OpenAI-compatible API
-                return this.generateOpenAICompletion(prompt, systemPrompt, modelName, options.apiKey);
+                throw new Error(`Unsupported provider "${provider}". Empyralis only supports direct provider integrations.`);
         }
     }
 
@@ -172,7 +177,7 @@ export class LlmService {
         }
     }
 
-    private async generateGoogleCompletion(
+    private async generateGeminiCompletion(
         prompt: string,
         systemPrompt?: string,
         model: string = 'gemini-pro',
@@ -181,11 +186,10 @@ export class LlmService {
         const key = apiKey || this.configService.get('GOOGLE_AI_API_KEY');
 
         if (!key) {
-            return { text: this.simulateResponse(prompt, 'Google AI') };
+            return { text: this.simulateResponse(prompt, 'Gemini') };
         }
 
         try {
-            // Google AI uses a REST API
             const response = await fetch(
                 `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`,
                 {
@@ -201,139 +205,59 @@ export class LlmService {
             );
 
             if (!response.ok) {
-                throw new Error(`Google AI error: ${response.status}`);
+                throw new Error(`Gemini error: ${response.status}`);
             }
 
             const data = await response.json();
             return { text: data.candidates?.[0]?.content?.parts?.[0]?.text || '[No response]' };
         } catch (error: any) {
-            this.logger.error(`Google AI error: ${error.message}`);
+            this.logger.error(`Gemini error: ${error.message}`);
             throw error;
         }
     }
 
-    private async generateGroqCompletion(
+    private async generateVertexCompletion(
         prompt: string,
         systemPrompt?: string,
-        model: string = 'llama-3-70b-8192',
-        apiKey?: string
+        model: string = 'gemini-2.0-flash-001',
+        accessToken?: string
     ): Promise<CompletionResult> {
-        const key = apiKey || this.configService.get('GROQ_API_KEY');
+        const token = accessToken || this.configService.get('VERTEX_ACCESS_TOKEN');
+        const projectId = this.configService.get('VERTEX_PROJECT_ID');
+        const location = this.configService.get('VERTEX_LOCATION') || 'us-central1';
 
-        if (!key) {
-            return { text: this.simulateResponse(prompt, 'Groq') };
+        if (!token || !projectId) {
+            return { text: this.simulateResponse(prompt, 'Vertex AI') };
         }
 
         try {
-            // Groq uses OpenAI-compatible API
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            const publisherModel = model.startsWith('publishers/')
+                ? model
+                : `publishers/google/models/${model}`;
+            const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/${publisherModel}:generateContent`;
+            const response = await fetch(url, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${key}`,
+                    'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: 'system', content: systemPrompt || 'You are a helpful AI Agent.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 2000,
+                    contents: [{
+                        role: 'user',
+                        parts: [{ text: `${systemPrompt || ''}\n\n${prompt}`.trim() }],
+                    }],
+                    generationConfig: { temperature: 0.7, maxOutputTokens: 2000 },
                 })
             });
 
             if (!response.ok) {
-                throw new Error(`Groq error: ${response.status}`);
+                throw new Error(`Vertex AI error: ${response.status}`);
             }
 
             const data = await response.json();
-            return { text: data.choices?.[0]?.message?.content || '[No response]' };
+            return { text: data.candidates?.[0]?.content?.parts?.[0]?.text || '[No response]' };
         } catch (error: any) {
-            this.logger.error(`Groq error: ${error.message}`);
-            throw error;
-        }
-    }
-
-    private async generateTogetherCompletion(
-        prompt: string,
-        systemPrompt?: string,
-        model: string = 'meta-llama/Llama-3-70b-chat-hf',
-        apiKey?: string
-    ): Promise<CompletionResult> {
-        const key = apiKey || this.configService.get('TOGETHER_API_KEY');
-
-        if (!key) {
-            return { text: this.simulateResponse(prompt, 'Together AI') };
-        }
-
-        try {
-            const response = await fetch('https://api.together.xyz/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${key}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: 'system', content: systemPrompt || 'You are a helpful AI Agent.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 2000,
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Together error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            return { text: data.choices?.[0]?.message?.content || '[No response]' };
-        } catch (error: any) {
-            this.logger.error(`Together error: ${error.message}`);
-            throw error;
-        }
-    }
-
-    private async generateOpenRouterCompletion(
-        prompt: string,
-        systemPrompt?: string,
-        model: string = 'auto',
-        apiKey?: string
-    ): Promise<CompletionResult> {
-        const key = apiKey || this.configService.get('OPENROUTER_API_KEY');
-
-        if (!key) {
-            return { text: this.simulateResponse(prompt, 'OpenRouter') };
-        }
-
-        try {
-            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${key}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://conductor.app',
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: 'system', content: systemPrompt || 'You are a helpful AI Agent.' },
-                        { role: 'user', content: prompt }
-                    ],
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`OpenRouter error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            return { text: data.choices?.[0]?.message?.content || '[No response]' };
-        } catch (error: any) {
-            this.logger.error(`OpenRouter error: ${error.message}`);
+            this.logger.error(`Vertex AI error: ${error.message}`);
             throw error;
         }
     }

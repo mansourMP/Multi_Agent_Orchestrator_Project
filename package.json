@@ -1,0 +1,7 @@
+{
+  "name": "empyralis-root",
+  "private": true,
+  "scripts": {
+    "tauri:dev": "cd src-tauri && cargo tauri dev"
+  }
+}

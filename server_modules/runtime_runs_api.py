@@ -115,6 +115,7 @@ def _resolve_local_execution_start_approval(
     approval_id: str,
     decision_text: str,
     note: str = "",
+    scope: str = "once",
 ) -> dict:
     pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
     correlation_id = str(pending.get("correlation_id") or "").strip() or _approval_correlation_id(approval_id, run_id=run_id_str)
@@ -141,7 +142,7 @@ def _resolve_local_execution_start_approval(
         "info" if approved else "warn",
         f"Decision received: {decision_text}",
         event="approval_received",
-        data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text},
+        data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": scope},
     )
     _append_approval_audit(
         approval_id=approval_id,
@@ -152,6 +153,7 @@ def _resolve_local_execution_start_approval(
         run_id=run_id_str,
         note=note,
         correlation_id=correlation_id,
+        metadata={"scope": scope},
     )
 
     if approved:
@@ -168,7 +170,7 @@ def _resolve_local_execution_start_approval(
             "info",
             "Approval granted. Run queued for Local Companion execution.",
             event="approval_resolved",
-            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "approved": True},
+            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "approved": True, "scope": scope},
         )
         _append_approval_audit(
             approval_id=approval_id,
@@ -178,6 +180,7 @@ def _resolve_local_execution_start_approval(
             source="local_execution_start",
             run_id=run_id_str,
             correlation_id=correlation_id,
+            metadata={"scope": scope},
         )
         _enqueue_local_companion_run(
             run_id_str,
@@ -190,6 +193,7 @@ def _resolve_local_execution_start_approval(
             "approval_id": approval_id,
             "correlation_id": correlation_id,
             "decision_kind": "approved",
+            "scope": scope,
         }
 
     run["pending_approval"] = None
@@ -211,6 +215,7 @@ def _resolve_local_execution_start_approval(
             "approved": False,
             "rejected": bool(rejected),
             "escalated": bool(escalated),
+            "scope": scope,
         },
     )
     _append_approval_audit(
@@ -226,6 +231,7 @@ def _resolve_local_execution_start_approval(
             "approved": False,
             "rejected": bool(rejected),
             "escalated": bool(escalated),
+            "scope": scope,
         },
     )
     run["result"] = "Local companion execution was not started because approval was not granted."
@@ -237,6 +243,7 @@ def _resolve_local_execution_start_approval(
         "approval_id": approval_id,
         "correlation_id": correlation_id,
         "decision_kind": ("escalated" if escalated else "rejected"),
+        "scope": scope,
     }
 
 
@@ -806,6 +813,7 @@ def register_run_routes(app) -> None:
                     approval_id,
                     str(payload.decision or "").strip().lower(),
                     str(payload.note or ""),
+                    str(payload.scope or "once"),
                 )
             if approval_id:
                 _append_approval_audit(
@@ -817,9 +825,10 @@ def register_run_routes(app) -> None:
                     run_id=run_id_str,
                     note=str(payload.note or ""),
                     correlation_id=correlation_id or _approval_correlation_id(approval_id, run_id=run_id_str),
+                    metadata={"scope": str(payload.scope or "once").strip().lower() or "once"},
                 )
-                run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision})
-                return {"status": "ok", "approval_id": approval_id, "correlation_id": correlation_id or None}
+                run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision, "note": payload.note, "scope": payload.scope})
+                return {"status": "ok", "approval_id": approval_id, "correlation_id": correlation_id or None, "scope": payload.scope or "once"}
             run["input_queue"].put(payload.decision)
             return {"status": "ok", "approval_id": None}
         raise HTTPException(404, "Run ID not found")

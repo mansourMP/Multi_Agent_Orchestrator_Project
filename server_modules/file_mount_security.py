@@ -3,8 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from server_modules.builder_runtime_mapping import normalize_file_mount_grants
-from server_modules.runtime_policy import EXECUTION_TARGET_LOCAL_COMPANION, normalize_execution_target
+try:
+    from server_modules.builder_runtime_mapping import normalize_file_mount_grants
+    from server_modules.runtime_policy import EXECUTION_TARGET_LOCAL_COMPANION, normalize_execution_target
+except ImportError:  # pragma: no cover - used by local worker scripts
+    from builder_runtime_mapping import normalize_file_mount_grants  # type: ignore[no-redef]
+    from runtime_policy import EXECUTION_TARGET_LOCAL_COMPANION, normalize_execution_target  # type: ignore[no-redef]
 
 
 FILE_OPERATION_MODE_READ = "read"

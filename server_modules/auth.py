@@ -31,6 +31,7 @@ ORION_ADMIN_EMAILS = {item.strip().lower() for item in str(os.getenv("ORION_ADMI
 ORION_DEFAULT_WORKSPACE_IDS = tuple(
     item.strip() for item in str(os.getenv("ORION_DEFAULT_WORKSPACE_IDS", "default")).split(",") if item.strip()
 ) or ("default",)
+ORION_SERVICE_RATE_LIMIT_PER_MINUTE = int(os.getenv("ORION_SERVICE_RATE_LIMIT_PER_MINUTE", "600"))
 
 
 def _orion_api_key() -> str:
@@ -316,12 +317,13 @@ def get_current_user(
     expected_api_key = _orion_api_key()
     provided_api_key = str(x_api_key or "").strip()
     if expected_api_key and provided_api_key and secrets.compare_digest(provided_api_key, expected_api_key):
-        _enforce_window_limit(
-            buckets=USER_RATE_LIMIT_BUCKETS,
-            lock=USER_RATE_LIMIT_LOCK,
-            key="user:service",
-            limit=60,
-        )
+        if ORION_SERVICE_RATE_LIMIT_PER_MINUTE > 0:
+            _enforce_window_limit(
+                buckets=USER_RATE_LIMIT_BUCKETS,
+                lock=USER_RATE_LIMIT_LOCK,
+                key="user:service",
+                limit=ORION_SERVICE_RATE_LIMIT_PER_MINUTE,
+            )
         return {"user_id": "service", "auth_type": "api_key", "email": None}
 
     raise HTTPException(status_code=401, detail="Authentication required.")

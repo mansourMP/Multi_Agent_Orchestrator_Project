@@ -56,6 +56,69 @@ describe('workflow schema normalization', () => {
     expect(normalized.nodes[2]?.data?.legacyType).toBe('http_request');
   });
 
+  it('adds desktop trust defaults to canonical permissions', () => {
+    const normalized = normalizeWorkflowDefinition({
+      nodes: [
+        {
+          id: 'agent_1',
+          type: 'agent',
+          config: {
+            identity: { name: 'Local Agent', role: 'Operator' },
+          },
+        },
+        {
+          id: 'tool_1',
+          type: 'tool',
+          variant: 'file',
+          config: {
+            path: 'artifacts/output.txt',
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(normalized.nodes[0]?.config?.permissions?.trust_preset).toBe('standard_local');
+    expect(normalized.nodes[0]?.config?.permissions?.remembered_grants).toEqual({
+      folders: [],
+      browser_session: false,
+      shell_capabilities: [],
+    });
+    expect(normalized.nodes[1]?.config?.permissions?.trust_preset).toBe('standard_local');
+  });
+
+  it('preserves canonical trust preset and remembered grants', () => {
+    const normalized = normalizeWorkflowDefinition({
+      nodes: [
+        {
+          id: 'agent_1',
+          type: 'agent',
+          config: {
+            identity: { name: 'Elevated Agent', role: 'Operator' },
+            runtime: { execution_target: 'local_companion' },
+            permissions: {
+              trust_preset: 'elevated_local',
+              action_policy: 'strict',
+              remembered_grants: {
+                folders: ['/Users/mansur/Downloads'],
+                browser_session: true,
+                shell_capabilities: ['stack.status'],
+              },
+            },
+          },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(normalized.nodes[0]?.config?.permissions?.trust_preset).toBe('elevated_local');
+    expect(normalized.nodes[0]?.config?.permissions?.remembered_grants).toEqual({
+      folders: ['/Users/mansur/Downloads'],
+      browser_session: true,
+      shell_capabilities: ['stack.status'],
+    });
+  });
+
   it('blocks publish when only a manual trigger exists', () => {
     const issues = validateWorkflowDefinition(
       {

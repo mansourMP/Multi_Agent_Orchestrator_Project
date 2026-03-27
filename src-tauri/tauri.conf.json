@@ -1,0 +1,19 @@
+{
+  "productName": "Empyralis",
+  "version": "0.1.0",
+  "identifier": "com.empyralis.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["../frontend/app/favicon.ico"]
+  }
+}

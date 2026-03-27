@@ -40,6 +40,44 @@ function originFromRequest(request: NextRequest): string | null {
   }
 }
 
+function parseOrigin(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function sameLoopbackOrigin(left: string, right: string): boolean {
+  const leftUrl = parseOrigin(left);
+  const rightUrl = parseOrigin(right);
+  if (!leftUrl || !rightUrl) return false;
+  if (leftUrl.protocol !== rightUrl.protocol) return false;
+  if (leftUrl.port !== rightUrl.port) return false;
+  return isLoopbackHost(leftUrl.hostname) && isLoopbackHost(rightUrl.hostname);
+}
+
+function missingOriginLoopbackAllowed(request: NextRequest): boolean {
+  if (!isLoopbackHost(request.nextUrl.hostname)) return false;
+  const secFetchSite = String(request.headers.get('sec-fetch-site') || '').trim().toLowerCase();
+  const secFetchMode = String(request.headers.get('sec-fetch-mode') || '').trim().toLowerCase();
+  const userAgent = String(request.headers.get('user-agent') || '').trim().toLowerCase();
+
+  if (secFetchSite && !['same-origin', 'same-site', 'none'].includes(secFetchSite)) {
+    return false;
+  }
+
+  if (secFetchMode && !['cors', 'same-origin', 'navigate', 'no-cors'].includes(secFetchMode)) {
+    return false;
+  }
+
+  if (secFetchSite || secFetchMode) {
+    return true;
+  }
+
+  return userAgent.includes('tauri') || userAgent.includes('wry');
+}
+
 function isLoopbackHost(hostname: string): boolean {
   const normalized = String(hostname || '').trim().toLowerCase();
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
@@ -58,11 +96,16 @@ export function enforceBffRouteGuard(request: NextRequest, options: BffGuardOpti
 
   const requestOrigin = originFromRequest(request);
   if (!requestOrigin) {
+    if (missingOriginLoopbackAllowed(request)) {
+      return null;
+    }
     return jsonError('Missing control-plane origin.', 403);
   }
 
   const allowedOrigins = normalizedAllowedOrigins(request);
-  if (!allowedOrigins.has(requestOrigin)) {
+  const originAllowed = allowedOrigins.has(requestOrigin)
+    || Array.from(allowedOrigins).some((allowedOrigin) => sameLoopbackOrigin(allowedOrigin, requestOrigin));
+  if (!originAllowed) {
     return jsonError('Origin is not allowed.', 403, {
       origin: requestOrigin,
       allowed_origins: Array.from(allowedOrigins),

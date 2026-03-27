@@ -3,6 +3,7 @@ import { obviousPrivateUrlReason } from '../security/url-guards';
 export const EMPYRALIST_WORKFLOW_SCHEMA_VERSION = 'empyralist.workflow.v2';
 
 export type ExecutionTarget = 'auto' | 'cloud' | 'local_companion';
+export type TrustPreset = 'standard_local' | 'trusted_workflow' | 'elevated_local';
 export type FileMountId =
     | 'artifacts'
     | 'project'
@@ -119,6 +120,7 @@ const DATA_VARIANTS = new Set<DataVariant>(['transform', 'compose', 'validate'])
 const SUBFLOW_VARIANTS = new Set<SubflowVariant>(['call_workflow']);
 const FILE_MOUNTS: FileMountId[] = ['artifacts', 'project', 'shared', 'knowledge', 'local_root', 'connector_files'];
 const FILE_GRANTS = new Set<FileGrant>(['none', 'read', 'read_write', 'create_only', 'append_only']);
+const TRUST_PRESETS = new Set<TrustPreset>(['standard_local', 'trusted_workflow', 'elevated_local']);
 const BROWSER_INTERACTIVE_ACTIONS = new Set([
     'type',
     'click',
@@ -155,6 +157,11 @@ function normalizeExecutionTarget(value: unknown): ExecutionTarget {
     return 'auto';
 }
 
+function normalizeTrustPreset(value: unknown): TrustPreset {
+    const token = String(value || '').trim().toLowerCase();
+    return TRUST_PRESETS.has(token as TrustPreset) ? token as TrustPreset : 'standard_local';
+}
+
 function parseInteger(value: unknown, fallback: number): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : fallback;
@@ -180,6 +187,15 @@ function dedupeStrings(value: unknown): string[] {
         out.push(token);
     }
     return out;
+}
+
+function normalizeRememberedGrants(value: unknown): Record<string, any> {
+    const source = isRecord(value) ? value : {};
+    return {
+        folders: dedupeStrings(source.folders),
+        browser_session: Boolean(source.browser_session),
+        shell_capabilities: dedupeStrings(source.shell_capabilities),
+    };
 }
 
 function normalizePosition(rawNode: Record<string, any>, index: number): { x: number; y: number } {
@@ -281,12 +297,14 @@ function defaultAgentConfig(
                 .filter((item) => item.connector_id),
         },
         permissions: {
+            trust_preset: normalizeTrustPreset(permissions.trust_preset),
             action_policy: compactText(permissions.action_policy ?? meta.action_policy ?? 'guarded', 40) || 'guarded',
             connector_permissions: dedupeStrings(permissions.connector_permissions ?? permissions.connectors),
             browser_permissions: isRecord(permissions.browser_permissions)
                 ? permissions.browser_permissions
                 : { allow: false },
             file_mount_grants: normalizeFileMountGrants(permissions.file_mount_grants, executionTarget),
+            remembered_grants: normalizeRememberedGrants(permissions.remembered_grants),
         },
     };
 }
@@ -353,6 +371,8 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
     else if (rawType === 'code' || rawVariant === 'code') variant = 'code';
     else if (rawVariant && TOOL_VARIANTS.has(rawVariant as ToolVariant)) variant = rawVariant as ToolVariant;
     else if (String(rawData.actionType || '').trim().toLowerCase() === 'write_file') variant = 'file';
+    const rawPermissions = isRecord(rawConfig.permissions) ? rawConfig.permissions : {};
+    const executionTarget = normalizeExecutionTarget(rawConfig.execution_target);
 
     const config = {
         action_id: compactText(rawConfig.action_id ?? rawData.actionType ?? '', 120),
@@ -361,7 +381,7 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
         url: compactText(rawConfig.url ?? rawData.url ?? '', 500),
         summary: compactText(rawConfig.summary ?? rawData.summary ?? '', 300),
         code: compactText(rawConfig.code ?? rawData.code ?? '', 4000),
-        execution_target: normalizeExecutionTarget(rawConfig.execution_target),
+        execution_target: executionTarget,
         command: compactText(rawConfig.command ?? '', 4000),
         argv: asArray(rawConfig.argv).map((item) => compactText(item, 400)).filter(Boolean),
         cwd: compactText(rawConfig.cwd ?? '', 400),
@@ -388,7 +408,16 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
         comment_id: compactText(rawConfig.comment_id ?? rawConfig.media_comment_id ?? '', 160),
         session_profile: compactText(rawConfig.session_profile ?? '', 160),
         browser_actions: asArray(rawConfig.browser_actions).filter(isRecord),
-        permissions: isRecord(rawConfig.permissions) ? rawConfig.permissions : {},
+        permissions: {
+            trust_preset: normalizeTrustPreset(rawPermissions.trust_preset),
+            action_policy: compactText(rawPermissions.action_policy ?? 'guarded', 40) || 'guarded',
+            connector_permissions: dedupeStrings(rawPermissions.connector_permissions ?? rawPermissions.connectors),
+            browser_permissions: isRecord(rawPermissions.browser_permissions)
+                ? rawPermissions.browser_permissions
+                : { allow: false },
+            file_mount_grants: normalizeFileMountGrants(rawPermissions.file_mount_grants, executionTarget),
+            remembered_grants: normalizeRememberedGrants(rawPermissions.remembered_grants),
+        },
     };
 
     const legacyType =

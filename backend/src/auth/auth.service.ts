@@ -4,6 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { SignupDto, LoginDto } from './dto';
 
+type GoogleAuthProfile = {
+    email: string;
+    name: string;
+    avatarUrl?: string | null;
+};
+
 @Injectable()
 export class AuthService {
     constructor(
@@ -33,28 +39,7 @@ export class AuthService {
             },
         });
 
-        // Create default organization for user
-        const org = await this.prisma.organization.create({
-            data: {
-                name: `${dto.name}'s Workspace`,
-                slug: `${dto.email.split('@')[0]}-${Date.now()}`,
-                members: {
-                    create: {
-                        userId: user.id,
-                        role: 'owner',
-                    },
-                },
-            },
-        });
-
-        // Create default workspace
-        await this.prisma.workspace.create({
-            data: {
-                organizationId: org.id,
-                name: 'Default Workspace',
-                description: 'Your first workspace',
-            },
-        });
+        await this.createDefaultWorkspace(user.id, dto.email, dto.name);
 
         // Generate token
         const token = await this.signToken(user.id, user.email);
@@ -125,5 +110,71 @@ export class AuthService {
         };
 
         return this.jwt.signAsync(payload);
+    }
+
+    async loginWithGoogleProfile(profile: GoogleAuthProfile) {
+        const email = profile.email.trim().toLowerCase();
+        const displayName = profile.name.trim() || email.split('@')[0];
+        const avatarUrl = String(profile.avatarUrl || '').trim() || null;
+
+        let user = await this.prisma.user.findUnique({
+            where: { email },
+        });
+
+        if (!user) {
+            user = await this.prisma.user.create({
+                data: {
+                    email,
+                    name: displayName,
+                    avatarUrl,
+                    emailVerified: true,
+                },
+            });
+
+            await this.createDefaultWorkspace(user.id, email, displayName);
+        } else {
+            user = await this.prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    name: user.name || displayName,
+                    avatarUrl: user.avatarUrl || avatarUrl,
+                    emailVerified: true,
+                },
+            });
+        }
+
+        const token = await this.signToken(user.id, user.email);
+        return {
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                avatarUrl: user.avatarUrl,
+            },
+            token,
+        };
+    }
+
+    private async createDefaultWorkspace(userId: string, email: string, displayName: string) {
+        const org = await this.prisma.organization.create({
+            data: {
+                name: `${displayName}'s Workspace`,
+                slug: `${email.split('@')[0]}-${Date.now()}`,
+                members: {
+                    create: {
+                        userId,
+                        role: 'owner',
+                    },
+                },
+            },
+        });
+
+        await this.prisma.workspace.create({
+            data: {
+                organizationId: org.id,
+                name: 'Default Workspace',
+                description: 'Your first workspace',
+            },
+        });
     }
 }

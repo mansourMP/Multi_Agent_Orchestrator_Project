@@ -52,6 +52,7 @@ export type ProviderOption = {
   auth: string[];
   defaultAuthMode?: string;
   authModes?: { id: string; label: string; secretRequired?: boolean }[];
+  note?: string;
 };
 export type ModelAliasOption = {
   alias: string;
@@ -884,9 +885,14 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
     id: 'openai',
     label: 'OpenAI',
     defaultModel: 'gpt-4.1',
-    auth: ['api_key'],
+    auth: ['api_key', 'access_token', 'oauth_token'],
     defaultAuthMode: 'api_key',
-    authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
+    authModes: [
+      { id: 'api_key', label: 'API Key', secretRequired: true },
+      { id: 'access_token', label: 'OpenAI access token', secretRequired: true },
+      { id: 'oauth_token', label: 'Saved OpenAI / Codex token', secretRequired: true },
+    ],
+    note: 'Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.',
   },
   {
     id: 'anthropic',
@@ -898,6 +904,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
       { id: 'api_key', label: 'API Key', secretRequired: true },
       { id: 'local_cli', label: 'Claude Subscription', secretRequired: false },
     ],
+    note: 'Use a direct Anthropic API key or the Claude subscription already signed into the local CLI on this machine.',
   },
   {
     id: 'gemini',
@@ -906,6 +913,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
     auth: ['api_key'],
     defaultAuthMode: 'api_key',
     authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
+    note: 'Direct Gemini API key only.',
   },
   {
     id: 'vertex',
@@ -914,6 +922,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
     auth: ['access_token', 'project_id', 'location'],
     defaultAuthMode: 'access_token',
     authModes: [{ id: 'access_token', label: 'Access Token', secretRequired: true }],
+    note: 'Direct Vertex AI access token with project and region.',
   },
 ];
 

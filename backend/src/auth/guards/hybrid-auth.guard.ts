@@ -16,7 +16,11 @@ export class HybridAuthGuard implements CanActivate {
         const request = context.switchToHttp().getRequest();
         const xApiKey = String(request.headers['x-api-key'] || '').trim();
         const authHeader = String(request.headers.authorization || '').trim();
-        const configuredApiKey = String(this.config.get('ORION_API_KEY') || '').trim();
+        const configuredApiKey = String(
+            this.config.get('ORION_API_KEY')
+            || this.config.get('RUNTIME_KEY')
+            || '',
+        ).trim();
 
         if (configuredApiKey && xApiKey && xApiKey === configuredApiKey) {
             request.user = {

@@ -154,10 +154,10 @@ export function evaluateDoctorRunGate(
       status: 'fail',
       blocking: true,
       title: 'OpenAI connection needs attention',
-      detail: openAiConnectivityWarning.detail || 'Managed OpenAI access is not ready for this run.',
+      detail: openAiConnectivityWarning.detail || 'OpenAI credentials are not ready for this run.',
       recommendation:
         openAiConnectivityWarning.recommendation
-        || 'Open Health and reconnect the managed OpenAI account before running.',
+        || 'Open Health and add a direct OpenAI API key or access token before running.',
       report,
     };
   }

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 
 export type DesktopBridge = {
   desktop?: boolean;
+  platform?: string;
+  openExternal?: (target: string) => Promise<boolean | string>;
 };
 
 export function getDesktopBridge(): DesktopBridge | null {

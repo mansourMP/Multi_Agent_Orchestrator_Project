@@ -87,6 +87,31 @@ describe('ExecutionsGateway security hardening', () => {
     });
   });
 
+  it('accepts service API key sockets when only RUNTIME_KEY is configured', async () => {
+    const config = createConfig({
+      NODE_ENV: 'production',
+      RUNTIME_KEY: 'service-secret',
+    });
+    const jwt = createJwt();
+    const prisma = createPrisma();
+    const gateway = new ExecutionsGateway(config as never, jwt as never, prisma as never);
+    const client = createSocket({
+      handshake: {
+        auth: { apiKey: 'service-secret' },
+        headers: {},
+      },
+    });
+
+    await gateway.handleConnection(client as never);
+
+    expect(client.disconnect).not.toHaveBeenCalled();
+    expect(client.data.actor).toMatchObject({
+      authType: 'api_key',
+      isService: true,
+      userId: 'service-api-key',
+    });
+  });
+
   it('rejects bridge sockets without a token in production', async () => {
     const config = createConfig({
       NODE_ENV: 'production',

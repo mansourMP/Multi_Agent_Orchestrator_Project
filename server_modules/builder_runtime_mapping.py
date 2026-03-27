@@ -2,13 +2,22 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from server_modules.runtime_policy import (
-    EXECUTION_TARGET_LOCAL_COMPANION,
-    normalize_execution_target,
-    normalize_trust_mode,
-    evaluate_tool_policy_decision,
-    tool_policy_snapshot,
-)
+try:
+    from server_modules.runtime_policy import (
+        EXECUTION_TARGET_LOCAL_COMPANION,
+        normalize_execution_target,
+        normalize_trust_mode,
+        evaluate_tool_policy_decision,
+        tool_policy_snapshot,
+    )
+except ImportError:  # pragma: no cover - used by local worker scripts
+    from runtime_policy import (  # type: ignore[no-redef]
+        EXECUTION_TARGET_LOCAL_COMPANION,
+        normalize_execution_target,
+        normalize_trust_mode,
+        evaluate_tool_policy_decision,
+        tool_policy_snapshot,
+    )
 
 
 FILE_MOUNTS = [
@@ -20,6 +29,7 @@ FILE_MOUNTS = [
     "connector_files",
 ]
 FILE_GRANTS = {"none", "read", "read_write", "create_only", "append_only"}
+TRUST_PRESETS = {"standard_local", "trusted_workflow", "elevated_local"}
 
 
 def _dedupe_strings(value: Any) -> List[str]:
@@ -33,6 +43,22 @@ def _dedupe_strings(value: Any) -> List[str]:
         seen.add(token)
         out.append(token)
     return out
+
+
+def normalize_trust_preset(raw: Any) -> str:
+    token = str(raw or "").strip().lower()
+    if token in TRUST_PRESETS:
+        return token
+    return "standard_local"
+
+
+def normalize_remembered_grants(raw: Any) -> Dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    return {
+        "folders": _dedupe_strings(source.get("folders")),
+        "browser_session": bool(source.get("browser_session")),
+        "shell_capabilities": _dedupe_strings(source.get("shell_capabilities")),
+    }
 
 
 def default_file_mount_grants() -> List[Dict[str, str]]:
@@ -82,14 +108,17 @@ def map_builder_permissions_to_runtime_metadata(
 ) -> Dict[str, Any]:
     source = permissions if isinstance(permissions, dict) else {}
     target = normalize_execution_target(execution_target)
+    trust_preset = normalize_trust_preset(source.get("trust_preset"))
     trust_mode = normalize_trust_mode(source.get("action_policy") or "guarded")
     file_mount_grants = normalize_file_mount_grants(source.get("file_mount_grants"), target)
     metadata = {
+        "trust_preset": trust_preset,
         "trust_mode": trust_mode,
         "execution_target": target,
         "connector_permissions": _dedupe_strings(source.get("connector_permissions") or source.get("connectors")),
         "browser_permissions": source.get("browser_permissions") if isinstance(source.get("browser_permissions"), dict) else {"allow": False},
         "file_mount_grants": file_mount_grants,
+        "remembered_grants": normalize_remembered_grants(source.get("remembered_grants")),
         "approval_rules": {
             "approve_on_connector_actions": True,
         },

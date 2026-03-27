@@ -25,6 +25,10 @@ def _request(path: str = "/test", query_string: bytes = b"") -> Request:
 
 
 class AuthHardeningTests(unittest.TestCase):
+    def setUp(self):
+        auth.USER_RATE_LIMIT_BUCKETS.clear()
+        auth.LOGIN_RATE_LIMIT_BUCKETS.clear()
+
     def test_auth_remains_required_when_api_key_is_configured(self):
         with patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
             self.assertTrue(auth._orion_auth_required())
@@ -35,6 +39,15 @@ class AuthHardeningTests(unittest.TestCase):
             user = auth.get_current_user(request=request, x_api_key="secret")
         self.assertEqual(user["auth_type"], "api_key")
         self.assertEqual(user["user_id"], "service")
+
+    def test_service_api_key_uses_separate_higher_rate_limit_budget(self):
+        request = _request()
+        with patch.object(auth, "ORION_SERVICE_RATE_LIMIT_PER_MINUTE", 2), patch("server_modules.auth._orion_api_key", return_value="secret"):
+            auth.get_current_user(request=request, x_api_key="secret")
+            auth.get_current_user(request=request, x_api_key="secret")
+            with self.assertRaises(HTTPException) as ctx:
+                auth.get_current_user(request=request, x_api_key="secret")
+        self.assertEqual(ctx.exception.status_code, 429)
 
     def test_extract_request_api_key_ignores_query_string(self):
         request = _request(query_string=b"api_key=leaked")

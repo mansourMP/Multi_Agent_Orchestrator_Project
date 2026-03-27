@@ -18,6 +18,7 @@ import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
 import { fetchExecution, fetchExecutionHistory, fetchExecutions } from '@/lib/api';
 import { readSeededRuntimeRuns, RUNTIME_RUN_SEEDS_UPDATED_EVENT, type RuntimeRunSeed } from '@/lib/runtimeRunSeed';
+import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
 
 type ExecutionRecord = {
   id: string;
@@ -627,6 +628,8 @@ export default function ExecutionsPage() {
       note: 'The queue is quiet. Start a task or use the filters below to review past runs.',
     };
   }, [runSummary]);
+  const executionLoadDetail = loadError ? humanizeUiError(loadError) : '';
+  const showExecutionLoadDetail = Boolean(executionLoadDetail && executionLoadDetail !== UI_ERROR_COPY.backend);
 
   const tokenSummary = useMemo(() => {
     if (!selectedExecution) return 0;
@@ -825,8 +828,10 @@ export default function ExecutionsPage() {
             <AlertCircle size={18} />
           </div>
           <div className="orion-panel-title">Runs are unavailable</div>
-          <div className="orion-panel-copy">The run history could not be loaded right now. If the backend is offline, bring it back up, then retry.</div>
-          <div className="orion-panel-copy" style={{ marginTop: -4 }}>{loadError}</div>
+          <div className="orion-panel-copy">{UI_ERROR_COPY.backend}</div>
+          {showExecutionLoadDetail ? (
+            <div className="orion-panel-copy" style={{ marginTop: -4 }}>{executionLoadDetail}</div>
+          ) : null}
           <div className="orion-state-actions">
             <button type="button" className="btn-secondary" onClick={() => void loadExecutions()}>
               <RefreshCw size={14} />

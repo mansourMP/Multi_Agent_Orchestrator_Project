@@ -388,8 +388,13 @@ const CANVAS_NODE_GROUPS: Array<{
 
 const ACTION_POLICY_OPTIONS = [
   { value: 'guarded', label: 'Guarded' },
-  { value: 'operator', label: 'Operator' },
-  { value: 'trusted', label: 'Trusted' },
+  { value: 'strict', label: 'Strict' },
+  { value: 'auto', label: 'Automatic' },
+] as const;
+const TRUST_PRESET_OPTIONS = [
+  { value: 'standard_local', label: 'Standard local' },
+  { value: 'trusted_workflow', label: 'Trusted workflow' },
+  { value: 'elevated_local', label: 'Elevated local' },
 ] as const;
 
 const MEMORY_SCOPE_OPTIONS = ['session', 'project', 'profile'] as const;
@@ -496,6 +501,26 @@ function resolveBuilderFileMountGrants(raw: unknown): Array<{ mount: string; gra
     }
   }
   return Array.from(defaults.entries()).map(([mount, grant]) => ({ mount, grant }));
+}
+
+function formatTrustPresetLabel(value: unknown): string {
+  const token = String(value || '').trim().toLowerCase();
+  if (token === 'trusted_workflow') return 'Trusted workflow';
+  if (token === 'elevated_local') return 'Elevated local';
+  return 'Standard local';
+}
+
+function normalizeBuilderRememberedGrants(raw: unknown): {
+  folders: string[];
+  browser_session: boolean;
+  shell_capabilities: string[];
+} {
+  const source = ensureRecord(raw);
+  return {
+    folders: normalizeStringList(source.folders),
+    browser_session: Boolean(source.browser_session),
+    shell_capabilities: normalizeStringList(source.shell_capabilities),
+  };
 }
 
 function formatCanonicalTypeLabel(type: CanonicalNodeType): string {
@@ -1925,6 +1950,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
       const primaryAgentConfig = isRecord(primaryAgentMeta.__canonicalConfig) ? primaryAgentMeta.__canonicalConfig : {};
       const primaryAgentPermissions = isRecord(primaryAgentConfig.permissions) ? primaryAgentConfig.permissions : {};
       const trustMode = String(primaryAgentPermissions.action_policy || 'guarded').trim() || 'guarded';
+      const trustPreset = String(primaryAgentPermissions.trust_preset || 'standard_local').trim() || 'standard_local';
+      const rememberedGrants = normalizeBuilderRememberedGrants(primaryAgentPermissions.remembered_grants);
       const connectorPermissions = Array.isArray(primaryAgentPermissions.connector_permissions)
         ? primaryAgentPermissions.connector_permissions.map((item) => String(item || '').trim()).filter(Boolean)
         : [];
@@ -1959,6 +1986,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             workspace_id: DEFAULT_WORKSPACE_ID,
             origin: 'builder',
             trust_mode: trustMode,
+            trust_preset: trustPreset,
+            remembered_grants: rememberedGrants,
             connector_permissions: connectorPermissions,
             browser_permissions: browserPermissions,
             file_mount_grants: fileMountGrants,
@@ -2314,6 +2343,8 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
     const permissions = ensureRecord(config.permissions);
     const connectorPermissions = normalizeStringList(permissions.connector_permissions);
     const browserPermissions = ensureRecord(permissions.browser_permissions);
+    const trustPreset = String(permissions.trust_preset || 'standard_local').trim() || 'standard_local';
+    const rememberedGrants = normalizeBuilderRememberedGrants(permissions.remembered_grants);
     const agentRuntime = ensureRecord(config.runtime);
     const agentSkills = ensureRecord(config.skills);
     const agentTools = ensureRecord(config.tools);
@@ -2420,6 +2451,27 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           section: 'permissions',
           level: 'error',
           message: 'local_root is only allowed when the agent runs locally.',
+        });
+      }
+      if (trustPreset !== 'standard_local' && String(agentRuntime.execution_target || 'auto').trim() === 'cloud') {
+        localAgentIssues.push({
+          section: 'permissions',
+          level: 'warning',
+          message: 'Trusted workflow and elevated local presets are intended for local companion execution.',
+        });
+      }
+      if (
+        trustPreset === 'standard_local'
+        && (
+          rememberedGrants.folders.length > 0
+          || rememberedGrants.browser_session
+          || rememberedGrants.shell_capabilities.length > 0
+        )
+      ) {
+        localAgentIssues.push({
+          section: 'permissions',
+          level: 'warning',
+          message: 'This agent has remembered desktop grants. Use Trusted workflow if that persistence is intentional.',
         });
       }
       if (currentProviderProfileId && !runtimeProfiles.some((profile) => profile.id === currentProviderProfileId)) {
@@ -3528,6 +3580,72 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
 
               {renderAgentInspectorSection('permissions', 'Permissions', (
                 <>
+                  <div className="orion-builder-inspector">
+                    <div className="orion-builder-inspector-title">Trust summary</div>
+                    <div className="orion-builder-inspector-grid">
+                      <div className="orion-builder-inspector-item">
+                        <div className="orion-builder-field-label">Preset</div>
+                        <div className="orion-builder-field-readonly">{formatTrustPresetLabel(trustPreset)}</div>
+                      </div>
+                      <div className="orion-builder-inspector-item">
+                        <div className="orion-builder-field-label">Action policy</div>
+                        <div className="orion-builder-field-readonly">
+                          {ACTION_POLICY_OPTIONS.find((option) => option.value === String(permissions.action_policy || 'guarded').trim())?.label || 'Guarded'}
+                        </div>
+                      </div>
+                      <div className="orion-builder-inspector-item">
+                        <div className="orion-builder-field-label">Browser access</div>
+                        <div className="orion-builder-field-readonly">
+                          {Boolean(browserPermissions.allow)
+                            ? rememberedGrants.browser_session
+                              ? 'Automation + remembered session'
+                              : 'Automation allowed'
+                            : 'Off'}
+                        </div>
+                      </div>
+                      <div className="orion-builder-inspector-item">
+                        <div className="orion-builder-field-label">Machine root</div>
+                        <div className="orion-builder-field-readonly">
+                          {resolveBuilderFileMountGrants(permissions.file_mount_grants).find((item) => item.mount === 'local_root')?.grant !== 'none'
+                            ? 'Enabled'
+                            : 'Blocked'}
+                        </div>
+                      </div>
+                      <div className="orion-builder-inspector-item is-wide">
+                        <div className="orion-builder-field-label">Remembered grants</div>
+                        <div className="orion-builder-field-readonly is-block">
+                          {rememberedGrants.folders.length === 0 && !rememberedGrants.browser_session && rememberedGrants.shell_capabilities.length === 0
+                            ? 'No remembered desktop grants.'
+                            : [
+                                rememberedGrants.folders.length > 0 ? `${rememberedGrants.folders.length} folder grant${rememberedGrants.folders.length === 1 ? '' : 's'}` : null,
+                                rememberedGrants.browser_session ? 'browser session' : null,
+                                rememberedGrants.shell_capabilities.length > 0 ? `${rememberedGrants.shell_capabilities.length} shell capability grant${rememberedGrants.shell_capabilities.length === 1 ? '' : 's'}` : null,
+                              ].filter(Boolean).join(' · ')}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Trust preset</span>
+                    <select
+                      className="orion-builder-field-input"
+                      value={trustPreset}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          permissions: {
+                            ...ensureRecord(ensureRecord(current.config).permissions),
+                            trust_preset: event.target.value,
+                          },
+                        },
+                      }))}
+                    >
+                      {TRUST_PRESET_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
                   <label className="orion-builder-field">
                     <span className="orion-builder-field-label">Action policy</span>
                     <select
@@ -3599,6 +3717,68 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                       }))}
                     />
                     {' '}Allow browser automation
+                  </label>
+                  <label className="orion-builder-copy">
+                    <input
+                      type="checkbox"
+                      checked={rememberedGrants.browser_session}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          permissions: {
+                            ...ensureRecord(ensureRecord(current.config).permissions),
+                            remembered_grants: {
+                              ...normalizeBuilderRememberedGrants(ensureRecord(ensureRecord(current.config).permissions).remembered_grants),
+                              browser_session: event.target.checked,
+                            },
+                          },
+                        },
+                      }))}
+                    />
+                    {' '}Remember browser session access on this machine
+                  </label>
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Remembered folders</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={rememberedGrants.folders.join(', ')}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          permissions: {
+                            ...ensureRecord(ensureRecord(current.config).permissions),
+                            remembered_grants: {
+                              ...normalizeBuilderRememberedGrants(ensureRecord(ensureRecord(current.config).permissions).remembered_grants),
+                              folders: normalizeCsvList(event.target.value),
+                            },
+                          },
+                        },
+                      }))}
+                      placeholder="/Users/mansur/Downloads, /Users/mansur/Documents"
+                    />
+                  </label>
+                  <label className="orion-builder-field">
+                    <span className="orion-builder-field-label">Remembered shell capabilities</span>
+                    <input
+                      className="orion-builder-field-input"
+                      value={rememberedGrants.shell_capabilities.join(', ')}
+                      onChange={(event) => updateSelectedCanonicalNode((current) => ({
+                        ...current,
+                        config: {
+                          ...ensureRecord(current.config),
+                          permissions: {
+                            ...ensureRecord(ensureRecord(current.config).permissions),
+                            remembered_grants: {
+                              ...normalizeBuilderRememberedGrants(ensureRecord(ensureRecord(current.config).permissions).remembered_grants),
+                              shell_capabilities: normalizeCsvList(event.target.value),
+                            },
+                          },
+                        },
+                      }))}
+                      placeholder="stack.status, file.convert"
+                    />
                   </label>
                   <div className="orion-builder-inspector-grid">
                     {resolveBuilderFileMountGrants(permissions.file_mount_grants).map((item) => (

@@ -111,6 +111,7 @@ interface ProviderInfo {
     auth_modes?: Array<{ id?: string; label?: string; secret_required?: boolean }>;
     default_auth_mode?: string;
     default_model?: string;
+    note?: string;
 }
 
 interface VaultCredentialItem {
@@ -277,7 +278,7 @@ const CANVAS_NODE_TOP = 50;
 const CANVAS_NODE_GAP = 170;
 const ACTION_POLICY_OPTIONS = [
     { value: 'guarded', label: 'Guarded' },
-    { value: 'auto', label: 'Automatic' },
+    { value: 'auto', label: 'Adaptive' },
     { value: 'strict', label: 'Strict' },
     { value: 'cost_guard', label: 'Cost guard' },
     { value: 'sensitive_guard', label: 'Sensitive guard' },
@@ -1219,7 +1220,7 @@ function sortRuntimeProfiles(items: RuntimeProfileRow[]): RuntimeProfileRow[] {
 }
 
 function formatConnectionModeLabel(mode: ConnectionMode): string {
-    return mode === 'managed' ? 'Hekor-managed access' : 'Your API key';
+    return mode === 'managed' ? 'Runtime account' : 'Saved AI account';
 }
 
 function buildWorkflowDraftName(nodes: CanvasWorkflowNode[], fallbackGoal = ''): string {
@@ -1358,10 +1359,30 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         return providers.length > 0
             ? providers
             : [
-                { id: 'openai', label: 'OpenAI', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gpt-4.1' },
-                { id: 'anthropic', label: 'Anthropic', auth: ['api_key', 'local_cli'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }, { id: 'local_cli', label: 'Claude Subscription', secret_required: false }], default_auth_mode: 'api_key', default_model: 'claude-sonnet' },
-                { id: 'gemini', label: 'Google Gemini', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gemini-flash' },
-                { id: 'vertex', label: 'Google Vertex AI', auth: ['access_token', 'project_id', 'location'], auth_modes: [{ id: 'access_token', label: 'Access Token', secret_required: true }], default_auth_mode: 'access_token', default_model: 'vertex-gemini-flash' },
+                {
+                    id: 'openai',
+                    label: 'OpenAI',
+                    auth: ['api_key', 'access_token', 'oauth_token'],
+                    auth_modes: [
+                        { id: 'api_key', label: 'API Key', secret_required: true },
+                        { id: 'access_token', label: 'OpenAI access token', secret_required: true },
+                        { id: 'oauth_token', label: 'Saved OpenAI / Codex token', secret_required: true },
+                    ],
+                    default_auth_mode: 'api_key',
+                    default_model: 'gpt-4.1',
+                    note: 'Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.',
+                },
+                {
+                    id: 'anthropic',
+                    label: 'Anthropic',
+                    auth: ['api_key', 'local_cli'],
+                    auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }, { id: 'local_cli', label: 'Claude Subscription', secret_required: false }],
+                    default_auth_mode: 'api_key',
+                    default_model: 'claude-sonnet',
+                    note: 'Use a direct Anthropic API key or the Claude subscription already signed into the local CLI on this machine.',
+                },
+                { id: 'gemini', label: 'Google Gemini', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gemini-flash', note: 'Direct Gemini API key only.' },
+                { id: 'vertex', label: 'Google Vertex AI', auth: ['access_token', 'project_id', 'location'], auth_modes: [{ id: 'access_token', label: 'Access Token', secret_required: true }], default_auth_mode: 'access_token', default_model: 'vertex-gemini-flash', note: 'Direct Vertex AI access token with project and region.' },
             ];
     }, [providers]);
 
@@ -1462,6 +1483,28 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
     const providerAuthNeedsSecret = useMemo(() => {
         return providerAuthOptions.find((item) => item.id === activeProviderAuthMode)?.secretRequired !== false;
     }, [providerAuthOptions, activeProviderAuthMode]);
+
+    const providerCredentialGuidance = useMemo(() => {
+        if (connection.provider === 'openai') {
+            if (activeProviderAuthMode === 'oauth_token') {
+                return 'Paste a saved OpenAI or Codex token you already control. Empyralis does not open a ChatGPT or Codex login flow for you.';
+            }
+            if (activeProviderAuthMode === 'access_token') {
+                return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
+            }
+            return selectedProvider?.note || 'Use a direct OpenAI API key. Empyralis does not route requests through model proxy services.';
+        }
+        if (connection.provider === 'anthropic' && activeProviderAuthMode === 'local_cli') {
+            return selectedProvider?.note || 'Use the Claude subscription already signed into the local Claude CLI on this machine.';
+        }
+        return selectedProvider?.note || 'Use direct provider credentials only.';
+    }, [connection.provider, activeProviderAuthMode, selectedProvider]);
+
+    const openAiCredentialPlaceholder = useMemo(() => {
+        if (activeProviderAuthMode === 'oauth_token') return 'Saved OpenAI or Codex token';
+        if (activeProviderAuthMode === 'access_token') return 'OpenAI access token';
+        return 'OpenAI API key';
+    }, [activeProviderAuthMode]);
 
     const filteredCredentials = useMemo(() => {
         return credentials.filter((item) => normalizeProvider(item.provider) === connection.provider);
@@ -2575,7 +2618,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                                 }))}
                                                 style={workflowInputSurfaceStyle}
                                             >
-                                                <option value="">Automatic</option>
+                                                <option value="">Smart routing</option>
                                                 {groupedRuntimeProfiles.map(([provider, profiles]) => (
                                                     <optgroup key={provider} label={provider}>
                                                         {profiles.map((profile) => (
@@ -2648,9 +2691,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                                     }))}
                                                     style={workflowInputSurfaceStyle}
                                                 >
-                                                    <option value="auto">Automatic</option>
-                                                    <option value="cloud">Cloud</option>
-                                                    <option value="local_companion">Local</option>
+                                                    <option value="auto">Smart routing</option>
+                                                    <option value="cloud">Cloud runtime</option>
+                                                    <option value="local_companion">Local machine</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -3141,9 +3184,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     }))}
                                     style={workflowInputSurfaceStyle}
                                 >
-                                    <option value="auto">Automatic</option>
-                                    <option value="cloud">Cloud</option>
-                                    <option value="local_companion">Local</option>
+                                    <option value="auto">Smart routing</option>
+                                    <option value="cloud">Cloud runtime</option>
+                                    <option value="local_companion">Local machine</option>
                                 </select>
                             </div>
 
@@ -3605,16 +3648,19 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             if (activeProviderAuthMode === 'local_cli') return { auth_mode: 'local_cli' };
             return { api_key: anthropicKey.trim(), auth_mode: activeProviderAuthMode };
         }
-        if (connection.provider === 'gemini') return { api_key: geminiKey.trim() };
+        if (connection.provider === 'gemini') return { api_key: geminiKey.trim(), auth_mode: activeProviderAuthMode };
         if (connection.provider === 'vertex') {
             return {
                 access_token: vertexToken.trim(),
                 project_id: vertexProject.trim(),
                 location: vertexLocation.trim() || 'us-central1',
+                auth_mode: activeProviderAuthMode,
             };
         }
         const token = openaiKey.trim();
-        return { api_key: token, access_token: token, oauth_token: token };
+        if (activeProviderAuthMode === 'oauth_token') return { oauth_token: token, auth_mode: 'oauth_token' };
+        if (activeProviderAuthMode === 'access_token') return { access_token: token, auth_mode: 'access_token' };
+        return { api_key: token, auth_mode: 'api_key' };
     }, [connection.provider, activeProviderAuthMode, openaiKey, anthropicKey, geminiKey, vertexToken, vertexProject, vertexLocation]);
 
     const saveCredential = useCallback(async () => {
@@ -3867,7 +3913,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             addToast({
                 type: 'error',
                 title: 'Local Machine Unavailable',
-                message: 'No local machine is online. Choose Automatic or Cloud runtime, or connect a local runtime first.',
+                message: 'No local machine is online. Choose Smart routing or Cloud runtime, or connect a local runtime first.',
             });
             return;
         }
@@ -3885,6 +3931,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const runtimeProvider = String(selectedRuntimeProfile?.provider || connection.provider).trim() || 'openai';
             const runtimeModel = String(selectedRuntimeProfile?.model || operator.modelId).trim() || 'gpt-4o-mini';
             const runtimeCredentialId = selectedProfileId ? undefined : connection.mode === 'byok' ? connection.credentialId : undefined;
+            const primaryAgentNode = canvasNodes.find((node) => node.type === 'agent') || null;
+            const primaryAgentMeta = primaryAgentNode ? deriveCanvasMeta(primaryAgentNode.data) : {};
+            const primaryAgentConfig = ensureRecord(primaryAgentMeta.__canonicalConfig);
+            const primaryPermissions = ensureRecord(primaryAgentConfig.permissions);
+            const trustPreset = String(primaryPermissions.trust_preset || 'standard_local').trim() || 'standard_local';
+            const rememberedGrants = {
+                folders: normalizeStringList(ensureRecord(primaryPermissions.remembered_grants).folders),
+                browser_session: Boolean(ensureRecord(primaryPermissions.remembered_grants).browser_session),
+                shell_capabilities: normalizeStringList(ensureRecord(primaryPermissions.remembered_grants).shell_capabilities),
+            };
             const doctorGate = await loadDoctorDecision();
             if (doctorGate?.blocking) {
                 throw new Error(doctorGate.detail);
@@ -3934,6 +3990,8 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         profile_id: selectedProfileId || undefined,
                         runtime_profile_id: selectedProfileId || undefined,
                         trust_mode: trustMode,
+                        trust_preset: trustPreset,
+                        remembered_grants: rememberedGrants,
                     },
                 }),
             });
@@ -4504,7 +4562,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 onChange={(e) => setExecutionTarget(normalizeExecutionTarget(e.target.value))}
                                 style={workflowInputSurfaceStyle}
                             >
-                                <option value="auto">Automatic</option>
+                                <option value="auto">Smart routing</option>
                                 <option value="local_companion" disabled={!hasLocalRuntime}>Local machine</option>
                                 <option value="cloud">Cloud runtime</option>
                             </select>
@@ -4543,7 +4601,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                             </select>
                         </div>
                         <div>
-                            <label style={workflowLabelStyle}>AI Access</label>
+                            <label style={workflowLabelStyle}>Account source</label>
                             <select
                                 value={connection.mode}
                                 onChange={(e) => setConnection((prev) => ({
@@ -4552,16 +4610,16 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 }))}
                                 style={workflowInputSurfaceStyle}
                             >
-                                <option value="managed">Hekor-managed access</option>
-                                <option value="byok">Use my own API key</option>
+                                <option value="managed">Runtime account</option>
+                                <option value="byok">Saved AI account</option>
                             </select>
                         </div>
                     </div>
 
                     <div style={{ display: 'grid', gap: 6 }}>
-                        <label style={workflowLabelStyle}>Runtime access</label>
+                        <label style={workflowLabelStyle}>Runtime session</label>
                         <div style={workflowInputSurfaceStyle}>
-                            Managed through your admin browser session.
+                            Provided by your admin session for this workspace.
                         </div>
                         <div style={workflowMutedCopyStyle}>
                             Direct runtime keys are no longer stored in this editor.
@@ -4624,23 +4682,33 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     style={workflowInputSurfaceStyle}
                                 />
                                 {connection.provider === 'openai' && (
-                                    <input
-                                        value={openaiKey}
-                                        onChange={(e) => setOpenaiKey(e.target.value)}
-                                        placeholder="OpenAI API key or Codex OAuth access token"
-                                        type="password"
-                                        style={workflowInputSurfaceStyle}
-                                    />
-                                )}
-                                {connection.provider === 'anthropic' && (
-                                    providerAuthNeedsSecret ? (
+                                    <>
                                         <input
-                                            value={anthropicKey}
-                                            onChange={(e) => setAnthropicKey(e.target.value)}
-                                            placeholder="Anthropic API key"
+                                            value={openaiKey}
+                                            onChange={(e) => setOpenaiKey(e.target.value)}
+                                            placeholder={openAiCredentialPlaceholder}
                                             type="password"
                                             style={workflowInputSurfaceStyle}
                                         />
+                                        <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.6 }}>
+                                            {providerCredentialGuidance}
+                                        </div>
+                                    </>
+                                )}
+                                {connection.provider === 'anthropic' && (
+                                    providerAuthNeedsSecret ? (
+                                        <>
+                                            <input
+                                                value={anthropicKey}
+                                                onChange={(e) => setAnthropicKey(e.target.value)}
+                                                placeholder="Anthropic API key"
+                                                type="password"
+                                                style={workflowInputSurfaceStyle}
+                                            />
+                                            <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.6 }}>
+                                                {providerCredentialGuidance}
+                                            </div>
+                                        </>
                                     ) : (
                                         <div
                                             style={{
@@ -4656,20 +4724,25 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     )
                                 )}
                                 {connection.provider === 'gemini' && (
-                                    <input
-                                        value={geminiKey}
-                                        onChange={(e) => setGeminiKey(e.target.value)}
-                                        placeholder="Gemini API key"
-                                        type="password"
-                                        style={workflowInputSurfaceStyle}
-                                    />
+                                    <>
+                                        <input
+                                            value={geminiKey}
+                                            onChange={(e) => setGeminiKey(e.target.value)}
+                                            placeholder="Gemini API key"
+                                            type="password"
+                                            style={workflowInputSurfaceStyle}
+                                        />
+                                        <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.6 }}>
+                                            {providerCredentialGuidance}
+                                        </div>
+                                    </>
                                 )}
                                 {connection.provider === 'vertex' && (
                                     <>
                                         <input
                                             value={vertexToken}
                                             onChange={(e) => setVertexToken(e.target.value)}
-                                            placeholder="Vertex OAuth access token"
+                                            placeholder="Vertex access token"
                                             type="password"
                                             style={workflowInputSurfaceStyle}
                                         />
@@ -4685,6 +4758,9 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                             placeholder="Vertex location (e.g. us-central1)"
                                             style={workflowInputSurfaceStyle}
                                         />
+                                        <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.6 }}>
+                                            {providerCredentialGuidance}
+                                        </div>
                                     </>
                                 )}
                                 <button

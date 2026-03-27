@@ -54,6 +54,11 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["nodes"][0]["variant"], "manual")
         self.assertEqual(payload["nodes"][1]["config"]["identity"]["name"], "Triage agent")
         self.assertEqual(payload["edges"][0]["source"], "trigger_1")
+        self.assertEqual(payload["nodes"][1]["config"]["permissions"]["trust_preset"], "standard_local")
+        self.assertEqual(
+            payload["nodes"][1]["config"]["permissions"]["remembered_grants"],
+            {"folders": [], "browser_session": False, "shell_capabilities": []},
+        )
 
     def test_parse_workflow_payload_rejects_invalid_json(self):
         with self.assertRaises(HTTPException) as ctx:
@@ -212,6 +217,44 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             any(issue.get("code") == "code_reviewed_execution_path_required" for issue in payload.get("issues", []))
+        )
+
+    def test_parse_workflow_payload_preserves_trust_preset_and_remembered_grants(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "agent_1",
+                  "type": "agent",
+                  "config": {
+                    "identity": {
+                      "name": "Desktop agent"
+                    },
+                    "permissions": {
+                      "trust_preset": "trusted_workflow",
+                      "remembered_grants": {
+                        "folders": ["/Users/mansur/Downloads"],
+                        "browser_session": true,
+                        "shell_capabilities": ["stack.status"]
+                      }
+                    }
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        permissions = payload["nodes"][0]["config"]["permissions"]
+        self.assertEqual(permissions["trust_preset"], "trusted_workflow")
+        self.assertEqual(
+            permissions["remembered_grants"],
+            {
+                "folders": ["/Users/mansur/Downloads"],
+                "browser_session": True,
+                "shell_capabilities": ["stack.status"],
+            },
         )
 
     def test_parse_workflow_payload_flags_shell_fields_on_code_tool(self):

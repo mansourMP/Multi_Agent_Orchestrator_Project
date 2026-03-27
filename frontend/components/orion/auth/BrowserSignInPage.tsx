@@ -1,0 +1,187 @@
+'use client';
+
+import { FormEvent, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { humanizeUiError } from '@/lib/uiError';
+
+type AuthProviders = {
+  email: { enabled: boolean };
+  google: { enabled: boolean };
+  apple: { enabled: boolean };
+};
+
+const DEFAULT_PROVIDERS: AuthProviders = {
+  email: { enabled: true },
+  google: { enabled: false },
+  apple: { enabled: false },
+};
+
+function authErrorMessage(code: string): string {
+  switch (code) {
+    case 'oauth_state':
+      return 'The sign-in session expired. Try again.';
+    case 'oauth_missing_token':
+      return 'Google sign-in did not return a valid session.';
+    default:
+      return '';
+  }
+}
+
+type BrowserSignInPageProps = {
+  returnTo: string;
+  errorCode?: string;
+};
+
+export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserSignInPageProps) {
+  const [providers, setProviders] = useState<AuthProviders>(DEFAULT_PROVIDERS);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [loadingProviders, setLoadingProviders] = useState(true);
+  const [error, setError] = useState(authErrorMessage(errorCode));
+
+  useEffect(() => {
+    let active = true;
+
+    const loadProviders = async () => {
+      try {
+        const response = await fetch('/api/control-plane/auth/providers', {
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        const payload = (await response.json().catch(() => null)) as AuthProviders | null;
+        if (!active) return;
+        if (response.ok && payload) {
+          setProviders(payload);
+        }
+      } finally {
+        if (active) {
+          setLoadingProviders(false);
+        }
+      }
+    };
+
+    void loadProviders();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/control-plane/auth/login', {
+        method: 'POST',
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail =
+          payload && typeof payload.detail === 'string'
+            ? payload.detail
+            : 'Unable to sign in right now.';
+        throw new Error(detail);
+      }
+
+      window.location.assign(returnTo);
+    } catch (submitError) {
+      setSubmitting(false);
+      setError(
+        humanizeUiError(
+          submitError instanceof Error ? submitError.message : '',
+          'Unable to sign in right now.',
+        ),
+      );
+    }
+  };
+
+  const continueWithGoogle = () => {
+    const target = `/api/control-plane/auth/google/start?returnTo=${encodeURIComponent(returnTo)}`;
+    window.location.assign(target);
+  };
+
+  return (
+    <div className="orion-auth-page">
+      <div className="orion-auth-card">
+        <div className="orion-auth-card__eyebrow">
+          <ShieldCheck size={14} />
+          Secure browser sign-in
+        </div>
+        <h1 className="orion-auth-card__title">Sign in to Empyralis</h1>
+        <p className="orion-auth-card__copy">
+          Sign in with the fastest supported provider. Direct AI account connection comes after app sign-in.
+        </p>
+
+        {!loadingProviders && providers.google.enabled ? (
+          <button type="button" className="orion-auth-provider" onClick={continueWithGoogle}>
+            <span className="orion-auth-provider__icon">
+              <Chrome size={16} />
+            </span>
+            Continue with Google
+          </button>
+        ) : null}
+
+        {providers.email.enabled ? (
+          <>
+            <div className="orion-auth-divider">
+              <span>{providers.google.enabled ? 'or use email' : 'Email sign-in'}</span>
+            </div>
+
+            <form className="orion-auth-form" onSubmit={handleSubmit}>
+              <label className="orion-auth-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@company.com"
+                  autoComplete="username"
+                  required
+                />
+              </label>
+              <label className="orion-auth-field">
+                <span>Password</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                  required
+                />
+              </label>
+
+              {error ? <div className="orion-auth-error">{error}</div> : null}
+
+              <button type="submit" className="btn-primary orion-auth-submit" disabled={submitting}>
+                <LockKeyhole size={14} />
+                {submitting ? 'Signing in…' : 'Continue'}
+              </button>
+            </form>
+          </>
+        ) : null}
+
+        <div className="orion-auth-card__footer">
+          <Link href={returnTo} className="btn-ghost orion-auth-back">
+            <ArrowLeft size={14} />
+            Back
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

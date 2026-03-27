@@ -221,12 +221,21 @@ class WeeklySchedulePatchRequest(BaseModel):
 
 class DecisionPayload(BaseModel):
     decision: str
+    note: Optional[str] = None
+    scope: Optional[str] = None
 
     def validate_fields(self) -> None:
         if not self.decision or len(self.decision.strip()) == 0:
             raise HTTPException(status_code=400, detail="Decision is required")
         if len(self.decision) > 256:
             raise HTTPException(status_code=400, detail="Decision too long")
+        if self.note is not None and len(str(self.note)) > 2000:
+            raise HTTPException(status_code=400, detail="Decision note too long")
+        if self.scope is not None:
+            normalized_scope = str(self.scope or "").strip().lower()
+            if normalized_scope not in {"once", "workflow", "agent"}:
+                raise HTTPException(status_code=400, detail="Decision scope is invalid")
+            self.scope = normalized_scope
 
 
 class ToolPolicyEvaluateRequest(BaseModel):

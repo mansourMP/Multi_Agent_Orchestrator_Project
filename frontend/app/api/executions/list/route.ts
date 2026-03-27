@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { getControlPlaneSession, requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
+import { backendJsonRequest } from '@/lib/server/backendControlPlane';
 import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
 
 export const dynamic = 'force-dynamic';
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const [{ status, payload }, history] = await Promise.all([
-      runtimeJsonRequest('/executions', { method: 'GET' }),
+      backendJsonRequest('/executions', { method: 'GET' }),
       runtimeJsonRequest('/history/runs?limit=200&workspace_id=default', { method: 'GET' }),
     ]);
     const ownedRunIds = ownedRunIdsFromHistoryPayload(history.payload, ownerUserId);

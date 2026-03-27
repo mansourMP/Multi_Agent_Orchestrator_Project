@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import { requireControlPlaneSession } from '@/lib/server/controlPlaneSession';
-import { runtimeJsonRequest } from '@/lib/server/runtimeControlPlane';
+import { backendJsonRequest } from '@/lib/server/backendControlPlane';
 import { requireOwnedRun } from '@/lib/server/runOwnership';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, { params }: Params) {
   const rawBody = await request.text();
 
   try {
-    const { status, payload } = await runtimeJsonRequest(`/executions/${executionId}/resume`, {
+    const { status, payload } = await backendJsonRequest(`/executions/${executionId}/resume`, {
       method: 'POST',
       body: rawBody || undefined,
       headers: rawBody ? { 'Content-Type': request.headers.get('content-type') || 'application/json' } : undefined,

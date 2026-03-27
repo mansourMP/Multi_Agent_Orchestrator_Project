@@ -77,12 +77,17 @@ export class ExecutionsGateway implements OnGatewayConnection, OnGatewayDisconne
             this.config.get('CONDUCTOR_BRIDGE_TOKEN')
             || this.config.get('BRIDGE_AUTH_TOKEN')
             || this.config.get('ORION_API_KEY')
+            || this.config.get('RUNTIME_KEY')
             || '',
         ).trim();
     }
 
     private async authenticateClient(client: Socket): Promise<GatewayActor | null> {
-        const configuredApiKey = String(this.config.get('ORION_API_KEY') || '').trim();
+        const configuredApiKey = String(
+            this.config.get('ORION_API_KEY')
+            || this.config.get('RUNTIME_KEY')
+            || '',
+        ).trim();
         const authApiKey = String(client.handshake.auth?.apiKey || '').trim();
         const headerApiKey = this.headerValue(client.handshake.headers['x-api-key']);
         const apiKey = authApiKey || headerApiKey;

@@ -46,10 +46,16 @@ export function defaultFileMountGrants() {
 function defaultPermissions(overrides: Record<string, unknown> = {}) {
   return mergeConfigDefaults(
     {
+      trust_preset: 'standard_local',
       action_policy: 'guarded',
       connector_permissions: [],
       browser_permissions: { allow: false },
       file_mount_grants: defaultFileMountGrants(),
+      remembered_grants: {
+        folders: [],
+        browser_session: false,
+        shell_capabilities: [],
+      },
     },
     overrides,
   );

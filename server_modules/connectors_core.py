@@ -199,6 +199,7 @@ async def list_providers():
             "auth_modes": info.get("auth_modes", []),
             "default_auth_mode": info.get("default_auth_mode"),
             "default_model": info.get("default_model"),
+            "note": info.get("note"),
         })
     return {"providers": providers}
 

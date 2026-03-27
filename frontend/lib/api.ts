@@ -73,6 +73,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
+function normalizeStringList(value: unknown): string[] {
+    const items = Array.isArray(value) ? value : [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of items) {
+        const token = String(item || '').trim();
+        if (!token || seen.has(token)) continue;
+        seen.add(token);
+        out.push(token);
+    }
+    return out;
+}
+
+function normalizeRememberedGrants(value: unknown): {
+    folders: string[];
+    browser_session: boolean;
+    shell_capabilities: string[];
+} {
+    const source = isRecord(value) ? value : {};
+    return {
+        folders: normalizeStringList(source.folders),
+        browser_session: Boolean(source.browser_session),
+        shell_capabilities: normalizeStringList(source.shell_capabilities),
+    };
+}
+
 type WorkflowExecutionShape = {
     id?: string;
     name?: string;
@@ -145,6 +171,8 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         || 'Run workflow';
     const agentRole = String(identity.role || operator.agentRole || meta.agent_role || 'operator').trim() || 'operator';
     const trustMode = String(permissions.action_policy || meta.trust_mode || 'guarded').trim() || 'guarded';
+    const trustPreset = String(permissions.trust_preset || meta.trust_preset || 'standard_local').trim() || 'standard_local';
+    const rememberedGrants = normalizeRememberedGrants(permissions.remembered_grants || meta.remembered_grants);
     const credentialId = runtimeProfileId
         ? ''
         : String(connection.mode || '').trim() === 'byok'
@@ -182,6 +210,8 @@ function extractWorkflowRunConfig(workflow: WorkflowExecutionShape, workflowId: 
         runtimeProfileId,
         executionTarget,
         trustMode,
+        trustPreset,
+        rememberedGrants,
         connectorPermissions: Array.isArray(permissions.connector_permissions)
             ? permissions.connector_permissions.map((item) => String(item || '').trim()).filter(Boolean)
             : [],
@@ -291,6 +321,8 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
                 provider: config.provider,
                 model: config.model,
                 trust_mode: config.trustMode,
+                trust_preset: config.trustPreset,
+                remembered_grants: config.rememberedGrants,
                 connector_permissions: config.connectorPermissions,
                 browser_permissions: config.browserPermissions,
                 file_mount_grants: config.fileMountGrants,

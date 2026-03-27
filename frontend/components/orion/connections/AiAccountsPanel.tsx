@@ -137,8 +137,9 @@ function providerAuthModeLabel(provider: ProviderId, authMode: string | undefine
   const item = getProviderAuthModes(providerOptionFor(provider, options)).find((entry) => entry.id === resolved);
   if (item?.label) return item.label;
   if (resolved === 'local_cli') return 'Claude Subscription';
+  if (resolved === 'oauth_token') return 'Saved OpenAI / Codex token';
   if (resolved === 'api_key') return 'API Key';
-  if (resolved === 'access_token') return 'Access Token';
+  if (resolved === 'access_token') return provider === 'vertex' ? 'Vertex access token' : 'OpenAI access token';
   return resolved || 'Default';
 }
 
@@ -207,12 +208,29 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
     };
   }
   const token = state.secret.trim();
-  return {
-    api_key: token,
-    access_token: token,
-    oauth_token: token,
-    auth_mode: state.authMode || 'api_key',
-  };
+  if (state.authMode === 'access_token') {
+    return { access_token: token, auth_mode: 'access_token' };
+  }
+  if (state.authMode === 'oauth_token') {
+    return { oauth_token: token, auth_mode: 'oauth_token' };
+  }
+  return { api_key: token, auth_mode: 'api_key' };
+}
+
+function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
+  if (provider === 'openai') {
+    if (authMode === 'oauth_token') {
+      return 'Paste a saved OpenAI or Codex token you already control. Empyralis does not open a ChatGPT or Codex login flow for you.';
+    }
+    if (authMode === 'access_token') {
+      return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
+    }
+    return option.note || 'Use a direct OpenAI API key. Empyralis does not route your requests through third-party model gateways.';
+  }
+  if (provider === 'anthropic' && authMode === 'local_cli') {
+    return option.note || 'Use the Claude subscription already signed into the local Claude CLI on this machine.';
+  }
+  return option.note || 'Use direct provider credentials only.';
 }
 
 function providerAccountContextLine(item: ProviderCredentialRow): string {
@@ -464,7 +482,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
       const normalizedProviders = providerItems
         .map((item: unknown): ProviderOption | null => {
           if (!item || typeof item !== 'object') return null;
-          const value = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown };
+          const value = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
           const id = knownProviderId(value.id);
           if (!id) return null;
           const fallback = DEFAULT_PROVIDER_OPTIONS.find((entry) => entry.id === id);
@@ -493,6 +511,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               ? value.default_auth_mode.trim()
               : fallback?.defaultAuthMode || fallback?.auth?.[0] || 'api_key',
             authModes,
+            note: typeof value.note === 'string' && value.note.trim() ? value.note.trim() : fallback?.note,
           };
         })
         .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
@@ -1328,7 +1347,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               <div style={{ display: 'grid', gap: 6 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>Add AI account</div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  Save the login in the encrypted vault, then optionally enable it as a runtime profile immediately.
+                  Save direct provider credentials in the encrypted vault, then optionally enable them as a runtime profile immediately.
                 </div>
               </div>
               <button
@@ -1356,7 +1375,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                   Account setup
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Pick the provider, choose the auth method, and confirm the runtime model.
+                  Pick the direct provider, choose the auth method, and confirm the runtime model.
                 </div>
               </div>
 
@@ -1485,6 +1504,24 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                     </label>
                   </>
                 ) : null}
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  borderRadius: 16,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-surface)',
+                  padding: '14px 16px',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                  Connection guidance
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  {providerSetupGuidance(providerForm.provider, providerForm.authMode, selectedProviderOption)}
+                </div>
               </div>
 
               {selectedProviderAuthModes.find((item) => item.id === providerForm.authMode)?.secretRequired === false ? (

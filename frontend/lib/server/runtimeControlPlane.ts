@@ -2,6 +2,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { API_BASE } from '@/lib/config';
 
+const RUNTIME_API_BASE =
+  process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
+
 async function fileExists(target: string): Promise<boolean> {
   try {
     await fs.access(target);
@@ -44,7 +47,7 @@ export async function runtimeAuthorizedFetch(
   headers.set('X-API-Key', runtimeKey);
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
-  return fetch(`${API_BASE}${runtimePath}`, {
+  return fetch(`${RUNTIME_API_BASE}${runtimePath}`, {
     ...init,
     headers,
     cache: 'no-store',

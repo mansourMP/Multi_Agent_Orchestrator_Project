@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
   getControlPlaneSession,
+  getTrustedDesktopIdentity,
   requireAdminBrowserIdentity,
   issueControlPlaneSessionResponse,
 } from '@/lib/server/controlPlaneSession';
@@ -19,6 +20,10 @@ export async function GET(request: NextRequest) {
       reused: true,
       auth_type: existingSession.authType,
     });
+  }
+  const trustedDesktopIdentity = getTrustedDesktopIdentity(request);
+  if (trustedDesktopIdentity) {
+    return issueControlPlaneSessionResponse(request, trustedDesktopIdentity);
   }
   const identity = await requireAdminBrowserIdentity(request);
   if (identity instanceof Response) return identity;

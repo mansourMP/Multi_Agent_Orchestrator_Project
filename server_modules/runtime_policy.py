@@ -1207,7 +1207,7 @@ def _local_runtime_pool_state() -> Dict[str, Any]:
             str(item.get("display_name") or item.get("runtime_id") or item.get("worker_id") or "").strip(),
         )
 
-    payload = local_queue.handle_runtime_status(scope="all")
+    payload = local_queue.handle_get_local_workers_status()
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     online_items = [
         item for item in items

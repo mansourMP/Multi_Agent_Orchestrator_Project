@@ -57,7 +57,6 @@ import {
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
-import { getExecutionTargetGuides, type ExecutionTarget } from '@/lib/executionTargets';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
 const WORKBENCH_AGENT_CHAT_STORAGE_KEY = 'orion.workbench.agent.chat.v1';
@@ -107,6 +106,18 @@ type PendingWorkbenchChat = {
   agentRole: string;
   placeholderId: string;
   runId: string | null;
+};
+
+type SimpleChatPermissionScope = 'once' | 'workflow' | 'agent';
+
+type SimpleChatPermissionPrompt = {
+  runId: string;
+  approvalId: string;
+  prompt: string;
+  labels: string[];
+  capabilities: string[];
+  canRememberWorkflow: boolean;
+  canRememberAgent: boolean;
 };
 
 type WorkbenchAgentChannelBinding = {
@@ -675,8 +686,8 @@ function formatChatExecutionLabel(
   if (target === 'browser') return 'Browser';
   if (target === 'desktop') return 'Desktop';
   if (target === 'cloud') return 'Cloud runtime';
-  if (target === 'auto') return 'Automatic';
-  return 'Automatic';
+  if (target === 'auto') return 'Smart routing';
+  return 'Smart routing';
 }
 
 function formatPreferredExecutionLabel(
@@ -688,7 +699,7 @@ function formatPreferredExecutionLabel(
   if (pack === 'local-execution-v1' || mode === 'local_companion') {
     return 'Local machine';
   }
-  return 'Automatic';
+  return 'Smart routing';
 }
 
 type ChatNextRecommendation = {
@@ -743,6 +754,12 @@ function resolveChatNextRecommendation(args: {
     actionLabel: 'Open Runs',
     href: '/executions',
   };
+}
+
+function formatSimpleChatTrustLabel(trustMode: string, accessMode: string): string {
+  if (accessMode === 'full' || trustMode === 'auto') return 'Elevated access';
+  if (trustMode === 'strict' || trustMode === 'sensitive_guard' || trustMode === 'cost_guard') return 'Restricted access';
+  return 'Standard access';
 }
 
 function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null, topError: string | null, status: string): string {
@@ -841,10 +858,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
-  const {
-    accessMode,
-    status: shellStatus,
-  } = usePlatformShell();
+  const { accessMode } = usePlatformShell();
   const singleAgentMode = SINGLE_AGENT_MODE;
 
   const pageState = usePageState();
@@ -858,11 +872,15 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setLocalExecutionDraft,
     provider,
     model,
+    setModel,
     providerOptions,
+    modelOptions,
+    modelsLoading,
     connectionMode,
     trustMode,
     setTrustMode,
     status,
+    setStatus,
     logs,
     runId,
     lastRouteInfo,
@@ -894,6 +912,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     appendLog,
     closeStream,
     checkCompatibility,
+    fetchRunResult,
     startAutopilot,
   } = api;
 
@@ -914,6 +933,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   });
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<{ sessionId: string; placeholderId: string; runId: string | null } | null>(null);
+  const [simplePermissionActionBusy, setSimplePermissionActionBusy] = useState<string | null>(null);
   const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
   const [selectedAgentChannelsLoading, setSelectedAgentChannelsLoading] = useState(false);
   const [workbenchDeckVisible, setWorkbenchDeckVisible] = useState(true);
@@ -1548,6 +1568,14 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
   );
+  const simpleChatModelLabel = useMemo(() => {
+    const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
+    return `${providerLabel} · ${model}`;
+  }, [activeProviderOption, model, provider]);
+  const simpleChatTrustLabel = useMemo(
+    () => formatSimpleChatTrustLabel(trustMode, accessMode),
+    [accessMode, trustMode],
+  );
   const sessionNextRecommendation = useMemo(() => {
     const executionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
     return resolveChatNextRecommendation({
@@ -1564,22 +1592,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     controlCenter.recentRuns,
     controlCenter.runtimeOk,
     selectedPack.id,
-    setupReady,
-  ]);
-  const sessionIdentityItems = useMemo<ChatIdentityItem[]>(() => {
-    const readinessLabel = setupReady ? 'Ready' : 'Finish setup';
-    const aiAccessLabel = setupStatus?.accountConnected ? (activeProviderOption?.label || homeTitleCase(provider)) : 'Needs API key';
-    const toolLabel = connectorCredentials.length > 0 ? `${connectorCredentials.length} connected` : 'Connect tools';
-    return [
-      { label: 'Status', value: readinessLabel, tone: setupReady ? 'success' : 'warning' },
-      { label: 'AI', value: aiAccessLabel, tone: setupStatus?.accountConnected ? 'neutral' : 'warning' },
-      { label: 'Tools', value: toolLabel, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
-    ];
-  }, [
-    activeProviderOption,
-    connectorCredentials.length,
-    provider,
-    setupStatus?.accountConnected,
     setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
@@ -1644,16 +1656,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     sessionNextRecommendation.chipTone,
     setupReady,
   ]);
-  const chatRouteGuideTarget = useMemo<ExecutionTarget>(() => {
-    const preferredExecutionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
-    if (preferredExecutionLabel === 'Local machine') return 'local_companion';
-    if (preferredExecutionLabel === 'Cloud runtime') return 'cloud';
-    return 'auto';
-  }, [connectionMode, selectedPack.id]);
-  const chatRouteGuides = useMemo(
-    () => getExecutionTargetGuides(shellStatus.localRuntimeOnline),
-    [shellStatus.localRuntimeOnline],
-  );
   const sessionIdentityActions = useMemo<ChatIdentityAction[]>(
     () => {
       const createAction = (label: string, href: string, priority: 'primary' | 'default' = 'default'): ChatIdentityAction => ({
@@ -1713,16 +1715,45 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
     if (providerError) return null;
     if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
-    if (!derivedSetupReady) return 'Connect Telegram to activate alerts.';
+    if (!setupStatus.accountConnected) return 'Connect an AI account to start chatting.';
+    if (!setupStatus.connectionTested) return 'Verify your AI account before running tasks.';
+    if (!derivedSetupReady) return 'Finish setup before starting live work.';
     return null;
-  }, [derivedSetupReady, selectedChatMessages, topError]);
+  }, [derivedSetupReady, selectedChatMessages, setupStatus.accountConnected, setupStatus.connectionTested, topError]);
   const inlineSimpleChatAction = useMemo(() => {
+    if (!setupStatus.accountConnected) {
+      return {
+        label: 'Connect AI account →',
+        href: '/setup',
+      };
+    }
+    if (!setupStatus.connectionTested) {
+      return {
+        label: 'Finish setup →',
+        href: '/setup',
+      };
+    }
     if (derivedSetupReady) return null;
     return {
-      label: 'Connect Telegram →',
-      href: '/credentials?connector=telegram_bot&onboarding=1',
+      label: 'Open setup →',
+      href: '/setup',
     };
-  }, [derivedSetupReady]);
+  }, [derivedSetupReady, setupStatus.accountConnected, setupStatus.connectionTested]);
+  const emptySimpleChatAction = useMemo(() => {
+    if (!setupStatus.accountConnected) {
+      return {
+        label: 'Connect AI account',
+        href: '/setup',
+      };
+    }
+    if (!setupStatus.connectionTested) {
+      return {
+        label: 'Finish setup',
+        href: '/setup',
+      };
+    }
+    return null;
+  }, [setupStatus.accountConnected, setupStatus.connectionTested]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
     return 'Connect Telegram to activate alerts.';
@@ -1734,6 +1765,44 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       href: '/credentials?connector=telegram_bot&onboarding=1',
     };
   }, [derivedSetupReady]);
+  const simpleChatPermissionPrompt = useMemo<SimpleChatPermissionPrompt | null>(() => {
+    if (status !== 'waiting') return null;
+    const activeRunId = pendingSimpleChat?.runId || runId;
+    if (!activeRunId) return null;
+    const payloadRunId = extractRunIdFromPayload(lastRunPayload);
+    if (payloadRunId && payloadRunId !== activeRunId) return null;
+    const pending = lastRunPayload?.pending_approval;
+    if (!pending || typeof pending !== 'object') return null;
+
+    const pendingRecord = pending as Record<string, unknown>;
+    const approvalId = String(pendingRecord.approval_id || '').trim();
+    if (!approvalId) return null;
+    const prompt = String(pendingRecord.prompt || '').trim() || 'This run needs approval before it can continue.';
+    const metadata = pendingRecord.metadata && typeof pendingRecord.metadata === 'object'
+      ? (pendingRecord.metadata as Record<string, unknown>)
+      : {};
+    const labels = Array.isArray(metadata.approval_labels)
+      ? metadata.approval_labels.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const capabilities = Array.isArray(metadata.approval_capabilities)
+      ? metadata.approval_capabilities.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const context = lastRunPayload?.context && typeof lastRunPayload.context === 'object'
+      ? (lastRunPayload.context as Record<string, unknown>)
+      : {};
+    const contextMetadata = context.metadata && typeof context.metadata === 'object'
+      ? (context.metadata as Record<string, unknown>)
+      : {};
+    return {
+      runId: activeRunId,
+      approvalId,
+      prompt,
+      labels,
+      capabilities,
+      canRememberWorkflow: String(context.workflow_id || contextMetadata.workflow_id || '').trim().length > 0,
+      canRememberAgent: String(context.agent_role || contextMetadata.agent_role || selectedAgentRole || '').trim().length > 0,
+    };
+  }, [lastRunPayload, pendingSimpleChat, runId, selectedAgentRole, status]);
 
   const appendWorkbenchAgentChat = useCallback((agentRole: string, message: WorkbenchAgentChatMessage) => {
     setWorkbenchAgentChats((current) => ({
@@ -1927,8 +1996,69 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       run_id: pendingSimpleChat.runId || runId,
       ts: new Date().toISOString(),
     });
+    if (status === 'waiting') return;
     setPendingSimpleChat(null);
   }, [controlCenter.latestRunSummary, lastRunPayload, patchSimpleChatMessage, pendingSimpleChat, runId, status, topError]);
+
+  const submitSimpleChatPermissionDecision = useCallback(async (
+    decision: 'Proceed' | 'Hold',
+    scope: SimpleChatPermissionScope = 'once',
+  ) => {
+    const prompt = simpleChatPermissionPrompt;
+    if (!prompt) return;
+    const busyKey = `${decision}:${scope}`;
+    setSimplePermissionActionBusy(busyKey);
+    try {
+      await ensureControlPlaneSession();
+      const res = await fetch(`/api/runs/${encodeURIComponent(prompt.runId)}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          scope,
+          note: `Resolved from ${BRAND.product} chat`,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || 'Failed to send decision.');
+      }
+      if (decision === 'Proceed' && pendingSimpleChat) {
+        patchSimpleChatMessage(pendingSimpleChat.sessionId, pendingSimpleChat.placeholderId, {
+          content: 'Continuing with the approved action…',
+          status: 'running',
+          ts: new Date().toISOString(),
+        });
+      }
+      const nextStatus = await fetchRunResult(prompt.runId);
+      if (
+        nextStatus === 'queued_local'
+        || nextStatus === 'running'
+        || nextStatus === 'waiting'
+        || nextStatus === 'completed'
+        || nextStatus === 'error'
+      ) {
+        setStatus(nextStatus);
+      }
+      appendLog(
+        decision === 'Proceed'
+          ? scope === 'once'
+            ? 'Permission granted for this run.'
+            : scope === 'workflow'
+              ? 'Permission granted for this workflow scope.'
+              : 'Permission granted for this agent scope.'
+          : 'Permission denied. The run will not continue.',
+        decision === 'Proceed' ? 'info' : 'warn',
+      );
+      if (decision !== 'Proceed' && nextStatus && nextStatus !== 'waiting') {
+        setPendingSimpleChat(null);
+      }
+    } catch (error) {
+      appendLog(error instanceof Error ? error.message : 'Failed to send decision.', 'error');
+    } finally {
+      setSimplePermissionActionBusy(null);
+    }
+  }, [appendLog, fetchRunResult, patchSimpleChatMessage, pendingSimpleChat, setStatus, simpleChatPermissionPrompt]);
 
   useEffect(() => {
     if (!pendingWorkbenchChat) return;
@@ -2123,29 +2253,33 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             messages={selectedChatMessages}
             inlineStatus={inlineSimpleChatStatus}
             inlineAction={inlineSimpleChatAction}
-            emptyStateSuggestions={[
-              'Monitor a camera',
-              'Summarize emails daily',
-              'Alert me on Telegram',
-              'Follow up with leads',
-            ]}
-            identityItems={sessionIdentityItems}
+            emptyAction={emptySimpleChatAction}
+            targetLabel={defaultAssistantProfile.label}
+            targetHref="/agents"
+            modelLabel={simpleChatModelLabel}
+            selectedModel={model}
+            modelOptions={modelOptions}
+            modelsLoading={modelsLoading}
+            onSelectModel={setModel}
+            trustLabel={simpleChatTrustLabel}
+            permissionPrompt={simpleChatPermissionPrompt ? {
+              title: 'Permission required',
+              prompt: simpleChatPermissionPrompt.prompt,
+              labels: simpleChatPermissionPrompt.labels,
+              capabilities: simpleChatPermissionPrompt.capabilities,
+              busyKey: simplePermissionActionBusy,
+              onAllowOnce: () => { void submitSimpleChatPermissionDecision('Proceed', 'once'); },
+              onAllowWorkflow: simpleChatPermissionPrompt.canRememberWorkflow
+                ? () => { void submitSimpleChatPermissionDecision('Proceed', 'workflow'); }
+                : undefined,
+              onAllowAgent: simpleChatPermissionPrompt.canRememberAgent
+                ? () => { void submitSimpleChatPermissionDecision('Proceed', 'agent'); }
+                : undefined,
+              onDeny: () => { void submitSimpleChatPermissionDecision('Hold', 'once'); },
+            } : null}
             identityDrawerOpen={chatIdentityDrawerOpen}
             onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
             onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
-            identityGuide={chatIdentityDrawerOpen ? (
-              <div className="orion-route-guide" aria-label="Execution route guide">
-                {chatRouteGuides.map((guide) => (
-                  <div
-                    key={guide.value}
-                    className={`orion-route-guide-item${guide.value === chatRouteGuideTarget ? ' is-selected' : ''}`.trim()}
-                  >
-                    <div className="orion-route-guide-title">{guide.label}</div>
-                    <div className="orion-route-guide-copy">{guide.hint}</div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
             identitySections={sessionIdentitySections}
             identityActions={sessionIdentityActions}
           />

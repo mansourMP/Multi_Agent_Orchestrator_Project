@@ -15,6 +15,7 @@ import { LoadingState } from '@/components/orion/state/LoadingState';
 import { RetryActions } from '@/components/orion/state/RetryActions';
 import { useWorkflowLibrary } from '@/hooks/pages/useWorkflowLibrary';
 import { WorkflowListRow } from '@/components/orion/workflows/WorkflowListRow';
+import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
 
 export default function WorkflowsPage() {
   const router = useRouter();
@@ -38,6 +39,8 @@ export default function WorkflowsPage() {
     isDeleting,
     formatApiError,
   } = useWorkflowLibrary();
+  const workflowLoadDetail = loadError ? humanizeUiError(loadError) : '';
+  const showWorkflowLoadDetail = Boolean(workflowLoadDetail && workflowLoadDetail !== UI_ERROR_COPY.backend);
 
   return (
     <div className="orion-page-shell is-static-entry">
@@ -102,9 +105,13 @@ export default function WorkflowsPage() {
           title="Workflows are unavailable"
           copy={
             <>
-              The workflow library could not be loaded right now. If the backend is offline, start it first, then retry.
-              <br />
-              {loadError}
+              {UI_ERROR_COPY.backend}
+              {showWorkflowLoadDetail ? (
+                <>
+                  <br />
+                  {workflowLoadDetail}
+                </>
+              ) : null}
             </>
           }
           actions={<RetryActions onRetry={() => void refresh()} />}

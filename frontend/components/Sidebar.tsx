@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
+import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 
 type NavItem = {
   label: string;
@@ -93,7 +94,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className={`sidebar sidebar-v2${collapsed ? ' is-collapsed' : ''}`}>
+    <aside className={`sidebar sidebar-v2${collapsed ? ' is-collapsed' : ''}`} onWheel={forwardWheelToMainScroll}>
       <div className="sidebar-v2-scroll">
         <div className="sidebar-v2-controls">
           <button
@@ -119,6 +120,8 @@ export default function Sidebar() {
             <span className="sidebar-v2-item-label">{HOME_NAV_ITEM.label}</span>
           </button>
         </div>
+
+        <div className="sidebar-v2-divider sidebar-v2-divider--collapsed-only" aria-hidden="true" />
 
         {primarySections.map((section, index) => (
           <section key={section.label} className="sidebar-v2-section">

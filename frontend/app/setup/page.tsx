@@ -62,8 +62,8 @@ const SETUP_STEP_META = [
     copy: 'Check the steps, confirm the tools, and make sure the task still matches what you want.',
   },
   {
-    title: 'Choose AI access for this task.',
-    copy: 'Pick the AI source this run should use, then continue when the task is ready to proceed.',
+    title: 'Choose the AI account for this task.',
+    copy: 'Connect a direct provider account for this run, then continue when the task is ready to proceed.',
   },
   {
     title: 'Connect only the tools this task needs.',
@@ -76,7 +76,6 @@ const SETUP_STEP_META = [
 ] as const;
 
 type SetupProviderId = 'openai' | 'anthropic' | 'gemini';
-type SetupSourceMode = 'credits' | 'byok';
 type SetupExecutionTarget = 'auto' | 'local_companion' | 'cloud';
 
 type RuntimeProfile = {
@@ -101,7 +100,6 @@ type PersistedSetupState = {
   prompt: string;
   planSteps: SetupPlanStep[];
   tools: SetupTool[];
-  sourceMode: SetupSourceMode;
   provider: SetupProviderId;
   selectedProfileId: string;
   executionTarget: SetupExecutionTarget;
@@ -146,6 +144,12 @@ function providerLabel(provider: SetupProviderId): string {
   if (provider === 'anthropic') return 'Anthropic';
   if (provider === 'gemini') return 'Google';
   return 'OpenAI';
+}
+
+function providerCredentialGuidance(provider: SetupProviderId): string {
+  if (provider === 'anthropic') return 'Use a direct Anthropic API key. It is encrypted and stored securely on this workspace.';
+  if (provider === 'gemini') return 'Use a direct Google Gemini API key. It is encrypted and stored securely on this workspace.';
+  return 'Use a direct OpenAI API key. It is encrypted and stored securely on this workspace.';
 }
 
 function defaultProviderModel(provider: SetupProviderId): string {
@@ -216,7 +220,6 @@ function readSetupState(): PersistedSetupState | null {
       prompt: String(parsed.prompt || '').trim(),
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps.filter(Boolean) as SetupPlanStep[] : [],
       tools: Array.isArray(parsed.tools) ? parsed.tools.filter(Boolean) as SetupTool[] : [],
-      sourceMode: parsed.sourceMode === 'byok' ? 'byok' : 'credits',
       provider: normalizeSetupProvider(parsed.provider),
       selectedProfileId: String(parsed.selectedProfileId || '').trim(),
       executionTarget:
@@ -267,7 +270,7 @@ function hasOnlineLocalRuntime(payload: unknown): boolean {
 function formatExecutionTargetLabel(target: string | null | undefined): string {
   if (target === 'local_companion' || target === 'local') return 'Local machine';
   if (target === 'cloud') return 'Cloud runtime';
-  return 'Automatic';
+  return 'Smart routing';
 }
 
 function executionTargetDescription(target: SetupExecutionTarget, hasLocalRuntime: boolean): string {
@@ -276,10 +279,10 @@ function executionTargetDescription(target: SetupExecutionTarget, hasLocalRuntim
       ? 'Run this on an available local machine.'
       : 'No local machine is online right now.';
   }
-  if (target === 'cloud') return 'Run this in Hekor cloud mode.';
+  if (target === 'cloud') return 'Run this in the cloud runtime.';
   return hasLocalRuntime
     ? 'Prefer a local machine, then fall back to cloud if needed.'
-    : 'No local machine is online, so this will run in cloud mode.';
+    : 'No local machine is online, so this will use the cloud runtime.';
 }
 
 function statusIconForTool(toolId: SetupToolId | null) {
@@ -303,7 +306,6 @@ export default function SetupPage() {
   const [planError, setPlanError] = useState('');
   const [profiles, setProfiles] = useState<RuntimeProfile[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(true);
-  const [selectedSourceMode, setSelectedSourceMode] = useState<SetupSourceMode>('byok');
   const [selectedProvider, setSelectedProvider] = useState<SetupProviderId>('openai');
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [sourceError, setSourceError] = useState('');
@@ -373,7 +375,6 @@ export default function SetupPage() {
       setPrompt(restored.prompt);
       setPlanSteps(restored.planSteps);
       setTools(restored.tools);
-      setSelectedSourceMode(restored.sourceMode);
       setSelectedProvider(restored.provider);
       setSelectedProfileId(restored.selectedProfileId);
       setSelectedExecutionTarget(restored.executionTarget);
@@ -388,12 +389,11 @@ export default function SetupPage() {
       prompt,
       planSteps,
       tools,
-      sourceMode: selectedSourceMode,
       provider: selectedProvider,
       selectedProfileId,
       executionTarget: selectedExecutionTarget,
     });
-  }, [hydrated, planSteps, prompt, selectedExecutionTarget, selectedProfileId, selectedProvider, selectedSourceMode, step, tools]);
+  }, [hydrated, planSteps, prompt, selectedExecutionTarget, selectedProfileId, selectedProvider, step, tools]);
 
   useEffect(() => {
     void loadRuntimeState();
@@ -762,25 +762,6 @@ export default function SetupPage() {
     }
   }, [activeProfile, buildRunStartPayload, controlPlaneFetch, currentProvider, selectedExecutionTarget]);
 
-  const handleSelectCredits = useCallback(() => {
-    setSelectedSourceMode('credits');
-    setSourceError('');
-  }, []);
-
-  const handleSelectByok = useCallback(() => {
-    setSelectedSourceMode('byok');
-    setSourceError('');
-  }, []);
-
-  const handleCreditsContinue = useCallback(() => {
-    addToast({
-      type: 'info',
-      title: 'Coming soon',
-      message: 'Add your own API key for now.',
-    });
-    setSelectedSourceMode('byok');
-  }, [addToast]);
-
   const handleSaveApiKey = useCallback(async () => {
     if (!apiKeyInput.trim()) {
       setSourceError('Enter your API key to continue.');
@@ -794,10 +775,7 @@ export default function SetupPage() {
       const model = defaultProviderModel(provider);
       const authMode = 'api_key';
       const secret = apiKeyInput.trim();
-      const credentials =
-        provider === 'anthropic' || provider === 'gemini'
-          ? { api_key: secret, auth_mode: authMode }
-          : { api_key: secret, access_token: secret, oauth_token: secret, auth_mode: authMode };
+      const credentials = { api_key: secret, auth_mode: authMode };
 
       const credentialRes = await controlPlaneFetch('/api/control-plane/credentials', {
         method: 'POST',
@@ -1122,86 +1100,52 @@ export default function SetupPage() {
 
       {step === 3 ? (
         <section className="hekor-setup-stage">
-          <div className="hekor-setup-source-grid">
-            <button
-              type="button"
-              className={`hekor-setup-source-card${selectedSourceMode === 'credits' ? ' is-selected' : ''}`}
-              onClick={handleSelectCredits}
-            >
-              <div className="hekor-setup-source-head">
-                <span className="hekor-setup-source-title">Hekor-managed access</span>
-                <span className="hekor-setup-source-badge">Soon</span>
-              </div>
-              <div className="hekor-setup-source-copy">Available soon. Use your own API key for now.</div>
-            </button>
+          <div className="orion-panel hekor-setup-panel">
+            <div className="hekor-setup-inline-note">
+              Connect a direct provider account for this task. Proxy or managed routing is not used here.
+            </div>
 
-            <button
-              type="button"
-              className={`hekor-setup-source-card${selectedSourceMode === 'byok' ? ' is-selected' : ''}`}
-              onClick={handleSelectByok}
-            >
-              <div className="hekor-setup-source-head">
-                <span className="hekor-setup-source-title">My own API key</span>
-              </div>
-              <div className="hekor-setup-source-copy">Use OpenAI, Anthropic, or Google.</div>
-            </button>
+            <div className="hekor-setup-provider-row">
+              {(['openai', 'anthropic', 'gemini'] as SetupProviderId[]).map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  className={`btn-secondary hekor-setup-provider-btn${selectedProvider === provider ? ' is-selected' : ''}`}
+                  onClick={() => setSelectedProvider(provider)}
+                >
+                  {providerLabel(provider)}
+                </button>
+              ))}
+            </div>
+
+            <div className="hekor-setup-field">
+              <label htmlFor="setup-api-key">API key</label>
+              <input
+                id="setup-api-key"
+                type="password"
+                className="orion-input"
+                placeholder={`Paste your ${providerLabel(selectedProvider)} API key`}
+                value={apiKeyInput}
+                onChange={(event) => setApiKeyInput(event.target.value)}
+              />
+              <div className="hekor-setup-muted">{providerCredentialGuidance(selectedProvider)}</div>
+            </div>
+
+            {sourceError ? <div className="hekor-setup-inline-error">{sourceError}</div> : null}
+
+            <div className="hekor-setup-actions">
+              <button type="button" className="btn-primary" onClick={() => void handleSaveApiKey()} disabled={sourceBusy}>
+                {sourceBusy ? (
+                  <>
+                    <Loader2 size={14} className="hekor-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save and continue'
+                )}
+              </button>
+            </div>
           </div>
-
-          {selectedSourceMode === 'byok' ? (
-            <div className="orion-panel hekor-setup-panel">
-              <div className="hekor-setup-provider-row">
-                {(['openai', 'anthropic', 'gemini'] as SetupProviderId[]).map((provider) => (
-                  <button
-                    key={provider}
-                    type="button"
-                    className={`btn-secondary hekor-setup-provider-btn${selectedProvider === provider ? ' is-selected' : ''}`}
-                    onClick={() => setSelectedProvider(provider)}
-                  >
-                    {providerLabel(provider)}
-                  </button>
-                ))}
-              </div>
-
-              <div className="hekor-setup-field">
-                <label htmlFor="setup-api-key">API key</label>
-                <input
-                  id="setup-api-key"
-                  type="password"
-                  className="orion-input"
-                  placeholder={`Paste your ${providerLabel(selectedProvider)} API key`}
-                  value={apiKeyInput}
-                  onChange={(event) => setApiKeyInput(event.target.value)}
-                />
-                <div className="hekor-setup-muted">Encrypted and stored securely. Change anytime.</div>
-              </div>
-
-              {sourceError ? <div className="hekor-setup-inline-error">{sourceError}</div> : null}
-
-              <div className="hekor-setup-actions">
-                <button type="button" className="btn-primary" onClick={() => void handleSaveApiKey()} disabled={sourceBusy}>
-                  {sourceBusy ? (
-                    <>
-                      <Loader2 size={14} className="hekor-spin" />
-                      Saving…
-                    </>
-                  ) : (
-                    'Save and continue'
-                  )}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="orion-panel muted hekor-setup-panel">
-              <div className="hekor-setup-inline-note">
-                Hekor-managed access is not available yet. Use your own API key for now.
-              </div>
-              <div className="hekor-setup-actions">
-                <button type="button" className="btn-primary" onClick={handleCreditsContinue}>
-                  Continue with my own API key
-                </button>
-              </div>
-            </div>
-          )}
         </section>
       ) : null}
 
@@ -1278,7 +1222,7 @@ export default function SetupPage() {
               <div className="hekor-setup-summary-row">
                 <span>Model access</span>
                 <div className="hekor-setup-summary-value">
-                  {activeProfile ? providerLabel(activeProfile.provider) : 'Use my own API key'}
+                  {activeProfile ? `${providerLabel(activeProfile.provider)} account` : 'Direct provider account'}
                 </div>
               </div>
               <div className="hekor-setup-summary-row">
@@ -1443,7 +1387,7 @@ export default function SetupPage() {
           </div>
           <div className={`hekor-setup-action-note${runTargetBlocked || precheckWaitingForRuntime || precheckWaitingForCapacity ? ' is-warning' : ''}`.trim()}>
             {runTargetBlocked
-              ? 'Local machine is selected, but no local runtime is online. Switch to Automatic or Cloud runtime to continue.'
+              ? 'Local machine is selected, but no local runtime is online. Switch to Smart routing or Cloud runtime to continue.'
               : (precheckWaitingForRuntime || precheckWaitingForCapacity) && precheckRouteReason
                 ? precheckRouteReason
                 : selectedExecutionTarget === 'auto' && !showAdvancedRouteOptions

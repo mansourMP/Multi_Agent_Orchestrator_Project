@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { GoogleStrategy } from './strategies/google.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { HybridAuthGuard } from './guards/hybrid-auth.guard';
 import { resolveJwtSecret } from './jwt-secret';
@@ -25,7 +26,7 @@ import { resolveJwtSecret } from './jwt-secret';
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, JwtStrategy, HybridAuthGuard],
-    exports: [AuthService, JwtStrategy, HybridAuthGuard, PassportModule, JwtModule],
+    providers: [AuthService, JwtStrategy, GoogleStrategy, HybridAuthGuard],
+    exports: [AuthService, JwtStrategy, GoogleStrategy, HybridAuthGuard, PassportModule, JwtModule],
 })
 export class AuthModule { }

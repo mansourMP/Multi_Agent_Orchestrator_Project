@@ -486,7 +486,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       const items = Array.isArray(payload?.providers) ? payload.providers : [];
       const mapped: ProviderOption[] = items
         .map((item: unknown) => {
-          const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown };
+          const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
           const rawId = typeof i.id === 'string' ? i.id.trim().toLowerCase() : '';
           const id = normalizeProviderId(rawId);
           if (!isProviderId(id)) return null;
@@ -516,6 +516,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
                 ? i.default_auth_mode.trim()
                 : fallback?.defaultAuthMode ?? fallback?.auth[0] ?? 'api_key',
             authModes,
+            note: typeof i.note === 'string' && i.note.trim() ? i.note.trim() : fallback?.note,
           } as ProviderOption;
         })
         .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
@@ -582,6 +583,22 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     },
     [connectionMode, controlPlaneFetch, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
+
+  const hasRuntimeProviderAccount = useCallback(async (providerId: ProviderId) => {
+    const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
+    if (!res.ok) {
+      throw new Error('Unable to load runtime accounts.');
+    }
+    const payload = await res.json().catch(() => ({ items: [] }));
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    return items.some((item: unknown) => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      const normalizedProvider = normalizeProviderId(typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : '');
+      const health = String(record.health || '').trim().toLowerCase();
+      return normalizedProvider === providerId && record.enabled !== false && health !== 'disabled';
+    });
+  }, [controlPlaneFetch]);
 
   const buildScheduledRunRequest = useCallback(() => {
     const selectedPack = OUTCOME_PACKS.find((pack) => pack.id === selectedPackId) || OUTCOME_PACKS[0];
@@ -1048,17 +1065,17 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         const problem = [failCheck.detail || 'System setup failed.', failCheck.recommendation || ''].filter(Boolean).join(' ');
         throw new Error(problem);
       }
-      const openaiWarn = checks.find((check) => check.name === 'openai_connectivity' && check.status === 'warn');
-      if (openaiWarn && connectionMode === 'managed') {
-        throw new Error('OpenAI connection is not ready. Choose "Use my own key" or reconnect OpenAI in Setup.');
+      if (connectionMode === 'managed') {
+        const hasRuntimeAccount = await hasRuntimeProviderAccount(provider);
+        if (!hasRuntimeAccount) {
+          const providerLabel = providerOptions.find((item) => item.id === provider)?.label || provider;
+          throw new Error(`${providerLabel} runtime account is not ready. Open Setup and connect a direct ${providerLabel} account.`);
+        }
       }
       setSetupStatus((prev) => ({
         ...prev,
         runtimeReady: true,
-        accountConnected:
-          connectionMode === 'managed' || connectionMode === 'local_companion'
-            ? true
-            : prev.accountConnected,
+        accountConnected: connectionMode === 'managed' || connectionMode === 'local_companion' ? true : prev.accountConnected,
       }));
       appendLog('System check passed.');
       await setupAction('select_provider', { provider });
@@ -1072,7 +1089,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       setSetupBusy(null);
     }
-  }, [appendLog, connectionMode, fetchDoctorChecks, provider, setupAction, setSetupBusy, setTopError, setSetupStatus, setShowSetupWizard]);
+  }, [appendLog, connectionMode, fetchDoctorChecks, hasRuntimeProviderAccount, provider, providerOptions, setupAction, setSetupBusy, setTopError, setSetupStatus, setShowSetupWizard]);
 
   const runLocalOpsAction = useCallback(
     async (
@@ -1378,8 +1395,14 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         providerId === 'anthropic' && selectedAuthMode === 'local_cli'
           ? { auth_mode: 'local_cli' }
           : providerId === 'openai'
-          ? { api_key: secret, access_token: secret, oauth_token: secret }
-          : { api_key: secret, auth_mode: selectedAuthMode };
+          ? selectedAuthMode === 'oauth_token'
+            ? { oauth_token: secret, auth_mode: 'oauth_token' }
+            : selectedAuthMode === 'access_token'
+              ? { access_token: secret, auth_mode: 'access_token' }
+              : { api_key: secret, auth_mode: 'api_key' }
+          : providerId === 'vertex'
+            ? { access_token: secret, auth_mode: selectedAuthMode }
+            : { api_key: secret, auth_mode: selectedAuthMode };
       const res = await controlPlaneFetch('/api/control-plane/credentials', {
         method: 'POST',
         body: JSON.stringify({
@@ -1442,14 +1465,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     try {
       if (connectionMode === 'managed') {
         const checks = await fetchDoctorChecks();
-        const openaiWarn = checks.find((check) => check.name === 'openai_connectivity' && check.status === 'warn');
         const failCheck = checks.find((check) => check.status === 'fail');
         if (failCheck) {
           const problem = [failCheck.detail || 'System setup failed.', failCheck.recommendation || ''].filter(Boolean).join(' ');
           throw new Error(problem);
         }
-        if (openaiWarn) {
-          throw new Error('OpenAI managed connection is not ready yet.');
+        const hasRuntimeAccount = await hasRuntimeProviderAccount(provider);
+        if (!hasRuntimeAccount) {
+          const providerLabel = providerOptions.find((item) => item.id === provider)?.label || provider;
+          throw new Error(`${providerLabel} runtime account is not ready yet.`);
         }
       } else if (connectionMode === 'byok') {
         if (!credentialId) throw new Error('Choose a saved account first.');
@@ -1488,6 +1512,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     controlPlaneFetch,
     credentialId,
     fetchDoctorChecks,
+    hasRuntimeProviderAccount,
+    provider,
+    providerOptions,
     setupAction,
     setSetupBusy,
     setTopError,
@@ -1714,10 +1741,13 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         const problem = [failCheck.detail || 'System setup failed.', failCheck.recommendation || ''].filter(Boolean).join(' ');
         throw new Error(problem);
       }
-      const openaiWarn = checks.find((check) => check.name === 'openai_connectivity' && check.status === 'warn');
       const selectedPreset = BUSINESS_PRESETS.find((p) => p.id === state.selectedPresetId) || BUSINESS_PRESETS[0];
-      if (openaiWarn && state.provider === 'openai' && state.connectionMode === 'managed' && !localDeterministicPack) {
-        throw new Error('OpenAI connection is not ready. Open Setup and reconnect your AI account.');
+      if (state.connectionMode === 'managed' && !localDeterministicPack) {
+        const hasRuntimeAccount = await hasRuntimeProviderAccount(state.provider);
+        if (!hasRuntimeAccount) {
+          const providerLabel = state.providerOptions.find((item) => item.id === state.provider)?.label || state.provider;
+          throw new Error(`${providerLabel} runtime account is not ready. Open Setup and connect a direct ${providerLabel} account.`);
+        }
       }
       state.setIsChecking(false);
 
@@ -1857,6 +1887,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           credential_id: state.connectionMode === 'byok' ? state.credentialId : undefined,
           metadata: {
             trust_mode: effectiveTrustMode,
+            trust_preset: 'standard_local',
+            remembered_grants: {
+              folders: [],
+              browser_session: false,
+              shell_capabilities: [],
+            },
             source: 'mom_mode',
             guided_defaults_enabled: state.guidedDefaultsEnabled,
             connection_mode: state.connectionMode,
@@ -1896,6 +1932,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       const runPayload = await runRes.json();
+      state.setLastRunPayload(runPayload as Record<string, unknown>);
       const nextRunId = runPayload?.run_id;
       if (!nextRunId) throw new Error('Run ID missing.');
 
@@ -1977,8 +2014,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
               const approvalId = parsed.data?.approval_id;
               if (approvalId) state.setPendingApprovalId(approvalId);
               state.setStatus('waiting');
+              void fetchRunResult(nextRunId);
             }
-            if (evt === 'approval_required') state.setStatus('waiting');
+            if (evt === 'approval_required') {
+              state.setStatus('waiting');
+              void fetchRunResult(nextRunId);
+            }
             if (['approval_received', 'approval_resolved', 'approval_skipped'].includes(evt)) state.setPendingApprovalId(null);
             if (evt === 'approval_timeout') { state.setPendingApprovalId(null); state.setStatus('error'); }
             if (evt === 'pack_summary' && parsed.data?.pack_id) {
@@ -2019,7 +2060,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     } finally {
       state.setIsChecking(false); state.setIsStarting(false);
     }
-  }, [appendLog, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, localExecutionDraft, state, streamRef]);
+  }, [appendLog, buildLocalExecutionGoal, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, localExecutionDraft, state, streamRef]);
 
   return {
     appendLog,
@@ -2033,6 +2074,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     fetchLocalWorkerStatus,
     refreshProviderCatalog,
     refreshProviderModels,
+    hasRuntimeProviderAccount,
     loadWeeklySchedule,
     saveWeeklySchedule,
     refreshCredentials,

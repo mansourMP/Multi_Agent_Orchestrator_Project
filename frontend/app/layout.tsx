@@ -5,6 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import GlobalCommandPalette from "@/components/orion/GlobalCommandPalette";
+import ControlPlaneSessionBootstrap from "@/components/orion/ControlPlaneSessionBootstrap";
 import { PlatformShellProvider } from "@/components/orion/PlatformShellContext";
 import PlatformTopBar from "@/components/orion/PlatformTopBar";
 import { BRAND } from "@/lib/brand";
@@ -36,15 +37,20 @@ export const viewport: Viewport = {
 
 const CRITICAL_SHELL_CSS = `
 :root {
-  --critical-sidebar-width: 56px;
-  --critical-topbar-height: 56px;
+  --sidebar-width: 56px;
+  --topbar-height: 56px;
   --critical-bg-shell: #f3f2ee;
   --critical-bg-app: #f4f4f1;
   --critical-bg-surface: #ffffff;
   --critical-border: rgba(93, 99, 110, 0.2);
   --critical-text: #1a1c21;
   --critical-text-secondary: #5d636e;
-  --critical-primary: #2f3136;
+  --critical-primary: #3d63dd;
+  --critical-primary-soft: rgba(61, 99, 221, 0.12);
+  --critical-success: #3f8a5f;
+  --critical-danger: #c06262;
+  --critical-danger-soft: rgba(192, 98, 98, 0.12);
+  --critical-overlay: rgba(244, 244, 241, 0.22);
 }
 *,
 *::before,
@@ -72,27 +78,42 @@ a {
   background: var(--critical-bg-app);
 }
 .orion-main-shell {
-  margin-left: var(--critical-sidebar-width);
-  padding-top: var(--critical-topbar-height);
+  margin-left: var(--sidebar-width);
+  width: calc(100vw - var(--sidebar-width));
+  max-width: calc(100vw - var(--sidebar-width));
+  padding-top: var(--topbar-height);
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
+  box-sizing: border-box;
   position: relative;
   z-index: 1;
+  transition: margin-left 180ms ease, width 180ms ease, max-width 180ms ease, padding-top 180ms ease;
 }
 .orion-main-stage {
-  height: calc(100vh - var(--critical-topbar-height));
-  min-height: calc(100vh - var(--critical-topbar-height));
+  height: calc(100vh - var(--topbar-height));
+  min-height: calc(100vh - var(--topbar-height));
   overflow: hidden;
   padding: 8px 12px 18px 4px;
   background: var(--critical-bg-app);
+  position: relative;
+  transition: transform 180ms ease, filter 180ms ease;
+}
+.orion-main-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--critical-overlay);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
 }
 .orion-page-shell {
   width: min(1460px, 100%);
   max-width: 1460px;
   margin: 0 auto;
-  height: calc(100vh - var(--critical-topbar-height) - 26px);
-  min-height: calc(100vh - var(--critical-topbar-height) - 26px);
+  height: calc(100vh - var(--topbar-height) - 26px);
+  min-height: calc(100vh - var(--topbar-height) - 26px);
   padding: 28px 30px 40px;
   display: flex;
   flex-direction: column;
@@ -127,9 +148,9 @@ a {
 .orion-shellbar {
   position: fixed;
   top: 0;
-  left: var(--critical-sidebar-width);
+  left: var(--sidebar-width);
   right: 0;
-  min-height: var(--critical-topbar-height);
+  min-height: var(--topbar-height);
   z-index: 70;
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.05fr) auto;
@@ -138,12 +159,13 @@ a {
   padding: 0 4px;
   background: var(--critical-bg-shell);
   border-bottom: 0;
+  transition: left 180ms ease;
 }
 .sidebar,
 .sidebar-v2 {
   position: fixed;
   inset: 0 auto 0 0;
-  width: var(--critical-sidebar-width);
+  width: var(--sidebar-width);
   background: var(--critical-bg-shell);
   z-index: 80;
 }
@@ -153,9 +175,15 @@ a {
 .btn,
 .orion-btn,
 .orion-btn-primary,
+.orion-btn-secondary,
 .orion-btn-ghost,
 .orion-btn-success,
-.orion-btn-danger {
+.orion-btn-danger,
+.orion-btn.primary,
+.orion-btn.secondary,
+.orion-btn.ghost,
+.orion-btn.success,
+.orion-btn.danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -173,33 +201,58 @@ a {
   white-space: nowrap;
 }
 .btn-primary,
-.orion-btn-primary {
+.orion-btn-primary,
+.orion-btn.primary {
   background: var(--critical-primary);
   color: #ffffff;
   border: 1px solid var(--critical-primary);
 }
-.orion-btn-success {
-  background: rgba(47, 122, 85, 0.12);
-  color: #24593f;
-  border: 1px solid rgba(47, 122, 85, 0.32);
+.orion-btn-success,
+.orion-btn.success {
+  background: rgba(63, 138, 95, 0.12);
+  color: #2e6b49;
+  border: 1px solid rgba(63, 138, 95, 0.32);
 }
-.orion-btn-danger {
-  background: rgba(185, 87, 87, 0.12);
-  color: #8a3b3b;
-  border: 1px solid rgba(185, 87, 87, 0.32);
+.orion-btn-danger,
+.orion-btn.danger {
+  background: var(--critical-danger-soft);
+  color: #8a4343;
+  border: 1px solid rgba(192, 98, 98, 0.32);
 }
 .btn-secondary,
 .btn,
-.orion-btn {
-  background: transparent;
+.orion-btn,
+.orion-btn-secondary,
+.orion-btn.secondary {
+  background: rgba(255, 255, 255, 0.68);
   color: var(--critical-text);
   border: 1px solid var(--critical-border);
 }
 .btn-ghost,
-.orion-btn-ghost {
+.orion-btn-ghost,
+.orion-btn.ghost {
   background: transparent;
   color: var(--critical-text-secondary);
   border: none;
+}
+.orion-btn.sm {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.orion-btn.lg {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 16px;
+}
+html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
+  transform: none;
+  filter: none;
+}
+html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage::after {
+  opacity: 0;
 }
 .input,
 .orion-input {
@@ -253,6 +306,7 @@ export default function RootLayout({
         <ThemeProvider>
           <PlatformShellProvider>
             <ToastProvider>
+              <ControlPlaneSessionBootstrap />
               <div className="orion-app-shell">
                 <Suspense fallback={null}>
                   <Sidebar />

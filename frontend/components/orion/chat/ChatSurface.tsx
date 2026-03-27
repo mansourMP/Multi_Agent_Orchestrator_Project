@@ -1,8 +1,8 @@
 'use client';
 
-import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowUp, X } from 'lucide-react';
+import { ArrowUp, ChevronDown, Plus, SlidersHorizontal, X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
 import { RUN_COMPLETED_STATUS_COPY } from '@/lib/runStartCopy';
 import type { ChatMessageRecord } from './chatSchema';
@@ -26,6 +26,18 @@ export type ChatIdentityAction = {
   priority?: 'primary' | 'default';
 };
 
+type ChatPermissionPrompt = {
+  title: string;
+  prompt: string;
+  labels: string[];
+  capabilities: string[];
+  busyKey: string | null;
+  onAllowOnce: () => void;
+  onAllowWorkflow?: (() => void) | undefined;
+  onAllowAgent?: (() => void) | undefined;
+  onDeny: () => void;
+};
+
 type ChatSurfaceProps = {
   isMobile: boolean;
   goal: string;
@@ -39,19 +51,29 @@ type ChatSurfaceProps = {
     label: string;
     href: string;
   } | null;
-  emptyStateSuggestions?: string[];
-  identityItems: ChatIdentityItem[];
+  emptyAction?: {
+    label: string;
+    href: string;
+  } | null;
+  permissionPrompt?: ChatPermissionPrompt | null;
+  targetLabel: string;
+  targetHref?: string;
+  modelLabel: string;
+  selectedModel: string;
+  modelOptions: string[];
+  modelsLoading?: boolean;
+  onSelectModel: (value: string) => void;
+  trustLabel: string;
   identityDrawerOpen: boolean;
   onToggleIdentityDrawer: () => void;
   onCloseIdentityDrawer: () => void;
-  identityGuide?: ReactNode;
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
 };
 
 type AssistantLifecycleTone = 'thinking' | 'working' | 'approval' | 'failed' | 'done';
 
-function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+function renderInlineMarkdown(text: string, keyPrefix: string) {
   const nodes: ReactNode[] = [];
   const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
   let lastIndex = 0;
@@ -76,7 +98,7 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function renderParagraphWithBreaks(text: string, keyPrefix: string): ReactNode {
+function renderParagraphWithBreaks(text: string, keyPrefix: string) {
   const lines = text.split('\n');
   return (
     <p key={keyPrefix}>
@@ -90,7 +112,7 @@ function renderParagraphWithBreaks(text: string, keyPrefix: string): ReactNode {
   );
 }
 
-function renderMarkdownBlocks(segment: string, keyPrefix: string): ReactNode[] {
+function renderMarkdownBlocks(segment: string, keyPrefix: string) {
   return segment
     .split(/\n{2,}/)
     .map((block, blockIndex) => {
@@ -126,10 +148,10 @@ function renderMarkdownBlocks(segment: string, keyPrefix: string): ReactNode[] {
 
       return renderParagraphWithBreaks(trimmed, `${keyPrefix}:paragraph:${blockIndex}`);
     })
-    .filter((node): node is ReactNode => node !== null);
+    .filter(Boolean);
 }
 
-function renderChatMarkdown(content: string, keyPrefix: string): ReactNode {
+function renderChatMarkdown(content: string, keyPrefix: string) {
   const normalized = content.replace(/\r\n/g, '\n').trim();
   if (!normalized) return null;
   const parts: ReactNode[] = [];
@@ -141,7 +163,7 @@ function renderChatMarkdown(content: string, keyPrefix: string): ReactNode {
   while ((match = fencePattern.exec(normalized)) !== null) {
     const before = normalized.slice(lastIndex, match.index).trim();
     if (before) {
-      parts.push(...renderMarkdownBlocks(before, `${keyPrefix}:segment:${segmentIndex}`));
+      parts.push(...(renderMarkdownBlocks(before, `${keyPrefix}:segment:${segmentIndex}`) as ReactNode[]));
       segmentIndex += 1;
     }
     parts.push(
@@ -155,7 +177,7 @@ function renderChatMarkdown(content: string, keyPrefix: string): ReactNode {
 
   const trailing = normalized.slice(lastIndex).trim();
   if (trailing) {
-    parts.push(...renderMarkdownBlocks(trailing, `${keyPrefix}:segment:${segmentIndex}`));
+    parts.push(...(renderMarkdownBlocks(trailing, `${keyPrefix}:segment:${segmentIndex}`) as ReactNode[]));
   }
 
   return parts;
@@ -180,10 +202,7 @@ function isSuppressedTechnicalMessage(content: string): boolean {
 function sanitizeAssistantDisplayText(content: string): string {
   let text = content.replace(/\r\n/g, '\n').trim();
   if (!text) return '';
-  if (
-    (text.startsWith('{') && text.endsWith('}')) ||
-    (text.startsWith('[') && text.endsWith(']'))
-  ) {
+  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
     return `${RUN_COMPLETED_STATUS_COPY} Open Runs for structured details.`;
   }
 
@@ -200,22 +219,13 @@ function sanitizeAssistantDisplayText(content: string): string {
 
     if (hasAbsolutePath(trimmed)) continue;
 
-    if (
-      /^validation:?/i.test(trimmed) ||
-      /^sources?:/i.test(trimmed) ||
-      /^source refs?:/i.test(trimmed)
-    ) {
+    if (/^validation:?/i.test(trimmed) || /^sources?:/i.test(trimmed) || /^source refs?:/i.test(trimmed)) {
       skippingTechnicalTail = true;
       continue;
     }
 
     if (skippingTechnicalTail) {
-      if (
-        /^[-*]\s*`/.test(trimmed) ||
-        /^`/.test(trimmed) ||
-        /^[-*]\s*[A-Za-z0-9_./-]+:\d+/.test(trimmed) ||
-        /^\.\//.test(trimmed)
-      ) {
+      if (/^[-*]\s*`/.test(trimmed) || /^`/.test(trimmed) || /^[-*]\s*[A-Za-z0-9_./-]+:\d+/.test(trimmed) || /^\.\//.test(trimmed)) {
         continue;
       }
       skippingTechnicalTail = false;
@@ -242,14 +252,10 @@ function resolveAssistantLifecycle(status: ChatMessageRecord['status']): { label
 function shouldSuppressAssistantBody(content: string, status: ChatMessageRecord['status']): boolean {
   const normalized = content.trim().toLowerCase();
   if (!normalized) return true;
-  if ((status === 'sending' || status === 'running') && (normalized === 'working on it...' || normalized === 'working on it…')) {
-    return true;
-  }
-  return false;
+  return (status === 'sending' || status === 'running') && (normalized === 'working on it...' || normalized === 'working on it…');
 }
 
 export function ChatSurface({
-  isMobile,
   goal,
   setGoal,
   primaryGoalRef,
@@ -258,12 +264,19 @@ export function ChatSurface({
   messages,
   inlineStatus,
   inlineAction = null,
-  emptyStateSuggestions = [],
-  identityItems,
+  emptyAction = null,
+  permissionPrompt = null,
+  targetLabel,
+  targetHref = '/agents',
+  modelLabel,
+  selectedModel,
+  modelOptions,
+  modelsLoading = false,
+  onSelectModel,
+  trustLabel,
   identityDrawerOpen,
   onToggleIdentityDrawer,
   onCloseIdentityDrawer,
-  identityGuide = null,
   identitySections,
   identityActions,
 }: ChatSurfaceProps) {
@@ -271,11 +284,11 @@ export function ChatSurface({
   const hasMessages = messages.length > 0;
   const sendDisabled = chatBusy || goal.trim().length === 0;
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
   const renderedMessages = useMemo(
-    () =>
-      messages.filter(
-        (message) => !(message.status === 'error' && isSuppressedTechnicalMessage(message.content)),
-      ),
+    () => messages.filter((message) => !(message.status === 'error' && isSuppressedTechnicalMessage(message.content))),
     [messages],
   );
   const isFirstThread = renderedMessages.length > 0 && renderedMessages.length <= 2;
@@ -288,18 +301,42 @@ export function ChatSurface({
   useEffect(() => {
     const element = primaryGoalRef.current;
     if (!element) return;
-    const minHeight = hasMessages ? 28 : 36;
-    const maxHeight = hasMessages ? 200 : 160;
+    const minHeight = 28;
+    const maxHeight = 160;
     element.style.height = '0px';
     const nextHeight = Math.max(minHeight, Math.min(element.scrollHeight, maxHeight));
     element.style.height = `${nextHeight}px`;
     element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [goal, hasMessages, primaryGoalRef]);
+  }, [goal, primaryGoalRef]);
 
   useEffect(() => {
     if (!hasMessages) return;
     anchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
   }, [hasMessages, renderedMessages.length]);
+
+  useEffect(() => {
+    if (!attachMenuOpen && !modelMenuOpen && !controlsMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest('[data-chat-menu-root]')) return;
+      setAttachMenuOpen(false);
+      setModelMenuOpen(false);
+      setControlsMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setAttachMenuOpen(false);
+      setModelMenuOpen(false);
+      setControlsMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [attachMenuOpen, controlsMenuOpen, modelMenuOpen]);
 
   useEffect(() => {
     if (!identityDrawerOpen) return;
@@ -313,52 +350,28 @@ export function ChatSurface({
   return (
     <section className={`orion-chat-v2${hasMessages ? ' has-history' : ' is-empty'}${isFirstThread ? ' is-first-thread' : ''}`}>
       <div className="orion-chat-v2-thread-shell">
-        {identityItems.length > 0 ? (
-          <button
-            type="button"
-            className={`orion-chat-v2-identity-bar${!hasMessages ? ' is-empty' : ''}`}
-            aria-label="Review current task setup"
-            aria-expanded={identityDrawerOpen}
-            onClick={onToggleIdentityDrawer}
-          >
-            <div className="orion-chat-v2-identity-grid">
-              {identityItems.map((item) => (
-                <div
-                  key={`${item.label}:${item.value}`}
-                  className={`orion-chat-v2-identity-chip${item.tone ? ` is-${item.tone}` : ''}${item.priority === 'high' ? ' is-priority' : ''}`}
-                >
-                  <span className="orion-chat-v2-identity-label">{item.label}</span>
-                  <span className="orion-chat-v2-identity-value">{item.value}</span>
-                </div>
-              ))}
-            </div>
-            <span className="orion-chat-v2-identity-cta">{identityDrawerOpen ? 'Hide setup' : 'Review setup'}</span>
+        <div className="orion-chat-v2-topline">
+          <button type="button" className="orion-chat-v2-target-chip" onClick={() => router.push(targetHref)}>
+            {targetLabel}
           </button>
-        ) : null}
-        {identityGuide ? <div className="orion-chat-v2-route-guide">{identityGuide}</div> : null}
+          {hasMessages ? (
+            <button type="button" className="orion-chat-v2-topline-link" onClick={() => router.push('/workspace')}>
+              Open workbench
+            </button>
+          ) : null}
+        </div>
+
         {!hasMessages ? (
-          <section className="orion-chat-v2-premium-empty" aria-label="Automation suggestions">
-            <h1 className="orion-chat-v2-premium-title">What do you want done?</h1>
-            <p className="orion-chat-v2-premium-copy">Describe the task in plain language.</p>
-            <div className="orion-chat-v2-premium-chips">
-              {emptyStateSuggestions.map((task) => (
-                <button
-                  key={task}
-                  type="button"
-                  className="orion-chat-v2-premium-chip"
-                  onClick={() => {
-                    setGoal(task);
-                    requestAnimationFrame(() => primaryGoalRef.current?.focus());
-                  }}
-                >
-                  <span className="orion-chat-v2-premium-chip-title">{task}</span>
-                  <span className="orion-chat-v2-premium-chip-meta">Use this as a starting point</span>
-                </button>
-              ))}
-            </div>
+          <section className="orion-chat-v2-compact-empty" aria-label="Empty chat">
+            <h1 className="orion-chat-v2-compact-title">What should this do?</h1>
+            <p className="orion-chat-v2-compact-copy">Describe one task in plain language.</p>
+            {emptyAction ? (
+              <button type="button" className="orion-chat-v2-empty-action" onClick={() => router.push(emptyAction.href)}>
+                {emptyAction.label}
+              </button>
+            ) : null}
           </section>
         ) : null}
-        {isFirstThread ? <div className="orion-chat-v2-hero-ghost" aria-hidden>What do you want done?</div> : null}
 
         {renderedMessages.length > 0 ? (
           <div className="orion-chat-v2-thread" aria-live="polite">
@@ -385,7 +398,7 @@ export function ChatSurface({
                       {lifecycle ? (
                         <div className={`orion-chat-v2-state is-${lifecycle.tone}`}>
                           <span className="orion-chat-v2-state-label">{lifecycle.label}</span>
-                          {lifecycle.tone === 'thinking' || lifecycle.tone === 'working' ? (
+                          {(lifecycle.tone === 'thinking' || lifecycle.tone === 'working') ? (
                             <span className="orion-chat-v2-state-dots" aria-hidden>
                               <span />
                               <span />
@@ -412,26 +425,104 @@ export function ChatSurface({
 
       <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
         <div className="orion-chat-v2-composer-frame">
-          {inlineStatus ? (
-            <div className="orion-chat-v2-status-line">
-              <span>⚠ {inlineStatus}</span>
-              {inlineAction ? (
+          <div className="orion-chat-v2-control-strip">
+            <span className="orion-chat-v2-control-chip is-target">{targetLabel}</span>
+            <span className="orion-chat-v2-control-chip is-trust">{trustLabel}</span>
+          </div>
+
+          {permissionPrompt ? (
+            <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
+              <div className="orion-chat-v2-permission-header">
+                <div className="orion-chat-v2-permission-title">Approval needed</div>
+                <div className="orion-chat-v2-permission-copy">{permissionPrompt.prompt}</div>
+              </div>
+              {permissionPrompt.labels.length > 0 ? (
+                <div className="orion-chat-v2-permission-chips">
+                  {permissionPrompt.labels.map((label) => (
+                    <span key={`label:${label}`} className="orion-chat-v2-permission-chip">{label}</span>
+                  ))}
+                </div>
+              ) : null}
+              {permissionPrompt.capabilities.length > 0 ? (
+                <div className="orion-chat-v2-permission-detail">Requested: {permissionPrompt.capabilities.join(', ')}</div>
+              ) : null}
+              <div className="orion-chat-v2-permission-actions">
                 <button
                   type="button"
-                  className="orion-chat-v2-status-action"
-                  onClick={() => router.push(inlineAction.href)}
+                  className="orion-chat-v2-permission-action is-primary"
+                  onClick={permissionPrompt.onAllowOnce}
+                  disabled={Boolean(permissionPrompt.busyKey)}
                 >
-                  {inlineAction.label}
+                  {permissionPrompt.busyKey === 'Proceed:once' ? 'Allowing…' : 'Allow once'}
                 </button>
-              ) : null}
+                {permissionPrompt.onAllowWorkflow ? (
+                  <button
+                    type="button"
+                    className="orion-chat-v2-permission-action"
+                    onClick={permissionPrompt.onAllowWorkflow}
+                    disabled={Boolean(permissionPrompt.busyKey)}
+                  >
+                    {permissionPrompt.busyKey === 'Proceed:workflow' ? 'Saving…' : 'Always for this task'}
+                  </button>
+                ) : null}
+                {permissionPrompt.onAllowAgent ? (
+                  <button
+                    type="button"
+                    className="orion-chat-v2-permission-action"
+                    onClick={permissionPrompt.onAllowAgent}
+                    disabled={Boolean(permissionPrompt.busyKey)}
+                  >
+                    {permissionPrompt.busyKey === 'Proceed:agent' ? 'Saving…' : 'Always for this agent'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="orion-chat-v2-permission-action is-danger"
+                  onClick={permissionPrompt.onDeny}
+                  disabled={Boolean(permissionPrompt.busyKey)}
+                >
+                  {permissionPrompt.busyKey === 'Hold:once' ? 'Blocking…' : 'Deny'}
+                </button>
+              </div>
             </div>
           ) : null}
+
           <div className="orion-chat-v2-composer">
+            <div className="orion-chat-v2-composer-leading" data-chat-menu-root>
+              <button
+                type="button"
+                className="orion-chat-v2-icon-btn"
+                aria-label="Add context"
+                aria-haspopup="menu"
+                aria-expanded={attachMenuOpen}
+                onClick={() => {
+                  setAttachMenuOpen((current) => !current);
+                  setModelMenuOpen(false);
+                  setControlsMenuOpen(false);
+                }}
+              >
+                <Plus size={16} />
+              </button>
+              {attachMenuOpen ? (
+                <div className="orion-chat-v2-menu" role="menu">
+                  <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/artifacts'); }}>
+                    Open artifacts
+                  </button>
+                  <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/executions'); }}>
+                    Open runs
+                  </button>
+                  <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); onToggleIdentityDrawer(); }}>
+                    Review setup
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
             <textarea
               ref={primaryGoalRef}
               value={goal}
               onChange={(event) => setGoal(event.target.value)}
-              placeholder={hasMessages ? 'Add the next instruction' : 'Describe the task you want Hekor to handle'}
+              placeholder="Ask anything or tell it what to do"
               rows={1}
               className="orion-chat-v2-input"
               onKeyDown={(event) => {
@@ -441,35 +532,110 @@ export function ChatSurface({
                 }
               }}
             />
-            <button
-              type="button"
-              onClick={invokeSend}
-              disabled={sendDisabled}
-              className="orion-chat-v2-send"
-              aria-label="Send"
-            >
-              <ArrowUp size={16} />
-            </button>
+
+            <div className="orion-chat-v2-composer-actions">
+              <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
+                <button
+                  type="button"
+                  className="orion-chat-v2-model-pill"
+                  aria-label="Choose model"
+                  aria-haspopup="menu"
+                  aria-expanded={modelMenuOpen}
+                  onClick={() => {
+                    setModelMenuOpen((current) => !current);
+                    setAttachMenuOpen(false);
+                    setControlsMenuOpen(false);
+                  }}
+                >
+                  <span>{modelsLoading ? 'Loading models…' : modelLabel}</span>
+                  <ChevronDown size={14} />
+                </button>
+                {modelMenuOpen ? (
+                  <div className="orion-chat-v2-menu is-model" role="menu">
+                    {modelOptions.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        className={`orion-chat-v2-menu-item${option === selectedModel ? ' is-selected' : ''}`}
+                        onClick={() => {
+                          onSelectModel(option);
+                          setModelMenuOpen(false);
+                        }}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
+                <button
+                  type="button"
+                  className="orion-chat-v2-icon-btn"
+                  aria-label="More controls"
+                  aria-haspopup="menu"
+                  aria-expanded={controlsMenuOpen}
+                  onClick={() => {
+                    setControlsMenuOpen((current) => !current);
+                    setAttachMenuOpen(false);
+                    setModelMenuOpen(false);
+                  }}
+                >
+                  <SlidersHorizontal size={16} />
+                </button>
+                {controlsMenuOpen ? (
+                  <div className="orion-chat-v2-menu is-controls" role="menu">
+                    <div className="orion-chat-v2-menu-section-label">Current access</div>
+                    <div className="orion-chat-v2-menu-meta">{trustLabel}</div>
+                    <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); onToggleIdentityDrawer(); }}>
+                      Review setup
+                    </button>
+                    <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); router.push('/workspace'); }}>
+                      Open workbench
+                    </button>
+                    <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); router.push('/agents'); }}>
+                      Open agents
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              <button
+                type="button"
+                onClick={invokeSend}
+                disabled={sendDisabled}
+                className="orion-chat-v2-send"
+                aria-label="Send"
+              >
+                <ArrowUp size={16} />
+              </button>
+            </div>
           </div>
-          <div className="orion-chat-v2-footer">
-            {hasMessages ? 'Enter to send • Shift+Enter for a new line' : 'Start with one concrete business task'}
-          </div>
+
+          {inlineStatus ? (
+            <div className="orion-chat-v2-status-line">
+              <span>⚠ {inlineStatus}</span>
+              {inlineAction ? (
+                <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(inlineAction.href)}>
+                  {inlineAction.label}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="orion-chat-v2-footer">Enter to send • Shift+Enter for a new line</div>
         </div>
       </div>
 
       {identityDrawerOpen ? (
         <>
-          <button
-            type="button"
-            className="orion-chat-v2-drawer-backdrop"
-            aria-label="Close assistant session details"
-            onClick={onCloseIdentityDrawer}
-          />
-          <aside className="orion-chat-v2-drawer" aria-label="Assistant session details">
+          <button type="button" className="orion-chat-v2-drawer-backdrop" aria-label="Close setup details" onClick={onCloseIdentityDrawer} />
+          <aside className="orion-chat-v2-drawer" aria-label="Task setup">
             <div className="orion-chat-v2-drawer-header">
               <div>
-                <div className="orion-chat-v2-drawer-eyebrow">Task setup</div>
-                <h2 className="orion-chat-v2-drawer-title">Before you run</h2>
+                <div className="orion-chat-v2-drawer-eyebrow">Setup</div>
+                <h2 className="orion-chat-v2-drawer-title">Review before running</h2>
               </div>
               <button type="button" className="orion-chat-v2-drawer-close" onClick={onCloseIdentityDrawer} aria-label="Close details">
                 <X size={16} />

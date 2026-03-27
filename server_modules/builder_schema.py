@@ -5,8 +5,9 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import HTTPException
 
 from server_modules.builder_runtime_mapping import (
-    default_file_mount_grants,
     normalize_file_mount_grants,
+    normalize_remembered_grants,
+    normalize_trust_preset,
     validate_file_mount_grants,
 )
 from server_modules.connector_manifests import CONNECTOR_MANIFESTS
@@ -264,10 +265,12 @@ def default_agent_config(raw_config: Optional[Dict[str, Any]] = None) -> Dict[st
             "bindings": source.get("connectors", {}).get("bindings") if isinstance(source.get("connectors"), dict) and isinstance(source.get("connectors", {}).get("bindings"), list) else [],
         },
         "permissions": {
+            "trust_preset": normalize_trust_preset(permissions.get("trust_preset")),
             "action_policy": normalize_trust_mode(permissions.get("action_policy") or "guarded"),
             "connector_permissions": _dedupe_strings(permissions.get("connector_permissions") or permissions.get("connectors")),
             "browser_permissions": permissions.get("browser_permissions") if isinstance(permissions.get("browser_permissions"), dict) else {"allow": False},
             "file_mount_grants": normalize_file_mount_grants(permissions.get("file_mount_grants"), execution_target),
+            "remembered_grants": normalize_remembered_grants(permissions.get("remembered_grants")),
         },
     }
 
@@ -299,9 +302,11 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
         return default_agent_config(seed)
     if node_type == "tool":
         raw_config = raw_node.get("config") if _is_record(raw_node.get("config")) else {}
+        permissions = raw_config.get("permissions") if isinstance(raw_config.get("permissions"), dict) else {}
         blob = _text_blob(prompt, raw_node.get("label"), raw_node.get("subtitle"))
         manifest = _infer_connector_manifest(blob)
         inferred_action = _find_manifest_entry(manifest, "actions", blob) if variant == "connector_action" else None
+        execution_target = _clean_text(raw_config.get("execution_target"), 40) or ("local_companion" if variant in {"shell", "file", "browser", "code"} else "auto")
         return {
             "action_id": _clean_text(raw_config.get("action_id"), 160) or (str(inferred_action.get("id") or "") if inferred_action else _clean_text(raw_node.get("label"), 160)),
             "connector": _clean_text(raw_config.get("connector"), 120) or (str(manifest.get("id") or "") if manifest else ""),
@@ -335,8 +340,15 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
             "comment_id": _clean_text(raw_config.get("comment_id") or raw_config.get("media_comment_id"), 160),
             "session_profile": _clean_text(raw_config.get("session_profile"), 160),
             "browser_actions": _browser_actions(raw_config.get("browser_actions")),
-            "permissions": raw_config.get("permissions") if _is_record(raw_config.get("permissions")) else {},
-            "execution_target": _clean_text(raw_config.get("execution_target"), 40) or ("local_companion" if variant in {"shell", "file", "browser", "code"} else "auto"),
+            "permissions": {
+                "trust_preset": normalize_trust_preset(permissions.get("trust_preset")),
+                "action_policy": normalize_trust_mode(permissions.get("action_policy") or "guarded"),
+                "connector_permissions": _dedupe_strings(permissions.get("connector_permissions") or permissions.get("connectors")),
+                "browser_permissions": permissions.get("browser_permissions") if isinstance(permissions.get("browser_permissions"), dict) else {"allow": False},
+                "file_mount_grants": normalize_file_mount_grants(permissions.get("file_mount_grants"), execution_target),
+                "remembered_grants": normalize_remembered_grants(permissions.get("remembered_grants")),
+            },
+            "execution_target": execution_target,
         }
     if node_type == "decision":
         return {

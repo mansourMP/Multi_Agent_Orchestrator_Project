@@ -12,7 +12,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from server_modules.file_mount_security import assert_file_mount_access
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+SERVER_MODULES_DIR = ROOT_DIR / "server_modules"
+if str(SERVER_MODULES_DIR) not in sys.path:
+    sys.path.insert(0, str(SERVER_MODULES_DIR))
+
+try:
+    from file_mount_security import assert_file_mount_access
+except ImportError:
+    from server_modules.file_mount_security import assert_file_mount_access  # type: ignore[no-redef]
 
 try:
     from scripts.platform_execution import (

@@ -217,6 +217,50 @@ describe('workflow schema normalization', () => {
     ).toBe(true);
   });
 
+  it('blocks code tool nodes pending a reviewed execution path', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'code',
+            config: {
+              code: 'print("ok")',
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(
+      issues.some((issue) => issue.code === 'code_reviewed_execution_path_required' && issue.level === 'error'),
+    ).toBe(true);
+  });
+
+  it('blocks shell-like fields on code tool nodes', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'code',
+            config: {
+              command: 'python3 -c "print(1)"',
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(issues.some((issue) => issue.code === 'code_shell_fields_disallowed')).toBe(true);
+  });
+
   it('blocks session-backed interactive browser automation in local companion v1', () => {
     const issues = validateWorkflowDefinition(
       {

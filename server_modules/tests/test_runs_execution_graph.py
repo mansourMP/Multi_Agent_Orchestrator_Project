@@ -693,6 +693,44 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertIn("cannot target cloud directly", str(ctx.exception))
 
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_local_code_tool_requires_reviewed_execution_path(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError) as ctx:
+            runs_execution._workflow_execute_local_tool(
+                "run-code-local",
+                {"metadata": {}},
+                {
+                    "code": "print('ok')",
+                    "execution_target": "local_companion",
+                    "permissions": {"file_mount_grants": []},
+                },
+                label="Run code",
+                variant="code",
+                current_text="",
+            )
+
+        self.assertIn("reviewed higher-trust execution path", str(ctx.exception))
+        create_child_run_mock.assert_not_called()
+
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_local_code_tool_rejects_shell_fields(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError) as ctx:
+            runs_execution._workflow_execute_local_tool(
+                "run-code-shell-fields",
+                {"metadata": {}},
+                {
+                    "command": "python3 -c \"print('ok')\"",
+                    "execution_target": "local_companion",
+                    "permissions": {"file_mount_grants": []},
+                },
+                label="Run code",
+                variant="code",
+                current_text="",
+            )
+
+        self.assertIn("cannot use command, argv, or capability", str(ctx.exception))
+        create_child_run_mock.assert_not_called()
+
     @patch(
         "server_modules.runs_execution._workflow_tool_connector_secret",
         return_value=("cred-telegram", "telegram_bot", {"chat_id": "12345"}),

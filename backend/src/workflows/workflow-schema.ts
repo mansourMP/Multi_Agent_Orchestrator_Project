@@ -771,6 +771,25 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             nodeId: node.id,
         });
     }
+    if (variant === 'code') {
+        const command = compactText(config.command ?? '', 2000);
+        const argv = dedupeStrings(config.argv);
+        const capability = compactText(config.capability ?? '', 160);
+        if (command || argv.length > 0 || capability) {
+            issues.push({
+                code: 'code_shell_fields_disallowed',
+                message: 'Code tool nodes cannot use command, argv, or capability in the current runtime.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        issues.push({
+            code: 'code_reviewed_execution_path_required',
+            message: 'Code tool nodes are not executable in local companion V1; they require a reviewed higher-trust execution path.',
+            level: 'error',
+            nodeId: node.id,
+        });
+    }
     if (variant === 'browser' && target === 'cloud') {
         issues.push({
             code: 'browser_requires_local_companion_or_auto',
@@ -779,7 +798,7 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             nodeId: node.id,
         });
     }
-    if (variant === 'shell' || variant === 'code') {
+    if (variant === 'shell') {
         const command = compactText(config.command ?? '', 2000);
         const argv = dedupeStrings(config.argv);
         const capability = compactText(config.capability ?? '', 160);

@@ -446,9 +446,16 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             issues.append({"code": "shell_requires_local_companion_or_auto", "message": "Shell tool nodes cannot target cloud directly; use local_companion or auto."})
         if variant == "code" and target == "cloud":
             issues.append({"code": "code_requires_local_companion_or_auto", "message": "Code tool nodes cannot target cloud directly; use local_companion or auto."})
+        if variant == "code":
+            command = _clean_text(config.get("command"), 2000)
+            argv = config.get("argv") if isinstance(config.get("argv"), list) else []
+            capability = _clean_text(config.get("capability"), 160)
+            if command or any(_clean_text(item, 400) for item in argv) or capability:
+                issues.append({"code": "code_shell_fields_disallowed", "message": "Code tool nodes cannot use command, argv, or capability in the current runtime."})
+            issues.append({"code": "code_reviewed_execution_path_required", "message": "Code tool nodes are not executable in local companion V1; they require a reviewed higher-trust execution path."})
         if variant == "browser" and target == "cloud":
             issues.append({"code": "browser_requires_local_companion_or_auto", "message": "Browser tool nodes cannot target cloud directly; use local_companion or auto."})
-        if variant in {"shell", "code"}:
+        if variant == "shell":
             command = _clean_text(config.get("command"), 2000)
             argv = config.get("argv") if isinstance(config.get("argv"), list) else []
             capability = _clean_text(config.get("capability"), 160)

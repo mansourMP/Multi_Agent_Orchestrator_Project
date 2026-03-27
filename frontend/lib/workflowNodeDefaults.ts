@@ -155,9 +155,8 @@ export function buildDefaultCanonicalConfig(type: WorkflowDefaultNodeType, varia
     }
     if (variant === 'code') {
       return {
-        summary: 'Code action',
+        summary: 'Requires reviewed execution path',
         execution_target: 'local_companion',
-        command: 'python3 -c "print(\'ok\')"',
         code: 'print("ok")',
         permissions: defaultPermissions(),
       };

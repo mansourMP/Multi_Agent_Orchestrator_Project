@@ -304,7 +304,7 @@ def _update_run_node_state(
 def _workflow_variant_default_tool_id(variant: str) -> str:
     mapping = {
         "shell": "execute_shell_command",
-        "code": "execute_shell_command",
+        "code": "",
         "browser": "browser_automation",
         "file": "read_write_files",
         "document": "document_create",
@@ -315,6 +315,8 @@ def _workflow_variant_default_tool_id(variant: str) -> str:
 
 def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
     clean_variant = str(variant or "").strip().lower()
+    if clean_variant == "code":
+        return ""
     if clean_variant == "connector_action":
         action_id = normalize_action_id(config.get("action_id"))
         action_mapping = {
@@ -1807,6 +1809,15 @@ def _workflow_execute_local_tool(
         has_capability = bool(str(config.get("capability") or "").strip())
         if has_capability and (has_command or has_argv):
             raise RuntimeError(f"{variant.title()} tool nodes cannot mix capability with command or argv.")
+    if variant == "code":
+        has_command = bool(str(config.get("command") or "").strip())
+        has_argv = isinstance(config.get("argv"), list) and any(str(item or "").strip() for item in (config.get("argv") or []))
+        has_capability = bool(str(config.get("capability") or "").strip())
+        if has_command or has_argv or has_capability:
+            raise RuntimeError("Code tool nodes cannot use command, argv, or capability in the current runtime.")
+        raise RuntimeError(
+            "Code tool nodes are not executable in local companion V1; they require a reviewed higher-trust execution path."
+        )
     if variant == "file":
         file_access = assert_file_mount_access(
             config.get("path") or config.get("file_path"),
@@ -1825,7 +1836,7 @@ def _workflow_execute_local_tool(
         }
         if not operation["path"]:
             raise RuntimeError("File tool node requires path or file_path.")
-    elif variant in {"shell", "code"}:
+    elif variant == "shell":
         cwd_access = assert_file_mount_access(
             config.get("cwd") or ".",
             "read",

@@ -192,6 +192,50 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             any(issue.get("code") == "code_requires_local_companion_or_auto" for issue in payload.get("issues", []))
         )
 
+    def test_parse_workflow_payload_flags_code_reviewed_execution_requirement(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "code",
+                  "config": {
+                    "code": "print('ok')"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(
+            any(issue.get("code") == "code_reviewed_execution_path_required" for issue in payload.get("issues", []))
+        )
+
+    def test_parse_workflow_payload_flags_shell_fields_on_code_tool(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "code",
+                  "config": {
+                    "command": "python3 -c \\"print(1)\\""
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(
+            any(issue.get("code") == "code_shell_fields_disallowed" for issue in payload.get("issues", []))
+        )
+
     def test_parse_workflow_payload_flags_shell_tool_without_command(self):
         payload = _parse_workflow_payload(
             """

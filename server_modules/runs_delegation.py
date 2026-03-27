@@ -2,7 +2,14 @@ from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
-from server_modules.runs_output import _serialize_run_snapshot
+from server_modules.runs_output import (
+    _get_archived_run_history_item,
+    _get_replay_payload,
+    _prefer_archived_snapshot,
+    _refresh_archived_run_snapshot,
+    _serialize_run_snapshot,
+    _upsert_run_history_snapshot,
+)
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -60,6 +67,32 @@ OUTCOME_PACK_AGENT_ROLE_MAP: Dict[str, str] = {
     "document-studio-v1": "builder",
     "local-execution-v1": "builder",
 }
+
+
+def emit_log(log_queue, level: str, message: str, event: str = "runtime", data: Optional[dict] = None):
+    payload = {
+        "event_id": str(uuid.uuid4()),
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "level": level,
+        "event": event,
+        "message": message,
+    }
+    if data:
+        payload["data"] = data
+    run_id = RUN_QUEUE_INDEX.get(id(log_queue))
+    if run_id:
+        run = runs.get(run_id)
+        if isinstance(run, dict):
+            seq = int(run.get("_event_seq", 0)) + 1
+            run["_event_seq"] = seq
+            payload["seq"] = seq
+            payload["run_id"] = run_id
+            events = run.setdefault("events", [])
+            if isinstance(events, list):
+                events.append(payload)
+                if len(events) > ORION_MAX_EVENT_BUFFER:
+                    del events[: len(events) - ORION_MAX_EVENT_BUFFER]
+    log_queue.put(payload)
 
 
 def normalize_agent_role(value: Any) -> str:
@@ -465,6 +498,13 @@ def _local_execution_approval_prompt(precheck: Dict[str, Any]) -> str:
     return "Approval required before local companion execution."
 
 
+def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
+    labels = _precheck_human_action_labels(precheck, decision="blocked")
+    if labels:
+        return f"Run blocked by local execution policy: {', '.join(labels)}."
+    return "Run blocked by local execution policy."
+
+
 def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
     precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else None
     if not isinstance(precheck, dict):
@@ -547,6 +587,11 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
     metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
+    if metadata["tool_policy_precheck"].get("blocked_count"):
+        raise HTTPException(
+            status_code=409,
+            detail=_local_execution_block_prompt(metadata["tool_policy_precheck"]),
+        )
     needs_local_approval = _local_execution_requires_start_approval(metadata, metadata["tool_policy_precheck"])
     if needs_local_approval:
         metadata["local_execution_waiting_approval"] = True

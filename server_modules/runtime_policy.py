@@ -1991,6 +1991,19 @@ def evaluate_tool_policy_decision(
             decision = "approval_required"
             reason = "guarded_requires_approval_policy"
 
+    if (
+        decision != "blocked"
+        and clean_tool_id == "browser_automation"
+        and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
+        and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
+    ):
+        decision = "blocked"
+        reason = (
+            "blocked_browser_authenticated_privileged_local_v1"
+            if browser_privileged_actions
+            else "blocked_browser_authenticated_interactive_local_v1"
+        )
+
     if decision != "blocked" and clean_tool_id == "browser_automation" and browser_requires_approval:
         if effective_trust_mode in {TRUST_MODE_GUARDED, TRUST_MODE_STRICT}:
             decision = "approval_required"

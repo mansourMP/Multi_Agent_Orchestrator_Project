@@ -815,6 +815,11 @@ async function main() {
 
     clearTimeout(timeout);
     browserSession.removeListener('will-download', downloadListener);
+    if (sessionProfile && typeof browserSession.flushStorageData === 'function') {
+      try {
+        await browserSession.flushStorageData();
+      } catch {}
+    }
     for (const tabWindow of tabs.values()) {
       try {
         tabWindow.destroy();

@@ -114,6 +114,23 @@ api_post() {
   curl -fsS -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}"
 }
 
+api_post_expect_status() {
+  local path="$1"
+  local payload="$2"
+  local expected_status="$3"
+  local tmp
+  local status
+  tmp="$(mktemp)"
+  status="$(curl -sS -o "${tmp}" -w "%{http_code}" -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}")"
+  if [[ "${status}" != "${expected_status}" ]]; then
+    cat "${tmp}" >&2
+    rm -f "${tmp}"
+    return 1
+  fi
+  cat "${tmp}"
+  rm -f "${tmp}"
+}
+
 poll_json_condition() {
   local path="$1"
   local attempts="${2:-30}"
@@ -258,6 +275,11 @@ cat > "${browser_site_dir}/index.html" <<'HTML'
     <title>Session Smoke</title>
     <script>
       function syncState() {
+        const params = new URLSearchParams(window.location.search);
+        const seed = params.get('seed');
+        if (seed) {
+          localStorage.setItem('empyralis-smoke', seed);
+        }
         const current = localStorage.getItem('empyralis-smoke') || 'unset';
         document.getElementById('state').textContent = current;
         document.title = current === 'unset' ? 'Session Smoke' : `Session ${current}`;
@@ -487,7 +509,7 @@ else
   fail "A6 browser page capture"
 fi
 
-browser_session_seed_payload="$(jq -nc --arg url "${browser_session_url}" '{
+browser_session_seed_payload="$(jq -nc --arg url "${browser_session_url}?seed=Persisted" '{
   engine:"orion",
   workspace_id:"default",
   user_goal:"Smoke test browser session persistence.",
@@ -503,10 +525,7 @@ browser_session_seed_payload="$(jq -nc --arg url "${browser_session_url}" '{
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
-          wait_for_selector:"#go",
-          type_selector:"#search",
-          type_text:"Persisted",
-          click_selector:"#go"
+          browser_permissions:{allow:true}
         }
       ],
       continue_on_error:false
@@ -515,8 +534,11 @@ browser_session_seed_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_session_seed_start_json="${TMP_DIR}/browser-session-seed-start.json"
+browser_session_seed_precheck_json="${TMP_DIR}/browser-session-seed-precheck.json"
+api_post "/runs/precheck" "${browser_session_seed_payload}" > "${browser_session_seed_precheck_json}"
 api_post "/runs/start" "${browser_session_seed_payload}" > "${browser_session_seed_start_json}"
 browser_session_seed_run_id="$(jq -r '.run_id // empty' "${browser_session_seed_start_json}")"
+browser_session_seed_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_session_seed_start_json}")"
 browser_session_seed_run_json="${TMP_DIR}/browser-session-seed-run.json"
 browser_session_check_payload="$(jq -nc --arg url "${browser_session_url}" '{
   engine:"orion",
@@ -533,7 +555,8 @@ browser_session_check_payload="$(jq -nc --arg url "${browser_session_url}" '{
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
-          session_profile:"smoke-browser-profile"
+          session_profile:"smoke-browser-profile",
+          browser_permissions:{allow:true}
         }
       ],
       continue_on_error:false
@@ -542,11 +565,26 @@ browser_session_check_payload="$(jq -nc --arg url "${browser_session_url}" '{
 }')"
 ensure_browser_session_server
 browser_session_check_start_json="${TMP_DIR}/browser-session-check-start.json"
+browser_session_check_precheck_json="${TMP_DIR}/browser-session-check-precheck.json"
+api_post "/runs/precheck" "${browser_session_check_payload}" > "${browser_session_check_precheck_json}"
+if [[ -n "${browser_session_seed_run_id}" && -n "${browser_session_seed_approval_id}" ]] \
+  && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_session_seed_precheck_json}")" == "1" ]] \
+  && [[ "$(jq -r '.status // empty' "${browser_session_seed_start_json}")" == "waiting_for_input" ]]; then
+  browser_session_seed_resolve_json="${TMP_DIR}/browser-session-seed-resolve.json"
+  api_post "/runs/${browser_session_seed_run_id}/approvals/${browser_session_seed_approval_id}/resolve" '{"decision":"proceed","note":"session seed approved"}' > "${browser_session_seed_resolve_json}"
+fi
 if [[ -n "${browser_session_seed_run_id}" ]] && poll_run_terminal "${browser_session_seed_run_id}" 120 1 "${browser_session_seed_run_json}" \
   && [[ "$(jq -r '.status // empty' "${browser_session_seed_run_json}")" == "completed" ]]; then
   api_post "/runs/start" "${browser_session_check_payload}" > "${browser_session_check_start_json}"
   browser_session_check_run_id="$(jq -r '.run_id // empty' "${browser_session_check_start_json}")"
+  browser_session_check_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_session_check_start_json}")"
   browser_session_check_run_json="${TMP_DIR}/browser-session-check-run.json"
+  if [[ -n "${browser_session_check_run_id}" && -n "${browser_session_check_approval_id}" ]] \
+    && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_session_check_precheck_json}")" == "1" ]] \
+    && [[ "$(jq -r '.status // empty' "${browser_session_check_start_json}")" == "waiting_for_input" ]]; then
+    browser_session_check_resolve_json="${TMP_DIR}/browser-session-check-resolve.json"
+    api_post "/runs/${browser_session_check_run_id}/approvals/${browser_session_check_approval_id}/resolve" '{"decision":"proceed","note":"session check approved"}' > "${browser_session_check_resolve_json}"
+  fi
   if [[ -n "${browser_session_check_run_id}" ]] && poll_run_terminal "${browser_session_check_run_id}" 120 1 "${browser_session_check_run_json}" \
     && [[ "$(jq -r '.status // empty' "${browser_session_check_run_json}")" == "completed" ]] \
     && grep -q "Persisted" <<<"$(jq -r '(.result_data.outputs.actions // [])[0].text_preview // empty' "${browser_session_check_run_json}")"; then
@@ -573,6 +611,7 @@ browser_script_payload="$(jq -nc --arg url "${browser_session_url}" '{
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#go"},
             {"action":"type","selector":"#search","text":"Sequence"},
@@ -616,6 +655,7 @@ browser_upload_payload="$(jq -nc --arg url "${browser_session_url}" --arg upload
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#upload"},
             {"action":"select","selector":"#choice","value":"beta"},
@@ -648,21 +688,24 @@ else
   fail "A9 browser upload and extract"
 fi
 
-approval_payload="$(jq -nc '{
+approval_payload="$(jq -nc --arg url "${browser_session_url}" '{
   engine:"orion",
   workspace_id:"default",
-  user_goal:"Smoke test approval-gated local shell run.",
-  agent_role:"builder",
+  user_goal:"Smoke test approval-gated browser session run.",
+  agent_role:"research",
   metadata:{
     outcome_pack:"local-execution-v1",
     execution_target:"local_companion",
     trust_mode:"guarded",
-    action_policy:{
-      blocked_actions:["delete_files","delete_records","transfer_funds"]
-    },
     pack_inputs:{
       operations:[
-        {tool:"execute_shell_command", command:"pwd", cwd:"."}
+        {
+          tool:"browser_automation",
+          mode:"capture_page",
+          url:$url,
+          session_profile:"smoke-browser-profile",
+          browser_permissions:{allow:true}
+        }
       ],
       continue_on_error:false
     }
@@ -682,12 +725,12 @@ if [[ -n "${approval_run_id}" && -n "${approval_id}" ]] \
   approval_run_json="${TMP_DIR}/approval-run.json"
   if poll_run_terminal "${approval_run_id}" 90 1 "${approval_run_json}" \
     && [[ "$(jq -r '.status // empty' "${approval_run_json}")" == "completed" ]]; then
-    pass "A10 approval-gated local shell run"
+    pass "A10 approval-gated browser session run"
   else
-    fail "A10 approval-gated local shell run"
+    fail "A10 approval-gated browser session run"
   fi
 else
-  fail "A10 approval-gated local shell run"
+  fail "A10 approval-gated browser session run"
 fi
 
 audit_json="${TMP_DIR}/audit.json"
@@ -918,6 +961,7 @@ browser_iframe_payload="$(jq -nc --arg url "${browser_session_url}" '{
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","frame":"#panel","selector":"#frame-go"},
             {"action":"type","frame":"#panel","selector":"#frame-search","text":"Inside frame"},
@@ -961,6 +1005,7 @@ browser_tab_payload="$(jq -nc --arg url "${browser_session_url}" --arg second_ur
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"open_tab","tab":"secondary","url":$second_url},
             {"action":"wait","tab":"secondary","selector":"#second-ready"},
@@ -1007,6 +1052,7 @@ browser_download_payload="$(jq -nc --arg url "${browser_session_url}" '{
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#download-link"},
             {"action":"download","selector":"#download-link","ms":8000}
@@ -1050,6 +1096,7 @@ browser_popup_payload="$(jq -nc --arg url "${browser_session_url}" '{
           tool:"browser_automation",
           mode:"capture_page",
           url:$url,
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#popup-link"},
             {"action":"open_popup","selector":"#popup-link","tab":"popup","ms":10000},
@@ -1096,6 +1143,7 @@ browser_auth_payload="$(jq -nc --arg url "${browser_session_url}" '{
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-auth-browser",
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#go"},
             {"action":"type","selector":"#search","text":"Auth smoke"},
@@ -1113,28 +1161,15 @@ ensure_browser_session_server
 browser_auth_precheck_json="${TMP_DIR}/browser-auth-precheck.json"
 api_post "/runs/precheck" "${browser_auth_payload}" > "${browser_auth_precheck_json}"
 browser_auth_start_json="${TMP_DIR}/browser-auth-start.json"
-api_post "/runs/start" "${browser_auth_payload}" > "${browser_auth_start_json}"
+api_post_expect_status "/runs/start" "${browser_auth_payload}" 409 > "${browser_auth_start_json}"
 browser_auth_run_id="$(jq -r '.run_id // empty' "${browser_auth_start_json}")"
 browser_auth_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_start_json}")"
-if [[ -n "${browser_auth_run_id}" && -n "${browser_auth_approval_id}" ]] \
-  && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_auth_precheck_json}")" == "1" ]] \
-  && [[ "$(jq -r '.status // empty' "${browser_auth_start_json}")" == "waiting_for_input" ]]; then
-  browser_auth_resolve_json="${TMP_DIR}/browser-auth-resolve.json"
-  api_post "/runs/${browser_auth_run_id}/approvals/${browser_auth_approval_id}/resolve" '{"decision":"proceed","note":"browser auth approved"}' > "${browser_auth_resolve_json}"
-  browser_auth_run_json="${TMP_DIR}/browser-auth-run.json"
-  if [[ -n "${browser_auth_run_id}" ]] && poll_run_terminal "${browser_auth_run_id}" 120 1 "${browser_auth_run_json}" \
-    && [[ "$(jq -r '.status // empty' "${browser_auth_run_json}")" == "completed" ]] \
-    && jq -e '
-      ((.result_data.outputs.actions // [])[0] // {}) as $action
-      | (($action.browser_security_profile // "") == "authenticated_interactive")
-        and (($action.text_preview // "") | contains("Auth smoke"))
-    ' "${browser_auth_run_json}" >/dev/null; then
-    pass "A18 authenticated browser approval"
-  else
-    fail "A18 authenticated browser approval"
-  fi
+if [[ -z "${browser_auth_run_id}" && -z "${browser_auth_approval_id}" ]] \
+  && [[ "$(jq -r '.tool_policy_precheck.blocked_count // 0' "${browser_auth_precheck_json}")" == "1" ]] \
+  && jq -e '.tool_policy_precheck.items[0].reason == "blocked_browser_authenticated_interactive_local_v1"' "${browser_auth_precheck_json}" >/dev/null; then
+  pass "A18 authenticated browser interactive block"
 else
-  fail "A18 authenticated browser approval"
+  fail "A18 authenticated browser interactive block"
 fi
 
 browser_auth_priv_payload="$(jq -nc --arg url "${browser_session_url}" --arg upload_path "${browser_upload_file}" '{
@@ -1153,6 +1188,7 @@ browser_auth_priv_payload="$(jq -nc --arg url "${browser_session_url}" --arg upl
           mode:"capture_page",
           url:$url,
           session_profile:"smoke-browser-profile",
+          browser_permissions:{allow:true},
           browser_actions:[
             {"action":"wait","selector":"#upload"},
             {"action":"upload","selector":"#upload","path":$upload_path},
@@ -1168,30 +1204,17 @@ ensure_browser_session_server
 browser_auth_priv_precheck_json="${TMP_DIR}/browser-auth-priv-precheck.json"
 api_post "/runs/precheck" "${browser_auth_priv_payload}" > "${browser_auth_priv_precheck_json}"
 browser_auth_priv_start_json="${TMP_DIR}/browser-auth-priv-start.json"
-api_post "/runs/start" "${browser_auth_priv_payload}" > "${browser_auth_priv_start_json}"
+api_post_expect_status "/runs/start" "${browser_auth_priv_payload}" 409 > "${browser_auth_priv_start_json}"
 browser_auth_priv_run_id="$(jq -r '.run_id // empty' "${browser_auth_priv_start_json}")"
 browser_auth_priv_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_priv_start_json}")"
-if [[ -n "${browser_auth_priv_run_id}" && -n "${browser_auth_priv_approval_id}" ]] \
-  && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_auth_priv_precheck_json}")" == "1" ]] \
+if [[ -z "${browser_auth_priv_run_id}" && -z "${browser_auth_priv_approval_id}" ]] \
+  && [[ "$(jq -r '.tool_policy_precheck.blocked_count // 0' "${browser_auth_priv_precheck_json}")" == "1" ]] \
   && [[ "$(jq -r '.tool_policy_precheck.browser_automation_policy.profile // empty' "${browser_auth_priv_precheck_json}")" == "authenticated_privileged" ]] \
   && jq -e '((.tool_policy_precheck.browser_automation_policy.privileged_actions // []) | index("upload")) != null' "${browser_auth_priv_precheck_json}" >/dev/null \
-  && [[ "$(jq -r '.status // empty' "${browser_auth_priv_start_json}")" == "waiting_for_input" ]]; then
-  browser_auth_priv_resolve_json="${TMP_DIR}/browser-auth-priv-resolve.json"
-  api_post "/runs/${browser_auth_priv_run_id}/approvals/${browser_auth_priv_approval_id}/resolve" '{"decision":"proceed","note":"browser privileged approved"}' > "${browser_auth_priv_resolve_json}"
-  browser_auth_priv_run_json="${TMP_DIR}/browser-auth-priv-run.json"
-  if [[ -n "${browser_auth_priv_run_id}" ]] && poll_run_terminal "${browser_auth_priv_run_id}" 120 1 "${browser_auth_priv_run_json}" \
-    && [[ "$(jq -r '.status // empty' "${browser_auth_priv_run_json}")" == "completed" ]] \
-    && jq -e '
-      ((.result_data.outputs.actions // [])[0] // {}) as $action
-      | (($action.browser_security_profile // "") == "authenticated_privileged")
-        and (($action.text_preview // "") | contains("Uploaded via Empyralis smoke"))
-    ' "${browser_auth_priv_run_json}" >/dev/null; then
-    pass "A23 authenticated privileged browser approval"
-  else
-    fail "A23 authenticated privileged browser approval"
-  fi
+  && jq -e '.tool_policy_precheck.items[0].reason == "blocked_browser_authenticated_privileged_local_v1"' "${browser_auth_priv_precheck_json}" >/dev/null; then
+  pass "A23 authenticated privileged browser block"
 else
-  fail "A23 authenticated privileged browser approval"
+  fail "A23 authenticated privileged browser block"
 fi
 
 if [[ "${SCREENSHOT_SMOKE}" == "1" ]]; then

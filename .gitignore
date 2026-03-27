@@ -66,6 +66,7 @@ __pycache__/
 .orion_whatsapp_autopilot_state.json
 .orion_vault_key
 .orion-validation/
+.orion-artifacts/
 .gws-config/
 *.bak.migration
 screenshots/

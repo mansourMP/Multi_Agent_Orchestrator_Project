@@ -457,6 +457,13 @@ def _local_execution_approval_prompt(precheck: Dict[str, Any]) -> str:
     return "Approval required before local companion execution."
 
 
+def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
+    labels = _precheck_human_action_labels(precheck, decision="blocked")
+    if labels:
+        return f"Run blocked by local execution policy: {', '.join(labels)}."
+    return "Run blocked by local execution policy."
+
+
 def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
     precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else None
     if not isinstance(precheck, dict):
@@ -541,6 +548,11 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
     metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
+    if metadata["tool_policy_precheck"].get("blocked_count"):
+        raise HTTPException(
+            status_code=409,
+            detail=_local_execution_block_prompt(metadata["tool_policy_precheck"]),
+        )
     needs_local_approval = _local_execution_requires_start_approval(metadata, metadata["tool_policy_precheck"])
     if needs_local_approval:
         metadata["local_execution_waiting_approval"] = True

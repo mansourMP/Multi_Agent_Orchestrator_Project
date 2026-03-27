@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   PauseCircle,
@@ -78,6 +80,8 @@ type ProviderAccountFormState = {
 
 type AiAccountsPanelProps = {
   workspaceId: string;
+  mode?: 'manage' | 'connect';
+  returnTo?: string;
 };
 
 type ClaudeAuthStatus = {
@@ -260,9 +264,10 @@ function profileTone(profile: ProviderProfileRow | null): CSSProperties {
   return { color: 'var(--text-secondary)', border: '1px solid var(--border-default)', background: 'var(--bg-element)' };
 }
 
-function profileStatusLabel(profile: ProviderProfileRow | null): string {
+function profileStatusLabel(profile: ProviderProfileRow | null, mode: 'manage' | 'connect'): string {
   if (!profile) return 'Vault only';
   if (profile.health === 'cooldown') return 'Cooldown';
+  if (mode === 'connect') return profile.enabled ? 'Ready' : 'Saved only';
   return profile.enabled ? 'Enabled for runtime' : 'Disabled';
 }
 
@@ -291,7 +296,8 @@ function normalizeClaudeCliError(message: string): string {
   return normalized;
 }
 
-export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
+export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
+  const router = useRouter();
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -300,6 +306,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerError, setProviderError] = useState('');
   const [providerNotice, setProviderNotice] = useState('');
+  const [lastConnectedAccountLabel, setLastConnectedAccountLabel] = useState('');
   const [providerBusy, setProviderBusy] = useState<Record<string, string>>({});
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
@@ -417,6 +424,8 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
   const credentialLabelById = useMemo(() => {
     return new Map(providerCredentials.map((item) => [item.id, item.label]));
   }, [providerCredentials]);
+
+  const connectMode = mode === 'connect';
 
   const setProviderActionBusy = useCallback((id: string, action: string | null) => {
     setProviderBusy((prev) => {
@@ -714,6 +723,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
     setProviderActionBusy('provider-create', 'save');
     setProviderError('');
     setProviderNotice('');
+    setLastConnectedAccountLabel('');
     try {
       const credentials = buildProviderCredentialPayload(providerForm);
       const res = await controlPlaneFetch('/api/control-plane/credentials', {
@@ -749,7 +759,14 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
       resetProviderForm(providerForm.provider, authMode);
       setShowProviderForm(false);
       await loadProviderAccounts();
-      setProviderNotice(providerForm.enableRuntime ? 'AI account saved and enabled for runtime.' : 'AI account saved to the encrypted vault.');
+      setLastConnectedAccountLabel(providerForm.label.trim());
+      setProviderNotice(
+        connectMode
+          ? `${providerLabel(providerForm.provider, providerOptions)} connected and ready.`
+          : providerForm.enableRuntime
+            ? 'AI account saved and enabled for runtime.'
+            : 'AI account saved to the encrypted vault.',
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to save AI account.';
       setProviderError(usesClaudeLocalCli ? normalizeClaudeCliError(message) : message);
@@ -769,6 +786,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
     workspaceId,
     usesClaudeLocalCli,
     claudeAuthStatus,
+    connectMode,
   ]);
 
   const handleTestProviderCredential = useCallback(async (credential: ProviderCredentialRow) => {
@@ -952,9 +970,11 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
           }}
         >
           <div style={{ display: 'grid', gap: 3 }}>
-            <div className="orion-panel-title">AI accounts</div>
+            <div className="orion-panel-title">{connectMode ? 'Connected providers' : 'AI accounts'}</div>
             <div className="orion-panel-copy">
-              Connect direct provider accounts here, then decide which one the runtime should use by default.
+              {connectMode
+                ? 'Connect a direct provider once. Chat, agents, and workflows can reuse it immediately.'
+                : 'Connect direct provider accounts here, then decide which one the runtime should use by default.'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -971,18 +991,54 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               }}
             >
               <Plus size={14} />
-              Add AI account
+              {connectMode ? 'Connect provider' : 'Add AI account'}
             </button>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="orion-chip">{providerCredentials.length} saved</span>
-          <span className="orion-chip">{providerHealth.total} runtime profiles</span>
-          {providerHealth.healthy ? <span className="orion-chip">{providerHealth.healthy} healthy</span> : null}
-          {providerHealth.cooldown ? <span className="orion-chip">{providerHealth.cooldown} cooling down</span> : null}
-          {providerHealth.disabled ? <span className="orion-chip">{providerHealth.disabled} disabled</span> : null}
-        </div>
+        {!connectMode ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span className="orion-chip">{providerCredentials.length} saved</span>
+            <span className="orion-chip">{providerHealth.total} runtime profiles</span>
+            {providerHealth.healthy ? <span className="orion-chip">{providerHealth.healthy} healthy</span> : null}
+            {providerHealth.cooldown ? <span className="orion-chip">{providerHealth.cooldown} cooling down</span> : null}
+            {providerHealth.disabled ? <span className="orion-chip">{providerHealth.disabled} disabled</span> : null}
+          </div>
+        ) : null}
+
+        {connectMode ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              borderRadius: 14,
+              border: '1px solid var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>Start with a provider</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {providerOptions.map((option) => {
+                const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
+                return (
+                  <button
+                    key={option.id}
+                    className="orion-btn orion-btn-secondary"
+                    style={{ minHeight: 34, paddingInline: 12 }}
+                    onClick={() => {
+                      resetProviderForm(option.id, defaultAuthMode);
+                      setShowProviderForm(true);
+                    }}
+                  >
+                    <Plus size={13} />
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         {providerError ? (
           <div
@@ -1016,6 +1072,41 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
           </div>
         ) : null}
 
+        {connectMode && providerCredentials.length > 0 ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              borderRadius: 14,
+              border: '1px solid var(--success-border)',
+              background: 'var(--success-bg)',
+              color: 'var(--success-fg)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+                {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} is ready` : 'AI provider ready'}
+              </div>
+              <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+                Return to chat and start your first task. You can manage runtime order later from Settings.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="orion-btn orion-btn-primary"
+                style={{ minHeight: 36, paddingInline: 14 }}
+                onClick={() => router.push(returnTo)}
+              >
+                Start chatting
+              </button>
+              <Link href="/credentials" className="orion-btn orion-btn-ghost" style={{ minHeight: 36, paddingInline: 14 }}>
+                Manage accounts
+              </Link>
+            </div>
+          </div>
+        ) : null}
+
         {providerLoading ? (
           <section className="orion-empty" style={{ minHeight: 180 }}>
             <div className="orion-empty-title">Loading AI accounts</div>
@@ -1025,7 +1116,9 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
           <section className="orion-empty" style={{ minHeight: 180 }}>
             <div className="orion-empty-title">No AI accounts yet</div>
             <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-              Save OpenAI, Anthropic, Gemini, or Vertex here so runs and workflows can reuse them cleanly.
+              {connectMode
+                ? 'Connect OpenAI, Anthropic, Gemini, or Vertex directly to start chatting and running agents.'
+                : 'Save OpenAI, Anthropic, Gemini, or Vertex here so runs and workflows can reuse them cleanly.'}
             </div>
             <button
               className="orion-btn orion-btn-primary"
@@ -1035,7 +1128,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               }}
             >
               <Plus size={14} />
-              Add AI account
+              {connectMode ? 'Connect provider' : 'Add AI account'}
             </button>
           </section>
         ) : (
@@ -1069,7 +1162,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                           </div>
                         </div>
                         <span className="orion-chip" style={profileTone(primaryProfile)}>
-                          {profileStatusLabel(primaryProfile)}
+                          {profileStatusLabel(primaryProfile, mode)}
                         </span>
                       </div>
 
@@ -1077,8 +1170,8 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                         <span className="orion-chip">{providerLabel(credential.provider, providerOptions)}</span>
                         <span className="orion-chip">{providerAuthModeLabel(credential.provider, credential.authMode, providerOptions)}</span>
                         {primaryProfile?.model ? <span className="orion-chip">Model {primaryProfile.model}</span> : null}
-                        {profileOrder ? <span className="orion-chip">Order #{profileOrder}</span> : null}
-                        {isDefaultProfile ? <span className="orion-chip">Default for runtime</span> : null}
+                        {!connectMode && profileOrder ? <span className="orion-chip">Order #{profileOrder}</span> : null}
+                        {!connectMode && isDefaultProfile ? <span className="orion-chip">Default for runtime</span> : null}
                         {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
                       </div>
 
@@ -1125,7 +1218,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                                   ? 'Enable runtime'
                                 : 'Use in runtime'}
                         </button>
-                        {primaryProfile && !isDefaultProfile ? (
+                        {primaryProfile && !isDefaultProfile && !connectMode ? (
                           <button
                             className="orion-btn orion-btn-ghost"
                             style={{ minHeight: 34, paddingInline: 12 }}
@@ -1135,7 +1228,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                             {providerBusy[primaryProfile.id] === 'make-default' ? 'Setting default…' : 'Make default'}
                           </button>
                         ) : null}
-                        {primaryProfile ? (
+                        {primaryProfile && !connectMode ? (
                           <button
                             className="orion-btn orion-btn-ghost"
                             style={{ minHeight: 34, paddingInline: 12 }}
@@ -1162,7 +1255,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               </div>
             ) : null}
 
-            {runtimeProfileGroups.length > 0 ? (
+            {!connectMode && runtimeProfileGroups.length > 0 ? (
               <div
                 style={{
                   display: 'grid',
@@ -1216,7 +1309,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                                   {isDefaultProfile ? <span className="orion-chip">Default</span> : null}
                                   {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
                                   <span className="orion-chip" style={profileTone(profile)}>
-                                    {profileStatusLabel(profile)}
+                                    {profileStatusLabel(profile, mode)}
                                   </span>
                                 </div>
                                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -1257,7 +1350,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               </div>
             ) : null}
 
-            {orphanProviderProfiles.length > 0 ? (
+            {!connectMode && orphanProviderProfiles.length > 0 ? (
               <div
                 style={{
                   display: 'grid',
@@ -1345,9 +1438,13 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
           >
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 20, alignItems: 'start' }}>
               <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>Add AI account</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>
+                  {connectMode ? 'Connect provider' : 'Add AI account'}
+                </div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  Connect a direct provider account, store it in the encrypted vault, then optionally enable it for runtime use immediately.
+                  {connectMode
+                    ? 'Choose a direct provider, add the credential you already control, and start using it right away.'
+                    : 'Connect a direct provider account, store it in the encrypted vault, then optionally enable it for runtime use immediately.'}
                 </div>
               </div>
               <button
@@ -1375,7 +1472,9 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                   Account setup
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Choose the provider, choose the auth method, and confirm the default model.
+                  {connectMode
+                    ? 'Choose a provider, pick the sign-in method you already use, and confirm the default model.'
+                    : 'Choose the provider, choose the auth method, and confirm the default model.'}
                 </div>
               </div>
 
@@ -1635,7 +1734,9 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               }}
             >
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                One centered account flow, then back to the Integrations page.
+                {connectMode
+                  ? 'Connect one provider now. You can change runtime order later in Settings.'
+                  : 'One centered account flow, then back to the Integrations page.'}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
@@ -1652,7 +1753,9 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                   disabled={providerBusy['provider-create'] === 'save'}
                 >
                   <Plus size={14} />
-                  {providerBusy['provider-create'] === 'save' ? 'Saving…' : 'Save account'}
+                  {providerBusy['provider-create'] === 'save'
+                    ? (connectMode ? 'Connecting…' : 'Saving…')
+                    : (connectMode ? 'Connect provider' : 'Save account')}
                 </button>
               </div>
             </div>

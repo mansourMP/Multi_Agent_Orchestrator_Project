@@ -1724,7 +1724,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (!setupStatus.accountConnected) {
       return {
         label: 'Connect AI account →',
-        href: '/setup',
+        href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {
@@ -1743,7 +1743,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (!setupStatus.accountConnected) {
       return {
         label: 'Connect AI account',
-        href: '/setup',
+        href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {

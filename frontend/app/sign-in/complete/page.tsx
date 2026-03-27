@@ -26,6 +26,7 @@ export default async function SignInCompletePage({ searchParams }: SignInComplet
         </p>
         <div className="orion-auth-note">
           Return to the desktop app. If it does not update automatically, reopen the app or press sign in again once.
+          Connect an AI account next if chat still shows setup is incomplete.
         </div>
         <div className="orion-auth-card__footer">
           <Link href={returnTo} className="btn-ghost orion-auth-back">

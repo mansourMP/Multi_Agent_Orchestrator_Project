@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { SignupDto, LoginDto } from './dto';
 
-type GoogleAuthProfile = {
+type ExternalAuthProfile = {
     email: string;
     name: string;
     avatarUrl?: string | null;
@@ -112,7 +112,15 @@ export class AuthService {
         return this.jwt.signAsync(payload);
     }
 
-    async loginWithGoogleProfile(profile: GoogleAuthProfile) {
+    async loginWithGoogleProfile(profile: ExternalAuthProfile) {
+        return this.loginWithExternalProfile(profile);
+    }
+
+    async loginWithAppleProfile(profile: ExternalAuthProfile) {
+        return this.loginWithExternalProfile(profile);
+    }
+
+    private async loginWithExternalProfile(profile: ExternalAuthProfile) {
         const email = profile.email.trim().toLowerCase();
         const displayName = profile.name.trim() || email.split('@')[0];
         const avatarUrl = String(profile.avatarUrl || '').trim() || null;

@@ -414,11 +414,29 @@ export function controlPlaneAuthProviders() {
     String(process.env.GOOGLE_CLIENT_ID || '').trim()
     && String(process.env.GOOGLE_CLIENT_SECRET || '').trim(),
   );
+  const backendPublicOrigin = String(process.env.BACKEND_PUBLIC_ORIGIN || '').trim();
+  let appleEnabled = false;
+  if (backendPublicOrigin) {
+    try {
+      const parsed = new URL(backendPublicOrigin);
+      const hostname = parsed.hostname.trim().toLowerCase();
+      appleEnabled = parsed.protocol === 'https:'
+        && !['localhost', '127.0.0.1', '::1'].includes(hostname)
+        && Boolean(
+          String(process.env.APPLE_CLIENT_ID || '').trim()
+          && String(process.env.APPLE_TEAM_ID || '').trim()
+          && String(process.env.APPLE_KEY_ID || '').trim()
+          && String(process.env.APPLE_PRIVATE_KEY || '').trim(),
+        );
+    } catch {
+      appleEnabled = false;
+    }
+  }
 
   return {
     email: { enabled: true },
     google: { enabled: googleEnabled },
-    apple: { enabled: false },
+    apple: { enabled: appleEnabled },
   };
 }
 

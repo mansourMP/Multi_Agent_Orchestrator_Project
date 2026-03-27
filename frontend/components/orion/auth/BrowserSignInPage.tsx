@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck, Smartphone } from 'lucide-react';
 import { humanizeUiError } from '@/lib/uiError';
 
 type AuthProviders = {
@@ -23,6 +23,12 @@ function authErrorMessage(code: string): string {
       return 'The sign-in session expired. Try again.';
     case 'oauth_missing_token':
       return 'Google sign-in did not return a valid session.';
+    case 'oauth_missing_code':
+      return 'The provider did not return a sign-in code.';
+    case 'oauth_exchange_failed':
+      return 'The provider sign-in could not be completed.';
+    case 'oauth_invalid_token':
+      return 'The provider sign-in response was not valid.';
     default:
       return '';
   }
@@ -114,6 +120,11 @@ export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserS
     window.location.assign(target);
   };
 
+  const continueWithApple = () => {
+    const target = `/api/control-plane/auth/apple/start?returnTo=${encodeURIComponent(returnTo)}`;
+    window.location.assign(target);
+  };
+
   return (
     <div className="orion-auth-page">
       <div className="orion-auth-card">
@@ -135,10 +146,19 @@ export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserS
           </button>
         ) : null}
 
+        {!loadingProviders && providers.apple.enabled ? (
+          <button type="button" className="orion-auth-provider" onClick={continueWithApple}>
+            <span className="orion-auth-provider__icon">
+              <Smartphone size={16} />
+            </span>
+            Continue with Apple
+          </button>
+        ) : null}
+
         {providers.email.enabled ? (
           <>
             <div className="orion-auth-divider">
-              <span>{providers.google.enabled ? 'or use email' : 'Email sign-in'}</span>
+              <span>{providers.google.enabled || providers.apple.enabled ? 'or use email' : 'Email sign-in'}</span>
             </div>
 
             <form className="orion-auth-form" onSubmit={handleSubmit}>

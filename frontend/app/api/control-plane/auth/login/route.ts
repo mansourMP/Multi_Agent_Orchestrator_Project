@@ -5,8 +5,8 @@ import { issueAdminBrowserIdentityResponse } from '@/lib/server/controlPlaneSess
 
 export const dynamic = 'force-dynamic';
 
-const CONTROL_PLANE_AUTH_URL =
-  process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
+const CONTROL_PLANE_BACKEND_URL =
+  process.env.NEXT_PUBLIC_API_URL || API_BASE;
 
 type LoginBody = {
   email?: string;
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   let loginResponse: Response;
   try {
-    loginResponse = await fetch(`${CONTROL_PLANE_AUTH_URL}/auth/login`, {
+    loginResponse = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -1793,15 +1793,15 @@ def _workflow_execute_local_tool(
         or context.get("metadata", {}).get("execution_target")
         or "auto"
     )
+    permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+    file_mount_grants = (
+        permissions.get("file_mount_grants")
+        if isinstance(permissions.get("file_mount_grants"), list)
+        else context.get("metadata", {}).get("file_mount_grants")
+    )
     if variant in {"shell", "browser", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
         raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
     if variant == "file":
-        permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
-        file_mount_grants = (
-            permissions.get("file_mount_grants")
-            if isinstance(permissions.get("file_mount_grants"), list)
-            else context.get("metadata", {}).get("file_mount_grants")
-        )
         file_access = assert_file_mount_access(
             config.get("path") or config.get("file_path"),
             config.get("mode") or config.get("operation") or "read",
@@ -1820,6 +1820,12 @@ def _workflow_execute_local_tool(
         if not operation["path"]:
             raise RuntimeError("File tool node requires path or file_path.")
     elif variant in {"shell", "code"}:
+        cwd_access = assert_file_mount_access(
+            config.get("cwd") or ".",
+            "read",
+            file_mount_grants,
+            execution_target,
+        )
         operation = {
             "tool": "execute_shell_command",
             "command": str(config.get("command") or "").strip() or None,
@@ -1827,17 +1833,30 @@ def _workflow_execute_local_tool(
             "cwd": str(config.get("cwd") or ".").strip() or ".",
             "timeout_seconds": int(config.get("timeout_seconds") or 60),
             "capability": str(config.get("capability") or "").strip() or None,
+            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
+            "cwd_mount": cwd_access["mount"],
         }
         if not operation["command"] and not operation["argv"]:
             raise RuntimeError(f"{variant.title()} tool nodes require command or argv in the current runtime.")
     elif variant == "browser":
+        browser_path = str(config.get("path") or "").strip()
+        browser_path_mount: Optional[Dict[str, str]] = None
+        if browser_path:
+            browser_path_mount = assert_file_mount_access(
+                browser_path,
+                "write",
+                file_mount_grants,
+                execution_target,
+            )
         operation = {
             "tool": "browser_automation",
             "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
             "url": str(config.get("url") or "").strip(),
-            "path": str(config.get("path") or "").strip() or None,
+            "path": browser_path or None,
             "session_profile": str(config.get("session_profile") or "").strip() or None,
             "browser_actions": config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None,
+            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
+            "path_mount": browser_path_mount["mount"] if browser_path_mount else None,
         }
         if not operation["url"]:
             raise RuntimeError("Browser tool node requires a URL.")

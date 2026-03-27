@@ -912,6 +912,25 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_local_shell_tool_blocks_absolute_cwd_without_local_root_grant(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_local_tool(
+                "run-shell-blocked",
+                {"metadata": {}},
+                {
+                    "command": "pwd",
+                    "cwd": str(Path.cwd()),
+                    "execution_target": "local_companion",
+                    "permissions": {"file_mount_grants": []},
+                },
+                label="Run shell",
+                variant="shell",
+                current_text="",
+            )
+
+        create_child_run_mock.assert_not_called()
+
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_execute_workflow_graph_waits_for_subflow_completion(self, create_child_run_mock):
         create_child_run_mock.return_value = {

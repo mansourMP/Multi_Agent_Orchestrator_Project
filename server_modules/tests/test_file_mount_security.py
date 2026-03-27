@@ -52,6 +52,26 @@ class FileMountSecurityTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     build_local_execution_pack_result({"run_id": "run-abs-blocked"}, metadata, pack_inputs)
 
+    def test_local_worker_blocks_absolute_shell_cwd_without_local_root_grant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {
+                "execution_target": "local_companion",
+                "file_mount_grants": default_file_mount_grants(),
+            }
+            pack_inputs = {
+                "operations": [
+                    {
+                        "tool": "execute_shell_command",
+                        "command": "pwd",
+                        "cwd": str(root),
+                    }
+                ]
+            }
+            with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    build_local_execution_pack_result({"run_id": "run-shell-blocked"}, metadata, pack_inputs)
+
     def test_local_worker_allows_project_relative_file_reads(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -75,6 +95,30 @@ class FileMountSecurityTests(unittest.TestCase):
 
             self.assertIn("Executed 1 of 1 local operations.", summary)
             self.assertEqual(data["outputs"]["operations_executed"], 1)
+
+    @patch("scripts.orion_local_worker_execution._run_browser_capture_task")
+    def test_local_worker_blocks_absolute_browser_artifact_path_without_local_root_grant(self, capture_mock):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {
+                "execution_target": "local_companion",
+                "file_mount_grants": default_file_mount_grants(),
+            }
+            pack_inputs = {
+                "operations": [
+                    {
+                        "tool": "browser_automation",
+                        "mode": "capture_page",
+                        "url": "https://example.com",
+                        "path": str(root / "capture.png"),
+                    }
+                ]
+            }
+            with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    build_local_execution_pack_result({"run_id": "run-browser-blocked"}, metadata, pack_inputs)
+
+        capture_mock.assert_not_called()
 
 
 if __name__ == "__main__":

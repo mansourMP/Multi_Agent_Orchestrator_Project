@@ -149,6 +149,12 @@ def _browser_artifact_paths(run_id: str, op_index: int, operation: Dict[str, Any
     browser_dir.mkdir(parents=True, exist_ok=True)
     requested = str(operation.get("path") or operation.get("file_path") or "").strip()
     if requested:
+        assert_file_mount_access(
+            requested,
+            "write",
+            operation.get("file_mount_grants"),
+            operation.get("__execution_target__") or "local_companion",
+        )
         target = _resolve_local_path(requested, root, create_parent=True)
         report_target = target if target.suffix.lower() in {".txt", ".json"} else target.with_suffix(".txt")
         html_target = target if target.suffix.lower() in {".html", ".htm"} else target.with_suffix(".html")
@@ -162,6 +168,12 @@ def _browser_capture_artifact_paths(run_id: str, op_index: int, operation: Dict[
     browser_dir.mkdir(parents=True, exist_ok=True)
     requested = str(operation.get("path") or operation.get("file_path") or "").strip()
     if requested:
+        assert_file_mount_access(
+            requested,
+            "write",
+            operation.get("file_mount_grants"),
+            operation.get("__execution_target__") or "local_companion",
+        )
         target = _resolve_local_path(requested, root, create_parent=True)
         if target.suffix.lower() not in BROWSER_CAPTURE_IMAGE_EXTENSIONS:
             raise RuntimeError("Capture page save path must end in .png, .jpg, or .jpeg.")
@@ -769,6 +781,12 @@ def _operation_summary(operation: Dict[str, Any], fallback_index: int) -> str:
 
 def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     tokens, matched_prefix, display_command = _match_allowed_operation_command(operation)
+    assert_file_mount_access(
+        operation.get("cwd") or ".",
+        "read",
+        operation.get("file_mount_grants"),
+        operation.get("__execution_target__") or "local_companion",
+    )
     cwd = _resolve_local_dir(operation.get("cwd") or ".", root)
     timeout_seconds = int(operation.get("timeout_seconds") or 20)
     timeout_seconds = max(1, min(timeout_seconds, 120))
@@ -1008,6 +1026,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
     for index, operation in enumerate(operations):
         operation_row = dict(operation)
         operation_row["__step_index__"] = index
+        operation_row["__execution_target__"] = metadata.get("execution_target") or "local_companion"
         tool_id = _normalize_action_id(operation_row.get("tool") or operation_row.get("action"))
         summary_label = _operation_summary(operation_row, index)
         try:

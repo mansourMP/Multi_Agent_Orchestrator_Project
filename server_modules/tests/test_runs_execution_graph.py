@@ -1035,6 +1035,47 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
+    @patch("server_modules.runs_execution._workflow_execute_local_tool")
+    @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
+    def test_execute_workflow_graph_requires_approval_for_session_backed_browser_tool(self, approval_mock, local_tool_mock):
+        local_tool_mock.return_value = {
+            "summary": "Browser automation completed.",
+            "result_data": {"browser": {"url": "https://example.com"}},
+        }
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "browser",
+                    "config": {
+                        "url": "https://example.com/private",
+                        "mode": "extract_text",
+                        "session_profile": "default",
+                        "execution_target": "local_companion",
+                        "permissions": {
+                            "action_policy": "guarded",
+                            "file_mount_grants": [],
+                            "browser_permissions": {"allow": True},
+                        },
+                    },
+                },
+            ],
+            "edges": [{"id": "e1", "source": "trigger_1", "target": "tool_1"}],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-browser-approval",
+            {"workflow_id": "wf_browser_guarded", "user_goal": "Read a private page", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        approval_mock.assert_called_once()
+        self.assertIn("Browser automation completed", result["result_text"])
+
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_execute_workflow_graph_waits_for_subflow_completion(self, create_child_run_mock):
         create_child_run_mock.return_value = {

@@ -472,6 +472,8 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             browser_allowed = bool(browser_permissions.get("allow"))
             session_profile = _clean_text(config.get("session_profile"), 160)
             browser_actions = _browser_actions(config.get("browser_actions"))
+            if session_profile:
+                issues.append({"code": "browser_session_requires_approval", "message": "Session-backed browser automation requires approval in guarded or strict policy modes."})
             if (session_profile or browser_actions) and not browser_allowed:
                 issues.append({"code": "browser_permission_required", "message": "Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true."})
             interactive = {

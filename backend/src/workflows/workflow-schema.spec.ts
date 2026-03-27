@@ -287,6 +287,35 @@ describe('workflow schema normalization', () => {
     expect(issues.some((issue) => issue.code === 'browser_authenticated_interactive_not_supported')).toBe(true);
   });
 
+  it('warns that session-backed browser automation requires approval', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'browser',
+            config: {
+              url: 'https://example.com/private',
+              session_profile: 'default',
+              permissions: {
+                browser_permissions: { allow: true },
+              },
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(
+      issues.some(
+        (issue) => issue.code === 'browser_session_requires_approval' && issue.level === 'warning',
+      ),
+    ).toBe(true);
+  });
+
   it('blocks schedule triggers without cron config', () => {
     const issues = validateWorkflowDefinition(
       {

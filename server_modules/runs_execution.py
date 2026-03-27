@@ -518,24 +518,7 @@ _BROWSER_PRIVILEGED_ACTIONS: Set[str] = {
 }
 
 
-def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    if normalize_action_id(metadata.get("outcome_pack")) != normalize_action_id(LOCAL_EXECUTION_PACK_ID):
-        return {}
-    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
-    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
-    browser_ops: List[Dict[str, Any]] = []
-    if operations:
-        for item in operations:
-            if not isinstance(item, dict):
-                continue
-            if normalize_action_id(item.get("tool") or item.get("action")) == "browser_automation":
-                browser_ops.append(item)
-    elif str(pack_inputs.get("url") or "").strip():
-        browser_ops.append(pack_inputs)
-    if not browser_ops:
-        return {}
-
+def _browser_automation_policy_from_operations(browser_ops: List[Dict[str, Any]]) -> Dict[str, Any]:
     session_profiles: Set[str] = set()
     interactive_actions: Set[str] = set()
     privileged_actions: Set[str] = set()
@@ -578,6 +561,9 @@ def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]
     elif session_profiles and interactive_actions:
         requires_approval = True
         approval_reason = "session-backed interactive browser automation requires approval"
+    elif session_profiles:
+        requires_approval = True
+        approval_reason = "session-backed browser automation requires approval"
 
     return {
         "profile": profile,
@@ -589,6 +575,26 @@ def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]
         "requires_approval": requires_approval,
         "reason": approval_reason,
     }
+
+
+def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if normalize_action_id(metadata.get("outcome_pack")) != normalize_action_id(LOCAL_EXECUTION_PACK_ID):
+        return {}
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    browser_ops: List[Dict[str, Any]] = []
+    if operations:
+        for item in operations:
+            if not isinstance(item, dict):
+                continue
+            if normalize_action_id(item.get("tool") or item.get("action")) == "browser_automation":
+                browser_ops.append(item)
+    elif str(pack_inputs.get("url") or "").strip():
+        browser_ops.append(pack_inputs)
+    if not browser_ops:
+        return {}
+    return _browser_automation_policy_from_operations(browser_ops)
 
 
 def _compute_tool_policy_precheck(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -2314,6 +2320,18 @@ def _execute_workflow_graph(
                     raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
                 permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
                 policy_metadata = map_builder_permissions_to_runtime_metadata(permissions, execution_target=execution_target)
+                if variant == "browser":
+                    browser_policy = _browser_automation_policy_from_operations(
+                        [
+                            {
+                                "mode": config.get("mode"),
+                                "session_profile": config.get("session_profile"),
+                                "browser_actions": config.get("browser_actions"),
+                            }
+                        ]
+                    )
+                    if browser_policy:
+                        policy_metadata["browser_automation_policy"] = browser_policy
                 capability_ids = []
                 if str(config.get("capability") or "").strip():
                     capability_ids = [str(config.get("capability") or "").strip()]

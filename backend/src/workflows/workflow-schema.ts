@@ -840,6 +840,14 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
         const browserAllowed = Boolean(browserPermissions.allow);
         const sessionProfile = compactText(config.session_profile ?? '', 160);
         const browserActions = asArray(config.browser_actions).filter(isRecord);
+        if (sessionProfile) {
+            issues.push({
+                code: 'browser_session_requires_approval',
+                message: 'Session-backed browser automation requires approval in guarded or strict policy modes.',
+                level: 'warning',
+                nodeId: node.id,
+            });
+        }
         if ((sessionProfile || browserActions.length > 0) && !browserAllowed) {
             issues.push({
                 code: 'browser_permission_required',

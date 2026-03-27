@@ -379,6 +379,30 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any(issue.get("code") == "browser_authenticated_interactive_not_supported" for issue in payload.get("issues", [])))
 
+    def test_parse_workflow_payload_warns_on_session_backed_browser(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "browser",
+                  "config": {
+                    "url": "https://example.com/private",
+                    "session_profile": "default",
+                    "permissions": {
+                      "browser_permissions": {"allow": true}
+                    }
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "browser_session_requires_approval" for issue in payload.get("issues", [])))
+
     async def test_builder_generate_returns_parsed_workflow(self):
         with (
             patch("server_modules.routes_builder.resolve_call_credentials") as resolve_mock,

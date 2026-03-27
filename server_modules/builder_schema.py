@@ -39,6 +39,18 @@ DECISION_VARIANTS: Set[str] = {"if_else", "classifier", "field_router"}
 HUMAN_VARIANTS: Set[str] = {"approval", "review", "wait_for_reply"}
 DATA_VARIANTS: Set[str] = {"transform", "compose", "validate"}
 SUBFLOW_VARIANTS: Set[str] = {"call_workflow"}
+_BROWSER_INTERACTIVE_ACTIONS: Set[str] = {
+    "type",
+    "click",
+    "select",
+    "upload",
+    "download",
+    "open_popup",
+    "open_tab",
+    "switch_tab",
+    "close_tab",
+    "navigate",
+}
 
 CONNECTOR_ALIAS_MAP = {
     "google workspace": "google_workspace",
@@ -88,6 +100,11 @@ def _dedupe_strings(value: Any) -> List[str]:
         seen.add(token)
         out.append(token)
     return out
+
+
+def _browser_actions(value: Any) -> List[Dict[str, Any]]:
+    items = value if isinstance(value, list) else []
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _text_blob(*values: Any) -> str:
@@ -293,11 +310,31 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
             "headers": raw_config.get("headers") if _is_record(raw_config.get("headers")) else {},
             "payload": raw_config.get("payload") if _is_record(raw_config.get("payload")) or isinstance(raw_config.get("payload"), list) else {},
             "summary": _clean_text(raw_config.get("summary") or raw_node.get("subtitle"), 600),
+            "command": _clean_text(raw_config.get("command"), 4000),
+            "argv": [_clean_text(item, 400) for item in raw_config.get("argv")] if isinstance(raw_config.get("argv"), list) else [],
+            "cwd": _clean_text(raw_config.get("cwd"), 600),
+            "timeout_seconds": raw_config.get("timeout_seconds"),
             "path": _clean_text(raw_config.get("path") or raw_config.get("file_path"), 600),
+            "file_path": _clean_text(raw_config.get("file_path") or raw_config.get("path"), 600),
             "content": raw_config.get("content"),
             "content_type": _clean_text(raw_config.get("content_type"), 120),
             "signing_secret": _clean_text(raw_config.get("signing_secret"), 300),
             "code": _clean_text(raw_config.get("code"), 8000),
+            "capability": _clean_text(raw_config.get("capability"), 160),
+            "mode": _clean_text(raw_config.get("mode") or raw_config.get("operation"), 80),
+            "title": _clean_text(raw_config.get("title"), 160),
+            "to_email": _clean_text(raw_config.get("to_email") or raw_config.get("to") or raw_config.get("email") or raw_config.get("recipient"), 200),
+            "subject": _clean_text(raw_config.get("subject"), 240),
+            "chat_id": _clean_text(raw_config.get("chat_id"), 160),
+            "channel_id": _clean_text(raw_config.get("channel_id"), 160),
+            "from_number": _clean_text(raw_config.get("from_number"), 80),
+            "to_number": _clean_text(raw_config.get("to_number") or raw_config.get("recipient"), 80),
+            "webhook_url": _clean_text(raw_config.get("webhook_url"), 500),
+            "page_id": _clean_text(raw_config.get("page_id"), 120),
+            "recipient_id": _clean_text(raw_config.get("recipient_id") or raw_config.get("recipient") or raw_config.get("user_id") or raw_config.get("instagram_user_id"), 160),
+            "comment_id": _clean_text(raw_config.get("comment_id") or raw_config.get("media_comment_id"), 160),
+            "session_profile": _clean_text(raw_config.get("session_profile"), 160),
+            "browser_actions": _browser_actions(raw_config.get("browser_actions")),
             "permissions": raw_config.get("permissions") if _is_record(raw_config.get("permissions")) else {},
             "execution_target": _clean_text(raw_config.get("execution_target"), 40) or ("local_companion" if variant in {"shell", "file", "browser", "code"} else "auto"),
         }
@@ -414,10 +451,27 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
         if variant in {"shell", "code"}:
             command = _clean_text(config.get("command"), 2000)
             argv = config.get("argv") if isinstance(config.get("argv"), list) else []
+            capability = _clean_text(config.get("capability"), 160)
             if not command and not any(_clean_text(item, 400) for item in argv):
                 issues.append({"code": f"{variant}_command_missing", "message": f"{variant} tool nodes require command or argv."})
+            if capability and (command or any(_clean_text(item, 400) for item in argv)):
+                issues.append({"code": f"{variant}_capability_conflict", "message": f"{variant} tool nodes cannot mix capability with command or argv."})
         if variant == "browser" and not _clean_text(config.get("url"), 1200):
             issues.append({"code": "browser_url_missing", "message": "Browser tool nodes require a URL."})
+        if variant == "browser":
+            browser_permissions = config.get("permissions", {}).get("browser_permissions") if isinstance(config.get("permissions"), dict) and isinstance(config.get("permissions", {}).get("browser_permissions"), dict) else {}
+            browser_allowed = bool(browser_permissions.get("allow"))
+            session_profile = _clean_text(config.get("session_profile"), 160)
+            browser_actions = _browser_actions(config.get("browser_actions"))
+            if (session_profile or browser_actions) and not browser_allowed:
+                issues.append({"code": "browser_permission_required", "message": "Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true."})
+            interactive = {
+                _clean_text(item.get("action"), 80).lower()
+                for item in browser_actions
+                if _clean_text(item.get("action"), 80)
+            } & _BROWSER_INTERACTIVE_ACTIONS
+            if session_profile and interactive:
+                issues.append({"code": "browser_authenticated_interactive_not_supported", "message": "Session-backed interactive browser automation is not executable in local companion V1."})
         if variant == "http":
             http_url = _clean_text(config.get("url"), 1200)
             if not http_url:

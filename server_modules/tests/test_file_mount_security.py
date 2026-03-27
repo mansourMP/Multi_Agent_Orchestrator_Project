@@ -72,6 +72,26 @@ class FileMountSecurityTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     build_local_execution_pack_result({"run_id": "run-shell-blocked"}, metadata, pack_inputs)
 
+    def test_local_worker_rejects_mixed_shell_capability_and_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {
+                "execution_target": "local_companion",
+                "file_mount_grants": default_file_mount_grants(),
+            }
+            pack_inputs = {
+                "operations": [
+                    {
+                        "tool": "execute_shell_command",
+                        "capability": "stack.status",
+                        "command": "pwd",
+                    }
+                ]
+            }
+            with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    build_local_execution_pack_result({"run_id": "run-shell-mixed"}, metadata, pack_inputs)
+
     def test_local_worker_allows_project_relative_file_reads(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -117,6 +137,57 @@ class FileMountSecurityTests(unittest.TestCase):
             with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
                 with self.assertRaises(RuntimeError):
                     build_local_execution_pack_result({"run_id": "run-browser-blocked"}, metadata, pack_inputs)
+
+        capture_mock.assert_not_called()
+
+    @patch("scripts.orion_local_worker_execution._run_browser_capture_task")
+    def test_local_worker_blocks_session_browser_without_explicit_permission(self, capture_mock):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {
+                "execution_target": "local_companion",
+                "file_mount_grants": default_file_mount_grants(),
+            }
+            pack_inputs = {
+                "operations": [
+                    {
+                        "tool": "browser_automation",
+                        "mode": "capture_page",
+                        "url": "https://example.com",
+                        "session_profile": "default",
+                        "browser_permissions": {"allow": False},
+                    }
+                ]
+            }
+            with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    build_local_execution_pack_result({"run_id": "run-browser-auth-blocked"}, metadata, pack_inputs)
+
+        capture_mock.assert_not_called()
+
+    @patch("scripts.orion_local_worker_execution._run_browser_capture_task")
+    def test_local_worker_blocks_session_backed_interactive_browser_actions(self, capture_mock):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metadata = {
+                "execution_target": "local_companion",
+                "file_mount_grants": default_file_mount_grants(),
+            }
+            pack_inputs = {
+                "operations": [
+                    {
+                        "tool": "browser_automation",
+                        "mode": "capture_page",
+                        "url": "https://example.com",
+                        "session_profile": "default",
+                        "browser_permissions": {"allow": True},
+                        "browser_actions": [{"action": "click", "selector": "#login"}],
+                    }
+                ]
+            }
+            with patch.dict(os.environ, {"ORION_LOCAL_COMPANION_ROOT": str(root)}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    build_local_execution_pack_result({"run_id": "run-browser-interactive-blocked"}, metadata, pack_inputs)
 
         capture_mock.assert_not_called()
 

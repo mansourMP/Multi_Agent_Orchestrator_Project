@@ -119,6 +119,18 @@ const DATA_VARIANTS = new Set<DataVariant>(['transform', 'compose', 'validate'])
 const SUBFLOW_VARIANTS = new Set<SubflowVariant>(['call_workflow']);
 const FILE_MOUNTS: FileMountId[] = ['artifacts', 'project', 'shared', 'knowledge', 'local_root', 'connector_files'];
 const FILE_GRANTS = new Set<FileGrant>(['none', 'read', 'read_write', 'create_only', 'append_only']);
+const BROWSER_INTERACTIVE_ACTIONS = new Set([
+    'type',
+    'click',
+    'select',
+    'upload',
+    'download',
+    'open_popup',
+    'open_tab',
+    'switch_tab',
+    'close_tab',
+    'navigate',
+]);
 
 function isRecord(value: unknown): value is Record<string, any> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -374,6 +386,8 @@ function normalizeToolNode(rawNode: Record<string, any>, index: number): Canonic
         page_id: compactText(rawConfig.page_id ?? '', 120),
         recipient_id: compactText(rawConfig.recipient_id ?? rawConfig.recipient ?? rawConfig.user_id ?? rawConfig.instagram_user_id ?? '', 160),
         comment_id: compactText(rawConfig.comment_id ?? rawConfig.media_comment_id ?? '', 160),
+        session_profile: compactText(rawConfig.session_profile ?? '', 160),
+        browser_actions: asArray(rawConfig.browser_actions).filter(isRecord),
         permissions: isRecord(rawConfig.permissions) ? rawConfig.permissions : {},
     };
 
@@ -768,10 +782,19 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
     if (variant === 'shell' || variant === 'code') {
         const command = compactText(config.command ?? '', 2000);
         const argv = dedupeStrings(config.argv);
+        const capability = compactText(config.capability ?? '', 160);
         if (!command && argv.length === 0) {
             issues.push({
                 code: `${variant}_command_missing`,
                 message: `${variant} tool nodes require command or argv.`,
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        if (capability && (command || argv.length > 0)) {
+            issues.push({
+                code: `${variant}_capability_conflict`,
+                message: `${variant} tool nodes cannot mix capability with command or argv.`,
                 level: 'error',
                 nodeId: node.id,
             });
@@ -784,6 +807,31 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             level: 'error',
             nodeId: node.id,
         });
+    }
+    if (variant === 'browser') {
+        const browserPermissions = isRecord(permissions.browser_permissions) ? permissions.browser_permissions : {};
+        const browserAllowed = Boolean(browserPermissions.allow);
+        const sessionProfile = compactText(config.session_profile ?? '', 160);
+        const browserActions = asArray(config.browser_actions).filter(isRecord);
+        if ((sessionProfile || browserActions.length > 0) && !browserAllowed) {
+            issues.push({
+                code: 'browser_permission_required',
+                message: 'Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        const interactive = browserActions
+            .map((item) => compactText(item.action ?? '', 80).toLowerCase())
+            .filter((action) => action && BROWSER_INTERACTIVE_ACTIONS.has(action));
+        if (sessionProfile && interactive.length > 0) {
+            issues.push({
+                code: 'browser_authenticated_interactive_not_supported',
+                message: 'Session-backed interactive browser automation is not executable in local companion V1.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
     }
     if (variant === 'http') {
         const httpUrl = compactText(config.url ?? '', 1200);

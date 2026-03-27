@@ -1801,6 +1801,12 @@ def _workflow_execute_local_tool(
     )
     if variant in {"shell", "browser", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
         raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
+    if variant in {"shell", "code"}:
+        has_command = bool(str(config.get("command") or "").strip())
+        has_argv = isinstance(config.get("argv"), list) and any(str(item or "").strip() for item in (config.get("argv") or []))
+        has_capability = bool(str(config.get("capability") or "").strip())
+        if has_capability and (has_command or has_argv):
+            raise RuntimeError(f"{variant.title()} tool nodes cannot mix capability with command or argv.")
     if variant == "file":
         file_access = assert_file_mount_access(
             config.get("path") or config.get("file_path"),
@@ -1848,15 +1854,31 @@ def _workflow_execute_local_tool(
                 file_mount_grants,
                 execution_target,
             )
+        browser_permissions = permissions.get("browser_permissions") if isinstance(permissions.get("browser_permissions"), dict) else {}
+        browser_actions = config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None
+        session_profile = str(config.get("session_profile") or "").strip()
+        if (session_profile or browser_actions) and not bool(browser_permissions.get("allow")):
+            raise RuntimeError("Browser tool nodes with session_profile or browser_actions require browser_permissions.allow = true.")
+        normalized_browser_actions = [
+            normalize_action_id(item.get("action"))
+            for item in (browser_actions or [])
+            if isinstance(item, dict) and normalize_action_id(item.get("action"))
+        ]
+        interactive_actions = [action for action in normalized_browser_actions if action in _BROWSER_AUTH_ACTIONS]
+        if session_profile and interactive_actions:
+            raise RuntimeError(
+                "Session-backed interactive or privileged browser automation is not executable in local companion V1 without a reviewed higher-trust path."
+            )
         operation = {
             "tool": "browser_automation",
             "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
             "url": str(config.get("url") or "").strip(),
             "path": browser_path or None,
-            "session_profile": str(config.get("session_profile") or "").strip() or None,
-            "browser_actions": config.get("browser_actions") if isinstance(config.get("browser_actions"), list) else None,
+            "session_profile": session_profile or None,
+            "browser_actions": browser_actions,
             "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
             "path_mount": browser_path_mount["mount"] if browser_path_mount else None,
+            "browser_permissions": browser_permissions if isinstance(browser_permissions, dict) else {"allow": False},
         }
         if not operation["url"]:
             raise RuntimeError("Browser tool node requires a URL.")

@@ -269,6 +269,52 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any(issue.get("code") == "trigger_event_missing" for issue in payload.get("issues", [])))
 
+    def test_parse_workflow_payload_flags_shell_capability_conflict(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "shell",
+                  "config": {
+                    "capability": "stack.status",
+                    "command": "pwd"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "shell_capability_conflict" for issue in payload.get("issues", [])))
+
+    def test_parse_workflow_payload_flags_authenticated_interactive_browser(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "browser",
+                  "config": {
+                    "url": "https://example.com",
+                    "session_profile": "default",
+                    "browser_actions": [{"action": "click", "selector": "#login"}],
+                    "permissions": {
+                      "browser_permissions": {"allow": true}
+                    }
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "browser_authenticated_interactive_not_supported" for issue in payload.get("issues", [])))
+
     async def test_builder_generate_returns_parsed_workflow(self):
         with (
             patch("server_modules.routes_builder.resolve_call_credentials") as resolve_mock,

@@ -931,6 +931,72 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_local_shell_tool_rejects_mixed_capability_and_command(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_local_tool(
+                "run-shell-mixed",
+                {"metadata": {}},
+                {
+                    "capability": "stack.status",
+                    "command": "pwd",
+                    "execution_target": "local_companion",
+                    "permissions": {"file_mount_grants": []},
+                },
+                label="Run shell",
+                variant="shell",
+                current_text="",
+            )
+
+        create_child_run_mock.assert_not_called()
+
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_browser_tool_requires_explicit_browser_permission_for_session_profile(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_local_tool(
+                "run-browser-auth",
+                {"metadata": {}},
+                {
+                    "url": "https://example.com",
+                    "mode": "capture_page",
+                    "session_profile": "default",
+                    "execution_target": "local_companion",
+                    "permissions": {
+                        "file_mount_grants": [],
+                        "browser_permissions": {"allow": False},
+                    },
+                },
+                label="Capture page",
+                variant="browser",
+                current_text="",
+            )
+
+        create_child_run_mock.assert_not_called()
+
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_browser_tool_rejects_session_backed_interactive_actions(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_local_tool(
+                "run-browser-interactive",
+                {"metadata": {}},
+                {
+                    "url": "https://example.com",
+                    "mode": "capture_page",
+                    "session_profile": "default",
+                    "browser_actions": [{"action": "click", "selector": "#login"}],
+                    "execution_target": "local_companion",
+                    "permissions": {
+                        "file_mount_grants": [],
+                        "browser_permissions": {"allow": True},
+                    },
+                },
+                label="Capture page",
+                variant="browser",
+                current_text="",
+            )
+
+        create_child_run_mock.assert_not_called()
+
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_execute_workflow_graph_waits_for_subflow_completion(self, create_child_run_mock):
         create_child_run_mock.return_value = {

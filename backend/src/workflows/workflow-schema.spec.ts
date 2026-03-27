@@ -170,6 +170,54 @@ describe('workflow schema normalization', () => {
     expect(issues.some((issue) => issue.code === 'trigger_event_missing' && issue.level === 'error')).toBe(true);
   });
 
+  it('blocks mixed capability and command on shell tool nodes', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'shell',
+            config: {
+              capability: 'stack.status',
+              command: 'pwd',
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(issues.some((issue) => issue.code === 'shell_capability_conflict')).toBe(true);
+  });
+
+  it('blocks session-backed interactive browser automation in local companion v1', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'browser',
+            config: {
+              url: 'https://example.com',
+              session_profile: 'default',
+              browser_actions: [{ action: 'click', selector: '#login' }],
+              permissions: {
+                browser_permissions: { allow: true },
+              },
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(issues.some((issue) => issue.code === 'browser_authenticated_interactive_not_supported')).toBe(true);
+  });
+
   it('blocks schedule triggers without cron config', () => {
     const issues = validateWorkflowDefinition(
       {

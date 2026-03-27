@@ -360,6 +360,17 @@ def _browser_security_profile(session_profile: str, browser_actions: List[Dict[s
     return "public_readonly"
 
 
+def _browser_policy_gate(operation: Dict[str, Any], session_profile: str, browser_actions: List[Dict[str, Any]], browser_security_profile: str) -> None:
+    permissions = operation.get("browser_permissions") if isinstance(operation.get("browser_permissions"), dict) else {}
+    browser_allowed = bool(permissions.get("allow"))
+    if (session_profile or browser_actions) and not browser_allowed:
+        raise RuntimeError("Browser automation with session_profile or browser_actions requires browser_permissions.allow = true.")
+    if browser_security_profile in {"authenticated_interactive", "authenticated_privileged"}:
+        raise RuntimeError(
+            "Session-backed interactive or privileged browser automation is not executable in local companion V1 without a reviewed higher-trust path."
+        )
+
+
 def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     mode = _normalize_action_id(operation.get("mode") or "extract_text")
     if mode not in {"extract_text", "extract_links", "save_html", "capture_page"}:
@@ -371,6 +382,7 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         session_profile = str(operation.get("session_profile") or operation.get("sessionProfile") or "").strip()
         browser_actions = _normalize_browser_actions(operation, root)
         browser_security_profile = _browser_security_profile(session_profile, browser_actions)
+        _browser_policy_gate(operation, session_profile, browser_actions, browser_security_profile)
         capture_result = _run_browser_capture_task(
             url,
             screenshot_target,
@@ -652,6 +664,8 @@ def _match_allowed_operation_command(operation: Dict[str, Any]) -> Tuple[List[st
     argv = operation.get("argv") if isinstance(operation.get("argv"), list) else None
     command = str(operation.get("command") or "").strip()
     capability = str(operation.get("capability") or "").strip()
+    if capability and (argv or command):
+        raise RuntimeError("Capability-based shell execution cannot be mixed with raw command or argv.")
     if capability and not argv and not command:
         resolved_argv = capability_command(capability, _project_root())
         if not resolved_argv:

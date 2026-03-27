@@ -1,6 +1,7 @@
 import logging
 import base64
 import asyncio
+import ast
 import hashlib
 import hmac
 from urllib.parse import urlencode
@@ -21,6 +22,8 @@ from server_modules.runs_engine import (
 from server_modules.runs_output import _compact_event_text, _json_safe
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
 from server_modules.runs_core import set_run_status, emit_log
+from server_modules.file_mount_security import assert_file_mount_access
+from server_modules.url_security import assert_safe_outbound_url
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -950,7 +953,100 @@ def _workflow_decision_value(current_text: str, state: Dict[str, Any], expressio
         "result_data": state.get("last_data") if isinstance(state.get("last_data"), dict) else {},
         "state": state,
     }
-    return bool(eval(expression, {"__builtins__": {}}, scope))
+    parsed = ast.parse(expression, mode="eval")
+
+    def _resolve_name(name: str) -> Any:
+        if name in scope:
+            return scope[name]
+        if name == "True":
+            return True
+        if name == "False":
+            return False
+        if name == "None":
+            return None
+        raise ValueError(f"Unsupported decision name '{name}'.")
+
+    def _resolve_attribute(value: Any, attr: str) -> Any:
+        if attr.startswith("__"):
+            raise ValueError("Decision expressions cannot access dunder attributes.")
+        if isinstance(value, dict):
+            return value.get(attr)
+        return getattr(value, attr)
+
+    def _resolve_subscript(value: Any, node: ast.Subscript) -> Any:
+        key = _evaluate(node.slice)
+        if isinstance(value, dict):
+            return value.get(key)
+        return value[key]
+
+    def _compare(operator_node: ast.cmpop, left: Any, right: Any) -> bool:
+        if isinstance(operator_node, ast.Eq):
+            return left == right
+        if isinstance(operator_node, ast.NotEq):
+            return left != right
+        if isinstance(operator_node, ast.Gt):
+            return left > right
+        if isinstance(operator_node, ast.GtE):
+            return left >= right
+        if isinstance(operator_node, ast.Lt):
+            return left < right
+        if isinstance(operator_node, ast.LtE):
+            return left <= right
+        if isinstance(operator_node, ast.In):
+            return left in right
+        if isinstance(operator_node, ast.NotIn):
+            return left not in right
+        if isinstance(operator_node, ast.Is):
+            return left is right
+        if isinstance(operator_node, ast.IsNot):
+            return left is not right
+        raise ValueError(f"Unsupported decision comparator '{type(operator_node).__name__}'.")
+
+    def _evaluate(node: ast.AST) -> Any:
+        if isinstance(node, ast.Expression):
+            return _evaluate(node.body)
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return _resolve_name(node.id)
+        if isinstance(node, ast.Attribute):
+            return _resolve_attribute(_evaluate(node.value), node.attr)
+        if isinstance(node, ast.Subscript):
+            return _resolve_subscript(_evaluate(node.value), node)
+        if isinstance(node, ast.BoolOp):
+            values = [_evaluate(value) for value in node.values]
+            if isinstance(node.op, ast.And):
+                return all(values)
+            if isinstance(node.op, ast.Or):
+                return any(values)
+            raise ValueError(f"Unsupported decision boolean operator '{type(node.op).__name__}'.")
+        if isinstance(node, ast.UnaryOp):
+            operand = _evaluate(node.operand)
+            if isinstance(node.op, ast.Not):
+                return not operand
+            if isinstance(node.op, ast.UAdd):
+                return +operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+            raise ValueError(f"Unsupported decision unary operator '{type(node.op).__name__}'.")
+        if isinstance(node, ast.Compare):
+            left_value = _evaluate(node.left)
+            comparisons = zip(node.ops, node.comparators)
+            for operator_node, comparator in comparisons:
+                right_value = _evaluate(comparator)
+                if not _compare(operator_node, left_value, right_value):
+                    return False
+                left_value = right_value
+            return True
+        if isinstance(node, ast.List):
+            return [_evaluate(item) for item in node.elts]
+        if isinstance(node, ast.Tuple):
+            return tuple(_evaluate(item) for item in node.elts)
+        if isinstance(node, ast.Dict):
+            return {_evaluate(key): _evaluate(value) for key, value in zip(node.keys, node.values)}
+        raise ValueError(f"Unsupported decision expression node '{type(node).__name__}'.")
+
+    return bool(_evaluate(parsed))
 
 
 def _workflow_tool_text_input(config: Dict[str, Any], current_text: str) -> str:
@@ -1137,6 +1233,7 @@ def _workflow_execute_connector_action(
         url = str(config.get("url") or "").strip()
         if not url:
             raise RuntimeError(f"Connector action '{requested_connector}.{action_id}' requires a URL.")
+        assert_safe_outbound_url(url)
         headers = _workflow_http_headers(config.get("headers"))
         payload_value = config.get("payload")
         if payload_value is None and method != "GET":
@@ -1699,12 +1796,26 @@ def _workflow_execute_local_tool(
     if variant in {"shell", "browser", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
         raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
     if variant == "file":
+        permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+        file_mount_grants = (
+            permissions.get("file_mount_grants")
+            if isinstance(permissions.get("file_mount_grants"), list)
+            else context.get("metadata", {}).get("file_mount_grants")
+        )
+        file_access = assert_file_mount_access(
+            config.get("path") or config.get("file_path"),
+            config.get("mode") or config.get("operation") or "read",
+            file_mount_grants,
+            execution_target,
+        )
         operation = {
             "tool": "read_write_files",
-            "mode": str(config.get("mode") or config.get("operation") or "read").strip().lower() or "read",
+            "mode": file_access["mode"],
             "path": str(config.get("path") or config.get("file_path") or "").strip(),
             "content": str(config.get("content") or current_text or ""),
             "overwrite": bool(config.get("overwrite")),
+            "file_mount_grants": file_mount_grants if isinstance(file_mount_grants, list) else [],
+            "mount": file_access["mount"],
         }
         if not operation["path"]:
             raise RuntimeError("File tool node requires path or file_path.")
@@ -2201,6 +2312,7 @@ def _execute_workflow_graph(
                     url = str(config.get("url") or "").strip()
                     if not url:
                         raise RuntimeError(f"HTTP tool node '{label}' requires a URL.")
+                    assert_safe_outbound_url(url)
                     payload = None if method == "GET" else {"context": current_text}
                     response = http_json_request(url, method=method, payload=payload, timeout=30)
                     if int(response.get("status") or 500) >= 400:

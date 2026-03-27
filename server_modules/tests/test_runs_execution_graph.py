@@ -1,4 +1,5 @@
 import queue
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -97,6 +98,23 @@ class RunsExecutionGraphTests(unittest.TestCase):
             ),
             "presentation_update",
         )
+
+    def test_workflow_decision_value_supports_safe_boolean_expressions(self):
+        result = runs_execution._workflow_decision_value(
+            "hello from workflow",
+            {"last_data": {"status": "ok", "count": 2}},
+            'result_data["status"] == "ok" and "hello" in context_text and result_data["count"] >= 2',
+        )
+
+        self.assertTrue(result)
+
+    def test_workflow_decision_value_rejects_callable_expression_injection(self):
+        with self.assertRaises(ValueError):
+            runs_execution._workflow_decision_value(
+                "hello from workflow",
+                {"last_data": {"status": "ok"}},
+                '__import__("os").system("whoami")',
+            )
 
     @patch(
         "server_modules.runs_execution.wait_for_human_response",
@@ -553,6 +571,18 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("custom_api.http_request", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
+    def test_execute_workflow_graph_blocks_custom_api_private_url(self):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_connector_action(
+                {"workspace_id": "default", "metadata": {}},
+                {
+                    "connector": "custom_api",
+                    "action_id": "http_request",
+                    "url": "http://127.0.0.1:8080/hook",
+                },
+                current_text="Call API",
+            )
+
     @patch(
         "server_modules.runs_execution._workflow_tool_connector_secret",
         return_value=("cred-m365", "microsoft_365", {"access_token": "token"}),
@@ -862,6 +892,25 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         self.assertIn("Local tool node completed", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
+
+    @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
+    def test_local_file_tool_blocks_local_root_without_grant(self, create_child_run_mock):
+        with self.assertRaises(RuntimeError):
+            runs_execution._workflow_execute_local_tool(
+                "run-local-blocked",
+                {"metadata": {}},
+                {
+                    "path": str(Path.cwd() / "README.md"),
+                    "mode": "read",
+                    "execution_target": "local_companion",
+                    "permissions": {"file_mount_grants": []},
+                },
+                label="Read host file",
+                variant="file",
+                current_text="",
+            )
+
+        create_child_run_mock.assert_not_called()
 
     @patch("server_modules.runs_delegation._create_run_from_request")
     def test_execute_workflow_graph_waits_for_subflow_completion(self, create_child_run_mock):

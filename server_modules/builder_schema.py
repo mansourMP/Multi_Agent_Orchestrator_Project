@@ -11,6 +11,7 @@ from server_modules.builder_runtime_mapping import (
 )
 from server_modules.connector_manifests import CONNECTOR_MANIFESTS
 from server_modules.runtime_policy import normalize_execution_target, normalize_trust_mode
+from server_modules.url_security import obvious_private_url_reason
 
 
 EMPYRALIST_WORKFLOW_SCHEMA_VERSION = "empyralist.workflow.v2"
@@ -417,6 +418,13 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
                 issues.append({"code": f"{variant}_command_missing", "message": f"{variant} tool nodes require command or argv."})
         if variant == "browser" and not _clean_text(config.get("url"), 1200):
             issues.append({"code": "browser_url_missing", "message": "Browser tool nodes require a URL."})
+        if variant == "http":
+            http_url = _clean_text(config.get("url"), 1200)
+            if not http_url:
+                issues.append({"code": "http_url_missing", "message": "HTTP tool nodes require a URL."})
+            private_url_reason = obvious_private_url_reason(http_url) if http_url else None
+            if private_url_reason:
+                issues.append({"code": "http_private_url_disallowed", "message": f"HTTP tool nodes cannot target private or unsupported hosts ({private_url_reason})."})
         if variant == "file" and not _clean_text(config.get("path") or config.get("file_path"), 1200):
             issues.append({"code": "file_path_missing", "message": "File tool nodes require path or file_path."})
         if variant == "connector_action":
@@ -427,8 +435,12 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             if not action_id:
                 issues.append({"code": "tool_action_missing", "message": "Connector action nodes require an action_id."})
             if connector == "custom_api":
-                if action_id in {"http_request", "signed_webhook"} and not _clean_text(config.get("url"), 600):
+                custom_api_url = _clean_text(config.get("url"), 600)
+                if action_id in {"http_request", "signed_webhook"} and not custom_api_url:
                     issues.append({"code": "custom_api_url_missing", "message": "Custom API connector actions require a URL."})
+                private_url_reason = obvious_private_url_reason(custom_api_url) if custom_api_url else None
+                if action_id in {"http_request", "signed_webhook"} and private_url_reason:
+                    issues.append({"code": "custom_api_private_url_disallowed", "message": f"Custom API connector actions cannot target private or unsupported hosts ({private_url_reason})."})
                 if action_id == "signed_webhook" and not _clean_text(config.get("signing_secret"), 300):
                     issues.append({"code": "custom_api_signing_secret_missing", "message": "signed_webhook actions require signing_secret."})
             if connector == "microsoft_365" and action_id == "upload_drive_file" and not _clean_text(config.get("path") or config.get("file_path"), 600):

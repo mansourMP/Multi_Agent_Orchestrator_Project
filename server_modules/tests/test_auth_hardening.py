@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import os
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -24,6 +25,17 @@ def _request(path: str = "/test", query_string: bytes = b"") -> Request:
 
 
 class AuthHardeningTests(unittest.TestCase):
+    def test_auth_remains_required_when_api_key_is_configured(self):
+        with patch.dict(os.environ, {"ORION_API_KEY": "secret"}, clear=False):
+            self.assertTrue(auth._orion_auth_required())
+
+    def test_get_current_user_accepts_matching_api_key_when_auth_enabled(self):
+        request = _request()
+        with patch.dict(os.environ, {"ORION_API_KEY": "secret", "ORION_AUTH_REQUIRED": "1"}, clear=False):
+            user = auth.get_current_user(request=request, x_api_key="secret")
+        self.assertEqual(user["auth_type"], "api_key")
+        self.assertEqual(user["user_id"], "service")
+
     def test_extract_request_api_key_ignores_query_string(self):
         request = _request(query_string=b"api_key=leaked")
         self.assertEqual(runtime_common._extract_request_api_key(request), "")

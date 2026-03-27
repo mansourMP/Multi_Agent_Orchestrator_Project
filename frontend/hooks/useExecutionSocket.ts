@@ -53,6 +53,7 @@ export function useExecutionSocket(options: UseExecutionSocketOptions = {}) {
         socketRef.current = io(`${WS_BASE}/executions`, {
             transports: ['websocket'],
             autoConnect: true,
+            withCredentials: true,
         });
 
         socketRef.current.on('connect', () => {

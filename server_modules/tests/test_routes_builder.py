@@ -146,6 +146,30 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             any(issue.get("code") == "custom_api_signing_secret_missing" for issue in payload.get("issues", []))
         )
 
+    def test_parse_workflow_payload_flags_custom_api_private_url(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "connector_action",
+                  "config": {
+                    "connector": "custom_api",
+                    "action_id": "http_request",
+                    "url": "http://127.0.0.1:8080/hook"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(
+            any(issue.get("code") == "custom_api_private_url_disallowed" for issue in payload.get("issues", []))
+        )
+
     def test_parse_workflow_payload_flags_code_tool_targeting_cloud(self):
         payload = _parse_workflow_payload(
             """

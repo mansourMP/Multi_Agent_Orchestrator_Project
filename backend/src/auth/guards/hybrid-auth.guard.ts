@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveJwtSecret } from '../jwt-secret';
 
 @Injectable()
 export class HybridAuthGuard implements CanActivate {
@@ -39,7 +40,7 @@ export class HybridAuthGuard implements CanActivate {
         }
 
         const payload = await this.jwt.verifyAsync<{ sub?: string }>(token, {
-            secret: this.config.get('JWT_SECRET') || 'dev-secret-change-in-production',
+            secret: resolveJwtSecret(this.config),
         }).catch(() => null);
 
         const userId = String(payload?.sub || '').trim();

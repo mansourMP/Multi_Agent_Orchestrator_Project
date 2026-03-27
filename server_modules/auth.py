@@ -39,10 +39,7 @@ def _orion_api_key() -> str:
 
 def _orion_auth_required() -> bool:
     raw = os.getenv("ORION_AUTH_REQUIRED")
-    required = (str(raw).strip() != "0") if raw is not None else True
-    if _orion_api_key():
-        required = False
-    return required
+    return (str(raw).strip() != "0") if raw is not None else True
 
 
 def _jwt_secret() -> str:

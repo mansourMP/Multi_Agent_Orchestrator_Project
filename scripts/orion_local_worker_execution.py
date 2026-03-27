@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from server_modules.file_mount_security import assert_file_mount_access
 
 try:
     from scripts.platform_execution import (
@@ -833,8 +834,15 @@ def _run_shell_operation(run_id: str, op_index: int, operation: Dict[str, Any], 
     return action, artifact
 
 
-def _run_file_operation(operation: Dict[str, Any], root: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    mode = _normalize_action_id(operation.get("mode") or "read")
+def _run_file_operation(operation: Dict[str, Any], root: Path, metadata: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    file_mount_grants = operation.get("file_mount_grants") if isinstance(operation.get("file_mount_grants"), list) else metadata.get("file_mount_grants")
+    access = assert_file_mount_access(
+        operation.get("path") or operation.get("file_path"),
+        operation.get("mode") or "read",
+        file_mount_grants,
+        metadata.get("execution_target") or "local_companion",
+    )
+    mode = access["mode"]
     if mode not in {"read", "write", "append", "delete"}:
         raise RuntimeError("read_write_files mode must be read, write, append, or delete.")
     target = _resolve_local_path(operation.get("path") or operation.get("file_path"), root, create_parent=mode in {"write", "append"})
@@ -1006,7 +1014,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
             if tool_id == "execute_shell_command":
                 action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
             elif tool_id == "read_write_files":
-                action, artifact = _run_file_operation(operation_row, root)
+                action, artifact = _run_file_operation(operation_row, root, metadata)
             elif tool_id == "capture_screenshot":
                 action, artifact = _run_screenshot_operation(run_id, index, operation_row, root, artifacts_root)
                 artifacts = [artifact]

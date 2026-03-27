@@ -10,7 +10,9 @@ import { TelegramService } from '../integrations/telegram.service';
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vm from 'node:vm';
 import { normalizeWorkflowDefinition } from '../workflows/workflow-schema';
+import { assertSafeOutboundUrl } from '../security/url-guards';
 
 /**
  * AC-OS Execution Engine
@@ -137,6 +139,41 @@ export class ExecutionsService {
             || node?.type
             || 'Step',
         ).trim() || 'Step';
+    }
+
+    private hasUnsafeDecisionExpression(expression: string): boolean {
+        if (!expression) return false;
+        if (!/^[\w\s.$'"!=<>&|()+\-*/%,?:[\]]+$/.test(expression)) {
+            return true;
+        }
+        return [
+            /(?:^|[^\w])(constructor|prototype|__proto__|globalThis|global|process|require|import|Function|eval|window|document|this|new)(?:$|[^\w])/i,
+            /__/,
+            /[`;{}\\]/,
+            /=>/,
+        ].some((pattern) => pattern.test(expression));
+    }
+
+    private evaluateDecisionExpression(expression: string, currentContext: string, currentNodeData: Record<string, any>): boolean {
+        if (this.hasUnsafeDecisionExpression(expression)) {
+            throw new Error('Unsafe decision expression.');
+        }
+        const sandbox = Object.create(null) as Record<string, unknown>;
+        sandbox.context = currentContext;
+        sandbox.context_text = currentContext;
+        sandbox.result_text = currentContext;
+        sandbox.result_data = currentNodeData?.result_data && typeof currentNodeData.result_data === 'object'
+            ? currentNodeData.result_data
+            : {};
+        sandbox.state = currentNodeData && typeof currentNodeData === 'object' ? currentNodeData : {};
+        const context = vm.createContext(sandbox, {
+            codeGeneration: {
+                strings: false,
+                wasm: false,
+            },
+        });
+        const script = new vm.Script(`Boolean(${expression})`);
+        return Boolean(script.runInContext(context, { timeout: 50 }));
     }
 
     private getAgentModel(node: any): string {
@@ -445,9 +482,7 @@ export class ExecutionsService {
                 emitLog(`🔀 Evaluating: ${expression}`);
                 let evaluation = false;
                 try {
-                    const script = `return !!(${expression})`;
-                    const func = new Function('context', script);
-                    evaluation = func(currentContext);
+                    evaluation = this.evaluateDecisionExpression(expression, currentContext, currentNodeData);
                     emitLog(`ℹ️ Condition result: ${evaluation}`);
                 } catch (err) {
                     emitLog(`⚠️ Logic Error: ${err.message}`);
@@ -743,6 +778,7 @@ export class ExecutionsService {
                             const body = currentNodeData.body || { context: currentContext };
 
                             if (!url) throw new Error('No URL configured');
+                            await assertSafeOutboundUrl(url);
                             const response = await fetch(url, {
                                 method,
                                 headers,

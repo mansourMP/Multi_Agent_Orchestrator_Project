@@ -1,3 +1,5 @@
+import { obviousPrivateUrlReason } from '../security/url-guards';
+
 export const EMPYRALIST_WORKFLOW_SCHEMA_VERSION = 'empyralist.workflow.v2';
 
 export type ExecutionTarget = 'auto' | 'cloud' | 'local_companion';
@@ -783,6 +785,26 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             nodeId: node.id,
         });
     }
+    if (variant === 'http') {
+        const httpUrl = compactText(config.url ?? '', 1200);
+        if (!httpUrl) {
+            issues.push({
+                code: 'http_url_missing',
+                message: 'HTTP tool nodes require a URL.',
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+        const privateUrlReason = httpUrl ? obviousPrivateUrlReason(httpUrl) : null;
+        if (privateUrlReason) {
+            issues.push({
+                code: 'http_private_url_disallowed',
+                message: `HTTP tool nodes cannot target private or unsupported hosts (${privateUrlReason}).`,
+                level: 'error',
+                nodeId: node.id,
+            });
+        }
+    }
     if (variant === 'file' && !compactText(config.path ?? config.file_path ?? '', 1200)) {
         issues.push({
             code: 'file_path_missing',
@@ -811,10 +833,20 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
             });
         }
         if (connector === 'custom_api') {
-            if ((actionId === 'http_request' || actionId === 'signed_webhook') && !compactText(config.url ?? '', 600)) {
+            const customApiUrl = compactText(config.url ?? '', 600);
+            if ((actionId === 'http_request' || actionId === 'signed_webhook') && !customApiUrl) {
                 issues.push({
                     code: 'custom_api_url_missing',
                     message: 'Custom API connector actions require a URL.',
+                    level: 'error',
+                    nodeId: node.id,
+                });
+            }
+            const privateUrlReason = customApiUrl ? obviousPrivateUrlReason(customApiUrl) : null;
+            if ((actionId === 'http_request' || actionId === 'signed_webhook') && privateUrlReason) {
+                issues.push({
+                    code: 'custom_api_private_url_disallowed',
+                    message: `Custom API connector actions cannot target private or unsupported hosts (${privateUrlReason}).`,
                     level: 'error',
                     nodeId: node.id,
                 });

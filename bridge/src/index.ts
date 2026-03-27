@@ -9,6 +9,7 @@ dotenv.config();
 
 const SERVER_URL = process.env.CONDUCTOR_URL || "http://localhost:3000";
 const BRIDGE_ID = os.hostname();
+const BRIDGE_TOKEN = process.env.CONDUCTOR_BRIDGE_TOKEN || process.env.ORION_API_KEY || "";
 
 console.clear();
 console.log(chalk.bold.cyan(`
@@ -29,7 +30,8 @@ console.log(chalk.gray(`----------------------------------------`));
 const socket = io(SERVER_URL, {
     auth: {
         type: 'bridge',
-        bridgeId: BRIDGE_ID
+        bridgeId: BRIDGE_ID,
+        bridgeToken: BRIDGE_TOKEN,
     },
     reconnection: true,
     reconnectionAttempts: Infinity,

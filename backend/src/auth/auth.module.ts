@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PrismaModule } from '../prisma/prisma.module';
 import { HybridAuthGuard } from './guards/hybrid-auth.guard';
+import { resolveJwtSecret } from './jwt-secret';
 
 @Module({
     imports: [
@@ -16,7 +17,7 @@ import { HybridAuthGuard } from './guards/hybrid-auth.guard';
             imports: [ConfigModule],
             inject: [ConfigService],
             useFactory: (config: ConfigService) => ({
-                secret: config.get('JWT_SECRET') || 'dev-secret-change-in-production',
+                secret: resolveJwtSecret(config),
                 signOptions: {
                     expiresIn: config.get('JWT_EXPIRATION') || '7d',
                 },

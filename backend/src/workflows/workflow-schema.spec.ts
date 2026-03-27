@@ -329,6 +329,36 @@ describe('workflow schema normalization', () => {
     expect(issues.some((issue) => issue.code === 'custom_api_signing_secret_missing' && issue.level === 'error')).toBe(true);
   });
 
+  it('blocks custom api connector actions that target private hosts', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        version: EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        nodes: [
+          {
+            id: 'trigger_1',
+            type: 'trigger',
+            variant: 'manual',
+            config: {},
+          },
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'connector_action',
+            config: {
+              connector: 'custom_api',
+              action_id: 'http_request',
+              url: 'http://127.0.0.1:8080/hook',
+            },
+          },
+        ],
+        edges: [{ id: 'edge-1', source: 'trigger_1', target: 'tool_1' }],
+      },
+      { forPublish: true },
+    );
+
+    expect(issues.some((issue) => issue.code === 'custom_api_private_url_disallowed' && issue.level === 'error')).toBe(true);
+  });
+
   it('blocks instagram reply actions without comment id', () => {
     const issues = validateWorkflowDefinition(
       {

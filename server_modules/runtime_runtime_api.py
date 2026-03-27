@@ -100,17 +100,43 @@ def _task_summary_from_local_claim(run: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def runtime_status_payload() -> Dict[str, Any]:
+    payload = local_queue.handle_get_local_workers_status()
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    return {
+        "scope": "local_companion_bridge",
+        "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+        "capability_queue": payload.get("capability_queue") if isinstance(payload.get("capability_queue"), dict) else {},
+        "items": [_runtime_summary_from_worker_item(item) for item in items if isinstance(item, dict)],
+    }
+
+
+def legacy_local_workers_status_payload() -> Dict[str, Any]:
+    payload = runtime_status_payload()
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    return {
+        "enabled": True,
+        "scope": payload.get("scope"),
+        "summary": summary,
+        "items": items,
+        "known": int(summary.get("known") or len(items)),
+        "online": int(summary.get("online") or 0),
+        "idle": int(summary.get("idle") or 0),
+        "busy": int(summary.get("busy") or 0),
+        "offline": int(summary.get("offline") or 0),
+        "online_workers": int(summary.get("online") or 0),
+    }
+
+
 def register_runtime_routes(app) -> None:
     @app.get("/runtime/runtimes/status", dependencies=[Depends(require_api_key)])
     async def get_runtime_status():
-        payload = local_queue.handle_get_local_workers_status()
-        items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        return {
-            "scope": "local_companion_bridge",
-            "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
-            "capability_queue": payload.get("capability_queue") if isinstance(payload.get("capability_queue"), dict) else {},
-            "items": [_runtime_summary_from_worker_item(item) for item in items if isinstance(item, dict)],
-        }
+        return runtime_status_payload()
+
+    @app.get("/local/workers/status", dependencies=[Depends(require_api_key)])
+    async def get_legacy_local_workers_status():
+        return legacy_local_workers_status_payload()
 
     @app.post("/runtime/runtimes/{runtime_id}/register", dependencies=[Depends(require_api_key)])
     async def register_runtime(runtime_id: str, payload: Optional[RuntimeRegisterPayload] = None):

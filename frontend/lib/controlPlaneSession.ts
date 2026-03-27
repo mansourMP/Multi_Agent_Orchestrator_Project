@@ -32,7 +32,54 @@ function controlPlaneSignInUrl(): string {
   const params = new URLSearchParams({
     returnTo: currentReturnPath(),
   });
+  if (getDesktopBridge()?.desktop) {
+    params.set('desktop', '1');
+  }
   return `${window.location.origin}/sign-in?${params.toString()}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function consumeDesktopControlPlaneAuthHandoff(): Promise<boolean> {
+  const response = await fetch('/api/control-plane/auth/desktop/consume', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+  }).catch(() => null);
+
+  if (!response) {
+    return false;
+  }
+
+  if (response.status === 204) {
+    return false;
+  }
+
+  if (response.ok) {
+    clearControlPlaneFailure();
+    return true;
+  }
+
+  const payload = await response.json().catch(() => null);
+  const detail =
+    payload && typeof payload.detail === 'string' && payload.detail.trim()
+      ? payload.detail.trim()
+      : 'Browser sign-in could not be completed.';
+  throw new Error(detail);
+}
+
+async function waitForDesktopControlPlaneSignIn(): Promise<void> {
+  const deadline = Date.now() + (60 * 1000 * 3);
+  while (Date.now() < deadline) {
+    const consumed = await consumeDesktopControlPlaneAuthHandoff();
+    if (consumed) {
+      return;
+    }
+    await sleep(1000);
+  }
+  throw new Error('Browser sign-in did not reach the app yet.');
 }
 
 async function openControlPlaneBrowserSignIn(): Promise<void> {
@@ -62,6 +109,7 @@ export function readControlPlaneFailure(): { message: string; at: number } | nul
 export async function ensureControlPlaneSession(options?: { forcePrompt?: boolean }): Promise<void> {
   if (typeof window === 'undefined') return;
   const forcePrompt = Boolean(options?.forcePrompt);
+  const desktopBridge = getDesktopBridge();
 
   if (
     !forcePrompt
@@ -73,6 +121,13 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
 
   if (!controlPlaneSessionPromise) {
     controlPlaneSessionPromise = (async () => {
+      if (desktopBridge?.desktop) {
+        const consumed = await consumeDesktopControlPlaneAuthHandoff();
+        if (consumed) {
+          return;
+        }
+      }
+
       const res = await fetch('/api/control-plane/session', {
         method: 'GET',
         cache: 'no-store',
@@ -96,6 +151,10 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
         rememberControlPlaneFailure(browserMessage);
         if (forcePrompt) {
           await openControlPlaneBrowserSignIn();
+          if (desktopBridge?.desktop) {
+            await waitForDesktopControlPlaneSignIn();
+            return;
+          }
         }
         throw new Error(browserMessage);
       }

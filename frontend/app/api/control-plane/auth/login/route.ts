@@ -1,7 +1,11 @@
 import type { NextRequest } from 'next/server';
 import { API_BASE } from '@/lib/config';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
-import { issueAdminBrowserIdentityResponse } from '@/lib/server/controlPlaneSession';
+import {
+  issueAdminBrowserIdentityResponse,
+  issueDesktopControlPlaneAuthHandoff,
+  sanitizeReturnTo,
+} from '@/lib/server/controlPlaneSession';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +15,8 @@ const CONTROL_PLANE_BACKEND_URL =
 type LoginBody = {
   email?: string;
   password?: string;
+  desktop_handoff?: boolean;
+  return_to?: string;
 };
 
 export async function POST(request: NextRequest) {
@@ -20,6 +26,8 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => null)) as LoginBody | null;
   const email = String(body?.email || '').trim().toLowerCase();
   const password = String(body?.password || '');
+  const desktopHandoff = Boolean(body?.desktop_handoff);
+  const returnTo = sanitizeReturnTo(String(body?.return_to || '/'));
   if (!email || !password) {
     return Response.json({ detail: 'Email and password are required.' }, { status: 400 });
   }
@@ -57,6 +65,18 @@ export async function POST(request: NextRequest) {
   const token = String(payload?.token || '').trim();
   if (!token) {
     return Response.json({ detail: 'Login did not return a bearer token.' }, { status: 502 });
+  }
+
+  if (desktopHandoff) {
+    const handoffFailure = await issueDesktopControlPlaneAuthHandoff(token, returnTo);
+    if (handoffFailure) {
+      return handoffFailure;
+    }
+    return Response.json({
+      ok: true,
+      desktop_handoff: true,
+      redirect_to: `/sign-in/complete?mode=desktop&returnTo=${encodeURIComponent(returnTo)}`,
+    });
   }
 
   return issueAdminBrowserIdentityResponse(request, token);

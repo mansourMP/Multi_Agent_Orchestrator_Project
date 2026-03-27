@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import {
   clearPendingControlPlaneOauth,
+  issueDesktopControlPlaneAuthHandoff,
   issueAdminBrowserIdentityResponse,
   readPendingControlPlaneOauth,
 } from '@/lib/server/controlPlaneSession';
@@ -25,7 +26,20 @@ export async function GET(request: NextRequest) {
     return failure;
   }
 
-  const response = await issueAdminBrowserIdentityResponse(request, token, pending.returnTo);
+  let response: Response | NextResponse;
+  if (pending.desktopMode) {
+    const handoffFailure = await issueDesktopControlPlaneAuthHandoff(token, pending.returnTo);
+    if (handoffFailure) {
+      return handoffFailure;
+    }
+    response = await issueAdminBrowserIdentityResponse(
+      request,
+      token,
+      `/sign-in/complete?mode=desktop&returnTo=${encodeURIComponent(pending.returnTo)}`,
+    );
+  } else {
+    response = await issueAdminBrowserIdentityResponse(request, token, pending.returnTo);
+  }
   if (!(response instanceof NextResponse)) {
     return response;
   }

@@ -37,9 +37,10 @@ function authErrorMessage(code: string): string {
 type BrowserSignInPageProps = {
   returnTo: string;
   errorCode?: string;
+  desktopMode?: boolean;
 };
 
-export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserSignInPageProps) {
+export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMode = false }: BrowserSignInPageProps) {
   const [providers, setProviders] = useState<AuthProviders>(DEFAULT_PROVIDERS);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -91,16 +92,23 @@ export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserS
         body: JSON.stringify({
           email,
           password,
+          desktop_handoff: desktopMode,
+          return_to: returnTo,
         }),
       });
 
-      const payload = await response.json().catch(() => null);
+      const payload = await response.json().catch(() => null) as { detail?: string; redirect_to?: string } | null;
       if (!response.ok) {
         const detail =
           payload && typeof payload.detail === 'string'
             ? payload.detail
             : 'Unable to sign in right now.';
         throw new Error(detail);
+      }
+
+      if (desktopMode && payload?.redirect_to) {
+        window.location.assign(payload.redirect_to);
+        return;
       }
 
       window.location.assign(returnTo);
@@ -116,12 +124,20 @@ export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserS
   };
 
   const continueWithGoogle = () => {
-    const target = `/api/control-plane/auth/google/start?returnTo=${encodeURIComponent(returnTo)}`;
+    const params = new URLSearchParams({ returnTo });
+    if (desktopMode) {
+      params.set('desktop', '1');
+    }
+    const target = `/api/control-plane/auth/google/start?${params.toString()}`;
     window.location.assign(target);
   };
 
   const continueWithApple = () => {
-    const target = `/api/control-plane/auth/apple/start?returnTo=${encodeURIComponent(returnTo)}`;
+    const params = new URLSearchParams({ returnTo });
+    if (desktopMode) {
+      params.set('desktop', '1');
+    }
+    const target = `/api/control-plane/auth/apple/start?${params.toString()}`;
     window.location.assign(target);
   };
 

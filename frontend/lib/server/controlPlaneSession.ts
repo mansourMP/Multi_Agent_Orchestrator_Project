@@ -1,3 +1,5 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -34,6 +36,13 @@ type ControlPlaneIdentity = {
 type PendingControlPlaneOauth = {
   state: string;
   returnTo: string;
+  desktopMode?: boolean;
+};
+
+type PendingDesktopControlPlaneAuth = {
+  token: string;
+  returnTo: string;
+  exp: number;
 };
 
 function trustedDesktopSessionPayload(request: NextRequest): ControlPlaneSessionPayload | null {
@@ -102,6 +111,19 @@ function trustedDesktopRuntimeUrl(): URL | null {
   }
 }
 
+function desktopAuthHandoffEnabled(): boolean {
+  return trustedDesktopRuntimeUrl() !== null;
+}
+
+function controlPlaneRepoRoot(): string {
+  const cwd = process.cwd();
+  return path.basename(cwd) === 'frontend' ? path.resolve(cwd, '..') : cwd;
+}
+
+function desktopAuthHandoffPath(): string {
+  return path.join(controlPlaneRepoRoot(), '.orion-stack', 'control-plane-auth-handoff.json');
+}
+
 async function controlPlaneSessionSecret(): Promise<string> {
   const configured = String(process.env.ORION_CONTROL_PLANE_SESSION_SECRET || '').trim();
   if (configured) return configured;
@@ -129,8 +151,49 @@ function decodePendingOauth(raw: string): PendingControlPlaneOauth | null {
     const state = String(parsed.state || '').trim();
     const returnTo = sanitizeReturnTo(String(parsed.returnTo || '').trim());
     if (!state) return null;
-    return { state, returnTo };
+    return { state, returnTo, desktopMode: Boolean(parsed.desktopMode) };
   } catch {
+    return null;
+  }
+}
+
+async function writePendingDesktopControlPlaneAuth(
+  bearerToken: string,
+  returnTo: string,
+): Promise<void> {
+  if (!desktopAuthHandoffEnabled()) return;
+  const targetPath = desktopAuthHandoffPath();
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const payload: PendingDesktopControlPlaneAuth = {
+    token: bearerToken,
+    returnTo: sanitizeReturnTo(returnTo),
+    exp: Math.floor(Date.now() / 1000) + (60 * 10),
+  };
+  await fs.writeFile(targetPath, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+}
+
+async function consumePendingDesktopControlPlaneAuth(): Promise<PendingDesktopControlPlaneAuth | null> {
+  if (!desktopAuthHandoffEnabled()) return null;
+  const targetPath = desktopAuthHandoffPath();
+  let raw = '';
+  try {
+    raw = await fs.readFile(targetPath, 'utf8');
+  } catch {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PendingDesktopControlPlaneAuth;
+    const token = String(parsed.token || '').trim();
+    const returnTo = sanitizeReturnTo(String(parsed.returnTo || '').trim());
+    const exp = Number(parsed.exp || 0);
+    await fs.unlink(targetPath).catch(() => undefined);
+    if (!token || !Number.isFinite(exp) || exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return { token, returnTo, exp };
+  } catch {
+    await fs.unlink(targetPath).catch(() => undefined);
     return null;
   }
 }
@@ -180,9 +243,6 @@ async function verifyBearerSignature(token: string): Promise<Response | null> {
 }
 
 async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIdentity | Response> {
-  const signatureFailure = await verifyBearerSignature(token);
-  if (signatureFailure) return signatureFailure;
-
   const claims = parseBearerClaims(token);
   if (claims instanceof Response) return claims;
 
@@ -232,6 +292,16 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
 
   if (runtimeResponse?.status === 403 || backendResponse?.status === 403) {
     return Response.json({ detail: 'Admin control-plane access required.' }, { status: 403 });
+  }
+
+  const signatureFailure = await verifyBearerSignature(token);
+  if (!signatureFailure) {
+    return {
+      sub: claims.sub,
+      email: claims.email,
+      authType: 'bearer',
+      admin: true,
+    };
   }
 
   if (runtimeResponse?.status === 401 && backendResponse?.status === 401) {
@@ -351,6 +421,25 @@ export async function issueAdminBrowserIdentityResponse(
     path: '/',
     maxAge: tokenMaxAge,
   });
+  const sessionPayload: ControlPlaneSessionPayload = {
+    v: 1,
+    exp: Math.floor(Date.now() / 1000) + CONTROL_PLANE_SESSION_TTL_SECONDS,
+    host: request.nextUrl.host,
+    ua: uaDigest(request),
+    sub: identity.sub,
+    authType: identity.authType,
+    admin: true,
+  };
+  const sessionToken = await encodeSession(sessionPayload);
+  response.cookies.set({
+    name: CONTROL_PLANE_SESSION_COOKIE,
+    value: sessionToken,
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: request.nextUrl.protocol === 'https:',
+    path: '/',
+    maxAge: CONTROL_PLANE_SESSION_TTL_SECONDS,
+  });
   return response;
 }
 
@@ -444,6 +533,7 @@ export function issuePendingControlPlaneOauthRedirect(
   request: NextRequest,
   startUrl: string,
   returnTo: string,
+  options?: { desktopMode?: boolean },
 ): NextResponse {
   const state = randomUUID();
   const nextUrl = new URL(startUrl);
@@ -451,7 +541,11 @@ export function issuePendingControlPlaneOauthRedirect(
   const response = NextResponse.redirect(nextUrl);
   response.cookies.set({
     name: CONTROL_PLANE_OAUTH_COOKIE,
-    value: encodePendingOauth({ state, returnTo: sanitizeReturnTo(returnTo) }),
+    value: encodePendingOauth({
+      state,
+      returnTo: sanitizeReturnTo(returnTo),
+      desktopMode: Boolean(options?.desktopMode),
+    }),
     httpOnly: true,
     sameSite: 'lax',
     secure: request.nextUrl.protocol === 'https:',
@@ -469,4 +563,20 @@ export function readPendingControlPlaneOauth(request: NextRequest): PendingContr
 
 export function clearPendingControlPlaneOauth(response: NextResponse, request: NextRequest) {
   clearCookie(response, request, CONTROL_PLANE_OAUTH_COOKIE);
+}
+
+export async function issueDesktopControlPlaneAuthHandoff(
+  bearerToken: string,
+  returnTo: string,
+): Promise<Response | null> {
+  await writePendingDesktopControlPlaneAuth(bearerToken, returnTo);
+  return null;
+}
+
+export async function consumeDesktopControlPlaneAuthHandoffResponse(
+  request: NextRequest,
+): Promise<NextResponse | Response | null> {
+  const pending = await consumePendingDesktopControlPlaneAuth();
+  if (!pending) return null;
+  return issueAdminBrowserIdentityResponse(request, pending.token);
 }

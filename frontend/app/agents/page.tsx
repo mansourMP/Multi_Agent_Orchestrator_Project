@@ -2,14 +2,16 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bot, MessageSquare, Plus } from 'lucide-react';
+import { type AgentRoleId, isAgentRoleId } from '@/app/page.catalog';
 import { PageCollection } from '@/components/orion/page/PageCollection';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { EmptyState } from '@/components/orion/state/EmptyState';
 import { ErrorState } from '@/components/orion/state/ErrorState';
 import { LoadingState } from '@/components/orion/state/LoadingState';
-import { fetchWorkflows } from '@/lib/api';
+import { createWorkflow, fetchWorkflows, getWorkflow, updateWorkflow } from '@/lib/api';
 
 type AgentRecord = {
   id: string;
@@ -17,6 +19,9 @@ type AgentRecord = {
   description?: string;
   updatedAt?: string;
   updated_at?: string;
+  definition?: {
+    nodes?: Array<Record<string, unknown>>;
+  };
 };
 
 type AgentTab = 'drafts' | 'templates';
@@ -53,11 +58,57 @@ function formatDate(value?: string) {
   return date.toLocaleDateString();
 }
 
+function formatActionError(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message.trim() : '';
+  return message ? `${fallback}: ${message}` : fallback;
+}
+
+function inferAgentRoleId(value?: string): AgentRoleId {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (isAgentRoleId(normalized)) return normalized;
+  if (!normalized) return 'builder';
+  if (normalized.includes('support') || normalized.includes('inbox')) return 'support';
+  if (normalized.includes('sales') || normalized.includes('lead') || normalized.includes('booking')) return 'sales';
+  if (normalized.includes('research') || normalized.includes('memory') || normalized.includes('analysis')) return 'research';
+  if (normalized.includes('finance') || normalized.includes('sheet') || normalized.includes('account')) return 'finance';
+  if (normalized.includes('private') || normalized.includes('personal') || normalized.includes('assistant')) return 'private-assistant';
+  if (normalized.includes('orchestr')) return 'orchestrator';
+  return 'builder';
+}
+
+function resolveAgentChatRole(agent: AgentRecord): AgentRoleId {
+  const nodes = Array.isArray(agent.definition?.nodes) ? agent.definition?.nodes : [];
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') continue;
+    if (String(node.type || '').trim().toLowerCase() !== 'agent') continue;
+    const config = node.config && typeof node.config === 'object' ? node.config as Record<string, unknown> : {};
+    const identity = config.identity && typeof config.identity === 'object' ? config.identity as Record<string, unknown> : {};
+    const role = String(identity.role || '').trim();
+    if (role) return inferAgentRoleId(role);
+    const data = node.data && typeof node.data === 'object' ? node.data as Record<string, unknown> : {};
+    const dataRole = String(data.role || data.label || '').trim();
+    if (dataRole) return inferAgentRoleId(dataRole);
+  }
+  return inferAgentRoleId(agent.name || agent.description || 'builder');
+}
+
+function buildAgentChatHref(agent: AgentRecord): string {
+  const query = new URLSearchParams({
+    chat: 'direct',
+    agent: resolveAgentChatRole(agent),
+    deck: 'context',
+  });
+  return `/?${query.toString()}`;
+}
+
 export default function AgentsPage() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<AgentTab>('drafts');
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [duplicatingId, setDuplicatingId] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -66,6 +117,7 @@ export default function AgentsPage() {
       try {
         setLoading(true);
         setError('');
+        setActionError('');
         const data = await fetchWorkflows();
         const items = Array.isArray(data)
           ? data
@@ -101,23 +153,40 @@ export default function AgentsPage() {
     [agents],
   );
 
+  const duplicateAgent = async (agentId: string) => {
+    try {
+      setActionError('');
+      setDuplicatingId(agentId);
+      const original = await getWorkflow(agentId);
+      const copyName = `${String(original.name || 'Agent').trim() || 'Agent'} Copy`;
+      const copyDescription = String(original.description || '').trim();
+      const created = await createWorkflow(copyName, copyDescription);
+      const createdId = typeof created.id === 'string' ? created.id.trim() : '';
+      if (!createdId) {
+        throw new Error('Unable to create the duplicated agent right now.');
+      }
+      if (original.definition) {
+        await updateWorkflow(createdId, original.definition);
+      }
+      router.push(`/builder/${createdId}`);
+    } catch (duplicateError) {
+      setActionError(formatActionError(duplicateError, 'Failed to duplicate agent'));
+    } finally {
+      setDuplicatingId('');
+    }
+  };
+
   return (
     <div className="orion-page-shell is-static-entry">
       <PageHero
         kicker="Agents"
         title="Create and manage reusable agents."
-        copy="Use this page for reusable agent systems. Chat stays separate, so you can build here and then talk to your assistant when you need live help."
+        copy="Use this page for reusable agent systems. Edit agents here. Use chat separately when you want live help from an assistant."
         actions={
-          <>
-            <Link href="/builder/new" className="btn-primary">
-              <Plus size={14} />
-              Create agent
-            </Link>
-            <Link href="/" className="btn-secondary">
-              <MessageSquare size={14} />
-              Open chat
-            </Link>
-          </>
+          <Link href="/builder/new" className="btn-primary">
+            <Plus size={14} />
+            Create agent
+          </Link>
         }
         aside={
           <PageHeroCard label="Agent library">
@@ -183,33 +252,53 @@ export default function AgentsPage() {
               }
             />
           ) : (
-            <div className="orion-builder-hub-grid">
-              {draftAgents.map((agent) => (
-                <Link
-                  key={agent.id}
-                  href={`/builder/${agent.id}`}
-                  className="orion-stat-card orion-control-card orion-builder-hub-card"
-                >
-                  <div className="orion-builder-hub-card-icon">
-                    <Bot size={16} />
-                  </div>
-                  <div className="orion-builder-hub-card-title">{agent.name || 'Untitled agent'}</div>
-                  <div className="orion-builder-hub-card-copy">{compactText(agent.description)}</div>
-                  <div className="orion-builder-hub-card-meta">
-                    <span>{formatDate(agent.updatedAt || agent.updated_at)}</span>
-                    <span>You</span>
-                  </div>
-                </Link>
-              ))}
-            </div>
+            <>
+              {actionError ? <div className="orion-builder-hub-feedback">{actionError}</div> : null}
+              <div className="orion-builder-hub-grid">
+                {draftAgents.map((agent) => (
+                  <article
+                    key={agent.id}
+                    className="orion-stat-card orion-control-card orion-builder-hub-card is-static"
+                  >
+                    <div className="orion-builder-hub-card-icon">
+                      <Bot size={16} />
+                    </div>
+                    <div className="orion-builder-hub-card-title">{agent.name || 'Untitled agent'}</div>
+                    <div className="orion-builder-hub-card-copy">{compactText(agent.description)}</div>
+                    <div className="orion-builder-hub-card-meta">
+                      <span>{formatDate(agent.updatedAt || agent.updated_at)}</span>
+                      <span>You</span>
+                    </div>
+                    <div className="orion-builder-hub-card-actions">
+                      <Link href={`/builder/${agent.id}`} className="btn-primary">
+                        Edit
+                      </Link>
+                      <Link href={buildAgentChatHref(agent)} className="btn-secondary">
+                        <MessageSquare size={14} />
+                        Open chat
+                      </Link>
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() => {
+                          void duplicateAgent(agent.id);
+                        }}
+                        disabled={duplicatingId === agent.id}
+                      >
+                        {duplicatingId === agent.id ? 'Duplicating…' : 'Duplicate'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
           )
         ) : (
           <div className="orion-builder-hub-grid">
             {AGENT_TEMPLATES.map((template) => (
-              <Link
+              <article
                 key={template.id}
-                href="/builder/new"
-                className="orion-stat-card orion-control-card orion-builder-hub-card"
+                className="orion-stat-card orion-control-card orion-builder-hub-card is-static"
               >
                 <div className="orion-builder-hub-card-icon">
                   <Bot size={16} />
@@ -220,7 +309,12 @@ export default function AgentsPage() {
                   <span>Template</span>
                   <span>Start here</span>
                 </div>
-              </Link>
+                <div className="orion-builder-hub-card-actions">
+                  <Link href="/builder/new" className="btn-primary">
+                    Create agent
+                  </Link>
+                </div>
+              </article>
             ))}
           </div>
         )}

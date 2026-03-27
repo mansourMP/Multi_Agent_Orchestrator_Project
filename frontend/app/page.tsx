@@ -67,7 +67,7 @@ const WORKBENCH_DECK_SIZE_STORAGE_KEY = 'orion.workbench.deck.size.v1';
 const PINNED_AGENT_STORAGE_KEY = 'empyralis.agents.pinned-rail';
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';
 const DEFAULT_AGENT_PROFILE_STORAGE_KEY = 'empyralis.agents.default-profile.v1';
-const WORKBENCH_PRELOAD_QUERY_KEYS = ['pack', 'goal', 'primary', 'secondary', 'tertiary', 'deck'] as const;
+const WORKBENCH_PRELOAD_QUERY_KEYS = ['pack', 'goal', 'primary', 'secondary', 'tertiary', 'deck', 'agent', 'chat'] as const;
 const LOCAL_EXECUTION_DEFAULT_GOAL =
   OUTCOME_PACKS.find((item) => item.id === 'local-execution-v1')?.defaultGoal?.trim().toLowerCase() || '';
 const CHAT_SESSION_LIMIT = 24;
@@ -1374,6 +1374,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const secondaryParam = params.get('secondary');
     const tertiaryParam = params.get('tertiary');
     const deckParam = params.get('deck');
+    const agentParam = params.get('agent');
+    const chatParam = params.get('chat');
 
     if (pack && OUTCOME_PACKS.some((item) => item.id === pack)) {
       setSelectedPackId(pack);
@@ -1387,11 +1389,19 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (primaryParam !== null) setInboxInput(primaryParam);
     if (secondaryParam !== null) setLeadsInput(secondaryParam);
     if (tertiaryParam !== null) setSlotsInput(tertiaryParam);
+    if (chatParam === 'direct' || chatParam === 'orchestrate') {
+      setWorkbenchChatMode(chatParam);
+    }
+    if (agentParam && isAgentRoleId(agentParam)) {
+      setSelectedAgentRole(agentParam);
+      setWorkbenchDeckVisible(true);
+      if (!deckParam) setDeckMode('context');
+    }
     if (deckParam === 'context' || deckParam === 'control' || deckParam === 'inspect') {
       setDeckMode(deckParam);
       setWorkbenchDeckVisible(true);
     }
-  }, [setGoal, setInboxInput, setLeadsInput, setSelectedPackId, setSlotsInput]);
+  }, [setGoal, setInboxInput, setLeadsInput, setSelectedPackId, setSlotsInput, setSelectedAgentRole]);
 
   useEffect(() => {
     if (selectedPack.id !== 'local-execution-v1') return;
@@ -1491,7 +1501,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       singleAgentMode || experienceMode === 'simple' || workbenchChatMode === 'orchestrate'
         ? AGENT_ROLE_OPTIONS.filter((option) => option.id === 'orchestrator')
         : workbenchPinnedAgentRoles.length > 0
-          ? AGENT_ROLE_OPTIONS.filter((option) => workbenchPinnedAgentRoles.includes(option.id) && option.id !== 'orchestrator')
+          ? AGENT_ROLE_OPTIONS.filter((option) =>
+              (workbenchPinnedAgentRoles.includes(option.id) || option.id === selectedAgentRole) && option.id !== 'orchestrator',
+            )
           : AGENT_ROLE_OPTIONS.filter((option) => option.id === selectedAgentRole || option.id === DEFAULT_AGENT_ROLE_ID);
 
     const deduped = source.filter((option, index, array) => array.findIndex((candidate) => candidate.id === option.id) === index);

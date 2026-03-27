@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, PlayCircle } from 'lucide-react';
+import { ArrowRight, MessageSquare, PlayCircle } from 'lucide-react';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
@@ -95,13 +95,13 @@ export default function HomePage() {
     <div className="orion-page-shell orion-animate-in">
       <PageHero
         kicker="Home"
-        title="Describe the work you want done and let Hekor handle the setup."
-        copy="The fastest path is a single task. Review the plan, connect what is needed, and run it. Reusable workflows are still here when you want to save a playbook."
+        title="See what is active, what changed, and where to continue."
+        copy="Use Home as your workspace overview. Open chat when you want to talk directly to an assistant. Open workflows when you want to edit or reuse a saved playbook."
         actions={
           <>
-            <Link href="/setup" className="btn-primary">
-              <PlayCircle size={14} />
-              New Task
+            <Link href="/" className="btn-primary">
+              <MessageSquare size={14} />
+              Open chat
             </Link>
             <Link href="/executions" className="btn-secondary">
               <PlayCircle size={14} />
@@ -121,7 +121,7 @@ export default function HomePage() {
               ) : error ? (
                 <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
               ) : featuredWorkflow ? (
-                <Link href={`/builder/${featuredWorkflow.id}`} className="orion-home-featured-link">
+                <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
                   <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
                   <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
                   <div className="orion-home-featured-meta">
@@ -148,7 +148,7 @@ export default function HomePage() {
               {supportingWorkflows.length > 0 ? (
                 <div className="orion-home-mini-list">
                   {supportingWorkflows.map((workflow) => (
-                    <Link key={workflow.id} href={`/builder/${workflow.id}`} className="orion-home-mini-link">
+                    <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
                       <span>{workflow.name || 'Untitled Workflow'}</span>
                       <ArrowRight size={13} />
                     </Link>
@@ -161,8 +161,8 @@ export default function HomePage() {
       />
 
       <PageSection
-        title="Reusable workflows"
-        description="Saved playbooks you can open, refine, and run again."
+        title="Recent workflows"
+        description="Saved playbooks you can reopen, refine, and run again."
         actions={
           <Link href="/workflows" className="orion-control-link">
             Open Workflows
@@ -182,7 +182,7 @@ export default function HomePage() {
             {recentWorkflows.map((workflow) => (
               <Link
                 key={workflow.id}
-                href={`/builder/${workflow.id}`}
+                href={`/workflows/${workflow.id}`}
                 className="orion-list-row orion-home-list-link"
               >
                 <div className="orion-item-leading">

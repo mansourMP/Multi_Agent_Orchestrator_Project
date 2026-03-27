@@ -666,7 +666,7 @@ export default function ExecutionsPage() {
     const url = URL.createObjectURL(payload);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `execution-${selectedExecution.id}.json`;
+    anchor.download = `run-${selectedExecution.id}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -825,7 +825,7 @@ export default function ExecutionsPage() {
             <AlertCircle size={18} />
           </div>
           <div className="orion-panel-title">Runs are unavailable</div>
-          <div className="orion-panel-copy">The execution history could not be loaded right now. If the backend is offline, bring it back up, then retry.</div>
+          <div className="orion-panel-copy">The run history could not be loaded right now. If the backend is offline, bring it back up, then retry.</div>
           <div className="orion-panel-copy" style={{ marginTop: -4 }}>{loadError}</div>
           <div className="orion-state-actions">
             <button type="button" className="btn-secondary" onClick={() => void loadExecutions()}>
@@ -839,7 +839,7 @@ export default function ExecutionsPage() {
         </section>
       ) : filteredExecutions.length === 0 ? (
         <section className="orion-empty">
-          <div className="orion-empty-title">{executions.length === 0 ? 'No work has run yet' : 'No runs match these filters'}</div>
+          <div className="orion-empty-title">{executions.length === 0 ? 'No runs yet' : 'No runs match these filters'}</div>
           <div className="orion-empty-copy orion-empty-copy-spaced">
             {executions.length === 0
               ? 'Start one task to see progress, approvals, and outcomes here.'
@@ -861,7 +861,7 @@ export default function ExecutionsPage() {
         <section className="orion-panel orion-panel-shell">
           <div className="orion-panel-header orion-panel-shell-header">
             <div>
-              <div className="orion-panel-title">Recent and active runs</div>
+              <div className="orion-panel-title">Recent runs</div>
               <div className="orion-panel-copy">Open any run to review the result, inspect the timeline, and decide what to do next.</div>
             </div>
           </div>
@@ -1027,7 +1027,7 @@ export default function ExecutionsPage() {
           <section className="orion-modal orion-execution-modal" onClick={(event) => event.stopPropagation()}>
             <header className="orion-panel-header orion-execution-modal-header" style={{ marginBottom: 0 }}>
               <div className="orion-execution-modal-title-wrap">
-                <div className="orion-execution-modal-kicker">Quick view</div>
+                <div className="orion-execution-modal-kicker">Run preview</div>
                 <h2 className="orion-execution-modal-title">{selectedExecution.workflow?.name || 'Untitled Workflow'}</h2>
                 <div className="orion-execution-modal-meta">
                   <span>Assistant {executionAgentRoleLabel(selectedExecution)}</span>
@@ -1036,7 +1036,7 @@ export default function ExecutionsPage() {
                   ) : null}
                 </div>
                 <p className="orion-execution-modal-copy">
-                  This is a technical preview of the recorded steps. Open the full run for the user-facing result and current status.
+                  This is a technical preview of the recorded run steps. Open the full run for the user-facing result and current status.
                 </p>
               </div>
               <div className="orion-execution-modal-actions">

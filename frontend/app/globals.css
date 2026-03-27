@@ -9477,6 +9477,12 @@ body.orion-setup-focus .orion-main-stage {
   gap: 10px;
 }
 
+.orion-builder-hub-card.is-static:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--border-subtle) 88%, transparent 12%);
+}
+
 .orion-builder-hub-card-icon {
   width: 40px;
   height: 40px;
@@ -9509,6 +9515,20 @@ body.orion-setup-focus .orion-main-stage {
   gap: 12px;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+.orion-builder-hub-card-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.orion-builder-hub-feedback {
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--error-fg);
 }
 
 .orion-metric-strip {

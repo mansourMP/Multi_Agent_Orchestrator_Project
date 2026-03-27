@@ -1633,7 +1633,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       },
       {
         title: 'Latest result',
-        note: 'This shows the latest outcome and where Hekor ran it.',
+        note: 'This shows the latest outcome and where it ran.',
         items: [
           { label: 'Latest result', value: latestRun?.result_summary || 'Nothing has run yet' },
           { label: 'Latest route', value: executionLabel },
@@ -1729,8 +1729,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     }
     if (!setupStatus.connectionTested) {
       return {
-        label: 'Finish setup →',
-        href: '/setup',
+        label: 'Verify AI account →',
+        href: '/connect-ai',
       };
     }
     if (derivedSetupReady) return null;
@@ -1748,8 +1748,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     }
     if (!setupStatus.connectionTested) {
       return {
-        label: 'Finish setup',
-        href: '/setup',
+        label: 'Verify AI account',
+        href: '/connect-ai',
       };
     }
     return null;
@@ -1859,6 +1859,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       return;
     }
 
+    if (command === '/connect-ai' || command === '/accounts') {
+      router.push('/connect-ai');
+      return;
+    }
     if (command === '/setup') {
       router.push('/setup');
       return;
@@ -1894,8 +1898,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     if (command === '/help') {
       setTopError(
         singleAgentMode
-          ? 'Commands: /run <goal>, /run, /setup, /assistant, /workflows, /runs, /approvals, /integrations, /health.'
-          : 'Commands: /run <goal>, /run, /setup, /agents, /workflows, /runs, /approvals, /integrations, /health.',
+          ? 'Commands: /run <goal>, /run, /connect-ai, /setup, /assistant, /workflows, /runs, /approvals, /integrations, /health.'
+          : 'Commands: /run <goal>, /run, /connect-ai, /setup, /agents, /workflows, /runs, /approvals, /integrations, /health.',
       );
       return;
     }

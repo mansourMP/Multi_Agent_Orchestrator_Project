@@ -54,8 +54,8 @@ const EXAMPLE_PROMPTS = [
 const TOTAL_STEPS = 5;
 const SETUP_STEP_META = [
   {
-    title: 'Tell Hekor what needs to happen.',
-    copy: 'Start with plain language. Hekor will outline the plan, tell you what it needs, and help you run it.',
+    title: 'Tell Empyralis what needs to happen.',
+    copy: 'Start with plain language. Empyralis will outline the plan, tell you what it needs, and help you run it.',
   },
   {
     title: 'Review the plan before anything starts.',
@@ -67,7 +67,7 @@ const SETUP_STEP_META = [
   },
   {
     title: 'Connect only the tools this task needs.',
-    copy: 'Hekor should ask for the minimum useful access, not the whole directory.',
+    copy: 'Empyralis should ask for the minimum useful access, not the whole directory.',
   },
   {
     title: 'Check the route and start the task.',
@@ -467,7 +467,7 @@ export default function SetupPage() {
   const currentStepMeta = SETUP_STEP_META[Math.max(0, Math.min(step - 1, SETUP_STEP_META.length - 1))];
   const setupTaskPreview = useMemo(() => {
     const trimmed = prompt.trim();
-    return trimmed ? buildTaskSummary(trimmed, 96) : 'Describe the work and Hekor will build the setup around it.';
+    return trimmed ? buildTaskSummary(trimmed, 96) : 'Describe the work and Empyralis will build the setup around it.';
   }, [prompt]);
   const selectedExecutionTargetLabel = useMemo(
     () => formatExecutionTargetLabel(selectedExecutionTarget),
@@ -548,9 +548,9 @@ export default function SetupPage() {
   const routeDecisionSummary = useMemo(() => {
     if (precheckRouteReason) return precheckRouteReason;
     if (precheckRouteSelected && precheckRouteRequested && precheckRouteSelected !== precheckRouteRequested) {
-      return `Requested ${selectedExecutionTargetLabel}. Hekor will use ${effectiveExecutionTargetLabel}.`;
+      return `Requested ${selectedExecutionTargetLabel}. Empyralis will use ${effectiveExecutionTargetLabel}.`;
     }
-    return `Hekor will use ${effectiveExecutionTargetLabel}.`;
+    return `Empyralis will use ${effectiveExecutionTargetLabel}.`;
   }, [
     effectiveExecutionTargetLabel,
     precheckRouteReason,
@@ -947,7 +947,7 @@ export default function SetupPage() {
             <>
               <PageHeroCard label="What happens next">
                 <div className="hekor-setup-hero-note">
-                  Hekor turns your task into a plan first. You review the plan, add AI access, connect only the needed tools, then start.
+                  Empyralis turns your task into a plan first. You review the plan, add AI access, connect only the needed tools, then start.
                 </div>
               </PageHeroCard>
               <PageHeroCard label="Keep it concrete">
@@ -1001,7 +1001,7 @@ export default function SetupPage() {
             <div className="hekor-setup-launch-copy">
               <div className="hekor-setup-launch-kicker">Start with one concrete task</div>
               <div className="hekor-setup-launch-note">
-                Describe one thing the agent should do. Hekor will draft the plan before anything runs.
+                Describe one thing the agent should do. Empyralis will draft the plan before anything runs.
               </div>
             </div>
 
@@ -1250,7 +1250,7 @@ export default function SetupPage() {
 
             <div className="hekor-setup-trust">
               <ShieldCheck size={16} />
-              <span>Hekor will not send work blindly. You still get a chance to review and approve when needed.</span>
+              <span>Empyralis will not send work blindly. You still get a chance to review and approve when needed.</span>
             </div>
 
             <div className="hekor-setup-advanced">

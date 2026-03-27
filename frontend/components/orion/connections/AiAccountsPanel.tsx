@@ -117,7 +117,7 @@ function normalizeProvidersError(message?: string | null): string {
     lowered.includes('aborted') ||
     lowered.includes('timed out')
   ) {
-    return 'Runtime is offline. Start Empyralis services to manage saved AI accounts.';
+    return 'Unable to reach the local control plane. Start Empyralis services, then try again.';
   }
   return normalized;
 }
@@ -954,7 +954,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
           <div style={{ display: 'grid', gap: 3 }}>
             <div className="orion-panel-title">AI accounts</div>
             <div className="orion-panel-copy">
-              Store provider logins here, then decide which saved account is enabled for runtime use.
+              Connect direct provider accounts here, then decide which one the runtime should use by default.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1019,7 +1019,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
         {providerLoading ? (
           <section className="orion-empty" style={{ minHeight: 180 }}>
             <div className="orion-empty-title">Loading AI accounts</div>
-            <div className="orion-empty-copy">Reading saved provider credentials and runtime profiles from the local state directory.</div>
+            <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
           </section>
         ) : providerCredentials.length === 0 && orphanProviderProfiles.length === 0 ? (
           <section className="orion-empty" style={{ minHeight: 180 }}>
@@ -1347,7 +1347,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
               <div style={{ display: 'grid', gap: 6 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>Add AI account</div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  Save direct provider credentials in the encrypted vault, then optionally enable them as a runtime profile immediately.
+                  Connect a direct provider account, store it in the encrypted vault, then optionally enable it for runtime use immediately.
                 </div>
               </div>
               <button
@@ -1375,7 +1375,7 @@ export default function AiAccountsPanel({ workspaceId }: AiAccountsPanelProps) {
                   Account setup
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Pick the direct provider, choose the auth method, and confirm the runtime model.
+                  Choose the provider, choose the auth method, and confirm the default model.
                 </div>
               </div>
 

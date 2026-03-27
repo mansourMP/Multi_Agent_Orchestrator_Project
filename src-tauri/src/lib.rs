@@ -21,6 +21,11 @@ const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WORKER_BOOT_GRACE: Duration = Duration::from_secs(2);
 
+struct DesktopShellLockState {
+    lock_path: PathBuf,
+    start_meta_path: PathBuf,
+}
+
 #[tauri::command]
 fn open_external(target: String) -> Result<bool, String> {
     let normalized = target.trim();
@@ -88,13 +93,238 @@ fn runtime_key_path() -> PathBuf {
     state_dir().join("runtime_key")
 }
 
+fn pid_dir() -> PathBuf {
+    state_dir().join("pids")
+}
+
+fn start_meta_path() -> PathBuf {
+    state_dir().join("start.meta.json")
+}
+
+fn desktop_shell_lock_path() -> PathBuf {
+    state_dir().join("desktop-shell.pid")
+}
+
 fn ensure_state_dir() -> Result<(), String> {
-    fs::create_dir_all(state_dir())
-        .map_err(|error| format!("Failed to create .orion-stack: {error}"))
+    fs::create_dir_all(state_dir()).map_err(|error| format!("Failed to create .orion-stack: {error}"))?;
+    fs::create_dir_all(pid_dir()).map_err(|error| format!("Failed to create pid directory: {error}"))
+}
+
+fn process_running(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let filter = format!("PID eq {pid}");
+        if let Ok(output) = Command::new("tasklist").arg("/FI").arg(filter).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return stdout.contains(&pid.to_string());
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+}
+
+fn focus_existing_desktop_process(pid: u32) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
+        );
+        let _ = Command::new("osascript").arg("-e").arg(script).status();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+    }
+}
+
+fn existing_desktop_process() -> Option<u32> {
+    let current_pid = std::process::id();
+    let exe_path = std::env::current_exe().ok()?;
+    let exe_path = exe_path.to_string_lossy().to_string();
+    let exe_name = std::path::Path::new(&exe_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("empyralis-tauri-shell")
+        .to_string();
+
+    let output = Command::new("ps")
+        .arg("-ax")
+        .arg("-o")
+        .arg("pid=")
+        .arg("-o")
+        .arg("command=")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
+        let Some(pid_token) = parts.next() else {
+            continue;
+        };
+        let Ok(pid) = pid_token.parse::<u32>() else {
+            continue;
+        };
+        if pid == 0 || pid == current_pid {
+            continue;
+        }
+        let command = parts.collect::<Vec<_>>().join(" ");
+        if command.contains(&exe_path) || command.contains(&exe_name) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+fn acquire_desktop_shell_lock() -> Result<PathBuf, String> {
+    ensure_state_dir()?;
+    let lock_path = desktop_shell_lock_path();
+    let current_pid = std::process::id();
+
+    if let Some(existing_pid) = existing_desktop_process() {
+        focus_existing_desktop_process(existing_pid);
+        return Err("Empyralis desktop is already running.".into());
+    }
+
+    if lock_path.exists() {
+        let raw = fs::read_to_string(&lock_path).unwrap_or_default();
+        let existing_pid = raw.trim().parse::<u32>().unwrap_or(0);
+        if existing_pid != 0 && existing_pid != current_pid && process_running(existing_pid) {
+            focus_existing_desktop_process(existing_pid);
+            return Err("Empyralis desktop is already running.".into());
+        }
+    }
+
+    fs::write(&lock_path, current_pid.to_string()).map_err(|error| {
+        format!(
+            "Failed to write desktop shell lock at {}: {error}",
+            lock_path.display()
+        )
+    })?;
+
+    Ok(lock_path)
+}
+
+fn release_desktop_shell_lock(lock_path: &PathBuf) {
+    let current_pid = std::process::id().to_string();
+    let contents = fs::read_to_string(lock_path).unwrap_or_default();
+    if contents.trim() == current_pid {
+        let _ = fs::remove_file(lock_path);
+    }
 }
 
 fn normalize_runtime_key(raw: &str) -> String {
     raw.chars().filter(|char| !char.is_whitespace()).collect()
+}
+
+fn pid_file_path(name: &str) -> PathBuf {
+    pid_dir().join(format!("{name}.pid"))
+}
+
+fn write_service_pid_file(name: &str, pid: u32) -> Result<(), String> {
+    let path = pid_file_path(name);
+    fs::write(&path, pid.to_string())
+        .map_err(|error| format!("Failed to write {name} pid file at {}: {error}", path.display()))
+}
+
+fn clear_service_pid_file(name: &str, pid: u32) {
+    let path = pid_file_path(name);
+    let contents = fs::read_to_string(&path).unwrap_or_default();
+    if contents.trim() == pid.to_string() {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn current_utc_timestamp() -> String {
+    Command::new("date")
+        .arg("-u")
+        .arg("+%Y-%m-%dT%H:%M:%SZ")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn listening_pid_for_port(port: &str) -> Option<u32> {
+    let output = Command::new("lsof")
+        .arg("-ti")
+        .arg(format!("tcp:{port}"))
+        .arg("-sTCP:LISTEN")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+fn lock_owner_label() -> String {
+    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
+    let host = std::env::var("HOSTNAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| "unknown-host".into());
+    format!("{user}@{host}")
+}
+
+fn write_desktop_start_metadata(runtime_key: &str) -> Result<PathBuf, String> {
+    ensure_state_dir()?;
+    let path = start_meta_path();
+    let payload = format!(
+        concat!(
+            "{{\n",
+            "  \"starter_pid\": {},\n",
+            "  \"started_at\": \"{}\",\n",
+            "  \"lock_owner\": \"{}\",\n",
+            "  \"runtime_key_fingerprint\": \"{}\",\n",
+            "  \"openclaw_policy\": \"desktop_shell\",\n",
+            "  \"auth_mode\": \"desktop\"\n",
+            "}}\n"
+        ),
+        std::process::id(),
+        current_utc_timestamp(),
+        lock_owner_label(),
+        runtime_key.chars().take(12).collect::<String>()
+    );
+
+    fs::write(&path, payload)
+        .map_err(|error| format!("Failed to write desktop start metadata at {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+fn release_desktop_start_metadata(path: &PathBuf) {
+    let current_pid = std::process::id().to_string();
+    let contents = fs::read_to_string(path).unwrap_or_default();
+    if contents.contains(&format!("\"starter_pid\": {current_pid}")) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn generate_runtime_key() -> String {
@@ -424,26 +654,30 @@ fn cleanup_stale_worker_processes(worker_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn stop_child(child: &mut Option<Child>) {
+fn stop_child(name: &str, child: &mut Option<Child>) {
     let Some(mut child) = child.take() else {
         return;
     };
+    let pid = child.id();
     let _ = child.kill();
     let _ = child.wait();
+    clear_service_pid_file(name, pid);
 }
 
 fn stop_sidecars(state: &SidecarState) {
     let Ok(mut guard) = state.0.lock() else {
         return;
     };
-    stop_child(&mut guard.next);
-    stop_child(&mut guard.worker);
-    stop_child(&mut guard.backend);
-    stop_child(&mut guard.runtime);
+    stop_child("frontend", &mut guard.next);
+    stop_child("worker", &mut guard.worker);
+    stop_child("backend", &mut guard.backend);
+    stop_child("runtime", &mut guard.runtime);
 }
 
 fn ensure_service<FSpawn, FStore>(
     state: &SidecarState,
+    service_name: &str,
+    port: &str,
     ready_url: &str,
     accept_client_errors: bool,
     label: &str,
@@ -455,6 +689,9 @@ where
     FStore: FnOnce(&mut Sidecars, Child),
 {
     if service_ready(ready_url, accept_client_errors) {
+        if let Some(pid) = listening_pid_for_port(port) {
+            let _ = write_service_pid_file(service_name, pid);
+        }
         return Ok(());
     }
 
@@ -483,6 +720,7 @@ fn ensure_worker(state: &SidecarState, runtime_key: &str) -> Result<(), String> 
     cleanup_stale_worker_processes(WORKER_ID)?;
 
     let child = spawn_worker(runtime_key)?;
+    let _ = write_service_pid_file("worker", child.id());
     {
         let mut guard = state
             .0
@@ -514,53 +752,91 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![open_external])
         .setup(|app| {
+            let lock_path =
+                acquire_desktop_shell_lock().map_err(|error| -> Box<dyn std::error::Error> {
+                    Box::new(std::io::Error::other(error))
+                })?;
+
             let runtime_key =
                 ensure_runtime_key().map_err(|error| -> Box<dyn std::error::Error> {
+                    release_desktop_shell_lock(&lock_path);
+                    Box::new(std::io::Error::other(error))
+                })?;
+            let start_meta_path =
+                write_desktop_start_metadata(&runtime_key).map_err(|error| -> Box<dyn std::error::Error> {
+                    release_desktop_shell_lock(&lock_path);
                     Box::new(std::io::Error::other(error))
                 })?;
 
             app.manage(SidecarState(Mutex::new(Sidecars::default())));
+            app.manage(DesktopShellLockState {
+                lock_path: lock_path.clone(),
+                start_meta_path: start_meta_path.clone(),
+            });
 
             let state = app.state::<SidecarState>();
 
             if let Err(error) = ensure_service(
                 &state,
+                "runtime",
+                RUNTIME_PORT,
                 &runtime_health_url(),
                 false,
                 "runtime",
                 || spawn_runtime(&runtime_key),
-                |sidecars, child| sidecars.runtime = Some(child),
+                |sidecars, child| {
+                    let _ = write_service_pid_file("runtime", child.id());
+                    sidecars.runtime = Some(child);
+                },
             ) {
                 stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
             if let Err(error) = ensure_service(
                 &state,
+                "backend",
+                BACKEND_PORT,
                 &backend_health_url(),
                 false,
                 "backend",
                 || spawn_backend(&runtime_key),
-                |sidecars, child| sidecars.backend = Some(child),
+                |sidecars, child| {
+                    let _ = write_service_pid_file("backend", child.id());
+                    sidecars.backend = Some(child);
+                },
             ) {
                 stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
             if let Err(error) = ensure_worker(&state, &runtime_key) {
                 stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
             if let Err(error) = ensure_service(
                 &state,
+                "frontend",
+                NEXT_PORT,
                 &next_health_url(),
                 true,
                 "Next.js",
                 spawn_next,
-                |sidecars, child| sidecars.next = Some(child),
+                |sidecars, child| {
+                    let _ = write_service_pid_file("frontend", child.id());
+                    sidecars.next = Some(child);
+                },
             ) {
                 stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(error)));
             }
 
@@ -578,6 +854,8 @@ pub fn run() {
                     .build()
             {
                 stop_sidecars(&state);
+                release_desktop_start_metadata(&start_meta_path);
+                release_desktop_shell_lock(&lock_path);
                 return Err(Box::new(std::io::Error::other(format!(
                     "Failed to build main window: {error}"
                 ))));
@@ -591,6 +869,9 @@ pub fn run() {
             if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
                 let state = app_handle.state::<SidecarState>();
                 stop_sidecars(&state);
+                let lock_state = app_handle.state::<DesktopShellLockState>();
+                release_desktop_start_metadata(&lock_state.start_meta_path);
+                release_desktop_shell_lock(&lock_state.lock_path);
             }
         });
 }

@@ -7,6 +7,7 @@ PID_DIR="${STATE_DIR}/pids"
 LOG_DIR="${STATE_DIR}/logs"
 START_LOCK_FILE="${STATE_DIR}/start.lock"
 START_META_FILE="${STATE_DIR}/start.meta.json"
+DESKTOP_SHELL_PID_FILE="${STATE_DIR}/desktop-shell.pid"
 
 port_for_service() {
   local name="$1"
@@ -37,6 +38,11 @@ proc_cmd() {
   ps -p "${pid}" -o command= 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]\{1,\}/ /g'
 }
 
+port_listener_pids() {
+  local port="$1"
+  lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null || true
+}
+
 show_pid_state() {
   local name="$1"
   local file="${PID_DIR}/${name}.pid"
@@ -45,7 +51,7 @@ show_pid_state() {
   if [[ ! -f "${file}" ]]; then
     if [[ -n "${fallback_port}" ]]; then
       local port_pids
-      port_pids="$(lsof -ti tcp:${fallback_port} -sTCP:LISTEN 2>/dev/null || true)"
+      port_pids="$(port_listener_pids "${fallback_port}")"
       if [[ -n "${port_pids}" ]]; then
         local compact
         compact="$(echo "${port_pids}" | tr '\n' ' ' | xargs)"
@@ -78,7 +84,7 @@ show_pid_state() {
   else
     if [[ -n "${fallback_port}" ]]; then
       local port_pids
-      port_pids="$(lsof -ti tcp:${fallback_port} -sTCP:LISTEN 2>/dev/null || true)"
+      port_pids="$(port_listener_pids "${fallback_port}")"
       if [[ -n "${port_pids}" ]]; then
         local compact
         compact="$(echo "${port_pids}" | tr '\n' ' ' | xargs)"
@@ -96,10 +102,23 @@ show_pid_state "backend"
 show_pid_state "frontend"
 show_pid_state "worker"
 
+if [[ -f "${DESKTOP_SHELL_PID_FILE}" ]]; then
+  desktop_pid="$(cat "${DESKTOP_SHELL_PID_FILE}" 2>/dev/null || true)"
+  if [[ -n "${desktop_pid}" ]] && kill -0 "${desktop_pid}" 2>/dev/null; then
+    echo "desktop: running (pid ${desktop_pid})"
+    desktop_cmd="$(proc_cmd "${desktop_pid}")"
+    if [[ -n "${desktop_cmd}" ]]; then
+      echo "  cmd: ${desktop_cmd}"
+    fi
+  else
+    echo "desktop: stale pid file (${desktop_pid:-unknown})"
+  fi
+fi
+
 echo
 echo "Ports:"
 for port in 8001 4000 3000; do
-  pids="$(lsof -ti tcp:${port} 2>/dev/null || true)"
+  pids="$(port_listener_pids "${port}")"
   if [[ -n "${pids}" ]]; then
     compact="$(echo "${pids}" | tr '\n' ' ' | xargs)"
     echo "  ${port}: in use (${compact})"

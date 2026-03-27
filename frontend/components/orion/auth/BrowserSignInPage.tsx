@@ -155,6 +155,12 @@ export default function BrowserSignInPage({ returnTo, errorCode = '' }: BrowserS
           </button>
         ) : null}
 
+        {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
+          <div className="orion-auth-note">
+            Social sign-in appears automatically when your hosted control plane is configured for Google or Apple.
+          </div>
+        ) : null}
+
         {providers.email.enabled ? (
           <>
             <div className="orion-auth-divider">

@@ -12110,6 +12110,16 @@ select:focus-visible {
   color: var(--text-secondary);
 }
 
+.orion-auth-note {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(246, 244, 238, 0.88);
+  border: 1px solid rgba(93, 99, 110, 0.12);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .orion-auth-field {
   display: grid;
   gap: 8px;

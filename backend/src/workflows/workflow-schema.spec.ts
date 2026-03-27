@@ -192,6 +192,31 @@ describe('workflow schema normalization', () => {
     expect(issues.some((issue) => issue.code === 'shell_capability_conflict')).toBe(true);
   });
 
+  it('warns when shell tool nodes rely on raw commands without a capability', () => {
+    const issues = validateWorkflowDefinition(
+      {
+        nodes: [
+          {
+            id: 'tool_1',
+            type: 'tool',
+            variant: 'shell',
+            config: {
+              command: 'pwd',
+            },
+          },
+        ],
+        edges: [],
+      },
+      { forPublish: false },
+    );
+
+    expect(
+      issues.some(
+        (issue) => issue.code === 'shell_raw_command_high_trust' && issue.level === 'warning',
+      ),
+    ).toBe(true);
+  });
+
   it('blocks session-backed interactive browser automation in local companion v1', () => {
     const issues = validateWorkflowDefinition(
       {

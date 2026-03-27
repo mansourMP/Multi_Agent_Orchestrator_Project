@@ -210,6 +210,26 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(any(issue.get("code") == "shell_command_missing" for issue in payload.get("issues", [])))
 
+    def test_parse_workflow_payload_warns_on_raw_shell_command(self):
+        payload = _parse_workflow_payload(
+            """
+            {
+              "nodes": [
+                {
+                  "id": "tool_1",
+                  "type": "tool",
+                  "variant": "shell",
+                  "config": {
+                    "command": "pwd"
+                  }
+                }
+              ],
+              "edges": []
+            }
+            """
+        )
+        self.assertTrue(any(issue.get("code") == "shell_raw_command_high_trust" for issue in payload.get("issues", [])))
+
     def test_parse_workflow_payload_flags_browser_tool_without_url(self):
         payload = _parse_workflow_payload(
             """

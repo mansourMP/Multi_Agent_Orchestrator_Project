@@ -791,6 +791,14 @@ function validateToolNode(node: CanonicalWorkflowNode, issues: WorkflowValidatio
                 nodeId: node.id,
             });
         }
+        if ((command || argv.length > 0) && !capability) {
+            issues.push({
+                code: `${variant}_raw_command_high_trust`,
+                message: `${variant} tool nodes using raw command or argv are blocked by default policy. Prefer capability-based local actions.`,
+                level: 'warning',
+                nodeId: node.id,
+            });
+        }
         if (capability && (command || argv.length > 0)) {
             issues.push({
                 code: `${variant}_capability_conflict`,

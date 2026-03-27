@@ -454,6 +454,8 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             capability = _clean_text(config.get("capability"), 160)
             if not command and not any(_clean_text(item, 400) for item in argv):
                 issues.append({"code": f"{variant}_command_missing", "message": f"{variant} tool nodes require command or argv."})
+            if (command or any(_clean_text(item, 400) for item in argv)) and not capability:
+                issues.append({"code": f"{variant}_raw_command_high_trust", "message": f"{variant} tool nodes using raw command or argv are blocked by default policy. Prefer capability-based local actions."})
             if capability and (command or any(_clean_text(item, 400) for item in argv)):
                 issues.append({"code": f"{variant}_capability_conflict", "message": f"{variant} tool nodes cannot mix capability with command or argv."})
         if variant == "browser" and not _clean_text(config.get("url"), 1200):

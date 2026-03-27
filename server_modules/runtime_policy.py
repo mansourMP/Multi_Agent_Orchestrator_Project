@@ -1953,6 +1953,8 @@ def evaluate_tool_policy_decision(
         )
         if isinstance(detail, dict)
     ]
+    uses_capability_path = clean_tool_id == "execute_shell_command" and bool(capability_details)
+    uses_raw_command_path = clean_tool_id == "execute_shell_command" and not uses_capability_path
     unsupported_capability = next(
         (
             detail
@@ -1968,7 +1970,10 @@ def evaluate_tool_policy_decision(
     if unsupported_capability:
         decision = "blocked"
         reason = "blocked_unsupported_capability"
-    elif clean_tool_id in blocked_actions:
+    elif uses_raw_command_path:
+        decision = "blocked"
+        reason = "blocked_raw_shell_command"
+    elif clean_tool_id in blocked_actions and not uses_capability_path:
         decision = "blocked"
         reason = "blocked_by_action_policy"
     elif effective_target == EXECUTION_TARGET_CLOUD and TOOL_POLICY.is_critical(clean_tool_id) and block_cloud_critical:
@@ -2005,6 +2010,8 @@ def evaluate_tool_policy_decision(
         "target": effective_target,
         "is_sensitive": TOOL_POLICY.is_sensitive(clean_tool_id) or browser_requires_approval,
         "is_critical": TOOL_POLICY.is_critical(clean_tool_id),
+        "uses_capability_path": uses_capability_path,
+        "uses_raw_command_path": uses_raw_command_path,
         "unsupported_capability": unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None,
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,

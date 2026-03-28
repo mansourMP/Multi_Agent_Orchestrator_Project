@@ -243,6 +243,7 @@ def _telegram_space_question_via_mcp(question: str) -> Dict[str, Any]:
     }
 
 ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS = os.getenv("ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS", "0") == "1"
+ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED = os.getenv("ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED", "0") == "1"
 ORION_TELEGRAM_MEDIA_ENABLED = os.getenv("ORION_TELEGRAM_MEDIA_ENABLED", "1") == "1"
 ORION_TELEGRAM_MEDIA_DIR = _resolve_state_dir(
     "ORION_TELEGRAM_MEDIA_DIR",
@@ -1736,6 +1737,14 @@ def _telegram_installed_skill_query(
     chat_id: str,
     session_key: str,
 ) -> Dict[str, Any]:
+    if not ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED:
+        return {
+            "handled": False,
+            "response": "",
+            "prompt_append": "",
+            "active_skill_ids": [],
+            "errors": [],
+        }
     try:
         return query_active_installed_skills(
             query=goal,

@@ -6,6 +6,21 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
+
+def _normalize_agent_role_safe(value: Any) -> str:
+    normalize = globals().get("normalize_agent_role")
+    if callable(normalize):
+        try:
+            return str(normalize(value) or "").strip().lower()
+        except Exception:
+            return ""
+    try:
+        from server_modules.runs_delegation import normalize_agent_role as normalize
+
+        return str(normalize(value) or "").strip().lower()
+    except Exception:
+        return ""
+
 def _pack_id_from_context(run: Dict[str, Any]) -> Optional[str]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -368,7 +383,7 @@ def _resolve_run_connector_binding(item: Dict[str, Any]) -> Optional[Dict[str, A
 
     provider = str((connector_row or {}).get("connector") or "").strip().lower()
     connector_metadata = (connector_row or {}).get("metadata") if isinstance((connector_row or {}).get("metadata"), dict) else {}
-    assigned_role = normalize_agent_role(connector_metadata.get("agent_role"))
+    assigned_role = _normalize_agent_role_safe(connector_metadata.get("agent_role"))
     identity_label = (
         str(connector_metadata.get("chat_id") or "").strip()
         or str(connector_metadata.get("bot_username") or "").strip()

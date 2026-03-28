@@ -8845,6 +8845,79 @@ body.orion-setup-focus .orion-main-stage {
   gap: 20px;
 }
 
+.orion-connect-shell {
+  width: min(980px, 100%);
+  max-width: 980px;
+  padding-top: 22px;
+}
+
+.orion-connect-card {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.orion-connect-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.orion-connect-title-wrap {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.orion-connect-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.orion-connect-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 36px);
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+
+.orion-connect-copy {
+  margin: 0;
+  max-width: 640px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.orion-connect-back {
+  min-height: 36px;
+  padding-inline: 12px;
+}
+
+@media (max-width: 720px) {
+  .orion-connect-shell {
+    padding-top: 14px;
+  }
+
+  .orion-connect-card {
+    padding: 16px;
+  }
+
+  .orion-connect-header {
+    grid-template-columns: 1fr;
+  }
+
+  .orion-connect-back {
+    justify-self: start;
+  }
+}
+
 .hekor-setup-shellbar {
   display: flex;
   align-items: center;

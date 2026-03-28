@@ -27,7 +27,7 @@ import {
   type ProviderOption,
 } from '@/app/page.catalog';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
-import { getDesktopBridge } from '@/lib/desktopBridge';
+import { getDesktopBridge, type OpenAiCodexOauthResult } from '@/lib/desktopBridge';
 
 type ProviderCredentialRow = {
   id: string;
@@ -248,7 +248,7 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
 function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
   if (provider === 'openai') {
     if (authMode === 'oauth_token') {
-      return 'Paste a saved OpenAI or Codex token you already control. Empyralis does not open a ChatGPT or Codex login flow for you.';
+      return 'Paste a saved OpenAI or Codex token you already control, or use Sign in with ChatGPT on the Connect AI page in the desktop app.';
     }
     if (authMode === 'access_token') {
       return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
@@ -273,6 +273,11 @@ function providerAccountContextLine(item: ProviderCredentialRow): string {
       .join(' • ') || 'Saved access token for Vertex AI.';
   }
   return 'Saved in the encrypted Empyralis vault for this workspace.';
+}
+
+function openAiCodexCredentialLabel(result: OpenAiCodexOauthResult): string {
+  const email = String(result.email || '').trim();
+  return email ? `ChatGPT / Codex (${email})` : 'ChatGPT / Codex';
 }
 
 function profileTone(profile: ProviderProfileRow | null): CSSProperties {
@@ -347,19 +352,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       headers,
       cache: 'no-store',
     });
-  }, []);
-
-  const openExternalTarget = useCallback(async (target: string) => {
-    const url = String(target || '').trim();
-    if (!url) return;
-    const desktopBridge = getDesktopBridge();
-    if (desktopBridge?.openExternal) {
-      const opened = await desktopBridge.openExternal(url).catch(() => false);
-      if (opened) return;
-    }
-    if (typeof window !== 'undefined') {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
   }, []);
 
   const selectedProviderOption = useMemo(
@@ -1067,6 +1059,136 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [controlPlaneFetch, loadLocalOpenAiAuth, loadProviderAccounts, setProviderActionBusy, workspaceId]);
 
+  const removeImportedOpenAiCredentials = useCallback(async (sources: string[]) => {
+    const sourceSet = new Set(sources.map((item) => item.trim().toLowerCase()).filter(Boolean));
+    if (sourceSet.size === 0) return;
+
+    const importedCredentials = providerCredentials.filter((credential) => {
+      if (credential.provider !== 'openai') return false;
+      const importSource = String(credential.metadata?.import_source || '').trim().toLowerCase();
+      return sourceSet.has(importSource);
+    });
+
+    for (const credential of importedCredentials) {
+      const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
+      for (const profile of linkedProfiles) {
+        const profileRes = await controlPlaneFetch(`/api/control-plane/providers/profiles/${encodeURIComponent(profile.id)}`, {
+          method: 'DELETE',
+        });
+        const profileRaw = await profileRes.text().catch(() => '');
+        const profileBody = profileRaw ? JSON.parse(profileRaw) : {};
+        if (!profileRes.ok) {
+          throw new Error(String(profileBody?.detail || profileBody?.message || 'Failed to remove an existing OpenAI runtime profile.'));
+        }
+      }
+      const credentialRes = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credential.id)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
+        method: 'DELETE',
+      });
+      const credentialRaw = await credentialRes.text().catch(() => '');
+      const credentialBody = credentialRaw ? JSON.parse(credentialRaw) : {};
+      if (!credentialRes.ok) {
+        throw new Error(String(credentialBody?.detail || credentialBody?.message || 'Failed to remove an existing OpenAI account.'));
+      }
+    }
+  }, [controlPlaneFetch, providerCredentials, providerProfilesByCredential, workspaceId]);
+
+  const handleOpenAiCodexOauthSignIn = useCallback(async () => {
+    const desktopBridge = getDesktopBridge();
+    if (!desktopBridge?.openaiCodexOauthLogin) {
+      setProviderError('Sign in with ChatGPT is available in the Empyralis desktop app.');
+      return;
+    }
+
+    setProviderActionBusy('openai-codex-oauth', 'login');
+    setProviderError('');
+    setProviderNotice('');
+    setLastConnectedAccountLabel('');
+
+    try {
+      const result = await desktopBridge.openaiCodexOauthLogin();
+      const accessToken = String(result?.access_token || '').trim();
+      const refreshToken = String(result?.refresh_token || '').trim();
+      const accountId = String(result?.account_id || '').trim();
+      const email = String(result?.email || '').trim();
+      const profileName = String(result?.profile_name || '').trim();
+      const expiresAt = Number(result?.expires_at || 0);
+
+      if (!accessToken || !refreshToken || !accountId || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+        throw new Error('ChatGPT sign-in did not return a complete OAuth session.');
+      }
+
+      await removeImportedOpenAiCredentials(['openai_codex_oauth', 'codex_auth_file']);
+
+      const label = openAiCodexCredentialLabel(result);
+      const res = await controlPlaneFetch('/api/control-plane/credentials', {
+        method: 'POST',
+        body: JSON.stringify({
+          label,
+          provider: 'openai',
+          workspace_id: workspaceId,
+          mode: 'byok',
+          metadata: {
+            auth_mode: 'oauth_token',
+            import_source: 'openai_codex_oauth',
+            source_label: 'ChatGPT OAuth',
+            account_id: accountId,
+            ...(email ? { email } : {}),
+            ...(profileName ? { profile_name: profileName } : {}),
+            expires_at: expiresAt,
+          },
+          skip_validation: true,
+          credentials: {
+            oauth_token: accessToken,
+            refresh_token: refreshToken,
+            expires_at: expiresAt,
+            account_id: accountId,
+            ...(email ? { email } : {}),
+            ...(profileName ? { profile_name: profileName } : {}),
+            auth_mode: 'oauth_token',
+          },
+        }),
+      });
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to save ChatGPT OAuth account.'));
+      }
+
+      const credentialId = typeof body?.id === 'string' ? body.id : '';
+      const credential: ProviderCredentialRow = {
+        id: credentialId,
+        label,
+        provider: 'openai',
+        authMode: 'oauth_token',
+        metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata as Record<string, unknown> : {},
+      };
+      if (credentialId) {
+        await upsertRuntimeProfileForCredential(
+          credential,
+          null,
+          true,
+          defaultProviderModel('openai', 'oauth_token', providerOptions),
+        );
+      }
+
+      await loadProviderAccounts();
+      setLastConnectedAccountLabel(label);
+      setProviderNotice('ChatGPT / Codex connected and ready.');
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : 'Failed to complete ChatGPT sign-in.');
+    } finally {
+      setProviderActionBusy('openai-codex-oauth', null);
+    }
+  }, [
+    controlPlaneFetch,
+    loadProviderAccounts,
+    providerOptions,
+    removeImportedOpenAiCredentials,
+    setProviderActionBusy,
+    upsertRuntimeProfileForCredential,
+    workspaceId,
+  ]);
+
   return (
     <>
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12, padding: '14px 16px' }}>
@@ -1079,10 +1201,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           }}
         >
           <div style={{ display: 'grid', gap: 3 }}>
-            <div className="orion-panel-title">{connectMode ? 'Connected providers' : 'AI accounts'}</div>
+            <div className="orion-panel-title">{connectMode ? 'Connect a provider' : 'AI accounts'}</div>
             <div className="orion-panel-copy">
               {connectMode
-                ? 'Connect a direct provider once. Chat, agents, and workflows can reuse it immediately.'
+                ? 'Use a direct provider key, or reuse the OpenAI / Codex session already on this Mac.'
                 : 'Connect direct provider accounts here, then decide which one the runtime should use by default.'}
             </div>
           </div>
@@ -1091,17 +1213,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               <RefreshCw size={14} />
               Refresh
             </button>
-            {connectMode ? (
-              <button
-                type="button"
-                className="orion-btn orion-btn-secondary"
-                style={{ minHeight: 38, paddingInline: 14 }}
-                onClick={() => void openExternalTarget(String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login'))}
-              >
-                <ShieldCheck size={14} />
-                Sign in with ChatGPT
-              </button>
-            ) : null}
             <button
               className="orion-btn orion-btn-primary"
               style={{ minHeight: 38, paddingInline: 14 }}
@@ -1174,7 +1285,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div style={{ display: 'grid', gap: 3 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700 }}>OpenAI / Codex on this Mac</div>
               <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                {localOpenAiAuth?.detail || 'Sign in with ChatGPT or Codex in your browser, then import that local session here without pasting a token.'}
+                Sign in with ChatGPT to connect a fresh OAuth session directly, or reuse the local OpenAI / Codex session already saved on this Mac.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1182,9 +1293,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 type="button"
                 className="orion-btn orion-btn-secondary"
                 style={{ minHeight: 36, paddingInline: 14 }}
-                onClick={() => void openExternalTarget(String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login'))}
+                disabled={providerBusy['openai-codex-oauth'] === 'login'}
+                onClick={() => void handleOpenAiCodexOauthSignIn()}
               >
-                Sign in with ChatGPT
+                {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
               </button>
               <button
                 type="button"
@@ -1201,66 +1313,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               </button>
             </div>
             <div style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-              This reuses the local OpenAI / Codex session already saved on this machine. App sign-in and AI provider access stay separate.
-            </div>
-          </div>
-        ) : null}
-
-        {connectMode && runtimeAvailability.length > 0 ? (
-          <div
-            style={{
-              display: 'grid',
-              gap: 10,
-              borderRadius: 14,
-              border: '1px solid var(--success-border)',
-              background: 'var(--success-bg)',
-              color: 'var(--success-fg)',
-              padding: '12px 14px',
-            }}
-          >
-            <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Runtime accounts on this machine</div>
-              <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-                Ready items can run immediately through the workspace runtime. Attention items were detected on this machine, but should not be treated as a launch-ready provider connection yet.
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
-              {runtimeAvailability.map((item) => (
-                <article
-                  key={`runtime:${item.provider}:${item.source}`}
-                  style={{
-                    display: 'grid',
-                    gap: 8,
-                    borderRadius: 14,
-                    border: `1px solid ${item.ready ? 'var(--success-border)' : 'var(--warning-border)'}`,
-                    background: item.ready ? 'rgba(255,255,255,0.55)' : 'var(--warning-bg)',
-                    color: item.ready ? 'var(--success-fg)' : 'var(--warning-fg)',
-                    padding: '10px 12px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-                    <div style={{ display: 'grid', gap: 2 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{item.label}</div>
-                      <div style={{ fontSize: 12 }}>{item.source_label}</div>
-                    </div>
-                    <span className="orion-chip">{item.ready ? 'Ready' : 'Needs attention'}</span>
-                  </div>
-                  <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{item.detail}</div>
-                </article>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Link href="/setup" className="orion-btn orion-btn-primary" style={{ minHeight: 36, paddingInline: 14 }}>
-                Use workspace runtime
-              </Link>
-              <button
-                type="button"
-                className="orion-btn orion-btn-ghost"
-                style={{ minHeight: 36, paddingInline: 14 }}
-                onClick={() => router.push(returnTo)}
-              >
-                Back to chat
-              </button>
+              ChatGPT sign-in uses a real OAuth browser flow in the desktop app. The local-session import remains as a fallback if you already have Codex signed in on this machine.
             </div>
           </div>
         ) : null}
@@ -1311,10 +1364,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           >
             <div style={{ display: 'grid', gap: 3 }}>
               <div style={{ fontSize: 13.5, fontWeight: 700 }}>
-                {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} is ready` : 'AI provider ready'}
+                {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} connected` : 'AI provider connected'}
               </div>
               <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-                Return to chat and start your first task. You can manage runtime order later from Settings.
+                Return to chat and continue. You can manage provider order later from Integrations if you need to.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1325,9 +1378,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               >
                 Start chatting
               </button>
-              <Link href="/credentials" className="orion-btn orion-btn-ghost" style={{ minHeight: 36, paddingInline: 14 }}>
-                Manage accounts
-              </Link>
             </div>
           </div>
         ) : null}
@@ -1359,7 +1409,13 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         ) : (
           <div style={{ display: 'grid', gap: 12 }}>
             {providerCredentials.length > 0 ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+              <div
+                style={
+                  connectMode
+                    ? { display: 'grid', gap: 10 }
+                    : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }
+                }
+              >
                 {providerCredentials.map((credential) => {
                   const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
                   const primaryProfile = linkedProfiles.find((item) => item.enabled || item.health === 'cooldown') || linkedProfiles[0] || null;
@@ -1373,10 +1429,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       style={{
                         display: 'grid',
                         gap: 10,
-                        borderRadius: 16,
+                        borderRadius: connectMode ? 14 : 16,
                         border: '1px solid var(--border-subtle)',
                         background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 84%, transparent 16%), var(--bg-surface))',
-                        padding: 12,
+                        padding: connectMode ? '12px 14px' : 12,
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -1417,32 +1473,45 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       )}
 
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 34, paddingInline: 12 }}
-                          onClick={() => void handleTestProviderCredential(credential)}
-                          disabled={Boolean(busyAction)}
-                        >
-                          <ShieldCheck size={13} />
-                          {busyAction === 'test' ? 'Testing…' : 'Test'}
-                        </button>
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 34, paddingInline: 12 }}
-                          onClick={() => void handleToggleProviderProfile(credential, primaryProfile)}
-                          disabled={Boolean(busyAction)}
-                        >
-                          {primaryProfile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
-                          {busyAction === 'disable-runtime'
-                            ? 'Disabling…'
-                            : busyAction === 'enable-runtime'
-                              ? 'Enabling…'
-                              : primaryProfile?.enabled
-                                ? 'Disable runtime'
-                                : primaryProfile
-                                  ? 'Enable runtime'
-                                : 'Use in runtime'}
-                        </button>
+                        {connectMode ? (
+                          <button
+                            className="orion-btn orion-btn-primary"
+                            style={{ minHeight: 34, paddingInline: 12 }}
+                            onClick={() => router.push(returnTo)}
+                          >
+                            Use this account
+                          </button>
+                        ) : null}
+                        {!connectMode ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 34, paddingInline: 12 }}
+                            onClick={() => void handleTestProviderCredential(credential)}
+                            disabled={Boolean(busyAction)}
+                          >
+                            <ShieldCheck size={13} />
+                            {busyAction === 'test' ? 'Testing…' : 'Test'}
+                          </button>
+                        ) : null}
+                        {!connectMode ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 34, paddingInline: 12 }}
+                            onClick={() => void handleToggleProviderProfile(credential, primaryProfile)}
+                            disabled={Boolean(busyAction)}
+                          >
+                            {primaryProfile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
+                            {busyAction === 'disable-runtime'
+                              ? 'Disabling…'
+                              : busyAction === 'enable-runtime'
+                                ? 'Enabling…'
+                                : primaryProfile?.enabled
+                                  ? 'Disable runtime'
+                                  : primaryProfile
+                                    ? 'Enable runtime'
+                                    : 'Use in runtime'}
+                          </button>
+                        ) : null}
                         {primaryProfile && !isDefaultProfile && !connectMode ? (
                           <button
                             className="orion-btn orion-btn-ghost"
@@ -1464,15 +1533,17 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             {providerBusy[primaryProfile.id] === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
                           </button>
                         ) : null}
-                        <button
-                          className="orion-btn orion-btn-danger"
-                          style={{ minHeight: 34, paddingInline: 12 }}
-                          onClick={() => void handleRemoveProviderCredential(credential)}
-                          disabled={Boolean(busyAction)}
-                        >
-                          <Trash2 size={13} />
-                          {busyAction === 'remove' ? 'Removing…' : 'Remove'}
-                        </button>
+                        {!connectMode ? (
+                          <button
+                            className="orion-btn orion-btn-danger"
+                            style={{ minHeight: 34, paddingInline: 12 }}
+                            onClick={() => void handleRemoveProviderCredential(credential)}
+                            disabled={Boolean(busyAction)}
+                          >
+                            <Trash2 size={13} />
+                            {busyAction === 'remove' ? 'Removing…' : 'Remove'}
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   );
@@ -1650,7 +1721,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           <div
             className="orion-panel"
             style={{
-              width: 'min(1120px, calc(100vw - 48px))',
+              width: connectMode ? 'min(820px, calc(100vw - 48px))' : 'min(1120px, calc(100vw - 48px))',
               maxHeight: 'calc(100vh - 48px)',
               overflow: 'auto',
               display: 'grid',
@@ -1960,8 +2031,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             >
               <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
                 {connectMode
-                  ? 'Connect one provider now. You can change runtime order later in Settings.'
-                  : 'One centered account flow, then back to the Integrations page.'}
+                  ? 'Connect a provider here, then return to chat.'
+                  : 'Save the account here, then continue managing runtime order from Integrations.'}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button

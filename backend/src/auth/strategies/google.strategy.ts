@@ -34,7 +34,11 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         if (!this.enabled) {
             return this.fail({ message: 'Google sign-in is not configured.' }, 503);
         }
-        return super.authenticate(req, options);
+        const requestState = String(req?.query?.state || '').trim();
+        const nextOptions = requestState
+            ? { ...(options || {}), state: requestState }
+            : options;
+        return super.authenticate(req, nextOptions);
     }
 
     async validate(

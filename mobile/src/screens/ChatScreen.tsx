@@ -267,10 +267,11 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
       } as AgentPayload);
       setRunActivity([]);
     } catch (err) {
-      console.error(err);
+      const message = err instanceof Error ? err.message : "Could not reach the agent. Check the server connection.";
+      console.warn("Chat request failed:", message);
       setFailedMessageIndex(nextUserMessageIndex);
       setRunActivity([]);
-      showBanner("Could not reach the agent. Check the server connection.", "error");
+      showBanner(message, "error");
     } finally {
       setIsLoading(false);
     }

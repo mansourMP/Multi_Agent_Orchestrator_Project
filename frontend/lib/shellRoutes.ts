@@ -138,6 +138,13 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     match: (pathname: string) => pathname === '/settings',
   },
   {
+    id: 'machines',
+    title: 'Machines',
+    breadcrumb: 'Settings',
+    slotLabel: 'Local machine status and runtime controls',
+    match: (pathname: string) => pathname === '/machines',
+  },
+  {
     id: 'capabilities',
     title: 'Capabilities',
     breadcrumb: 'Admin',
@@ -146,8 +153,8 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
   },
   {
     id: 'account',
-    title: 'Account',
-    breadcrumb: 'Account',
+    title: 'Profile',
+    breadcrumb: 'Settings',
     slotLabel: 'Identity and profile',
     match: (pathname: string) => pathname === '/account',
   },

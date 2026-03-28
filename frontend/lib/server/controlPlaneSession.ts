@@ -37,6 +37,7 @@ type PendingControlPlaneOauth = {
   state: string;
   returnTo: string;
   desktopMode?: boolean;
+  exp?: number;
 };
 
 type PendingDesktopControlPlaneAuth = {
@@ -124,6 +125,15 @@ function desktopAuthHandoffPath(): string {
   return path.join(controlPlaneRepoRoot(), '.orion-stack', 'control-plane-auth-handoff.json');
 }
 
+function pendingControlPlaneOauthDir(): string {
+  return path.join(controlPlaneRepoRoot(), '.orion-stack', 'control-plane-oauth');
+}
+
+function pendingControlPlaneOauthPath(state: string): string {
+  const key = createHash('sha256').update(String(state || '').trim()).digest('hex');
+  return path.join(pendingControlPlaneOauthDir(), `${key}.json`);
+}
+
 async function controlPlaneSessionSecret(): Promise<string> {
   const configured = String(process.env.ORION_CONTROL_PLANE_SESSION_SECRET || '').trim();
   if (configured) return configured;
@@ -150,11 +160,52 @@ function decodePendingOauth(raw: string): PendingControlPlaneOauth | null {
     const parsed = JSON.parse(base64UrlDecode(raw)) as PendingControlPlaneOauth;
     const state = String(parsed.state || '').trim();
     const returnTo = sanitizeReturnTo(String(parsed.returnTo || '').trim());
+    const exp = Number(parsed.exp || 0);
     if (!state) return null;
-    return { state, returnTo, desktopMode: Boolean(parsed.desktopMode) };
+    if (Number.isFinite(exp) && exp > 0 && exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return { state, returnTo, desktopMode: Boolean(parsed.desktopMode), exp };
   } catch {
     return null;
   }
+}
+
+async function writePendingControlPlaneOauth(payload: PendingControlPlaneOauth): Promise<void> {
+  const targetPath = pendingControlPlaneOauthPath(payload.state);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+}
+
+async function readPendingControlPlaneOauthFile(state: string): Promise<PendingControlPlaneOauth | null> {
+  const normalizedState = String(state || '').trim();
+  if (!normalizedState) return null;
+  const targetPath = pendingControlPlaneOauthPath(normalizedState);
+  let raw = '';
+  try {
+    raw = await fs.readFile(targetPath, 'utf8');
+  } catch {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PendingControlPlaneOauth;
+    const pending = decodePendingOauth(base64UrlEncode(JSON.stringify(parsed)));
+    if (!pending || pending.state !== normalizedState) {
+      await fs.unlink(targetPath).catch(() => undefined);
+      return null;
+    }
+    return pending;
+  } catch {
+    await fs.unlink(targetPath).catch(() => undefined);
+    return null;
+  }
+}
+
+async function clearPendingControlPlaneOauthFile(state: string): Promise<void> {
+  const normalizedState = String(state || '').trim();
+  if (!normalizedState) return;
+  await fs.unlink(pendingControlPlaneOauthPath(normalizedState)).catch(() => undefined);
 }
 
 async function writePendingDesktopControlPlaneAuth(
@@ -211,7 +262,12 @@ function decodeBearerPayloadSegment(token: string): Record<string, unknown> {
 }
 
 function parseBearerClaims(token: string): { sub: string; email: string | null; exp: number } | Response {
-  const payload = decodeBearerPayloadSegment(token);
+  let payload: Record<string, unknown>;
+  try {
+    payload = decodeBearerPayloadSegment(token);
+  } catch {
+    return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
+  }
   const sub = String(payload.sub || '').trim();
   const exp = Number(payload.exp || 0);
   const email = String(payload.email || '').trim().toLowerCase() || null;
@@ -529,13 +585,14 @@ export function controlPlaneAuthProviders() {
   };
 }
 
-export function issuePendingControlPlaneOauthRedirect(
+export async function issuePendingControlPlaneOauthRedirect(
   request: NextRequest,
   startUrl: string,
   returnTo: string,
   options?: { desktopMode?: boolean },
-): NextResponse {
+): Promise<NextResponse> {
   const state = randomUUID();
+  const exp = Math.floor(Date.now() / 1000) + (60 * 10);
   const nextUrl = new URL(startUrl);
   nextUrl.searchParams.set('state', state);
   const response = NextResponse.redirect(nextUrl);
@@ -545,6 +602,7 @@ export function issuePendingControlPlaneOauthRedirect(
       state,
       returnTo: sanitizeReturnTo(returnTo),
       desktopMode: Boolean(options?.desktopMode),
+      exp,
     }),
     httpOnly: true,
     sameSite: 'lax',
@@ -552,17 +610,41 @@ export function issuePendingControlPlaneOauthRedirect(
     path: '/',
     maxAge: 60 * 10,
   });
+  await writePendingControlPlaneOauth({
+    state,
+    returnTo: sanitizeReturnTo(returnTo),
+    desktopMode: Boolean(options?.desktopMode),
+    exp,
+  });
   return response;
 }
 
-export function readPendingControlPlaneOauth(request: NextRequest): PendingControlPlaneOauth | null {
+export async function readPendingControlPlaneOauth(
+  request: NextRequest,
+  stateHint?: string,
+): Promise<PendingControlPlaneOauth | null> {
   const token = request.cookies.get(CONTROL_PLANE_OAUTH_COOKIE)?.value || '';
-  if (!token) return null;
-  return decodePendingOauth(token);
+  const cookiePending = token ? decodePendingOauth(token) : null;
+  const normalizedStateHint = String(stateHint || '').trim();
+  if (cookiePending && (!normalizedStateHint || cookiePending.state === normalizedStateHint)) {
+    return cookiePending;
+  }
+  if (!normalizedStateHint) {
+    return cookiePending;
+  }
+  return readPendingControlPlaneOauthFile(normalizedStateHint);
 }
 
-export function clearPendingControlPlaneOauth(response: NextResponse, request: NextRequest) {
+export async function clearPendingControlPlaneOauth(
+  response: NextResponse,
+  request: NextRequest,
+  stateHint?: string,
+): Promise<void> {
+  const token = request.cookies.get(CONTROL_PLANE_OAUTH_COOKIE)?.value || '';
+  const cookiePending = token ? decodePendingOauth(token) : null;
   clearCookie(response, request, CONTROL_PLANE_OAUTH_COOKIE);
+  await clearPendingControlPlaneOauthFile(cookiePending?.state || '');
+  await clearPendingControlPlaneOauthFile(String(stateHint || '').trim());
 }
 
 export async function issueDesktopControlPlaneAuthHandoff(

@@ -2,10 +2,20 @@
 
 import { useEffect, useState } from 'react';
 
+export type OpenAiCodexOauthResult = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  account_id: string;
+  email?: string | null;
+  profile_name?: string | null;
+};
+
 export type DesktopBridge = {
   desktop?: boolean;
   platform?: string;
   openExternal?: (target: string) => Promise<boolean | string>;
+  openaiCodexOauthLogin?: () => Promise<OpenAiCodexOauthResult>;
 };
 
 export function getDesktopBridge(): DesktopBridge | null {

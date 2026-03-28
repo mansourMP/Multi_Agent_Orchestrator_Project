@@ -1,7 +1,5 @@
-'use client';
-
-import { AutopilotWorkspace } from '../page';
+import { redirect } from 'next/navigation';
 
 export default function AdvancedWorkspacePage() {
-  return <AutopilotWorkspace experience="simple" />;
+  redirect('/');
 }

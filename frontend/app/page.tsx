@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CoreControlCenter } from '@/components/solutions/CoreControlCenter';
 import {
   AGENT_ROLE_OPTIONS,
   BUSINESS_PRESETS,
@@ -333,7 +332,7 @@ function createWorkbenchChatId(prefix: string): string {
 }
 
 export default function AutopilotHome() {
-  return <CoreControlCenter />;
+  return <AutopilotWorkspace experience="simple" />;
 }
 
 function normalizeRepeatedMessageContent(value: string): string {
@@ -1731,24 +1730,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [connectionMode, derivedSetupReady, provider, providerOptions, selectedChatMessages, setupStatus.accountConnected, setupStatus.connectionTested, topError]);
   const inlineSimpleChatAction = useMemo(() => {
     if (!setupStatus.accountConnected) {
-      if (connectionMode === 'managed') {
-        return {
-          label: 'Open setup →',
-          href: '/setup',
-        };
-      }
       return {
         label: 'Connect AI account →',
         href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {
-      if (connectionMode === 'managed') {
-        return {
-          label: 'Verify runtime account →',
-          href: '/setup',
-        };
-      }
       return {
         label: 'Verify AI account →',
         href: '/connect-ai',
@@ -1762,24 +1749,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [connectionMode, derivedSetupReady, setupStatus.accountConnected, setupStatus.connectionTested]);
   const emptySimpleChatAction = useMemo(() => {
     if (!setupStatus.accountConnected) {
-      if (connectionMode === 'managed') {
-        return {
-          label: 'Open setup',
-          href: '/setup',
-        };
-      }
       return {
         label: 'Connect AI account',
         href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {
-      if (connectionMode === 'managed') {
-        return {
-          label: 'Verify runtime account',
-          href: '/setup',
-        };
-      }
       return {
         label: 'Verify AI account',
         href: '/connect-ai',

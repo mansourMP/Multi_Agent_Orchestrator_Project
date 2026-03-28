@@ -148,6 +148,9 @@ def _telegram_looks_like_space_question(text: str) -> bool:
     return normalized.startswith("is the ") or normalized.startswith("how many ")
 
 
+ORION_TELEGRAM_SPACE_STATUS_ENABLED = os.getenv("ORION_TELEGRAM_SPACE_STATUS_ENABLED", "0") == "1"
+
+
 def _telegram_resolve_space_id(question: str) -> Optional[str]:
     normalized = f" {str(question or '').strip().lower()} "
     catalog = _telegram_space_catalog()
@@ -217,6 +220,8 @@ def _telegram_render_space_answer(question: str, state: Dict[str, Any], space_id
 
 
 def _telegram_space_question_via_mcp(question: str) -> Dict[str, Any]:
+    if not ORION_TELEGRAM_SPACE_STATUS_ENABLED:
+        return {"handled": False, "response": ""}
     if not _telegram_looks_like_space_question(question):
         return {"handled": False, "response": ""}
     space_id = _telegram_resolve_space_id(question)
@@ -3356,7 +3361,7 @@ def _telegram_send_message(
     reply_markup: Optional[Dict[str, Any]] = None,
     trace_id: Optional[str] = None,
     source_event_id: Optional[str] = None,
-):
+) -> str:
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -3414,6 +3419,99 @@ def _telegram_send_message(
             "delivery_transport": "telegram_sendMessage",
         },
     )
+    return sent_message_id
+
+
+def _telegram_send_chat_action(bot_token: str, chat_id: str, action: str = "typing") -> None:
+    try:
+        _telegram_api_request(
+            bot_token,
+            "sendChatAction",
+            payload={
+                "chat_id": chat_id,
+                "action": action,
+            },
+        )
+    except Exception:
+        return
+
+
+def _telegram_edit_message(
+    bot_token: str,
+    chat_id: str,
+    message_id: Any,
+    text: str,
+    *,
+    workspace_id: Optional[str] = None,
+    action: Optional[str] = None,
+    run_id: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    parent_message_id: Optional[Any] = None,
+    profile: Optional[Dict[str, Any]] = None,
+    include_keyboard: bool = True,
+    reply_markup: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    source_event_id: Optional[str] = None,
+) -> bool:
+    message_token = str(message_id or "").strip()
+    if not message_token:
+        return False
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_token) if message_token.isdigit() else message_token,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if isinstance(reply_markup, dict) and reply_markup:
+        payload["reply_markup"] = reply_markup
+    elif include_keyboard and isinstance(profile, dict):
+        default_keyboard = _telegram_reply_keyboard(profile)
+        if default_keyboard:
+            payload["reply_markup"] = default_keyboard
+    resolved_trace_id = str(trace_id or "").strip()
+    if not resolved_trace_id:
+        resolved_trace_id = f"tg-edit:{_telegram_safe_path_token(chat_id)}:{str(uuid.uuid4())[:10]}"
+    try:
+        _telegram_api_request(bot_token, "editMessageText", payload=payload)
+    except Exception as exc:
+        _append_channel_dead_letter(
+            channel="telegram",
+            direction="outbound",
+            event_type="message_edit",
+            reason=str(exc),
+            text=text,
+            workspace_id=str(workspace_id or ""),
+            session_key=_telegram_session_key(chat_id),
+            run_id=str(run_id or ""),
+            action=str(action or ""),
+            connector_id=str(connector_id or ""),
+            trace_id=resolved_trace_id,
+            source_event_id=str(source_event_id or "").strip(),
+            metadata={"transport": "telegram_editMessageText", "message_id": message_token},
+        )
+        return False
+    session_key = _telegram_session_key(chat_id)
+    _record_channel_event(
+        channel="telegram",
+        direction="outbound",
+        event_type="message_edit",
+        text=text,
+        workspace_id=workspace_id,
+        session_key=session_key,
+        session_id=session_key,
+        message_id=message_token or None,
+        parent_id=str(parent_message_id or "").strip() or None,
+        run_id=run_id,
+        action=action,
+        metadata={
+            "connector_id": str(connector_id or "").strip(),
+            "trace_id": resolved_trace_id,
+            "source_event_id": str(source_event_id or "").strip(),
+            "delivery_status": "sent",
+            "delivery_transport": "telegram_editMessageText",
+        },
+    )
+    return True
 
 
 def _chat_id_from_session_key(session_key: str) -> str:
@@ -4806,16 +4904,18 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                             connector_context=connector_context,
                         )
                         run_id = str(run_info.get("run_id") or "")
+                        pending_message_id = ""
                         if run_id and ORION_TELEGRAM_AUTOPILOT_SEND_ACK:
-                            ack_text = "⏣ Empyralis started your request."
+                            _telegram_send_chat_action(bot_token, chat_id, action="typing")
+                            ack_text = "Thinking..."
                             if _autopilot_include_run_meta():
                                 ack_text += f"\nrun_id: {run_id}"
-                            _telegram_send_message(
+                            pending_message_id = _telegram_send_message(
                                 bot_token,
                                 chat_id,
                                 ack_text,
                                 workspace_id=workspace_id,
-                                action=action,
+                                action="thinking",
                                 run_id=run_id,
                                 connector_id=connector_id,
                                 parent_message_id=inbound_message_id or None,
@@ -4827,6 +4927,7 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                         result = _wait_for_run_terminal_status(run_id)
                         status = str(result.get("status") or "").lower()
                         summary = _truncate_one_line(str(result.get("summary") or "Run finished."), ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS)
+                        final_reply = _autopilot_run_reply_text(status, run_id, summary)
                         _record_channel_event(
                             channel="telegram",
                             direction="system",
@@ -4845,19 +4946,36 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                                 "source_event_id": source_event_id,
                             },
                         )
-                        _telegram_send_message(
-                            bot_token,
-                            chat_id,
-                            _autopilot_run_reply_text(status, run_id, summary),
-                            workspace_id=workspace_id,
-                            action=action,
-                            run_id=run_id,
-                            connector_id=connector_id,
-                            parent_message_id=inbound_message_id or None,
-                            profile=profile,
-                            trace_id=trace_id,
-                            source_event_id=source_event_id,
-                        )
+                        edited = False
+                        if pending_message_id:
+                            edited = _telegram_edit_message(
+                                bot_token,
+                                chat_id,
+                                pending_message_id,
+                                final_reply,
+                                workspace_id=workspace_id,
+                                action=action,
+                                run_id=run_id,
+                                connector_id=connector_id,
+                                parent_message_id=inbound_message_id or None,
+                                profile=profile,
+                                trace_id=trace_id,
+                                source_event_id=source_event_id,
+                            )
+                        if not edited:
+                            _telegram_send_message(
+                                bot_token,
+                                chat_id,
+                                final_reply,
+                                workspace_id=workspace_id,
+                                action=action,
+                                run_id=run_id,
+                                connector_id=connector_id,
+                                parent_message_id=inbound_message_id or None,
+                                profile=profile,
+                                trace_id=trace_id,
+                                source_event_id=source_event_id,
+                            )
             else:
                 _telegram_send_message(
                     bot_token,

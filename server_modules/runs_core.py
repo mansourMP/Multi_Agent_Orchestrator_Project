@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+import sys
 from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
@@ -286,7 +287,7 @@ _runtime_services_initialized = False
 
 
 def initialize_runtime_services() -> None:
-    global _runtime_services_initialized
+    global _runtime_services_initialized, TELEGRAM_AUTOPILOT_THREAD
     if _runtime_services_initialized:
         return
     init_runtime_state_db(ORION_RUNTIME_STATE_DB)
@@ -307,8 +308,13 @@ def initialize_runtime_services() -> None:
         _scheduler_thread = threading.Thread(target=_run_weekly_scheduler_forever, daemon=True)
         _scheduler_thread.start()
     if ORION_TELEGRAM_AUTOPILOT_ENABLED:
-        TELEGRAM_AUTOPILOT_THREAD = threading.Thread(target=_run_telegram_autopilot_forever, daemon=True)
-        TELEGRAM_AUTOPILOT_THREAD.start()
+        telegram_thread = threading.Thread(target=_run_telegram_autopilot_forever, daemon=True)
+        TELEGRAM_AUTOPILOT_THREAD = telegram_thread
+        shared.TELEGRAM_AUTOPILOT_THREAD = telegram_thread
+        server_module = sys.modules.get("server")
+        if server_module is not None:
+            setattr(server_module, "TELEGRAM_AUTOPILOT_THREAD", telegram_thread)
+        telegram_thread.start()
     if ORION_WHATSAPP_AUTOPILOT_ENABLED:
         _whatsapp_autopilot_activate()
     _runtime_services_initialized = True

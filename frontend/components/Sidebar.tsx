@@ -8,11 +8,9 @@ import {
   PanelLeft,
   Workflow,
   Activity,
-  Server,
   Key,
   MessageSquare,
   Settings,
-  UserRound,
 } from 'lucide-react';
 import { useSidebarCollapsed } from '@/lib/useSidebarCollapsed';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
@@ -36,12 +34,10 @@ const PRIMARY_NAV: NavItem[] = [
   { label: 'Workflows', href: '/workflows', icon: Workflow },
   { label: 'Runs', href: '/executions', icon: Activity },
   { label: 'Integrations', href: '/credentials', icon: Key },
-  { label: 'Machines', href: '/machines', icon: Server },
 ];
 
 const BOTTOM_NAV: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings },
-  { label: 'Profile', href: '/account', icon: UserRound },
 ];
 
 const HOME_NAV_ITEM: NavItem = { label: 'Home', href: '/home', icon: Home };
@@ -52,7 +48,7 @@ function isActivePath(pathname: string, href: string): boolean {
   if (href === '/agents') return pathname === '/agents' || pathname === '/builder' || pathname.startsWith('/builder/');
   if (href === '/workflows') return pathname === '/workflows' || pathname.startsWith('/workflows/');
   if (href === '/executions') return pathname === '/executions' || pathname.startsWith('/runs/');
-  if (href === '/machines') return pathname === '/machines';
+  if (href === '/settings') return pathname === '/settings' || pathname === '/account' || pathname === '/machines';
   return pathname === href;
 }
 

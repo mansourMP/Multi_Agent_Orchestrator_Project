@@ -547,6 +547,7 @@ start_backend() {
 start_frontend() {
   echo "Starting frontend on ${FRONTEND_HOST}:${FRONTEND_PORT} ..."
   (
+    export EMPYRALIS_TAURI_DESKTOP=1
     export NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}"
     spawn_detached "${PID_DIR}/frontend.pid" "${LOG_DIR}/frontend.log" "${ROOT_DIR}/frontend" \
       npm run dev -- --hostname "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" >/dev/null

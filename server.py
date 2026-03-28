@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,9 +85,16 @@ docs_url = "/docs" if os.getenv("ENV") == "development" else None
 redoc_url = "/redoc" if os.getenv("ENV") == "development" else None
 openapi_url = "/openapi.json" if os.getenv("ENV") == "development" else None
 
+
+@asynccontextmanager
+async def runtime_app_lifespan(app_instance: FastAPI):
+    runs_core.initialize_runtime_services()
+    async with shared.app_lifespan(app_instance):
+        yield
+
 app = FastAPI(
     title="Empyralis Runtime API",
-    lifespan=shared.app_lifespan,
+    lifespan=runtime_app_lifespan,
     docs_url=docs_url,
     redoc_url=redoc_url,
     openapi_url=openapi_url,
@@ -114,7 +122,3 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(connectors_router)
 app.include_router(builder_router)
-
-@app.on_event("startup")
-async def initialize_runtime_services_on_startup():
-    runs_core.initialize_runtime_services()

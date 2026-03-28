@@ -1,8 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { KeyRound, LogOut } from 'lucide-react';
+import { Cpu, KeyRound, LogOut, UserRound } from 'lucide-react';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
@@ -22,12 +23,13 @@ type ConnectorRow = {
 type AccountProfile = {
   displayName: string;
   email?: string;
-  roleLabel: string;
+  photoUrl?: string;
 };
 
 const DEFAULT_PROFILE: AccountProfile = {
   displayName: 'Account owner',
-  roleLabel: 'Primary account',
+  email: '',
+  photoUrl: '',
 };
 
 function loadStoredProfile(): AccountProfile {
@@ -39,7 +41,7 @@ function loadStoredProfile(): AccountProfile {
     return {
       displayName: typeof saved.displayName === 'string' && saved.displayName.trim() ? saved.displayName.trim() : DEFAULT_PROFILE.displayName,
       email: typeof saved.email === 'string' && saved.email.trim() ? saved.email.trim() : '',
-      roleLabel: typeof saved.roleLabel === 'string' && saved.roleLabel.trim() ? saved.roleLabel.trim() : DEFAULT_PROFILE.roleLabel,
+      photoUrl: typeof saved.photoUrl === 'string' && saved.photoUrl.trim() ? saved.photoUrl.trim() : '',
     };
   } catch {
     return DEFAULT_PROFILE;
@@ -69,9 +71,6 @@ export default function SettingsPage() {
   const [error, setError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
   const profile = useMemo(() => loadStoredProfile(), []);
-  const [displayName, setDisplayName] = useState(profile.displayName);
-  const [email, setEmail] = useState(profile.email || '');
-  const [saveNotice, setSaveNotice] = useState('');
 
   const loadConnectors = useCallback(async () => {
     setLoading(true);
@@ -121,17 +120,6 @@ export default function SettingsPage() {
     }
   }, [router]);
 
-  const handleSaveProfile = useCallback(() => {
-    const nextProfile: AccountProfile = {
-      displayName: displayName.trim() || DEFAULT_PROFILE.displayName,
-      email: email.trim(),
-      roleLabel: profile.roleLabel,
-    };
-    window.localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(nextProfile));
-    setSaveNotice('Saved');
-    window.setTimeout(() => setSaveNotice(''), 1600);
-  }, [displayName, email, profile.roleLabel]);
-
   return (
     <div className="orion-page-shell orion-animate-in">
       <PageHero
@@ -147,8 +135,8 @@ export default function SettingsPage() {
                   <div className="orion-home-side-note">Connected tools</div>
                 </div>
                 <div>
-                  <div className="orion-home-side-value">{profile.roleLabel}</div>
-                  <div className="orion-home-side-note">Account role</div>
+                  <div className="orion-home-side-value">{profile.displayName}</div>
+                  <div className="orion-home-side-note">Profile</div>
                 </div>
               </div>
             </PageHeroCard>
@@ -156,27 +144,37 @@ export default function SettingsPage() {
         }
       />
 
-      <PageSection title="Account" description="Workspace owner details stored on this device.">
-        <div style={{ display: 'grid', gap: 16 }}>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span className="orion-panel-copy" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Name</span>
-            <input className="orion-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-          </label>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span className="orion-panel-copy" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Email</span>
-            <input
-              className="orion-input"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="No email available"
-            />
-          </label>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, alignItems: 'center' }}>
-            {saveNotice ? <span className="orion-panel-copy">{saveNotice}</span> : null}
-            <button type="button" className="btn-primary" onClick={handleSaveProfile}>
-              Save
-            </button>
+      <PageSection title="Profile" description="Open profile details and account preferences.">
+        <div className="orion-list-row">
+          <div className="orion-list-row-main">
+            <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <UserRound size={14} />
+              {profile.displayName}
+            </div>
+            <div className="orion-list-row-subtitle">
+              {profile.email?.trim() || 'No signed-in email available'}
+            </div>
           </div>
+          <Link href="/account" className="orion-btn orion-btn-secondary" style={{ minHeight: 34, paddingInline: 14 }}>
+            Open profile
+          </Link>
+        </div>
+      </PageSection>
+
+      <PageSection title="Machines" description="Open local machine status and runtime controls.">
+        <div className="orion-list-row">
+          <div className="orion-list-row-main">
+            <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <Cpu size={14} />
+              Local machine and runtime
+            </div>
+            <div className="orion-list-row-subtitle">
+              Inspect availability, queue pressure, and runtime capability state.
+            </div>
+          </div>
+          <Link href="/machines" className="orion-btn orion-btn-secondary" style={{ minHeight: 34, paddingInline: 14 }}>
+            Open machines
+          </Link>
         </div>
       </PageSection>
 

@@ -19,5 +19,5 @@ export async function GET(request: NextRequest) {
   const returnTo = sanitizeReturnTo(request.nextUrl.searchParams.get('returnTo') || '/');
   const desktopMode = request.nextUrl.searchParams.get('desktop') === '1';
   const backendStartUrl = `${CONTROL_PLANE_BACKEND_URL}/auth/apple`;
-  return issuePendingControlPlaneOauthRedirect(request, backendStartUrl, returnTo, { desktopMode });
+  return await issuePendingControlPlaneOauthRedirect(request, backendStartUrl, returnTo, { desktopMode });
 }

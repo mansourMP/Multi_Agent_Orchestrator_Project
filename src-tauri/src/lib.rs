@@ -1,12 +1,21 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use rand::{rngs::OsRng, RngCore};
+use serde::Serialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use url::Url;
 
 const RUNTIME_HOST: &str = "127.0.0.1";
 const RUNTIME_PORT: &str = "8001";
@@ -20,6 +29,14 @@ const WORKER_ID: &str = "empyralis-tauri-local";
 const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WORKER_BOOT_GRACE: Duration = Duration::from_secs(2);
+const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const OPENAI_CODEX_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
+const OPENAI_CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const OPENAI_CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+const OPENAI_CODEX_SCOPE: &str = "openid profile email offline_access";
+const OPENAI_CODEX_JWT_AUTH_CLAIM_PATH: &str = "https://api.openai.com/auth";
+const OPENAI_CODEX_JWT_PROFILE_CLAIM_PATH: &str = "https://api.openai.com/profile";
+const OPENAI_CODEX_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct DesktopShellLockState {
     lock_path: PathBuf,
@@ -66,6 +83,313 @@ fn open_external(target: String) -> Result<bool, String> {
     }
 
     Ok(true)
+}
+
+#[derive(Serialize)]
+struct OpenAiCodexOauthResult {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+    account_id: String,
+    email: Option<String>,
+    profile_name: Option<String>,
+}
+
+fn base64url_encode(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_pkce_pair() -> (String, String) {
+    let mut verifier_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut verifier_bytes);
+    let verifier = base64url_encode(&verifier_bytes);
+
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let challenge = base64url_encode(&hasher.finalize());
+    (verifier, challenge)
+}
+
+fn oauth_success_html(message: &str) -> String {
+    format!(
+        concat!(
+            "<!doctype html><html lang='en'><head><meta charset='utf-8' />",
+            "<meta name='viewport' content='width=device-width, initial-scale=1' />",
+            "<title>Authentication successful</title>",
+            "<style>",
+            "html{{color-scheme:dark}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;",
+            "padding:24px;background:#09090b;color:#fafafa;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:center}}",
+            "main{{max-width:560px}}h1{{margin:0 0 10px;font-size:28px;line-height:1.15;font-weight:650}}",
+            "p{{margin:0;line-height:1.7;color:#a1a1aa;font-size:15px}}",
+            "</style></head><body><main><h1>Authentication successful</h1><p>{}</p></main></body></html>"
+        ),
+        message
+    )
+}
+
+fn oauth_error_html(message: &str) -> String {
+    format!(
+        concat!(
+            "<!doctype html><html lang='en'><head><meta charset='utf-8' />",
+            "<meta name='viewport' content='width=device-width, initial-scale=1' />",
+            "<title>Authentication failed</title>",
+            "<style>",
+            "html{{color-scheme:dark}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;",
+            "padding:24px;background:#09090b;color:#fafafa;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:center}}",
+            "main{{max-width:560px}}h1{{margin:0 0 10px;font-size:28px;line-height:1.15;font-weight:650}}",
+            "p{{margin:0;line-height:1.7;color:#fca5a5;font-size:15px}}",
+            "</style></head><body><main><h1>Authentication failed</h1><p>{}</p></main></body></html>"
+        ),
+        message
+    )
+}
+
+fn write_http_response(
+    stream: &mut std::net::TcpStream,
+    status_line: &str,
+    html: &str,
+) -> Result<(), String> {
+    let body = html.as_bytes();
+    let response = format!(
+        "{status_line}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .and_then(|_| stream.write_all(body))
+        .map_err(|error| format!("Failed to write OAuth callback response: {error}"))
+}
+
+fn decode_jwt_payload(token: &str) -> Option<Value> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let _signature = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(payload.as_bytes()).ok()?;
+    serde_json::from_slice::<Value>(&decoded).ok()
+}
+
+fn openai_codex_account_id(access_token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(access_token)?;
+    payload
+        .get(OPENAI_CODEX_JWT_AUTH_CLAIM_PATH)?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .map(|value| value.to_string())
+}
+
+fn openai_codex_email(access_token: &str) -> Option<String> {
+    let payload = decode_jwt_payload(access_token)?;
+    payload
+        .get(OPENAI_CODEX_JWT_PROFILE_CLAIM_PATH)?
+        .get("email")?
+        .as_str()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn openai_codex_profile_name(access_token: &str, fallback_email: Option<&str>) -> Option<String> {
+    if let Some(email) = fallback_email {
+        let trimmed = email.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let payload = decode_jwt_payload(access_token)?;
+    let auth = payload.get(OPENAI_CODEX_JWT_AUTH_CLAIM_PATH);
+    let subject = auth
+        .and_then(|value| value.get("chatgpt_account_user_id").and_then(|item| item.as_str()))
+        .or_else(|| auth.and_then(|value| value.get("chatgpt_user_id").and_then(|item| item.as_str())))
+        .or_else(|| auth.and_then(|value| value.get("user_id").and_then(|item| item.as_str())))
+        .or_else(|| payload.get("sub").and_then(|item| item.as_str()))?;
+    Some(format!("id-{}", base64url_encode(subject.as_bytes())))
+}
+
+fn exchange_openai_codex_code(code: &str, verifier: &str) -> Result<OpenAiCodexOauthResult, String> {
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "authorization_code")
+        .append_pair("client_id", OPENAI_CODEX_CLIENT_ID)
+        .append_pair("code", code)
+        .append_pair("code_verifier", verifier)
+        .append_pair("redirect_uri", OPENAI_CODEX_REDIRECT_URI)
+        .finish();
+
+    let mut response = ureq::post(OPENAI_CODEX_TOKEN_URL)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .send(body)
+        .map_err(|error| format!("OpenAI token exchange failed: {error}"))?;
+    let status = response.status().as_u16();
+    let raw = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|error| format!("Failed to read OpenAI token response: {error}"))?;
+    if !(200..300).contains(&status) {
+        let detail = raw.trim();
+        return Err(if detail.is_empty() {
+            format!("OpenAI token exchange failed with status {status}.")
+        } else {
+            format!("OpenAI token exchange failed with status {status}: {detail}")
+        });
+    }
+    let json: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("Invalid OpenAI token response: {error}"))?;
+
+    let access_token = json
+        .get("access_token")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OpenAI token response did not include access_token.".to_string())?;
+    let refresh_token = json
+        .get("refresh_token")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OpenAI token response did not include refresh_token.".to_string())?;
+    let expires_in = json
+        .get("expires_in")
+        .and_then(|value| value.as_i64())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "OpenAI token response did not include a valid expires_in.".to_string())?;
+
+    let account_id = openai_codex_account_id(&access_token)
+        .ok_or_else(|| "Failed to extract ChatGPT account id from OAuth token.".to_string())?;
+    let email = openai_codex_email(&access_token);
+    let profile_name = openai_codex_profile_name(&access_token, email.as_deref());
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0);
+
+    Ok(OpenAiCodexOauthResult {
+        access_token,
+        refresh_token,
+        expires_at: now_ms + expires_in * 1000,
+        account_id,
+        email,
+        profile_name,
+    })
+}
+
+fn run_openai_codex_oauth_flow() -> Result<OpenAiCodexOauthResult, String> {
+    let (verifier, challenge) = generate_pkce_pair();
+    let mut state_bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut state_bytes);
+    let state = base64url_encode(&state_bytes);
+
+    let listener = TcpListener::bind("127.0.0.1:1455")
+        .map_err(|error| format!("Failed to bind OpenAI OAuth callback on localhost:1455: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("Failed to configure OpenAI OAuth callback listener: {error}"))?;
+
+    let mut authorize_url = Url::parse(OPENAI_CODEX_AUTHORIZE_URL)
+        .map_err(|error| format!("Invalid OpenAI authorize URL: {error}"))?;
+    {
+        let mut query = authorize_url.query_pairs_mut();
+        query.append_pair("response_type", "code");
+        query.append_pair("client_id", OPENAI_CODEX_CLIENT_ID);
+        query.append_pair("redirect_uri", OPENAI_CODEX_REDIRECT_URI);
+        query.append_pair("scope", OPENAI_CODEX_SCOPE);
+        query.append_pair("code_challenge", &challenge);
+        query.append_pair("code_challenge_method", "S256");
+        query.append_pair("state", &state);
+        query.append_pair("id_token_add_organizations", "true");
+        query.append_pair("codex_cli_simplified_flow", "true");
+        query.append_pair("originator", "empyralis");
+    }
+
+    open_external(authorize_url.to_string())?;
+
+    let started = Instant::now();
+    let (sender, receiver) = mpsc::channel::<Result<String, String>>();
+
+    loop {
+        if started.elapsed() >= OPENAI_CODEX_CALLBACK_TIMEOUT {
+            return Err("Timed out waiting for the ChatGPT OAuth callback.".into());
+        }
+
+        match listener.accept() {
+            Ok((mut stream, _addr)) => {
+                let mut buffer = [0u8; 8192];
+                let read = stream
+                    .read(&mut buffer)
+                    .map_err(|error| format!("Failed to read OAuth callback request: {error}"))?;
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let first_line = request.lines().next().unwrap_or_default();
+                let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+                let callback_url = format!("http://localhost{path}");
+
+                let outcome = (|| -> Result<String, String> {
+                    let url = Url::parse(&callback_url)
+                        .map_err(|error| format!("Invalid OAuth callback URL: {error}"))?;
+                    if url.path() != "/auth/callback" {
+                        return Err("Unexpected OAuth callback path.".into());
+                    }
+                    let callback_state = url
+                        .query_pairs()
+                        .find(|(key, _)| key == "state")
+                        .map(|(_, value)| value.to_string())
+                        .unwrap_or_default();
+                    if callback_state != state {
+                        return Err("OAuth state mismatch.".into());
+                    }
+                    let code = url
+                        .query_pairs()
+                        .find(|(key, _)| key == "code")
+                        .map(|(_, value)| value.to_string())
+                        .unwrap_or_default();
+                    if code.trim().is_empty() {
+                        return Err("OAuth callback did not include an authorization code.".into());
+                    }
+                    Ok(code)
+                })();
+
+                match &outcome {
+                    Ok(_) => {
+                        let _ = write_http_response(
+                            &mut stream,
+                            "HTTP/1.1 200 OK",
+                            &oauth_success_html("ChatGPT sign-in completed. You can close this window and return to Empyralis."),
+                        );
+                    }
+                    Err(message) => {
+                        let _ = write_http_response(
+                            &mut stream,
+                            "HTTP/1.1 400 Bad Request",
+                            &oauth_error_html(message),
+                        );
+                    }
+                }
+
+                let _ = sender.send(outcome);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(error) => {
+                return Err(format!("OpenAI OAuth callback listener failed: {error}"));
+            }
+        }
+    }
+
+    let code = receiver
+        .recv()
+        .map_err(|error| format!("Failed to receive OAuth callback result: {error}"))??;
+    exchange_openai_codex_code(&code, &verifier)
+}
+
+#[tauri::command]
+async fn openai_codex_oauth_login() -> Result<OpenAiCodexOauthResult, String> {
+    tauri::async_runtime::spawn_blocking(run_openai_codex_oauth_flow)
+        .await
+        .map_err(|error| format!("OpenAI Codex OAuth task failed: {error}"))?
 }
 
 #[derive(Default)]
@@ -584,6 +908,12 @@ fn desktop_bridge_script() -> String {
       }}
       return false;
     }},
+    openaiCodexOauthLogin: async () => {{
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {{
+        return await window.__TAURI_INTERNALS__.invoke("openai_codex_oauth_login");
+      }}
+      throw new Error("OpenAI Codex OAuth is only available in the Empyralis desktop app.");
+    }},
   }};
   window.empyralisDesktop = Object.assign(window.empyralisDesktop || {{}}, bridge);
   window.orionDesktop = window.empyralisDesktop;
@@ -750,7 +1080,7 @@ fn ensure_worker(state: &SidecarState, runtime_key: &str) -> Result<(), String> 
 
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![open_external])
+        .invoke_handler(tauri::generate_handler![open_external, openai_codex_oauth_login])
         .setup(|app| {
             let lock_path =
                 acquire_desktop_shell_lock().map_err(|error| -> Box<dyn std::error::Error> {

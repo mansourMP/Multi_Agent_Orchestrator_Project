@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { ArrowLeft, KeyRound } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
+import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { sanitizeReturnTo } from '@/lib/server/controlPlaneSession';
 
 const WORKSPACE_ID = 'default';
 
@@ -12,20 +13,14 @@ type ConnectAiPageProps = {
 export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps) {
   const params = await searchParams;
   const returnToValue = Array.isArray(params.returnTo) ? params.returnTo[0] : params.returnTo;
-  const returnTo = String(returnToValue || '/');
+  const returnTo = sanitizeReturnTo(String(returnToValue || '/'));
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
       <OsPageHeader
         icon={<KeyRound size={18} />}
         title="Connect AI account"
-        subtitle="Connect one direct provider for chat, agents, and workflows."
-        meta={
-          <>
-            <span>Direct providers only</span>
-            <span>separate from app sign-in</span>
-          </>
-        }
+        subtitle="Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate."
         actions={
           <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
             <ArrowLeft size={13} />
@@ -34,17 +29,9 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
         }
       />
 
-      <section className="orion-panel">
-        <div className="orion-panel-header">
-          <div>
-            <div className="orion-panel-title">Provider connection</div>
-            <div className="orion-panel-copy">
-              Connect OpenAI, Anthropic, Gemini, or Vertex directly. You can also sign in with ChatGPT in your browser and reuse the OpenAI / Codex session already saved on this Mac.
-            </div>
-          </div>
-        </div>
+      <div style={{ maxWidth: 920, marginInline: 'auto' }}>
         <AiAccountsPanel workspaceId={WORKSPACE_ID} mode="connect" returnTo={returnTo} />
-      </section>
+      </div>
     </div>
   );
 }

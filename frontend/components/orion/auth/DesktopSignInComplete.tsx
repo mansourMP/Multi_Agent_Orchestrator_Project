@@ -10,8 +10,11 @@ export default function DesktopSignInComplete({ enabled }: DesktopSignInComplete
   useEffect(() => {
     if (!enabled) return;
     const timer = window.setTimeout(() => {
-      window.close();
-      window.location.replace('about:blank');
+      try {
+        window.close();
+      } catch {
+        // Keep the completion page visible if the browser refuses to close.
+      }
     }, 600);
     return () => window.clearTimeout(timer);
   }, [enabled]);

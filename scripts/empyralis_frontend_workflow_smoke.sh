@@ -80,6 +80,18 @@ jq -e '
   and ((.items | type) == "array")
 ' "$profiles_health_json" >/dev/null
 
+runtime_availability_json="${tmpdir}/runtime-availability.json"
+curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/api/control-plane/providers/runtime-availability?workspace_id=default" \
+  "${common_headers[@]}" \
+  > "$runtime_availability_json"
+
+jq -e '
+  (.summary.total >= 0)
+  and (.summary.ready >= 0)
+  and (.summary.attention >= 0)
+  and ((.items | type) == "array")
+' "$runtime_availability_json" >/dev/null
+
 connect_ai_html="${tmpdir}/connect-ai.html"
 curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/connect-ai?returnTo=%2F" \
   "${common_headers[@]}" \

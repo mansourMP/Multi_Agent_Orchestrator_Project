@@ -1715,19 +1715,40 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
     if (providerError) return null;
     if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
-    if (!setupStatus.accountConnected) return 'Connect an AI account to start chatting.';
-    if (!setupStatus.connectionTested) return 'Verify your AI account before running tasks.';
+    const providerLabel = providerOptions.find((item) => item.id === provider)?.label || provider;
+    if (!setupStatus.accountConnected) {
+      return connectionMode === 'managed'
+        ? `${providerLabel} runtime account is not ready yet.`
+        : 'Connect an AI account to start chatting.';
+    }
+    if (!setupStatus.connectionTested) {
+      return connectionMode === 'managed'
+        ? 'Verify the workspace runtime account before running tasks.'
+        : 'Verify your AI account before running tasks.';
+    }
     if (!derivedSetupReady) return 'Finish setup before starting live work.';
     return null;
-  }, [derivedSetupReady, selectedChatMessages, setupStatus.accountConnected, setupStatus.connectionTested, topError]);
+  }, [connectionMode, derivedSetupReady, provider, providerOptions, selectedChatMessages, setupStatus.accountConnected, setupStatus.connectionTested, topError]);
   const inlineSimpleChatAction = useMemo(() => {
     if (!setupStatus.accountConnected) {
+      if (connectionMode === 'managed') {
+        return {
+          label: 'Open setup →',
+          href: '/setup',
+        };
+      }
       return {
         label: 'Connect AI account →',
         href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {
+      if (connectionMode === 'managed') {
+        return {
+          label: 'Verify runtime account →',
+          href: '/setup',
+        };
+      }
       return {
         label: 'Verify AI account →',
         href: '/connect-ai',
@@ -1738,22 +1759,34 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       label: 'Open setup →',
       href: '/setup',
     };
-  }, [derivedSetupReady, setupStatus.accountConnected, setupStatus.connectionTested]);
+  }, [connectionMode, derivedSetupReady, setupStatus.accountConnected, setupStatus.connectionTested]);
   const emptySimpleChatAction = useMemo(() => {
     if (!setupStatus.accountConnected) {
+      if (connectionMode === 'managed') {
+        return {
+          label: 'Open setup',
+          href: '/setup',
+        };
+      }
       return {
         label: 'Connect AI account',
         href: '/connect-ai',
       };
     }
     if (!setupStatus.connectionTested) {
+      if (connectionMode === 'managed') {
+        return {
+          label: 'Verify runtime account',
+          href: '/setup',
+        };
+      }
       return {
         label: 'Verify AI account',
         href: '/connect-ai',
       };
     }
     return null;
-  }, [setupStatus.accountConnected, setupStatus.connectionTested]);
+  }, [connectionMode, setupStatus.accountConnected, setupStatus.connectionTested]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
     return 'Connect Telegram to activate alerts.';

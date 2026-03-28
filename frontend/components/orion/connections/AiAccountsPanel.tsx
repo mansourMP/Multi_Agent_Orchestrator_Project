@@ -67,6 +67,17 @@ type ProviderProfilesHealth = {
   total: number;
 };
 
+type RuntimeAvailabilityItem = {
+  provider: ProviderId;
+  label: string;
+  ready: boolean;
+  status: 'ready' | 'attention';
+  source: string;
+  source_label: string;
+  detail: string;
+  profile_count: number;
+};
+
 type ProviderAccountFormState = {
   provider: ProviderId;
   label: string;
@@ -303,6 +314,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRow[]>([]);
   const [providerHealth, setProviderHealth] = useState<ProviderProfilesHealth>({ healthy: 0, cooldown: 0, disabled: 0, total: 0 });
+  const [runtimeAvailability, setRuntimeAvailability] = useState<RuntimeAvailabilityItem[]>([]);
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerError, setProviderError] = useState('');
   const [providerNotice, setProviderNotice] = useState('');
@@ -454,21 +466,24 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setProviderError('');
     setProviderNotice('');
     try {
-      const [providersRes, modelAliasesRes, credentialsRes, profilesRes] = await Promise.all([
+      const [providersRes, modelAliasesRes, credentialsRes, profilesRes, runtimeAvailabilityRes] = await Promise.all([
         controlPlaneFetch('/api/control-plane/providers'),
         controlPlaneFetch('/api/control-plane/providers/model-aliases'),
         controlPlaneFetch(`/api/control-plane/credentials?workspace_id=${encodeURIComponent(workspaceId)}`),
         controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`),
+        controlPlaneFetch(`/api/control-plane/providers/runtime-availability?workspace_id=${encodeURIComponent(workspaceId)}`),
       ]);
 
       const providersRaw = await providersRes.text().catch(() => '');
       const modelAliasesRaw = await modelAliasesRes.text().catch(() => '');
       const credentialsRaw = await credentialsRes.text().catch(() => '');
       const profilesRaw = await profilesRes.text().catch(() => '');
+      const runtimeAvailabilityRaw = await runtimeAvailabilityRes.text().catch(() => '');
       const providersBody = providersRaw ? JSON.parse(providersRaw) : {};
       const modelAliasesBody = modelAliasesRaw ? JSON.parse(modelAliasesRaw) : {};
       const credentialsBody = credentialsRaw ? JSON.parse(credentialsRaw) : {};
       const profilesBody = profilesRaw ? JSON.parse(profilesRaw) : {};
+      const runtimeAvailabilityBody = runtimeAvailabilityRaw ? JSON.parse(runtimeAvailabilityRaw) : {};
       const nextModelAliases = modelAliasesRes.ok
         ? parseModelAliasCatalog(Array.isArray(modelAliasesBody?.models) ? modelAliasesBody.models : [])
         : [];
@@ -596,6 +611,27 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         disabled: typeof summary.disabled === 'number' ? summary.disabled : 0,
         total: typeof summary.total === 'number' ? summary.total : normalizedProfiles.length,
       });
+
+      const availabilityItems = runtimeAvailabilityRes.ok && Array.isArray(runtimeAvailabilityBody?.items)
+        ? runtimeAvailabilityBody.items
+            .filter((item: unknown): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+            .map((item: Record<string, unknown>): RuntimeAvailabilityItem | null => {
+              const provider = knownProviderId(item.provider);
+              if (!provider) return null;
+              return {
+                provider,
+                label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : providerLabel(provider, normalizedProviders.length > 0 ? normalizedProviders : providerOptions),
+                ready: item.ready === true,
+                status: item.status === 'attention' ? 'attention' : 'ready',
+                source: typeof item.source === 'string' ? item.source : '',
+                source_label: typeof item.source_label === 'string' ? item.source_label : 'Runtime account',
+                detail: typeof item.detail === 'string' ? item.detail : '',
+                profile_count: typeof item.profile_count === 'number' ? item.profile_count : 0,
+              };
+            })
+            .filter((item: RuntimeAvailabilityItem | null): item is RuntimeAvailabilityItem => item !== null)
+        : [];
+      setRuntimeAvailability(availabilityItems);
     } catch (error) {
       setProviderError(normalizeProvidersError(error instanceof Error ? error.message : 'Failed to load saved AI accounts.'));
     } finally {
@@ -1036,6 +1072,65 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                   </button>
                 );
               })}
+            </div>
+          </div>
+        ) : null}
+
+        {connectMode && runtimeAvailability.length > 0 ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              borderRadius: 14,
+              border: '1px solid var(--success-border)',
+              background: 'var(--success-bg)',
+              color: 'var(--success-fg)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Already available in this workspace</div>
+              <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+                The runtime can already use these provider accounts without saving a separate AI account. Use Setup if you want chat to run through the workspace runtime instead of a saved account.
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+              {runtimeAvailability.map((item) => (
+                <article
+                  key={`runtime:${item.provider}:${item.source}`}
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    borderRadius: 14,
+                    border: `1px solid ${item.ready ? 'var(--success-border)' : 'var(--warning-border)'}`,
+                    background: item.ready ? 'rgba(255,255,255,0.55)' : 'var(--warning-bg)',
+                    color: item.ready ? 'var(--success-fg)' : 'var(--warning-fg)',
+                    padding: '10px 12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ display: 'grid', gap: 2 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>{item.label}</div>
+                      <div style={{ fontSize: 12 }}>{item.source_label}</div>
+                    </div>
+                    <span className="orion-chip">{item.ready ? 'Ready' : 'Needs attention'}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{item.detail}</div>
+                </article>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Link href="/setup" className="orion-btn orion-btn-primary" style={{ minHeight: 36, paddingInline: 14 }}>
+                Use workspace runtime
+              </Link>
+              <button
+                type="button"
+                className="orion-btn orion-btn-ghost"
+                style={{ minHeight: 36, paddingInline: 14 }}
+                onClick={() => router.push(returnTo)}
+              >
+                Back to chat
+              </button>
             </div>
           </div>
         ) : null}

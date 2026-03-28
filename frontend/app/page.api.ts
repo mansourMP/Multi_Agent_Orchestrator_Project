@@ -77,6 +77,16 @@ export async function readResponseMessage(response: Response, fallback: string):
   return raw;
 }
 
+type RuntimeAccountAvailabilityItem = {
+  provider: ProviderId;
+  ready: boolean;
+  status?: 'ready' | 'attention';
+  source?: string;
+  source_label?: string;
+  detail?: string;
+  profile_count?: number;
+};
+
 export function humanizeError(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('invalid api key')) {
@@ -585,18 +595,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   );
 
   const hasRuntimeProviderAccount = useCallback(async (providerId: ProviderId) => {
-    const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
-    if (!res.ok) {
-      throw new Error('Unable to load runtime accounts.');
-    }
+    const res = await controlPlaneFetch(`/api/control-plane/providers/runtime-availability?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
+    if (!res.ok) throw new Error('Unable to load runtime accounts.');
     const payload = await res.json().catch(() => ({ items: [] }));
     const items = Array.isArray(payload?.items) ? payload.items : [];
     return items.some((item: unknown) => {
       if (!item || typeof item !== 'object') return false;
-      const record = item as Record<string, unknown>;
+      const record = item as RuntimeAccountAvailabilityItem & Record<string, unknown>;
       const normalizedProvider = normalizeProviderId(typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : '');
-      const health = String(record.health || '').trim().toLowerCase();
-      return normalizedProvider === providerId && record.enabled !== false && health !== 'disabled';
+      return normalizedProvider === providerId && record.ready === true;
     });
   }, [controlPlaneFetch]);
 
@@ -824,13 +831,19 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       if (matches.length > 0 && !matches.some((item) => item.id === credentialId)) {
         setCredentialId(matches[0].id);
       }
-      setSetupStatus((prev) => ({ ...prev, accountConnected: matches.length > 0 }));
+      const runtimeAccountReady = connectionMode === 'managed'
+        ? await hasRuntimeProviderAccount(provider).catch(() => false)
+        : false;
+      setSetupStatus((prev) => ({
+        ...prev,
+        accountConnected: connectionMode === 'managed' ? (runtimeAccountReady || matches.length > 0) : matches.length > 0,
+      }));
     } catch (error: unknown) {
       setTopError(humanizeError(error instanceof Error ? error.message : 'Unable to load connected accounts.'));
     } finally {
       setIsCredentialsLoading(false);
     }
-  }, [controlPlaneFetch, credentialId, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
+  }, [connectionMode, controlPlaneFetch, credentialId, hasRuntimeProviderAccount, provider, setIsCredentialsLoading, setCredentials, setCredentialId, setSetupStatus, setTopError]);
 
   const refreshConnectors = useCallback(async () => {
     setIsConnectorsLoading(true);

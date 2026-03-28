@@ -1294,7 +1294,7 @@ status, execution = req("POST", f"{runtime_base.rstrip('/')}/runs/start", {
 })
 execution_id = execution["run_id"]
 final = None
-for _ in range(20):
+for _ in range(40):
     status, final = req("GET", f"{runtime_base.rstrip('/')}/runs/{execution_id}")
     if final.get("status") in {"completed", "waiting_for_input", "failed"}:
         break

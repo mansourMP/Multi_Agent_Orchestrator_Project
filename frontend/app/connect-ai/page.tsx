@@ -39,7 +39,7 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
           <div>
             <div className="orion-panel-title">Provider connection</div>
             <div className="orion-panel-copy">
-              Connect OpenAI, Anthropic, Gemini, or Vertex directly. You can also reuse the OpenAI / Codex session already signed into this Mac.
+              Connect OpenAI, Anthropic, Gemini, or Vertex directly. You can also sign in with ChatGPT in your browser and reuse the OpenAI / Codex session already saved on this Mac.
             </div>
           </div>
         </div>

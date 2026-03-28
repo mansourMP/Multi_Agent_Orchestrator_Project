@@ -1091,6 +1091,17 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               <RefreshCw size={14} />
               Refresh
             </button>
+            {connectMode ? (
+              <button
+                type="button"
+                className="orion-btn orion-btn-secondary"
+                style={{ minHeight: 38, paddingInline: 14 }}
+                onClick={() => void openExternalTarget(String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login'))}
+              >
+                <ShieldCheck size={14} />
+                Sign in with ChatGPT
+              </button>
+            ) : null}
             <button
               className="orion-btn orion-btn-primary"
               style={{ minHeight: 38, paddingInline: 14 }}
@@ -1173,7 +1184,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 style={{ minHeight: 36, paddingInline: 14 }}
                 onClick={() => void openExternalTarget(String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login'))}
               >
-                Open ChatGPT sign-in
+                Sign in with ChatGPT
               </button>
               <button
                 type="button"

@@ -34,15 +34,19 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(order[0], "openai")
         self.assertEqual(order[1], "codex_cli")
 
-    def test_generate_chat_short_circuits_codex_cli_on_openai_scope_error(self):
+    def test_generate_chat_uses_chat_completions_for_codex_auth_mode(self):
         with patch.dict(os.environ, {"ORION_AUTH_MODE": "codex"}, clear=False):
             with patch.object(worker_llm, "provider_order_for_run", return_value=["openai", "codex_cli"]):
                 with patch.object(
                     worker_llm,
                     "openai_responses_text",
-                    return_value=("", None, "gpt-4.1", "Missing required scope: api.responses.write"),
+                    side_effect=AssertionError("responses api should be skipped for codex auth"),
                 ):
-                    with patch.object(worker_llm, "openai_chat_json") as openai_chat_json_mock:
+                    with patch.object(
+                        worker_llm,
+                        "openai_chat_json",
+                        return_value=({"reply": "Short reply"}, {"total_tokens": 5}, "gpt-4.1", ""),
+                    ) as openai_chat_json_mock:
                         with patch.object(worker_llm, "codex_exec_text") as codex_exec_text_mock:
                             text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
                                 context={},
@@ -51,12 +55,38 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
                                 system_prompt="You are concise.",
                             )
 
-        self.assertEqual(text, "")
-        self.assertIsNone(usage)
+        self.assertEqual(text, "Short reply")
+        self.assertIsNotNone(usage)
         self.assertEqual(attempted, "openai")
-        self.assertIn("api.responses.write", error)
-        openai_chat_json_mock.assert_not_called()
+        self.assertEqual(error, "")
+        openai_chat_json_mock.assert_called_once()
         codex_exec_text_mock.assert_not_called()
+
+    def test_generate_chat_uses_chat_completions_for_explicit_oauth_token_mode(self):
+        with patch.dict(os.environ, {"ORION_AUTH_MODE": "api_key"}, clear=False):
+            with patch.object(worker_llm, "provider_order_for_run", return_value=["openai"]):
+                with patch.object(
+                    worker_llm,
+                    "openai_responses_text",
+                    side_effect=AssertionError("responses api should be skipped for oauth_token auth mode"),
+                ):
+                    with patch.object(
+                        worker_llm,
+                        "openai_chat_json",
+                        return_value=({"reply": "OAuth reply"}, {"total_tokens": 7}, "gpt-4.1", ""),
+                    ) as openai_chat_json_mock:
+                        text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                            context={"auth_mode": "oauth_token"},
+                            metadata={},
+                            user_goal="Answer briefly",
+                            system_prompt="You are concise.",
+                        )
+
+        self.assertEqual(text, "OAuth reply")
+        self.assertIsNotNone(usage)
+        self.assertEqual(attempted, "openai")
+        self.assertEqual(error, "")
+        openai_chat_json_mock.assert_called_once()
 
 
 if __name__ == "__main__":

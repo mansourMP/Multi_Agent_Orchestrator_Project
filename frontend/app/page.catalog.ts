@@ -892,7 +892,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
       { id: 'access_token', label: 'OpenAI access token', secretRequired: true },
       { id: 'oauth_token', label: 'Saved OpenAI / Codex token', secretRequired: true },
     ],
-    note: 'Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.',
+    note: 'Use a direct OpenAI credential, or sign in with ChatGPT in your browser on the connect page and import the local session from this Mac.',
   },
   {
     id: 'anthropic',

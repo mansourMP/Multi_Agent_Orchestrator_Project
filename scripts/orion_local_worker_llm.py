@@ -236,6 +236,13 @@ def requested_auth_mode(context: Dict[str, Any], metadata: Dict[str, Any]) -> st
     ).strip().lower()
 
 
+def should_use_openai_chat_completions(context: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    requested_mode = requested_auth_mode(context, metadata)
+    if requested_mode == "oauth_token":
+        return True
+    return _openai_auth_mode() == "codex"
+
+
 def resolve_requested_provider(context: Dict[str, Any], metadata: Dict[str, Any]) -> str:
     raw_provider = str(context.get("provider") or metadata.get("provider") or "").strip().lower()
     auth_mode = requested_auth_mode(context, metadata)
@@ -840,7 +847,7 @@ def generate_chat_reply_with_provider_fallback(
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     attempted: list[str] = []
     last_error = "no provider credentials available"
-    auth_mode = _openai_auth_mode()
+    prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         if provider == "codex_cli":
@@ -866,18 +873,16 @@ def generate_chat_reply_with_provider_fallback(
             last_error = f"claude_code_cli generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "openai":
-            # Prefer Responses API for OAuth/Codex tokens.
-            text, usage, model, provider_error = openai_responses_text(system_prompt, user_goal)
-            if text:
-                return (
-                    text,
-                    build_usage_masked_from_provider("openai", usage, model),
-                    ",".join(attempted),
-                    "",
-                )
-            if auth_mode == "codex" and is_auth_scope_error(provider_error):
-                last_error = f"openai generation failed: {provider_error or 'missing_scope'}"
-                return "", None, ",".join(attempted), last_error
+            provider_error = ""
+            if not prefer_openai_chat:
+                text, usage, model, provider_error = openai_responses_text(system_prompt, user_goal)
+                if text:
+                    return (
+                        text,
+                        build_usage_masked_from_provider("openai", usage, model),
+                        ",".join(attempted),
+                        "",
+                    )
             # Fallback to chat-completions JSON wrapper if responses fails.
             json_prompt = (
                 f"User goal:\n{user_goal}\n\n"

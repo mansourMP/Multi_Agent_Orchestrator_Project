@@ -211,7 +211,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         {providers.email.enabled ? (
           <>
             <div className="orion-auth-divider">
-              <span>{providers.google.enabled || providers.apple.enabled ? 'or use email' : 'Local account'}</span>
+              <span>Email sign-in</span>
             </div>
 
             <div className="orion-auth-switch" role="tablist" aria-label="Authentication mode">

@@ -884,7 +884,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'openai',
     label: 'OpenAI',
-    defaultModel: 'gpt-4.1',
+    defaultModel: 'gpt-4o-mini',
     auth: ['api_key', 'access_token', 'oauth_token'],
     defaultAuthMode: 'api_key',
     authModes: [
@@ -927,7 +927,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
 ];
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
-  openai: ['gpt-4.1', 'gpt-4o-mini'],
+  openai: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1'],
   anthropic: ['claude-sonnet', 'claude-haiku'],
   claude_code_cli: ['sonnet', 'opus'],
   gemini: ['gemini-flash', 'gemini-pro'],
@@ -941,7 +941,7 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     model: 'gpt-4.1',
     resolvedModel: 'gpt-4.1',
     isGlobalDefault: false,
-    isProviderDefault: true,
+    isProviderDefault: false,
   },
   {
     alias: 'gpt-4o',
@@ -957,6 +957,14 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     model: 'gpt-4o-mini',
     resolvedModel: 'gpt-4o-mini',
     isGlobalDefault: true,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'gpt-4.1-mini',
+    provider: 'openai',
+    model: 'gpt-4.1-mini',
+    resolvedModel: 'gpt-4.1-mini',
+    isGlobalDefault: false,
     isProviderDefault: false,
   },
   {

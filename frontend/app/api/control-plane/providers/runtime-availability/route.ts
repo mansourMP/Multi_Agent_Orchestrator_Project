@@ -46,22 +46,35 @@ function openAiSourceLabel(source: string): string {
   }
 }
 
+function openAiSourceCountsAsVerified(source: string): boolean {
+  return source === 'env_api_key' || source === 'env_access_token' || source === 'vault';
+}
+
 function openAiReadyDetail(source: string): string {
   switch (source) {
     case 'env_api_key':
       return 'The workspace runtime can already use an OpenAI API key from its environment.';
     case 'env_access_token':
-      return 'The workspace runtime can already use an OpenAI access token from its environment.';
-    case 'env_oauth_token':
-      return 'The workspace runtime can already use an OpenAI OAuth token from its environment.';
-    case 'env_codex_oauth_token':
-      return 'The workspace runtime can already use an OpenAI / Codex token from its environment.';
-    case 'codex_token_vault':
-      return 'The workspace runtime can already use a saved OpenAI / Codex token on this machine.';
+      return 'The workspace runtime can already use a direct OpenAI access token from its environment.';
     case 'vault':
       return 'The workspace runtime can already use a saved OpenAI credential from the workspace vault.';
     default:
-      return 'The workspace runtime can already use an OpenAI credential available on this machine.';
+      return 'The workspace runtime can already use a direct OpenAI credential available on this machine.';
+  }
+}
+
+function openAiAttentionDetail(source: string): string {
+  switch (source) {
+    case 'env_access_token':
+      return 'An OpenAI access token was detected for the runtime, but it is not treated as a verified workspace account yet.';
+    case 'env_oauth_token':
+      return 'An OpenAI OAuth token was detected for the runtime, but you should connect a direct OpenAI API key for reliable chat and workflow execution.';
+    case 'env_codex_oauth_token':
+      return 'A Codex/OpenAI token was detected in the runtime environment, but it is not treated as a verified runtime account for launch-critical chat execution.';
+    case 'codex_token_vault':
+      return 'A saved OpenAI / Codex token was detected on this machine, but you should connect a direct OpenAI API key before relying on chat or workflows.';
+    default:
+      return 'An OpenAI credential was detected for the runtime, but it is not treated as a verified workspace account yet.';
   }
 }
 
@@ -123,10 +136,10 @@ export async function GET(request: NextRequest) {
     const healthPayload = healthResult.payload && typeof healthResult.payload === 'object'
       ? (healthResult.payload as Record<string, unknown>)
       : {};
-    const openAiReady = Boolean(healthPayload.openai_key_valid);
     const openAiDetected = Boolean(healthPayload.openai_key_present) || Boolean(healthPayload.openai_vault_present);
+    const source = String(healthPayload.openai_credential_source || '').trim().toLowerCase();
+    const openAiReady = Boolean(healthPayload.openai_key_valid) && openAiSourceCountsAsVerified(source);
     if (!byProvider.has('openai') && (openAiReady || openAiDetected)) {
-      const source = String(healthPayload.openai_credential_source || '').trim().toLowerCase();
       items.push({
         provider: 'openai',
         label: PROVIDER_LABELS.openai,
@@ -136,7 +149,7 @@ export async function GET(request: NextRequest) {
         source_label: openAiSourceLabel(source),
         detail: openAiReady
           ? openAiReadyDetail(source)
-          : 'An OpenAI credential was detected for the runtime, but validation did not pass.',
+          : openAiAttentionDetail(source),
         profile_count: 0,
       });
     }

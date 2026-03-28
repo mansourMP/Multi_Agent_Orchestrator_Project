@@ -877,7 +877,7 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
   if (type === 'action') return { label: 'Tool action', actionType: 'connector_action' };
   return {
     label: 'Agent',
-    modelId: 'gpt-4.1',
+    modelId: 'gpt-4o-mini',
     prompt: 'Describe the task for this agent.',
     tools: [],
     provider: 'openai',

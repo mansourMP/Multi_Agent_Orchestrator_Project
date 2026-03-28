@@ -109,7 +109,7 @@ PROVIDER_CATALOG = {
             {"id": "api_key", "label": "API Key", "secret_required": True},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "gpt-4.1",
+        "default_model": "gpt-4o-mini",
         "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
     },
     "anthropic": {

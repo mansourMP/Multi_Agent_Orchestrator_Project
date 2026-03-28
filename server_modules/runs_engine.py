@@ -82,38 +82,80 @@ def generate_with_candidate_failover(
         credentials = candidate.get("credentials") if isinstance(candidate.get("credentials"), dict) else {}
         if not credentials:
             continue
-        model = str(candidate.get("model") or default_model).strip() or default_model
+        initial_model = str(candidate.get("model") or default_model).strip() or default_model
         profile_id = str(candidate.get("profile_id") or "").strip() or None
         source = str(candidate.get("source") or "unknown").strip()
-        try:
-            resolved_provider, adapter_key, adapter = resolve_provider_adapter(provider, credentials)
-            text = adapter.generate(system_prompt, user_input, model, credentials)
-            if profile_id:
-                _mark_profile_success(profile_id)
-            state["active_candidate_index"] = idx
-            state["active_profile_id"] = profile_id
-            state["active_model"] = model
-            state["active_provider"] = resolved_provider
-            state["active_adapter"] = adapter_key
-            state["credentials"] = credentials
-            if idx > 0:
-                emit_log(
-                    log_queue,
-                    "warn",
-                    f"Provider failover succeeded using candidate {idx + 1} ({source}).",
-                    event="profile_failover",
-                    data={"provider": provider, "profile_id": profile_id, "candidate_index": idx, "source": source},
-                )
-            return text
-        except Exception as exc:
-            last_error = exc
-            raw_error = str(exc)
+        model_attempts = _candidate_model_attempts(provider, initial_model)
+        candidate_error: Optional[Exception] = None
+        for model_attempt_index, model in enumerate(model_attempts):
+            try:
+                resolved_provider, adapter_key, adapter = resolve_provider_adapter(provider, credentials)
+                text = adapter.generate(system_prompt, user_input, model, credentials)
+                if profile_id:
+                    _mark_profile_success(profile_id)
+                state["active_candidate_index"] = idx
+                state["active_profile_id"] = profile_id
+                state["active_model"] = model
+                state["active_provider"] = resolved_provider
+                state["active_adapter"] = adapter_key
+                state["credentials"] = credentials
+                if idx > 0:
+                    emit_log(
+                        log_queue,
+                        "warn",
+                        f"Provider failover succeeded using candidate {idx + 1} ({source}).",
+                        event="profile_failover",
+                        data={"provider": provider, "profile_id": profile_id, "candidate_index": idx, "source": source},
+                    )
+                if model_attempt_index > 0:
+                    emit_log(
+                        log_queue,
+                        "warn",
+                        f"Recovered with fallback model {model}.",
+                        event="profile_model_fallback",
+                        data={
+                            "provider": provider,
+                            "profile_id": profile_id,
+                            "candidate_index": idx,
+                            "source": source,
+                            "requested_model": initial_model,
+                            "model": model,
+                        },
+                    )
+                return text
+            except Exception as exc:
+                last_error = exc
+                candidate_error = exc
+                if (
+                    _is_rate_limit_runtime_error(exc)
+                    and model_attempt_index + 1 < len(model_attempts)
+                ):
+                    next_model = model_attempts[model_attempt_index + 1]
+                    emit_log(
+                        log_queue,
+                        "warn",
+                        f"Model {model} is rate-limited; retrying with {next_model}.",
+                        event="profile_model_retry",
+                        data={
+                            "provider": provider,
+                            "profile_id": profile_id,
+                            "candidate_index": idx,
+                            "source": source,
+                            "model": model,
+                            "next_model": next_model,
+                            "error": str(exc)[:800],
+                        },
+                    )
+                    continue
+                break
+        if candidate_error is not None:
+            raw_error = str(candidate_error)
             if profile_id:
                 _mark_profile_failure(profile_id, raw_error)
             emit_log(
                 log_queue,
                 "warn",
-                f"Provider candidate failed ({source}): {friendly_runtime_error_message(exc)}",
+                f"Provider candidate failed ({source}): {friendly_runtime_error_message(candidate_error)}",
                 event="profile_candidate_failed",
                 data={
                     "provider": provider,
@@ -127,6 +169,22 @@ def generate_with_candidate_failover(
     if last_error is not None:
         raise last_error
     raise RuntimeError(f"No usable credentials remained for provider '{provider}'.")
+
+
+def _is_rate_limit_runtime_error(exc: Exception) -> bool:
+    lowered = str(exc or "").strip().lower()
+    return "429" in lowered or "rate limit" in lowered
+
+
+def _candidate_model_attempts(provider: str, preferred_model: str) -> List[str]:
+    model = str(preferred_model or "").strip()
+    attempts: List[str] = [model] if model else []
+    if normalize_provider_id(provider) == "openai":
+        for fallback in ("gpt-4o-mini", "gpt-4.1-mini", "gpt-4o", "gpt-4.1"):
+            token = str(fallback).strip()
+            if token and token not in attempts:
+                attempts.append(token)
+    return attempts or [str(CODEX_MODEL or "gpt-4o-mini").strip() or "gpt-4o-mini"]
 
 
 def requires_human_approval(context: Dict[str, Any], plan_text: str) -> tuple[bool, str]:
@@ -407,6 +465,8 @@ class OrionEngineAdapter:
     name = "orion"
 
     def execute(self, run_id: str):
+        from server_modules.runs_execution import run_orion_mission
+
         run_orion_mission(run_id)
 
 

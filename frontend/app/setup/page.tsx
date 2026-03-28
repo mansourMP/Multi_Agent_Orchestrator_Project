@@ -153,7 +153,7 @@ function providerCredentialGuidance(provider: SetupProviderId): string {
 }
 
 function defaultProviderModel(provider: SetupProviderId): string {
-  return DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === provider)?.defaultModel || 'gpt-4.1';
+  return DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === provider)?.defaultModel || 'gpt-4o-mini';
 }
 
 function parseProfiles(payload: unknown): RuntimeProfile[] {

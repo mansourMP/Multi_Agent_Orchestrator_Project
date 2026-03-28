@@ -289,7 +289,7 @@ const FILE_MOUNT_OPTIONS = ['artifacts', 'project', 'shared', 'knowledge', 'loca
 const FILE_GRANT_OPTIONS = ['none', 'read', 'read_write', 'create_only', 'append_only'] as const;
 
 const DEFAULT_OPERATOR: OperatorConfig = {
-    modelId: 'gpt-4.1',
+    modelId: 'gpt-4o-mini',
     agentRole: DEFAULT_AGENT_ROLE_ID,
     duty: 'Run workflows reliably, explain what is happening, and ask before risky actions.',
     systemPrompt: `You are the ${BRAND.assistant}. Be practical, concise, and transparent.`,
@@ -909,7 +909,7 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
     }
     return {
         label: 'Agent',
-        modelId: 'gpt-4.1',
+        modelId: 'gpt-4o-mini',
         prompt: 'Describe the task for this agent.',
         tools: [],
         provider: 'openai',
@@ -1004,7 +1004,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
     }
     const base: AgentCanvasData = {
         label: 'AI Agent',
-        modelId: 'gpt-4.1',
+        modelId: 'gpt-4o-mini',
         prompt: 'Describe the task for this agent.',
         tools: [],
         provider: 'openai',
@@ -1369,7 +1369,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         { id: 'oauth_token', label: 'Saved OpenAI / Codex token', secret_required: true },
                     ],
                     default_auth_mode: 'api_key',
-                    default_model: 'gpt-4.1',
+                    default_model: 'gpt-4o-mini',
                     note: 'Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.',
                 },
                 {
@@ -2668,7 +2668,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                                     }))}
                                                     style={workflowInputSurfaceStyle}
                                                 >
-                                                    {(models.length > 0 ? models : [String(runtime.model || operator.modelId || 'gpt-4.1')]).map((model) => (
+                                                    {(models.length > 0 ? models : [String(runtime.model || operator.modelId || 'gpt-4o-mini')]).map((model) => (
                                                         <option key={model} value={model}>{model}</option>
                                                     ))}
                                                 </select>

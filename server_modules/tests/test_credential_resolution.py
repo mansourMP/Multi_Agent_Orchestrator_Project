@@ -149,7 +149,7 @@ class CredentialResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolution["candidate"]["label"], "vault-default")
         self.assertEqual(resolution["credentials"]["access_token"], "token-vault-default")
-        self.assertEqual(resolution["model"], "gpt-4.1")
+        self.assertEqual(resolution["model"], "gpt-4o-mini")
 
 
 if __name__ == "__main__":

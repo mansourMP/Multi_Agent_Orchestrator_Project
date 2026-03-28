@@ -1089,9 +1089,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             }}
           >
             <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Already available in this workspace</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>Runtime accounts on this machine</div>
               <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-                The runtime can already use these provider accounts without saving a separate AI account. Use Setup if you want chat to run through the workspace runtime instead of a saved account.
+                Ready items can run immediately through the workspace runtime. Attention items were detected on this machine, but should not be treated as a launch-ready provider connection yet.
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>

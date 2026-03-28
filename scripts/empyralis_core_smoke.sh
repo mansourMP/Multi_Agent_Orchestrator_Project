@@ -20,6 +20,8 @@ VALIDATION_REPORT_DIR="${ROOT_DIR}/.orion-validation"
 VALIDATION_REPORT_FILE="${VALIDATION_REPORT_DIR}/latest_core_smoke.json"
 VALIDATION_CHECKS_FILE="${TMP_DIR}/checks.tsv"
 ORCHESTRATOR_ATTEMPTS="${EMPYRALIS_SMOKE_ORCHESTRATOR_ATTEMPTS:-360}"
+SMOKE_POLL_ATTEMPTS="${EMPYRALIS_SMOKE_POLL_ATTEMPTS:-60}"
+SMOKE_POLL_SLEEP="${EMPYRALIS_SMOKE_POLL_SLEEP:-5}"
 
 cleanup() {
   if [[ -n "${BROWSER_SESSION_SERVER_PID}" ]]; then
@@ -106,11 +108,26 @@ ensure_runtime() {
 
 api_get() {
   local path="$1"
+  local url
+  local tmp
+  local status
+  tmp="$(mktemp)"
   if [[ "${path}" == http://* || "${path}" == https://* ]]; then
-    curl -fsS "${headers[@]}" "${path}"
+    url="${path}"
   else
-    curl -fsS "${headers[@]}" "${API_URL}${path}"
+    url="${API_URL}${path}"
   fi
+  status="$(curl -sS -o "${tmp}" -w "%{http_code}" "${headers[@]}" "${url}")" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  if [[ "${status}" =~ ^2 ]]; then
+    cat "${tmp}"
+    rm -f "${tmp}"
+    return 0
+  fi
+  rm -f "${tmp}"
+  return 1
 }
 
 api_post() {
@@ -253,6 +270,32 @@ poll_run_terminal() {
     fi
     sleep "${sleep_secs}"
   done
+  return 1
+}
+
+poll_artifact_preview_ready() {
+  local workspace_id="$1"
+  local run_id="$2"
+  local artifact_path="$3"
+  local attempts="${4:-60}"
+  local sleep_secs="${5:-1}"
+  local artifacts_out="$6"
+  local preview_out="$7"
+  local artifact_api_path="/artifacts/workspace?workspace_id=${workspace_id}&history_limit=40"
+  local i
+  for ((i=0; i<attempts; i++)); do
+    if api_get "${artifact_api_path}" > "${artifacts_out}" \
+      && jq -e --arg rid "${run_id}" '.items | map(select(.run_id == $rid)) | length > 0' "${artifacts_out}" >/dev/null 2>&1 \
+      && api_get "/artifacts/preview?path=$(urlencode "${artifact_path}")" > "${preview_out}" \
+      && [[ "$(jq -r '.ok // false' "${preview_out}")" == "true" ]]; then
+      return 0
+    fi
+    sleep "${sleep_secs}"
+  done
+  api_get "${artifact_api_path}" > "${artifacts_out}" 2>/dev/null || true
+  if [[ -n "${artifact_path}" ]]; then
+    api_get "/artifacts/preview?path=$(urlencode "${artifact_path}")" > "${preview_out}" 2>/dev/null || true
+  fi
   return 1
 }
 
@@ -425,7 +468,7 @@ read_start_json="${TMP_DIR}/read-start.json"
 api_post "/runs/start" "${read_payload}" > "${read_start_json}"
 read_run_id="$(jq -r '.run_id // empty' "${read_start_json}")"
 read_run_json="${TMP_DIR}/read-run.json"
-if [[ -n "${read_run_id}" ]] && poll_run_terminal "${read_run_id}" 90 1 "${read_run_json}"; then
+if [[ -n "${read_run_id}" ]] && poll_run_terminal "${read_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${read_run_json}"; then
   read_status="$(jq -r '.status // empty' "${read_run_json}")"
   read_role="$(jq -r '.context.metadata.agent_role // .agent_role // empty' "${read_run_json}")"
   read_artifact="$(jq -r '(.result_data.outputs.artifacts // [])[0].file_path // empty' "${read_run_json}")"
@@ -439,13 +482,10 @@ else
 fi
 
 artifacts_json="${TMP_DIR}/artifacts.json"
-if api_get "/artifacts/workspace?workspace_id=default&history_limit=40" > "${artifacts_json}" && jq -e --arg rid "${read_run_id}" '.items | map(select(.run_id == $rid)) | length > 0' "${artifacts_json}" >/dev/null; then
-  preview_json="${TMP_DIR}/artifact-preview.json"
-  if api_get "/artifacts/preview?path=$(urlencode "${read_artifact}")" > "${preview_json}" && [[ "$(jq -r '.ok // false' "${preview_json}")" == "true" ]]; then
-    pass "A4 artifact preview"
-  else
-    fail "A4 artifact preview"
-  fi
+preview_json="${TMP_DIR}/artifact-preview.json"
+if [[ -n "${read_run_id}" && -n "${read_artifact}" ]] \
+  && poll_artifact_preview_ready "default" "${read_run_id}" "${read_artifact}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${artifacts_json}" "${preview_json}"; then
+  pass "A4 artifact preview"
 else
   fail "A4 artifact preview"
 fi
@@ -472,7 +512,7 @@ browser_start_json="${TMP_DIR}/browser-start.json"
 api_post "/runs/start" "${browser_payload}" > "${browser_start_json}"
 browser_run_id="$(jq -r '.run_id // empty' "${browser_start_json}")"
 browser_run_json="${TMP_DIR}/browser-run.json"
-if [[ -n "${browser_run_id}" ]] && poll_run_terminal "${browser_run_id}" 90 1 "${browser_run_json}"; then
+if [[ -n "${browser_run_id}" ]] && poll_run_terminal "${browser_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_run_json}"; then
   browser_status="$(jq -r '.status // empty' "${browser_run_json}")"
   browser_tool="$(jq -r '(.result_data.outputs.actions // [])[0].tool // empty' "${browser_run_json}")"
   browser_artifact_count="$(jq -r '(.result_data.outputs.artifacts // []) | length' "${browser_run_json}")"
@@ -507,7 +547,7 @@ browser_capture_start_json="${TMP_DIR}/browser-capture-start.json"
 api_post "/runs/start" "${browser_capture_payload}" > "${browser_capture_start_json}"
 browser_capture_run_id="$(jq -r '.run_id // empty' "${browser_capture_start_json}")"
 browser_capture_run_json="${TMP_DIR}/browser-capture-run.json"
-if [[ -n "${browser_capture_run_id}" ]] && poll_run_terminal "${browser_capture_run_id}" 120 1 "${browser_capture_run_json}"; then
+if [[ -n "${browser_capture_run_id}" ]] && poll_run_terminal "${browser_capture_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_capture_run_json}"; then
   browser_capture_status="$(jq -r '.status // empty' "${browser_capture_run_json}")"
   browser_capture_mode="$(jq -r '(.result_data.outputs.actions // [])[0].mode // empty' "${browser_capture_run_json}")"
   browser_capture_kinds="$(jq -r '(.result_data.outputs.artifacts // []) | map(.kind) | join(",")' "${browser_capture_run_json}")"
@@ -586,7 +626,7 @@ if [[ -n "${browser_session_seed_run_id}" && -n "${browser_session_seed_approval
   browser_session_seed_resolve_json="${TMP_DIR}/browser-session-seed-resolve.json"
   api_post "/runs/${browser_session_seed_run_id}/approvals/${browser_session_seed_approval_id}/resolve" '{"decision":"proceed","note":"session seed approved"}' > "${browser_session_seed_resolve_json}"
 fi
-if [[ -n "${browser_session_seed_run_id}" ]] && poll_run_terminal "${browser_session_seed_run_id}" 120 1 "${browser_session_seed_run_json}" \
+if [[ -n "${browser_session_seed_run_id}" ]] && poll_run_terminal "${browser_session_seed_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_session_seed_run_json}" \
   && [[ "$(jq -r '.status // empty' "${browser_session_seed_run_json}")" == "completed" ]]; then
   api_post "/runs/start" "${browser_session_check_payload}" > "${browser_session_check_start_json}"
   browser_session_check_run_id="$(jq -r '.run_id // empty' "${browser_session_check_start_json}")"
@@ -598,7 +638,7 @@ if [[ -n "${browser_session_seed_run_id}" ]] && poll_run_terminal "${browser_ses
     browser_session_check_resolve_json="${TMP_DIR}/browser-session-check-resolve.json"
     api_post "/runs/${browser_session_check_run_id}/approvals/${browser_session_check_approval_id}/resolve" '{"decision":"proceed","note":"session check approved"}' > "${browser_session_check_resolve_json}"
   fi
-  if [[ -n "${browser_session_check_run_id}" ]] && poll_run_terminal "${browser_session_check_run_id}" 120 1 "${browser_session_check_run_json}" \
+  if [[ -n "${browser_session_check_run_id}" ]] && poll_run_terminal "${browser_session_check_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_session_check_run_json}" \
     && [[ "$(jq -r '.status // empty' "${browser_session_check_run_json}")" == "completed" ]] \
     && grep -q "Persisted" <<<"$(jq -r '(.result_data.outputs.actions // [])[0].text_preview // empty' "${browser_session_check_run_json}")"; then
     pass "A7 browser session persistence"
@@ -736,7 +776,7 @@ if [[ -n "${approval_run_id}" && -n "${approval_id}" ]] \
   resolve_json="${TMP_DIR}/approval-resolve.json"
   api_post "/runs/${approval_run_id}/approvals/${approval_id}/resolve" '{"decision":"proceed","note":"smoke approved"}' > "${resolve_json}"
   approval_run_json="${TMP_DIR}/approval-run.json"
-  if poll_run_terminal "${approval_run_id}" 90 1 "${approval_run_json}" \
+  if poll_run_terminal "${approval_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${approval_run_json}" \
     && [[ "$(jq -r '.status // empty' "${approval_run_json}")" == "completed" ]]; then
     pass "A10 approval-gated browser session run"
   else
@@ -1231,7 +1271,7 @@ else
 fi
 
 workflow_smoke_json="${TMP_DIR}/workflow-smoke.json"
-if RUNTIME_KEY="${RUNTIME_KEY}" BACKEND_API_URL="${EMPYRALIS_BACKEND_API_URL:-http://127.0.0.1:4000/api/v1}" WORKFLOW_SMOKE_JSON="${workflow_smoke_json}" python3 - <<'PY'
+if RUNTIME_KEY="${RUNTIME_KEY}" BACKEND_API_URL="${EMPYRALIS_BACKEND_API_URL:-http://127.0.0.1:4000/api/v1}" WORKFLOW_SMOKE_JSON="${workflow_smoke_json}" SMOKE_POLL_ATTEMPTS="${SMOKE_POLL_ATTEMPTS}" SMOKE_POLL_SLEEP="${SMOKE_POLL_SLEEP}" python3 - <<'PY'
 import json
 import os
 import time
@@ -1240,6 +1280,8 @@ import urllib.request
 runtime_key = os.environ["RUNTIME_KEY"]
 base = os.environ["BACKEND_API_URL"].rstrip("/")
 out_file = os.environ["WORKFLOW_SMOKE_JSON"]
+poll_attempts = int(os.environ.get("SMOKE_POLL_ATTEMPTS", "60"))
+poll_sleep = float(os.environ.get("SMOKE_POLL_SLEEP", "5"))
 headers = {"X-API-Key": runtime_key, "Content-Type": "application/json"}
 
 def req(method, path, payload=None):
@@ -1294,11 +1336,11 @@ status, execution = req("POST", f"{runtime_base.rstrip('/')}/runs/start", {
 })
 execution_id = execution["run_id"]
 final = None
-for _ in range(40):
+for _ in range(poll_attempts):
     status, final = req("GET", f"{runtime_base.rstrip('/')}/runs/{execution_id}")
     if final.get("status") in {"completed", "waiting_for_input", "failed"}:
         break
-    time.sleep(0.5)
+    time.sleep(poll_sleep)
 
 payload = {
     "workflow_id": workflow_id,

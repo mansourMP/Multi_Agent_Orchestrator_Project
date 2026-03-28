@@ -111,7 +111,7 @@ function trustedDesktopRuntimeUrl(): URL | null {
   }
 }
 
-function desktopAuthHandoffEnabled(): boolean {
+export function desktopAuthHandoffEnabled(): boolean {
   return trustedDesktopRuntimeUrl() !== null;
 }
 

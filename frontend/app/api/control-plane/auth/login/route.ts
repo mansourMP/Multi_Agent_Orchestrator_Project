@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { API_BASE } from '@/lib/config';
 import { enforceBffRouteGuard } from '@/lib/server/bffRouteGuard';
 import {
+  desktopAuthHandoffEnabled,
   issueAdminBrowserIdentityResponse,
   issueDesktopControlPlaneAuthHandoff,
   sanitizeReturnTo,
@@ -68,6 +69,12 @@ export async function POST(request: NextRequest) {
   }
 
   if (desktopHandoff) {
+    if (!desktopAuthHandoffEnabled()) {
+      return Response.json(
+        { detail: 'Desktop auth handoff is unavailable in this frontend runtime.' },
+        { status: 503 },
+      );
+    }
     const handoffFailure = await issueDesktopControlPlaneAuthHandoff(token, returnTo);
     if (handoffFailure) {
       return handoffFailure;

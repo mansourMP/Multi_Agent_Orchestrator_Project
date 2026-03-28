@@ -1217,6 +1217,85 @@ else
   fail "A23 authenticated privileged browser block"
 fi
 
+workflow_smoke_json="${TMP_DIR}/workflow-smoke.json"
+if RUNTIME_KEY="${RUNTIME_KEY}" BACKEND_API_URL="${EMPYRALIS_BACKEND_API_URL:-http://127.0.0.1:4000/api/v1}" WORKFLOW_SMOKE_JSON="${workflow_smoke_json}" python3 - <<'PY'
+import json
+import os
+import time
+import urllib.request
+
+runtime_key = os.environ["RUNTIME_KEY"]
+base = os.environ["BACKEND_API_URL"].rstrip("/")
+out_file = os.environ["WORKFLOW_SMOKE_JSON"]
+headers = {"X-API-Key": runtime_key, "Content-Type": "application/json"}
+
+def req(method, path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(f"{base}{path}", data=data, method=method)
+    for key, value in headers.items():
+        request.add_header(key, value)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        body = response.read().decode("utf-8")
+        return response.status, json.loads(body) if body else {}
+
+workflow_payload = {
+    "name": "Workflow Smoke Live",
+    "description": "Live create/publish/run smoke",
+    "definition": {
+        "version": "empyralist.workflow.v2",
+        "nodes": [
+            {
+                "id": "trigger_1",
+                "type": "trigger",
+                "variant": "connector_event",
+                "data": {"label": "Inbound"},
+                "config": {"connector": "telegram_bot", "event": "inbound_message"},
+            },
+            {
+                "id": "data_1",
+                "type": "data",
+                "variant": "transform",
+                "data": {"label": "Transform"},
+                "config": {"template": "Normalize the inbound event"},
+            },
+        ],
+        "edges": [{"id": "edge_1", "source": "trigger_1", "target": "data_1"}],
+    },
+}
+
+status, created = req("POST", "/workflows?workspaceId=default", workflow_payload)
+workflow_id = created["id"]
+status, fetched = req("GET", f"/workflows/{workflow_id}")
+status, published = req("POST", f"/workflows/{workflow_id}/publish")
+status, execution = req("POST", f"/executions/{workflow_id}/run", {"initialPrompt": "Smoke run for workflow plumbing"})
+execution_id = execution["executionId"]
+final = None
+for _ in range(20):
+    status, final = req("GET", f"/executions/{execution_id}")
+    if final.get("status") in {"success", "waiting", "failed"}:
+        break
+    time.sleep(0.5)
+
+payload = {
+    "workflow_id": workflow_id,
+    "publish_status": published.get("status"),
+    "execution_id": execution_id,
+    "execution_status": final.get("status") if isinstance(final, dict) else None,
+    "workflow_validation": fetched.get("validation", {}) if isinstance(fetched, dict) else {},
+}
+with open(out_file, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2)
+
+if payload["publish_status"] != "published" or payload["execution_status"] != "success":
+    raise SystemExit(1)
+PY
+then
+  pass "A24 workflow create publish execute"
+else
+  cat "${workflow_smoke_json}" 2>/dev/null || true
+  fail "A24 workflow create publish execute"
+fi
+
 if [[ "${SCREENSHOT_SMOKE}" == "1" ]]; then
   screenshot_payload="$(jq -nc '{
     engine:"orion",

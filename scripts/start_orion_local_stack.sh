@@ -263,6 +263,34 @@ service_log_path() {
   esac
 }
 
+spawn_detached() {
+  local pid_file="$1"
+  local log_file="$2"
+  local cwd="$3"
+  shift 3
+  python3 - "${pid_file}" "${log_file}" "${cwd}" "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+pid_file, log_file, cwd, *cmd = sys.argv[1:]
+os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+os.makedirs(os.path.dirname(log_file), exist_ok=True)
+with open(log_file, "wb", buffering=0) as log:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+with open(pid_file, "w", encoding="utf-8") as fh:
+    fh.write(str(proc.pid))
+print(proc.pid)
+PY
+}
+
 fail_service_startup() {
   local name="$1"
   local reason="$2"
@@ -446,37 +474,36 @@ start_runtime() {
     runtime_launcher=("uvicorn")
   fi
   (
-    cd "${ROOT_DIR}"
-    ORION_AUTH_REQUIRED=1 \
-    ORION_API_KEY="${RUNTIME_KEY}" \
-    ORION_LOCAL_COMPANION_ENABLED=1 \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED="${TELEGRAM_AUTOPILOT_ENABLED}" \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE="${TELEGRAM_AUTOPILOT_PROFILE}" \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_ENGINE="${TELEGRAM_AUTOPILOT_ENGINE}" \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX="${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}" \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}" \
-    EMPYRALIS_TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}" \
-    ORION_TELEGRAM_AUTOPILOT_ENABLED="${TELEGRAM_AUTOPILOT_ENABLED}" \
-    ORION_TELEGRAM_AUTOPILOT_PROFILE="${TELEGRAM_AUTOPILOT_PROFILE}" \
-    ORION_TELEGRAM_AUTOPILOT_ENGINE="${TELEGRAM_AUTOPILOT_ENGINE}" \
-    ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX="${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}" \
-    ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}" \
-    ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}" \
-    EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED="${WHATSAPP_AUTOPILOT_ENABLED}" \
-    EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE="${WHATSAPP_AUTOPILOT_PROFILE}" \
-    EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE="${WHATSAPP_AUTOPILOT_ENGINE}" \
-    EMPYRALIS_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX="${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}" \
-    EMPYRALIS_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}" \
-    ORION_WHATSAPP_AUTOPILOT_ENABLED="${WHATSAPP_AUTOPILOT_ENABLED}" \
-    ORION_WHATSAPP_AUTOPILOT_PROFILE="${WHATSAPP_AUTOPILOT_PROFILE}" \
-    ORION_WHATSAPP_AUTOPILOT_ENGINE="${WHATSAPP_AUTOPILOT_ENGINE}" \
-    ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX="${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}" \
-    ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}" \
-    ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}" \
-    ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}" \
-    OPENAI_HEALTHCHECK="${OPENAI_HEALTHCHECK:-0}" \
-    nohup "${runtime_launcher[@]}" server:app --host "${ORION_BIND_HOST}" --port "${ORION_PORT}" > "${LOG_DIR}/runtime.log" 2>&1 &
-    echo $! > "${PID_DIR}/runtime.pid"
+    export ORION_AUTH_REQUIRED=1
+    export ORION_API_KEY="${RUNTIME_KEY}"
+    export ORION_LOCAL_COMPANION_ENABLED=1
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_ENABLED="${TELEGRAM_AUTOPILOT_ENABLED}"
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE="${TELEGRAM_AUTOPILOT_PROFILE}"
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_ENGINE="${TELEGRAM_AUTOPILOT_ENGINE}"
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX="${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}"
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}"
+    export EMPYRALIS_TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}"
+    export ORION_TELEGRAM_AUTOPILOT_ENABLED="${TELEGRAM_AUTOPILOT_ENABLED}"
+    export ORION_TELEGRAM_AUTOPILOT_PROFILE="${TELEGRAM_AUTOPILOT_PROFILE}"
+    export ORION_TELEGRAM_AUTOPILOT_ENGINE="${TELEGRAM_AUTOPILOT_ENGINE}"
+    export ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX="${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}"
+    export ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}"
+    export ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}"
+    export EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED="${WHATSAPP_AUTOPILOT_ENABLED}"
+    export EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE="${WHATSAPP_AUTOPILOT_PROFILE}"
+    export EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE="${WHATSAPP_AUTOPILOT_ENGINE}"
+    export EMPYRALIS_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX="${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}"
+    export EMPYRALIS_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}"
+    export ORION_WHATSAPP_AUTOPILOT_ENABLED="${WHATSAPP_AUTOPILOT_ENABLED}"
+    export ORION_WHATSAPP_AUTOPILOT_PROFILE="${WHATSAPP_AUTOPILOT_PROFILE}"
+    export ORION_WHATSAPP_AUTOPILOT_ENGINE="${WHATSAPP_AUTOPILOT_ENGINE}"
+    export ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX="${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}"
+    export ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}"
+    export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
+    export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    export OPENAI_HEALTHCHECK="${OPENAI_HEALTHCHECK:-0}"
+    spawn_detached "${PID_DIR}/runtime.pid" "${LOG_DIR}/runtime.log" "${ROOT_DIR}" \
+      "${runtime_launcher[@]}" server:app --host "${ORION_BIND_HOST}" --port "${ORION_PORT}" >/dev/null
   )
 }
 
@@ -499,41 +526,43 @@ start_backend() {
 
   echo "Starting backend on 127.0.0.1:${BACKEND_PORT} (mode=${mode}) ..."
   (
-    cd "${ROOT_DIR}/backend"
+    export ORION_API_KEY="${RUNTIME_KEY}"
+    export RUNTIME_KEY="${RUNTIME_KEY}"
+    export ORION_API_URL="${ORION_API_URL}"
     if [[ "${mode}" == "dist" ]]; then
-      if [[ -f "dist/main.js" ]]; then
-        nohup node --enable-source-maps dist/main.js > "${LOG_DIR}/backend.log" 2>&1 &
+      if [[ -f "${ROOT_DIR}/backend/dist/main.js" ]]; then
+        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
+          node --enable-source-maps dist/main.js >/dev/null
       else
-        nohup npm run start:prod > "${LOG_DIR}/backend.log" 2>&1 &
+        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
+          npm run start:prod >/dev/null
       fi
     else
-      nohup npm run start:dev > "${LOG_DIR}/backend.log" 2>&1 &
+      spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
+        npm run start:dev >/dev/null
     fi
-    echo $! > "${PID_DIR}/backend.pid"
   )
 }
 
 start_frontend() {
   echo "Starting frontend on ${FRONTEND_HOST}:${FRONTEND_PORT} ..."
   (
-    cd "${ROOT_DIR}/frontend"
-    NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}" \
-    nohup npm run dev -- --hostname "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" > "${LOG_DIR}/frontend.log" 2>&1 &
-    echo $! > "${PID_DIR}/frontend.pid"
+    export NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}"
+    spawn_detached "${PID_DIR}/frontend.pid" "${LOG_DIR}/frontend.log" "${ROOT_DIR}/frontend" \
+      npm run dev -- --hostname "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" >/dev/null
   )
 }
 
 start_worker() {
   echo "Starting local worker ..."
   (
-    cd "${ROOT_DIR}"
     cleanup_existing_worker_processes "$(resolve_worker_id)"
-    RUNTIME_KEY="${RUNTIME_KEY}" \
-    ORION_API_URL="${ORION_API_URL}" \
-    ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}" \
-    ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}" \
-    nohup bash scripts/run_local_worker.sh > "${LOG_DIR}/worker.log" 2>&1 &
-    echo $! > "${PID_DIR}/worker.pid"
+    export RUNTIME_KEY="${RUNTIME_KEY}"
+    export ORION_API_URL="${ORION_API_URL}"
+    export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
+    export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    spawn_detached "${PID_DIR}/worker.pid" "${LOG_DIR}/worker.log" "${ROOT_DIR}" \
+      bash scripts/run_local_worker.sh >/dev/null
   )
 }
 
@@ -661,9 +690,8 @@ if [[ "${START_BACKEND}" == "1" ]]; then
       fi
       BACKEND_EFFECTIVE_MODE="dist"
       (
-        cd "${ROOT_DIR}/backend"
-        nohup node --enable-source-maps dist/main.js > "${LOG_DIR}/backend.log" 2>&1 &
-        echo $! > "${PID_DIR}/backend.pid"
+        spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
+          node --enable-source-maps dist/main.js >/dev/null
       )
       if ! wait_http_ok "${BACKEND_HEALTH_URL}" 80 0.4; then
         fail_service_startup "backend" "fallback dist mode did not become ready"

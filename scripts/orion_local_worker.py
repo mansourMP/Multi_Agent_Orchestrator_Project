@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -42,6 +43,27 @@ def build_runtime_capabilities() -> List[str]:
         "desktop.screenshot",
         "local.worker",
     ]
+
+
+def _truncate_text(value: str, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _deterministic_chat_fallback(goal: str, llm_error: str) -> str:
+    compact_error = re.sub(r"\s+", " ", str(llm_error or "").strip().lower())
+
+    if "api.responses.write" in compact_error or "missing scopes" in compact_error:
+        return "Reconnect your Codex/OpenAI auth, then retry. The current token is missing the scope needed for model replies."
+    if "insufficient_quota" in compact_error or "exceeded your current quota" in compact_error:
+        return "The connected AI account has quota or billing limits right now. Reconnect the account or switch provider, then retry."
+    if "no provider credentials available" in compact_error or "missing_api_key" in compact_error:
+        return "No active AI credential is available right now. Reconnect Codex/OpenAI, then retry."
+    if compact_error:
+        return f"I couldn’t get a model reply right now. Retry in a moment. Error: {_truncate_text(compact_error, limit=220)}"
+    return "I couldn’t get a model reply right now. Retry in a moment."
 
 
 def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -331,17 +353,7 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
             }
             return cleaned_reply, data, usage_masked
 
-    goal_lower = goal.strip().lower()
-    if "api.responses.write" in (llm_error or "").lower() or "missing scopes" in (llm_error or "").lower():
-        summary = "I got your message, but AI auth is missing required scope (`api.responses.write`). Reconnect Codex auth, then try again."
-    elif "insufficient_quota" in (llm_error or "").lower() or "exceeded your current quota" in (llm_error or "").lower():
-        summary = "I got your message, but the connected AI account has quota/billing limits. Reconnect or change provider."
-    elif "no provider credentials available" in (llm_error or "").lower() or "missing_api_key" in (llm_error or "").lower():
-        summary = "I got your message, but no Codex/OpenAI credential is active. Run codex login (or add token) and retry."
-    elif goal_lower in {"hi", "hello", "hey", "yo", "sup", "/start", "start"}:
-        summary = "Hey, I’m online. Tell me exactly what you want done and I’ll execute it."
-    else:
-        summary = f"I got this: “{goal}”. I’m in local fallback mode right now."
+    summary = _deterministic_chat_fallback(goal, llm_error or "")
     fallback = {
         "generated_by": "empyralis_local_worker_v0",
         "worker_id": worker_id,

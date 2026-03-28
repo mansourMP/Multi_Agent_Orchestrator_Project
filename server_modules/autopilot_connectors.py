@@ -244,6 +244,7 @@ def _telegram_space_question_via_mcp(question: str) -> Dict[str, Any]:
 
 ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS = os.getenv("ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS", "0") == "1"
 ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED = os.getenv("ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED", "0") == "1"
+ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED = os.getenv("ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED", "0") == "1"
 ORION_TELEGRAM_MEDIA_ENABLED = os.getenv("ORION_TELEGRAM_MEDIA_ENABLED", "1") == "1"
 ORION_TELEGRAM_MEDIA_DIR = _resolve_state_dir(
     "ORION_TELEGRAM_MEDIA_DIR",
@@ -1366,6 +1367,8 @@ def _telegram_handle_guided_automation_setup(
     chat_id: str,
     message_text: str,
 ) -> Dict[str, Any]:
+    if not ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED:
+        return {"handled": False, "reply": ""}
     active_state = _get_telegram_camera_setup_state(workspace_id, chat_id)
     normalized_text = str(message_text or "").strip()
     active_intent = str(active_state.get("intent") or "").strip().upper()
@@ -1589,18 +1592,7 @@ def _telegram_profile_help_text(profile: Dict[str, Any]) -> str:
 
 
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
-    request_text = str(goal or "").strip()
-    has_context = any(str(profile_data.get(field_name) or "").strip() for field_name in _TELEGRAM_PROFILE_FIELDS)
-    if not has_context:
-        return request_text
-    context_lines = _telegram_profile_lines(profile_data)
-    context_block = "\n".join(context_lines)
-    return (
-        "User context (apply only when relevant):\n"
-        f"{context_block}\n\n"
-        "User request:\n"
-        f"{request_text}"
-    )
+    return str(goal or "").strip()
 
 
 def _connector_capability_summary(connector_id: str) -> str:
@@ -3206,7 +3198,7 @@ def _humanize_telegram_run_summary(summary: str) -> str:
     if lower == "run not found." or "run not found" in lower:
         return "I lost track of that request. Please send it again."
     if "missing required scope" in lower or "api.responses.write" in lower:
-        return "Your AI account needs to be reconnected before I can continue. Open Setup and reconnect it."
+        return "I couldn’t get a model reply right now. Please retry in a moment."
     if (
         "ai account authorization failed" in lower
         or "invalid api key" in lower
@@ -3214,9 +3206,9 @@ def _humanize_telegram_run_summary(summary: str) -> str:
         or "unauthorized" in lower
         or "forbidden" in lower
     ):
-        return "Your AI account needs attention before I can continue. Open Setup and reconnect it."
+        return "I couldn’t get a model reply right now. Please retry in a moment."
     if "no valid ai account is connected" in lower or "no credentials available" in lower:
-        return "I do not have a working AI account connected right now. Open Setup and connect one."
+        return "I don’t have a working model connection right now. Please retry in a moment."
     if "approval window timed out" in lower or "approval timeout" in lower:
         return "I waited too long for approval. Please send the request again and approve it when prompted."
     if "requires local companion execution" in lower:

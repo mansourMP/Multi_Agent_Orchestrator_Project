@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -96,6 +97,34 @@ def sanitize_bearer_token(value: Any) -> str:
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
     return token
+
+
+def _jwt_payload(token: str) -> Optional[Dict[str, Any]]:
+    raw = sanitize_bearer_token(token)
+    parts = raw.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1].strip()
+    if not payload:
+        return None
+    padding = "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((payload + padding).encode("utf-8")).decode("utf-8")
+        parsed = json.loads(decoded)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def codex_account_id_from_token(token: str) -> str:
+    payload = _jwt_payload(token)
+    if not isinstance(payload, dict):
+        return ""
+    auth_payload = payload.get("https://api.openai.com/auth")
+    if not isinstance(auth_payload, dict):
+        return ""
+    account_id = str(auth_payload.get("chatgpt_account_id") or "").strip()
+    return account_id
 
 
 def codex_token_from_vault(codex_auth_file: Path) -> str:
@@ -359,6 +388,144 @@ def extract_openai_text(payload: Dict[str, Any]) -> str:
     return ""
 
 
+def openai_codex_backend_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    token = get_openai_bearer_token()
+    if not token:
+        return "", None, "", "missing_oauth_token"
+
+    account_id = codex_account_id_from_token(token)
+    if not account_id:
+        return "", None, "", "missing_chatgpt_account_id"
+
+    model = (
+        os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
+        or os.getenv("CODEX_MODEL")
+        or "gpt-5.4"
+    ).strip() or "gpt-5.4"
+    timeout_seconds = max(20, to_int(os.getenv("ORION_LOCAL_WORKER_CODEX_TIMEOUT_SECONDS"), 90))
+    reasoning_effort = str(os.getenv("ORION_LOCAL_WORKER_CODEX_REASONING_EFFORT") or "low").strip().lower() or "low"
+    api_url = ensure_trailing_slashless(
+        os.getenv("ORION_LOCAL_WORKER_CODEX_RESPONSES_URL")
+        or "https://chatgpt.com/backend-api/codex/responses"
+    )
+
+    payload = {
+        "model": model,
+        "store": False,
+        "stream": True,
+        "instructions": system_prompt,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": user_prompt,
+                    }
+                ],
+            }
+        ],
+        "text": {"verbosity": "low"},
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+    }
+    if reasoning_effort:
+        payload["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
+
+    req = urllib.request.Request(
+        url=api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "chatgpt-account-id": account_id,
+            "originator": "pi",
+            "OpenAI-Beta": "responses=experimental",
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+            "User-Agent": "Empyralis Local Worker",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            buffer = ""
+            text_parts: list[str] = []
+            usage: Optional[Dict[str, Any]] = None
+            completed_message_text = ""
+
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                buffer += chunk.decode("utf-8", "ignore")
+                while "\n\n" in buffer:
+                    raw_event, buffer = buffer.split("\n\n", 1)
+                    data_lines = []
+                    for line in raw_event.splitlines():
+                        if line.startswith("data:"):
+                            data_lines.append(line[5:].strip())
+                    if not data_lines:
+                        continue
+                    payload_text = "\n".join(data_lines).strip()
+                    if not payload_text or payload_text == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(payload_text)
+                    except Exception:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    event_type = str(event.get("type") or "").strip()
+                    if event_type == "response.output_text.delta":
+                        delta = str(event.get("delta") or "")
+                        if delta:
+                            text_parts.append(delta)
+                        continue
+                    if event_type == "response.output_item.done":
+                        item = event.get("item")
+                        if isinstance(item, dict) and str(item.get("type") or "").strip() == "message":
+                            content = item.get("content")
+                            done_parts: list[str] = []
+                            if isinstance(content, list):
+                                for block in content:
+                                    if not isinstance(block, dict):
+                                        continue
+                                    if str(block.get("type") or "").strip() == "output_text":
+                                        block_text = str(block.get("text") or "")
+                                        if block_text:
+                                            done_parts.append(block_text)
+                            completed_message_text = "\n".join(part for part in done_parts if part).strip()
+                        continue
+                    if event_type in {"response.completed", "response.done", "response.incomplete"}:
+                        response_payload = event.get("response")
+                        if isinstance(response_payload, dict) and isinstance(response_payload.get("usage"), dict):
+                            usage = response_payload.get("usage")
+                        final_text = completed_message_text or "\n".join(part for part in text_parts if part).strip()
+                        if not final_text and isinstance(response_payload, dict):
+                            final_text = extract_openai_text(response_payload).strip()
+                        if final_text:
+                            return final_text, usage, model, ""
+                        return "", usage, model, "codex_empty_output"
+                    if event_type in {"response.failed", "error"}:
+                        message = ""
+                        response_payload = event.get("response")
+                        if isinstance(response_payload, dict):
+                            response_error = response_payload.get("error")
+                            if isinstance(response_error, dict):
+                                message = str(response_error.get("message") or response_error.get("code") or "").strip()
+                        if not message:
+                            message = str(event.get("message") or event.get("code") or "codex_response_failed").strip()
+                        return "", None, model, message or "codex_response_failed"
+
+            final_text = "\n".join(part for part in text_parts if part).strip()
+            if final_text:
+                return final_text, usage, model, ""
+            return "", usage, model, "codex_empty_output"
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
+
+
 def openai_responses_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     token = get_openai_bearer_token()
     if not token:
@@ -405,8 +572,11 @@ def openai_responses_text(system_prompt: str, user_prompt: str) -> Tuple[str, Op
 
 
 def codex_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    direct_text, direct_usage, direct_model, direct_error = openai_codex_backend_text(system_prompt, user_prompt)
+    if direct_text:
+        return direct_text, direct_usage, direct_model, ""
     if not codex_cli_available():
-        return "", None, "codex", "codex_cli_not_found"
+        return "", None, direct_model or "codex", direct_error or "codex_cli_not_found"
 
     timeout_seconds = max(15, to_int(os.getenv("ORION_LOCAL_WORKER_CODEX_TIMEOUT_SECONDS"), 90))
     model = (os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL") or "").strip()
@@ -457,8 +627,12 @@ def codex_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional
             return "", None, model or "codex", "codex_empty_output"
         return text, None, model or "codex", ""
     except subprocess.TimeoutExpired:
+        if direct_error:
+            return "", None, model or "codex", direct_error
         return "", None, model or "codex", "codex_timeout"
     except Exception as exc:
+        if direct_error:
+            return "", None, model or "codex", direct_error
         return "", None, model or "codex", f"codex_exec_error: {exc}"
     finally:
         try:
@@ -779,6 +953,7 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         "off",
     }
     context_provider = resolve_requested_provider(context, metadata)
+    run_source = str(metadata.get("source") or context.get("source") or "").strip().lower()
 
     base = list(requested_order)
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and provider_hint not in base:
@@ -789,14 +964,15 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     for pid in SUPPORTED_PROVIDERS:
         if pid not in base:
             base.append(pid)
-    if auth_mode == "codex" and prefer_direct_openai and "openai" in base and provider_has_key("openai"):
-        ordered: list[str] = ["openai"]
-        if use_codex_cli and "codex_cli" in base and provider_has_key("codex_cli"):
-            ordered.append("codex_cli")
-        ordered.extend(pid for pid in base if pid not in ordered)
-        base = ordered
-    elif use_codex_cli and auth_mode == "codex" and "codex_cli" in base:
+    if auth_mode == "codex" and use_codex_cli and "codex_cli" in base and provider_has_key("codex_cli"):
+        if run_source in {"telegram_autopilot", "whatsapp_autopilot"}:
+            return ["codex_cli"]
         base = ["codex_cli"] + [pid for pid in base if pid != "codex_cli"]
+        if prefer_direct_openai and "openai" in base and provider_has_key("openai"):
+            openai_index = base.index("openai")
+            if openai_index > 1:
+                base.pop(openai_index)
+                base.insert(1, "openai")
 
     fallback_enabled = str(os.getenv("ORION_LOCAL_WORKER_PROVIDER_FALLBACK", "1")).strip().lower() not in {"0", "false", "no", "off"}
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and not fallback_enabled:

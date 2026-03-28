@@ -40,6 +40,7 @@ TELEGRAM_AUTOPILOT_REQUIRE_PREFIX="${EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX
 TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${EMPYRALIS_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT:-${ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT:-1}}" # 1|0
 TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${EMPYRALIS_TELEGRAM_AUTOPILOT_EXECUTION_TARGET:-${ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET:-local_companion}}" # auto|cloud|local_companion
 TELEGRAM_AUTOPILOT_SEND_ACK="${EMPYRALIS_TELEGRAM_AUTOPILOT_SEND_ACK:-${ORION_TELEGRAM_AUTOPILOT_SEND_ACK:-1}}" # 1|0
+TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED="${EMPYRALIS_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED:-${ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED:-0}}" # 1|0
 WHATSAPP_AUTOPILOT_ENABLED="${EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED:-${ORION_WHATSAPP_AUTOPILOT_ENABLED:-1}}" # 1|0
 WHATSAPP_AUTOPILOT_PROFILE="${EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE:-${ORION_WHATSAPP_AUTOPILOT_PROFILE:-assistant}}"
 WHATSAPP_AUTOPILOT_ENGINE="${EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE:-${ORION_WHATSAPP_AUTOPILOT_ENGINE:-codex}}"
@@ -130,6 +131,7 @@ EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX=${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}
 EMPYRALIS_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT=${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}
 EMPYRALIS_TELEGRAM_AUTOPILOT_EXECUTION_TARGET=${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}
 EMPYRALIS_TELEGRAM_AUTOPILOT_SEND_ACK=${TELEGRAM_AUTOPILOT_SEND_ACK}
+EMPYRALIS_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED=${TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED}
 ORION_TELEGRAM_AUTOPILOT_ENABLED=${TELEGRAM_AUTOPILOT_ENABLED}
 ORION_TELEGRAM_AUTOPILOT_PROFILE=${TELEGRAM_AUTOPILOT_PROFILE}
 ORION_TELEGRAM_AUTOPILOT_ENGINE=${TELEGRAM_AUTOPILOT_ENGINE}
@@ -137,6 +139,7 @@ ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX=${TELEGRAM_AUTOPILOT_REQUIRE_PREFIX}
 ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT=${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}
 ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET=${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}
 ORION_TELEGRAM_AUTOPILOT_SEND_ACK=${TELEGRAM_AUTOPILOT_SEND_ACK}
+ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED=${TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED}
 EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED=${WHATSAPP_AUTOPILOT_ENABLED}
 EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE=${WHATSAPP_AUTOPILOT_PROFILE}
 EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE=${WHATSAPP_AUTOPILOT_ENGINE}
@@ -227,31 +230,38 @@ resolve_worker_id() {
 existing_worker_pids() {
   local worker_id="$1"
   ps -ef | awk -v root="${ROOT_DIR}" -v worker_id="${worker_id}" '
-    index($0, root "/scripts/orion_local_worker.py") && index($0, "--worker-id " worker_id) { print $2 }
+    (index($0, root "/scripts/orion_local_worker.py") || index($0, "scripts/orion_local_worker.py")) && index($0, "--worker-id " worker_id) { print $2 }
+  '
+}
+
+existing_worker_wrapper_pids() {
+  ps -ef | awk -v root="${ROOT_DIR}" '
+    index($0, "bash scripts/run_local_worker.sh") || index($0, root "/scripts/run_local_worker.sh") { print $2 }
   '
 }
 
 cleanup_existing_worker_processes() {
   local worker_id="$1"
-  local pids
-  pids="$(existing_worker_pids "${worker_id}")"
-  if [[ -z "${pids}" ]]; then
+  local worker_pids wrapper_pids
+  worker_pids="$(existing_worker_pids "${worker_id}")"
+  wrapper_pids="$(existing_worker_wrapper_pids)"
+  if [[ -z "${worker_pids}" && -z "${wrapper_pids}" ]]; then
     return 0
   fi
   local compact
-  compact="$(echo "${pids}" | tr '\n' ' ' | xargs)"
+  compact="$(printf "%s\n%s\n" "${worker_pids}" "${wrapper_pids}" | awk 'NF {print $1}' | sort -u | tr '\n' ' ' | xargs)"
   echo "Replacing existing local worker for ${worker_id}: ${compact}"
   while IFS= read -r pid; do
     [[ -z "${pid}" ]] && continue
     kill "${pid}" 2>/dev/null || true
-  done <<< "${pids}"
+  done <<< "$(printf "%s\n%s\n" "${worker_pids}" "${wrapper_pids}" | awk 'NF {print $1}' | sort -u)"
   sleep 0.3
   while IFS= read -r pid; do
     [[ -z "${pid}" ]] && continue
     if kill -0 "${pid}" 2>/dev/null; then
       kill -9 "${pid}" 2>/dev/null || true
     fi
-  done <<< "${pids}"
+  done <<< "$(printf "%s\n%s\n" "${worker_pids}" "${wrapper_pids}" | awk 'NF {print $1}' | sort -u)"
 }
 
 service_log_path() {
@@ -493,6 +503,7 @@ start_runtime() {
     export ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT="${TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT}"
     export ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET="${TELEGRAM_AUTOPILOT_EXECUTION_TARGET}"
     export ORION_TELEGRAM_AUTOPILOT_SEND_ACK="${TELEGRAM_AUTOPILOT_SEND_ACK}"
+    export ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED="${TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED}"
     export EMPYRALIS_WHATSAPP_AUTOPILOT_ENABLED="${WHATSAPP_AUTOPILOT_ENABLED}"
     export EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE="${WHATSAPP_AUTOPILOT_PROFILE}"
     export EMPYRALIS_WHATSAPP_AUTOPILOT_ENGINE="${WHATSAPP_AUTOPILOT_ENGINE}"

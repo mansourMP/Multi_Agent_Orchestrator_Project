@@ -46,6 +46,40 @@ curl -sS -c "$cookiejar" -b "$cookiejar" -X POST "${FRONTEND_URL}/api/control-pl
 
 jq -e '.ok == true and .auth_type == "bearer" and .admin == true' "$login_json" >/dev/null
 
+session_json="${tmpdir}/session.json"
+curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/api/control-plane/session" \
+  "${common_headers[@]}" \
+  > "$session_json"
+
+jq -e '.ok == true and (.auth_type | type == "string")' "$session_json" >/dev/null
+
+providers_json="${tmpdir}/providers.json"
+curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/api/control-plane/providers" \
+  "${common_headers[@]}" \
+  > "$providers_json"
+
+jq -e '(.providers // .items // .catalog // .) | type == "array"' "$providers_json" >/dev/null
+jq -e '
+  ((.providers // .items // .catalog // .) | map((.id // .provider // "") | ascii_downcase)) as $ids
+  | ($ids | index("openai")) != null
+  and ($ids | index("anthropic")) != null
+  and ($ids | index("gemini")) != null
+  and ($ids | index("vertex")) != null
+' "$providers_json" >/dev/null
+
+profiles_health_json="${tmpdir}/profiles-health.json"
+curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/api/control-plane/providers/profiles/health?workspace_id=default" \
+  "${common_headers[@]}" \
+  > "$profiles_health_json"
+
+jq -e '
+  (.summary.total >= 0)
+  and (.summary.healthy >= 0)
+  and (.summary.cooldown >= 0)
+  and (.summary.disabled >= 0)
+  and ((.items | type) == "array")
+' "$profiles_health_json" >/dev/null
+
 workflow_payload="$(jq -n '{
   name:"Frontend Workflow Smoke",
   description:"Authenticated BFF workflow smoke",

@@ -27,10 +27,24 @@ function currentReturnPath(): string {
   return path;
 }
 
+function isSignInRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  return String(window.location.pathname || '').startsWith('/sign-in');
+}
+
 function controlPlaneSignInUrl(): string {
   if (typeof window === 'undefined') return '/sign-in';
+  let returnTo = currentReturnPath();
+  if (isSignInRoute()) {
+    const existing = new URL(window.location.href).searchParams.get('returnTo') || '';
+    if (existing.startsWith('/') && !existing.startsWith('//')) {
+      returnTo = existing;
+    } else {
+      returnTo = '/';
+    }
+  }
   const params = new URLSearchParams({
-    returnTo: currentReturnPath(),
+    returnTo,
   });
   if (getDesktopBridge()?.desktop) {
     params.set('desktop', '1');
@@ -42,7 +56,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function consumeDesktopControlPlaneAuthHandoff(): Promise<boolean> {
+export async function consumeDesktopControlPlaneAuthHandoff(): Promise<boolean> {
   const response = await fetch('/api/control-plane/auth/desktop/consume', {
     method: 'POST',
     cache: 'no-store',
@@ -70,7 +84,7 @@ async function consumeDesktopControlPlaneAuthHandoff(): Promise<boolean> {
   throw new Error(detail);
 }
 
-async function waitForDesktopControlPlaneSignIn(): Promise<void> {
+export async function waitForDesktopControlPlaneSignIn(): Promise<void> {
   const deadline = Date.now() + (60 * 1000 * 3);
   while (Date.now() < deadline) {
     const consumed = await consumeDesktopControlPlaneAuthHandoff();
@@ -87,6 +101,11 @@ async function openControlPlaneBrowserSignIn(): Promise<void> {
     controlPlaneBrowserSignInPromise = (async () => {
       const target = controlPlaneSignInUrl();
       const desktopBridge = getDesktopBridge();
+
+      if (desktopBridge?.desktop) {
+        window.location.assign(target);
+        return;
+      }
 
       if (desktopBridge?.openExternal) {
         const opened = await desktopBridge.openExternal(target).catch(() => false);
@@ -147,8 +166,15 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
           : 'Control-plane session bootstrap failed.';
 
       if (res.status === 401 && requiresLogin) {
-        const browserMessage = 'Continue in your browser to sign in.';
-        rememberControlPlaneFailure(browserMessage);
+        const desktopMode = Boolean(desktopBridge?.desktop);
+        const message = desktopMode ? 'Sign in required.' : 'Continue in your browser to sign in.';
+        rememberControlPlaneFailure(message);
+        if (desktopMode) {
+          if (!isSignInRoute()) {
+            window.location.assign(controlPlaneSignInUrl());
+          }
+          throw new Error(message);
+        }
         if (forcePrompt) {
           await openControlPlaneBrowserSignIn();
           if (desktopBridge?.desktop) {
@@ -156,7 +182,7 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
             return;
           }
         }
-        throw new Error(browserMessage);
+        throw new Error(message);
       }
 
       throw new Error(detail);

@@ -13,7 +13,7 @@ $OpenAiKeyFile = Join-Path $StateDir "openai_api_key"
 
 $OrionHost = if ($env:ORION_HOST) { $env:ORION_HOST } else { "127.0.0.1" }
 $OrionPort = if ($env:ORION_PORT) { [int]$env:ORION_PORT } else { 8001 }
-$BackendPort = if ($env:BACKEND_PORT) { [int]$env:BACKEND_PORT } else { 4000 }
+$BackendPort = if ($env:BACKEND_PORT) { [int]$env:BACKEND_PORT } else { 8080 }
 $FrontendHost = if ($env:FRONTEND_HOST) { $env:FRONTEND_HOST } else { "127.0.0.1" }
 $FrontendPort = if ($env:FRONTEND_PORT) { [int]$env:FRONTEND_PORT } else { 3000 }
 

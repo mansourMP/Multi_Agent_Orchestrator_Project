@@ -11,7 +11,7 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 const RUNTIME_HOST: &str = "127.0.0.1";
 const RUNTIME_PORT: &str = "8001";
 const BACKEND_HOST: &str = "127.0.0.1";
-const BACKEND_PORT: &str = "4000";
+const BACKEND_PORT: &str = "8080";
 const NEXT_HOST: &str = "localhost";
 const NEXT_PORT: &str = "3000";
 const WINDOW_LABEL: &str = "main";

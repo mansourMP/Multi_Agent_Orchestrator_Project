@@ -3,6 +3,8 @@
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck, Smartphone } from 'lucide-react';
+import { getDesktopBridge } from '@/lib/desktopBridge';
+import { waitForDesktopControlPlaneSignIn } from '@/lib/controlPlaneSession';
 import { humanizeUiError } from '@/lib/uiError';
 
 type AuthProviders = {
@@ -47,8 +49,14 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [oauthSubmitting, setOauthSubmitting] = useState<'google' | 'apple' | null>(null);
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [error, setError] = useState(authErrorMessage(errorCode));
+  const [inDesktopWindow, setInDesktopWindow] = useState(false);
+
+  useEffect(() => {
+    setInDesktopWindow(Boolean(desktopMode && getDesktopBridge()?.desktop));
+  }, [desktopMode]);
 
   useEffect(() => {
     let active = true;
@@ -79,6 +87,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   }, []);
 
   useEffect(() => {
+    if (inDesktopWindow) return;
     if (loadingProviders || error) return;
     const socialProviders = [
       providers.google.enabled ? 'google' : null,
@@ -94,7 +103,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       ? `/api/control-plane/auth/google/start?${params.toString()}`
       : `/api/control-plane/auth/apple/start?${params.toString()}`;
     window.location.replace(target);
-  }, [desktopMode, error, loadingProviders, providers.apple.enabled, providers.google.enabled, returnTo]);
+  }, [desktopMode, error, inDesktopWindow, loadingProviders, providers.apple.enabled, providers.google.enabled, returnTo]);
 
   useEffect(() => {
     if (loadingProviders) return;
@@ -123,7 +132,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           name,
           email,
           password,
-          desktop_handoff: desktopMode,
+          desktop_handoff: desktopMode && !inDesktopWindow,
           return_to: returnTo,
         }),
       });
@@ -137,7 +146,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         throw new Error(detail);
       }
 
-      if (desktopMode && payload?.redirect_to) {
+      if (desktopMode && !inDesktopWindow && payload?.redirect_to) {
         window.location.assign(payload.redirect_to);
         return;
       }
@@ -160,7 +169,31 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       params.set('desktop', '1');
     }
     const target = `/api/control-plane/auth/google/start?${params.toString()}`;
-    window.location.assign(target);
+    if (!inDesktopWindow) {
+      window.location.assign(target);
+      return;
+    }
+    setOauthSubmitting('google');
+    setError('');
+    void (async () => {
+      try {
+        const absoluteTarget = new URL(target, window.location.origin).toString();
+        const opened = await getDesktopBridge()?.openExternal?.(absoluteTarget);
+        if (!opened) {
+          throw new Error('Unable to open Google sign-in in the system browser.');
+        }
+        await waitForDesktopControlPlaneSignIn();
+        window.location.assign(returnTo);
+      } catch (oauthError) {
+        setOauthSubmitting(null);
+        setError(
+          humanizeUiError(
+            oauthError instanceof Error ? oauthError.message : '',
+            'Google sign-in could not be completed right now.',
+          ),
+        );
+      }
+    })();
   };
 
   const continueWithApple = () => {
@@ -169,7 +202,31 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       params.set('desktop', '1');
     }
     const target = `/api/control-plane/auth/apple/start?${params.toString()}`;
-    window.location.assign(target);
+    if (!inDesktopWindow) {
+      window.location.assign(target);
+      return;
+    }
+    setOauthSubmitting('apple');
+    setError('');
+    void (async () => {
+      try {
+        const absoluteTarget = new URL(target, window.location.origin).toString();
+        const opened = await getDesktopBridge()?.openExternal?.(absoluteTarget);
+        if (!opened) {
+          throw new Error('Unable to open Apple sign-in in the system browser.');
+        }
+        await waitForDesktopControlPlaneSignIn();
+        window.location.assign(returnTo);
+      } catch (oauthError) {
+        setOauthSubmitting(null);
+        setError(
+          humanizeUiError(
+            oauthError instanceof Error ? oauthError.message : '',
+            'Apple sign-in could not be completed right now.',
+          ),
+        );
+      }
+    })();
   };
 
   return (
@@ -177,34 +234,44 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       <div className="orion-auth-card">
         <div className="orion-auth-card__eyebrow">
           <ShieldCheck size={14} />
-          Secure browser sign-in
+          {inDesktopWindow ? 'Secure sign-in' : 'Secure browser sign-in'}
         </div>
         <h1 className="orion-auth-card__title">Sign in to Empyralis</h1>
         <p className="orion-auth-card__copy">
-          Sign in with the fastest supported provider. Direct AI account connection comes after app sign-in.
+          {inDesktopWindow
+            ? 'Sign in here. Google and Apple continue in your system browser and return to the app automatically.'
+            : 'Sign in with the fastest supported provider. Direct AI account connection comes after app sign-in.'}
         </p>
 
         {!loadingProviders && providers.google.enabled ? (
-          <button type="button" className="orion-auth-provider" onClick={continueWithGoogle}>
+          <button type="button" className="orion-auth-provider" onClick={continueWithGoogle} disabled={oauthSubmitting !== null}>
             <span className="orion-auth-provider__icon">
               <Chrome size={16} />
             </span>
-            Continue with Google
+            {oauthSubmitting === 'google' ? 'Waiting for Google…' : 'Continue with Google'}
           </button>
         ) : null}
 
         {!loadingProviders && providers.apple.enabled ? (
-          <button type="button" className="orion-auth-provider" onClick={continueWithApple}>
+          <button type="button" className="orion-auth-provider" onClick={continueWithApple} disabled={oauthSubmitting !== null}>
             <span className="orion-auth-provider__icon">
               <Smartphone size={16} />
             </span>
-            Continue with Apple
+            {oauthSubmitting === 'apple' ? 'Waiting for Apple…' : 'Continue with Apple'}
           </button>
         ) : null}
 
         {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
           <div className="orion-auth-note">
-            This local build is not configured for Google or Apple sign-in yet. Create a local account here, or sign in with an existing local account.
+            {inDesktopWindow
+              ? 'Google or Apple sign-in is not configured in this build yet. Create an account here, or sign in with your existing account.'
+              : 'This local build is not configured for Google or Apple sign-in yet. Create a local account here, or sign in with an existing local account.'}
+          </div>
+        ) : null}
+
+        {oauthSubmitting && inDesktopWindow ? (
+          <div className="orion-auth-note">
+            Finish sign-in in your browser. Empyralis will return you to the app automatically when authentication completes.
           </div>
         ) : null}
 

@@ -3,11 +3,13 @@
 import { useEffect, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { ensureControlPlaneSession, readControlPlaneFailure } from '@/lib/controlPlaneSession';
+import { useDesktopShell } from '@/lib/desktopBridge';
 import { humanizeUiError } from '@/lib/uiError';
 
 type BootstrapState = 'idle' | 'bootstrapping' | 'ready' | 'error';
 
 export default function ControlPlaneSessionBootstrap() {
+  const isDesktop = useDesktopShell();
   const [state, setState] = useState<BootstrapState>('idle');
   const [message, setMessage] = useState('');
   const [retrying, setRetrying] = useState(false);
@@ -28,7 +30,9 @@ export default function ControlPlaneSessionBootstrap() {
         const remembered = readControlPlaneFailure();
         const detail = humanizeUiError(
           remembered?.message || (error instanceof Error ? error.message : ''),
-          'Continue in your browser to unlock control-plane features in this app.',
+          isDesktop
+            ? 'Sign in to unlock control-plane features in this app.'
+            : 'Continue in your browser to unlock control-plane features in this app.',
         );
         setMessage(detail);
         setRetrying(false);
@@ -40,7 +44,7 @@ export default function ControlPlaneSessionBootstrap() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isDesktop]);
 
   const retry = async () => {
     setRetrying(true);
@@ -53,7 +57,9 @@ export default function ControlPlaneSessionBootstrap() {
       const remembered = readControlPlaneFailure();
       const detail = humanizeUiError(
         remembered?.message || (error instanceof Error ? error.message : ''),
-        'Continue in your browser to unlock control-plane features in this app.',
+        isDesktop
+          ? 'Sign in to unlock control-plane features in this app.'
+          : 'Continue in your browser to unlock control-plane features in this app.',
       );
       setMessage(detail);
       setRetrying(false);
@@ -61,6 +67,7 @@ export default function ControlPlaneSessionBootstrap() {
     }
   };
 
+  if (isDesktop) return null;
   if (state !== 'error') return null;
 
   return (

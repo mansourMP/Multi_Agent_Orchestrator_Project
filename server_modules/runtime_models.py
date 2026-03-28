@@ -324,6 +324,7 @@ class CredentialUpsertRequest(BaseModel):
     mode: str = "byok"
     credentials: Dict[str, Any]
     metadata: Optional[Dict[str, Any]] = None
+    skip_validation: bool = False
 
     def validate_fields(self) -> None:
         provider = (self.provider or "").strip().lower()

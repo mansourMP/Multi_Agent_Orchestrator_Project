@@ -21,6 +21,7 @@ def _init():
 
 
 def _sanitize_connector_metadata(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    _init()
     metadata = dict(raw) if isinstance(raw, dict) else {}
     if "agent_role" in metadata:
         normalized_role = _server.normalize_agent_role(metadata.get("agent_role"))
@@ -93,6 +94,7 @@ def _connector_public_metadata(connector: str, credentials: Dict[str, Any]) -> D
 
 
 def _provider_public_metadata(provider: str, credentials: Dict[str, Any]) -> Dict[str, Any]:
+    _init()
     provider_id = _server.normalize_provider_id(provider)
     public: Dict[str, Any] = {}
     auth_mode = str(credentials.get("auth_mode") or credentials.get("authMode") or "").strip().lower()
@@ -170,6 +172,7 @@ def _find_duplicate_connector_entry(
     *,
     exclude_id: str = "",
 ) -> Optional[Dict[str, Any]]:
+    _init()
     signature = _connector_identity_signature(connector, credentials)
     if not signature:
         return None

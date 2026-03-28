@@ -39,7 +39,7 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
           <div>
             <div className="orion-panel-title">Provider connection</div>
             <div className="orion-panel-copy">
-              Connect OpenAI, Anthropic, Gemini, or Vertex directly. App sign-in and AI provider access stay separate.
+              Connect OpenAI, Anthropic, Gemini, or Vertex directly. You can also reuse the OpenAI / Codex session already signed into this Mac.
             </div>
           </div>
         </div>

@@ -27,6 +27,7 @@ import {
   type ProviderOption,
 } from '@/app/page.catalog';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { getDesktopBridge } from '@/lib/desktopBridge';
 
 type ProviderCredentialRow = {
   id: string;
@@ -76,6 +77,18 @@ type RuntimeAvailabilityItem = {
   source_label: string;
   detail: string;
   profile_count: number;
+};
+
+type LocalOpenAiAuthStatus = {
+  available: boolean;
+  importable: boolean;
+  auth_file_exists: boolean;
+  auth_file_path?: string;
+  auth_mode?: string | null;
+  has_access_token: boolean;
+  has_api_key: boolean;
+  sign_in_url?: string;
+  detail?: string;
 };
 
 type ProviderAccountFormState = {
@@ -315,6 +328,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRow[]>([]);
   const [providerHealth, setProviderHealth] = useState<ProviderProfilesHealth>({ healthy: 0, cooldown: 0, disabled: 0, total: 0 });
   const [runtimeAvailability, setRuntimeAvailability] = useState<RuntimeAvailabilityItem[]>([]);
+  const [localOpenAiAuth, setLocalOpenAiAuth] = useState<LocalOpenAiAuthStatus | null>(null);
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerError, setProviderError] = useState('');
   const [providerNotice, setProviderNotice] = useState('');
@@ -333,6 +347,19 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       headers,
       cache: 'no-store',
     });
+  }, []);
+
+  const openExternalTarget = useCallback(async (target: string) => {
+    const url = String(target || '').trim();
+    if (!url) return;
+    const desktopBridge = getDesktopBridge();
+    if (desktopBridge?.openExternal) {
+      const opened = await desktopBridge.openExternal(url).catch(() => false);
+      if (opened) return;
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   }, []);
 
   const selectedProviderOption = useMemo(
@@ -639,9 +666,28 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [controlPlaneFetch, workspaceId]);
 
+  const loadLocalOpenAiAuth = useCallback(async () => {
+    if (!connectMode) return;
+    try {
+      const res = await controlPlaneFetch('/api/control-plane/providers/openai/local-auth/status');
+      const body = await res.json().catch(() => null) as LocalOpenAiAuthStatus | null;
+      if (res.ok && body) {
+        setLocalOpenAiAuth(body);
+        return;
+      }
+      setLocalOpenAiAuth(null);
+    } catch {
+      setLocalOpenAiAuth(null);
+    }
+  }, [connectMode, controlPlaneFetch]);
+
   useEffect(() => {
     void loadProviderAccounts();
   }, [loadProviderAccounts]);
+
+  useEffect(() => {
+    void loadLocalOpenAiAuth();
+  }, [loadLocalOpenAiAuth]);
 
   useEffect(() => {
     const availableAuthMode = selectedProviderAuthModes.find((item) => item.id === providerForm.authMode)?.id
@@ -994,6 +1040,33 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [controlPlaneFetch, refreshClaudeAuthStatus, setProviderActionBusy]);
 
+  const handleImportLocalOpenAiAuth = useCallback(async () => {
+    setProviderActionBusy('openai-local-import', 'import');
+    setProviderError('');
+    setProviderNotice('');
+    try {
+      const res = await controlPlaneFetch('/api/control-plane/providers/openai/local-auth/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          enable_runtime: true,
+        }),
+      });
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to import OpenAI / Codex session.'));
+      }
+      await Promise.all([loadProviderAccounts(), loadLocalOpenAiAuth()]);
+      setLastConnectedAccountLabel('OpenAI / Codex on this Mac');
+      setProviderNotice(String(body?.message || 'OpenAI / Codex session imported from this Mac.'));
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : 'Failed to import OpenAI / Codex session.');
+    } finally {
+      setProviderActionBusy('openai-local-import', null);
+    }
+  }, [controlPlaneFetch, loadLocalOpenAiAuth, loadProviderAccounts, setProviderActionBusy, workspaceId]);
+
   return (
     <>
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12, padding: '14px 16px' }}>
@@ -1072,6 +1145,52 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                   </button>
                 );
               })}
+            </div>
+          </div>
+        ) : null}
+
+        {connectMode ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              borderRadius: 14,
+              border: '1px solid var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--bg-elevated) 84%, transparent 16%)',
+              padding: '12px 14px',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>OpenAI / Codex on this Mac</div>
+              <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                {localOpenAiAuth?.detail || 'Sign in with ChatGPT or Codex in your browser, then import that local session here without pasting a token.'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="orion-btn orion-btn-secondary"
+                style={{ minHeight: 36, paddingInline: 14 }}
+                onClick={() => void openExternalTarget(String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login'))}
+              >
+                Open ChatGPT sign-in
+              </button>
+              <button
+                type="button"
+                className="orion-btn orion-btn-primary"
+                style={{ minHeight: 36, paddingInline: 14 }}
+                disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
+                onClick={() => void handleImportLocalOpenAiAuth()}
+              >
+                {providerBusy['openai-local-import'] === 'import'
+                  ? 'Importing…'
+                  : localOpenAiAuth?.importable
+                    ? 'Use OpenAI / Codex from this Mac'
+                    : 'Sign in first'}
+              </button>
+            </div>
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+              This reuses the local OpenAI / Codex session already saved on this machine. App sign-in and AI provider access stay separate.
             </div>
           </div>
         ) : null}

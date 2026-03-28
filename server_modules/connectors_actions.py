@@ -413,15 +413,16 @@ async def create_vault_credential(body: CredentialUpsertRequest):
         raise HTTPException(status_code=400, detail=f"Unsupported auth mode '{auth_mode}' for provider '{provider}'.")
     if auth_mode:
         credentials["auth_mode"] = auth_mode
-    _, _, adapter = resolve_provider_adapter(provider, credentials)
-
-    try:
-        check = adapter.validate(credentials)
-        if not check.get("ok"):
-            raise RuntimeError(check.get("message", "Credential validation failed."))
-        models = adapter.list_models(credentials)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    models: List[str] = []
+    if not bool(getattr(body, "skip_validation", False)):
+        _, _, adapter = resolve_provider_adapter(provider, credentials)
+        try:
+            check = adapter.validate(credentials)
+            if not check.get("ok"):
+                raise RuntimeError(check.get("message", "Credential validation failed."))
+            models = adapter.list_models(credentials)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     now = datetime.utcnow().isoformat() + "Z"
     entry_metadata = {
@@ -489,7 +490,7 @@ async def test_vault_credential(credential_id: str, workspace_id: Optional[str] 
     try:
         provider, _, adapter = resolve_provider_adapter(credentials.get("_provider"), credentials)
         result = adapter.validate(credentials)
-        models = adapter.list_models(credentials)
+        models = adapter.list_models(credentials) if result.get("ok") else []
         return {
             "ok": bool(result.get("ok")),
             "status": result.get("status"),

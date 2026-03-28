@@ -83,6 +83,45 @@ def resolve_default_vault_credential(provider, workspace_id=None):
     return _server.resolve_default_vault_credential(provider, workspace_id)
 
 
+def _validation_message(provider_label: str, response: Dict[str, Any]) -> str:
+    status = int(response.get("status") or 500)
+    payload = response.get("json")
+    detail = ""
+    if isinstance(payload, dict):
+        error_obj = payload.get("error")
+        if isinstance(error_obj, dict):
+            detail = str(
+                error_obj.get("message")
+                or error_obj.get("detail")
+                or error_obj.get("error")
+                or ""
+            ).strip()
+        elif isinstance(error_obj, str):
+            detail = error_obj.strip()
+        if not detail:
+            detail = str(
+                payload.get("message")
+                or payload.get("detail")
+                or payload.get("error_description")
+                or payload.get("title")
+                or ""
+            ).strip()
+    if not detail:
+        detail = str(response.get("text") or "").strip()
+    if status == 200:
+        return f"{provider_label} credential is valid."
+    return detail or f"{provider_label} credential could not be verified (status {status})."
+
+
+def _validation_result(provider_label: str, response: Dict[str, Any]) -> Dict[str, Any]:
+    status = int(response.get("status") or 500)
+    return {
+        "ok": status == 200,
+        "status": status,
+        "message": _validation_message(provider_label, response),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Provider catalog (moved from server.py)
 # ---------------------------------------------------------------------------
@@ -350,7 +389,7 @@ class OpenAIAdapter(ProviderAdapter):
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
-        return {"ok": res["status"] == 200, "status": res["status"], "message": "OpenAI credential is valid."}
+        return _validation_result("OpenAI", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
@@ -393,7 +432,7 @@ class AnthropicAdapter(ProviderAdapter):
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
-        return {"ok": res["status"] == 200, "status": res["status"], "message": "Anthropic credential is valid."}
+        return _validation_result("Anthropic", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
@@ -463,7 +502,7 @@ class GeminiAdapter(ProviderAdapter):
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         key = self._api_key(credentials)
         res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(key)}")
-        return {"ok": res["status"] == 200, "status": res["status"], "message": "Gemini credential is valid."}
+        return _validation_result("Gemini", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         key = self._api_key(credentials)
@@ -514,7 +553,7 @@ class VertexAdapter(ProviderAdapter):
         token, project, location = self._params(credentials)
         url = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models"
         res = http_json_request(url, headers={"Authorization": f"Bearer {token}"})
-        return {"ok": res["status"] == 200, "status": res["status"], "message": "Vertex credential is valid."}
+        return _validation_result("Vertex", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         token, project, location = self._params(credentials)

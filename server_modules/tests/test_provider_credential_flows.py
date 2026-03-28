@@ -9,16 +9,40 @@ class ProviderValidationMessageTests(unittest.TestCase):
     def setUp(self):
         provider_profiles._init()
 
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_openai_oauth_token_validate_skips_standard_api_probe(self, http_json_request_mock):
+        result = provider_profiles.OpenAIAdapter().validate(
+            {"oauth_token": "token-123", "auth_mode": "oauth_token"}
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], 200)
+        self.assertIn("imported", result["message"].lower())
+        http_json_request_mock.assert_not_called()
+
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_openai_oauth_token_list_models_returns_empty_without_probe(self, http_json_request_mock):
+        models = provider_profiles.OpenAIAdapter().list_models(
+            {"oauth_token": "token-123", "auth_mode": "oauth_token"}
+        )
+
+        self.assertEqual(models, [])
+        http_json_request_mock.assert_not_called()
+
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")
     @patch("server_modules.provider_profiles.http_json_request")
-    def test_openai_validate_returns_real_error_message_on_non_200(self, http_json_request_mock, _openai_bearer_mock):
+    def test_openai_validate_returns_real_error_message_on_non_200_for_standard_api_tokens(
+        self,
+        http_json_request_mock,
+        _openai_bearer_mock,
+    ):
         http_json_request_mock.return_value = {
             "status": 429,
             "json": {"error": {"message": "Rate limit exceeded for this token."}},
             "text": '{"error":{"message":"Rate limit exceeded for this token."}}',
         }
 
-        result = provider_profiles.OpenAIAdapter().validate({"oauth_token": "token-123", "auth_mode": "oauth_token"})
+        result = provider_profiles.OpenAIAdapter().validate({"access_token": "token-123", "auth_mode": "access_token"})
 
         self.assertEqual(result["status"], 429)
         self.assertFalse(result["ok"])

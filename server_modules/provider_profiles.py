@@ -371,10 +371,15 @@ def run_claude_code_cli(system_prompt: str, user_input: str, model: str, timeout
 class OpenAIAdapter(ProviderAdapter):
     provider_id = "openai"
 
+    def _uses_oauth_token(self, credentials: Dict[str, Any]) -> bool:
+        auth_mode = str(credentials.get("auth_mode") or "").strip().lower()
+        oauth_token = str(credentials.get("oauth_token") or "").strip()
+        return auth_mode == "oauth_token" or (not auth_mode and bool(oauth_token))
+
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
         token = _openai_bearer_from_credentials(credentials)
         if not token:
-            raise RuntimeError("OpenAI credential requires api_key or access_token.")
+            raise RuntimeError("OpenAI credential requires api_key, access_token, or oauth_token.")
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -388,10 +393,18 @@ class OpenAIAdapter(ProviderAdapter):
         return headers
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        if self._uses_oauth_token(credentials):
+            return {
+                "ok": True,
+                "status": 200,
+                "message": "OpenAI / Codex session imported.",
+            }
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         return _validation_result("OpenAI", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        if self._uses_oauth_token(credentials):
+            return []
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         data = res.get("json", {}) or {}
         models = []

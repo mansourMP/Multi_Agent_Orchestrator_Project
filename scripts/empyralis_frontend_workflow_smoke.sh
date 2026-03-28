@@ -80,6 +80,13 @@ jq -e '
   and ((.items | type) == "array")
 ' "$profiles_health_json" >/dev/null
 
+connect_ai_html="${tmpdir}/connect-ai.html"
+curl -sS -c "$cookiejar" -b "$cookiejar" "${FRONTEND_URL}/connect-ai?returnTo=%2F" \
+  "${common_headers[@]}" \
+  > "$connect_ai_html"
+
+grep -qi 'Connect AI account' "$connect_ai_html"
+
 workflow_payload="$(jq -n '{
   name:"Frontend Workflow Smoke",
   description:"Authenticated BFF workflow smoke",

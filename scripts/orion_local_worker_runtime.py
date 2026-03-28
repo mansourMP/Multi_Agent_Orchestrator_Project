@@ -201,52 +201,61 @@ class RuntimeClient:
         result_data: Optional[Dict[str, Any]] = None,
         usage_masked: Optional[Dict[str, Any]] = None,
     ):
-        payload: Dict[str, Any] = {"worker_id": worker_id, "result_text": result_text}
-        if isinstance(result_data, dict):
-            payload["result_data"] = result_data
-        if isinstance(usage_masked, dict):
-            payload["usage_masked"] = usage_masked
-        payload["runtime_id"] = worker_id
-        payload["session_token"] = self.runtime_session_token
-        payload["instance_id"] = self.runtime_instance_id
+        def _payload() -> Dict[str, Any]:
+            payload: Dict[str, Any] = {"worker_id": worker_id, "result_text": result_text}
+            if isinstance(result_data, dict):
+                payload["result_data"] = result_data
+            if isinstance(usage_masked, dict):
+                payload["usage_masked"] = usage_masked
+            payload["runtime_id"] = worker_id
+            payload["session_token"] = self.runtime_session_token
+            payload["instance_id"] = self.runtime_instance_id
+            return payload
+
         self._retry_with_reregister(
             worker_id,
             lambda: self._request_with_fallback(
                 "POST",
                 f"/runtime/tasks/{run_id}/complete",
                 f"/local/runs/{run_id}/complete",
-                payload,
+                _payload(),
             ),
         )
 
     def fail_run(self, run_id: str, worker_id: str, error_message: str):
+        def _payload() -> Dict[str, Any]:
+            return {
+                "runtime_id": worker_id,
+                "session_token": self.runtime_session_token,
+                "instance_id": self.runtime_instance_id,
+                "error": error_message[:1000],
+            }
+
         self._retry_with_reregister(
             worker_id,
             lambda: self._request_with_fallback(
                 "POST",
                 f"/runtime/tasks/{run_id}/fail",
                 f"/local/runs/{run_id}/fail",
-                {
-                    "runtime_id": worker_id,
-                    "session_token": self.runtime_session_token,
-                    "instance_id": self.runtime_instance_id,
-                    "error": error_message[:1000],
-                },
+                _payload(),
             ),
         )
 
     def heartbeat_worker(self, worker_id: str, current_run_id: Optional[str], note: str):
-        payload: Dict[str, Any] = {"note": note[:240]}
-        if current_run_id:
-            payload["current_run_id"] = current_run_id
-        payload["session_token"] = self.runtime_session_token
-        payload["instance_id"] = self.runtime_instance_id
+        def _payload() -> Dict[str, Any]:
+            payload: Dict[str, Any] = {"note": note[:240]}
+            if current_run_id:
+                payload["current_run_id"] = current_run_id
+            payload["session_token"] = self.runtime_session_token
+            payload["instance_id"] = self.runtime_instance_id
+            return payload
+
         self._retry_with_reregister(
             worker_id,
             lambda: self._request_with_fallback(
                 "POST",
                 f"/runtime/runtimes/{worker_id}/heartbeat",
                 f"/local/workers/{worker_id}/heartbeat",
-                payload,
+                _payload(),
             ),
         )

@@ -78,7 +78,14 @@ print(secrets.token_hex(24))
 PY
 }
 
-RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-}}}}"
+load_existing_runtime_key() {
+  if [[ -f "${STATE_DIR}/runtime_key" ]]; then
+    tr -d '[:space:]' < "${STATE_DIR}/runtime_key" 2>/dev/null || true
+  fi
+}
+
+EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
+RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${EXISTING_RUNTIME_KEY:-}}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
 GENERATED_RUNTIME_KEY=0
 if [[ -z "${RUNTIME_KEY}" ]]; then
@@ -202,6 +209,46 @@ cleanup_stale_pid_files() {
   cleanup_stale_pid_file "frontend"
   cleanup_stale_pid_file "worker"
   cleanup_stale_pid_file "ops-daemon"
+}
+
+resolve_worker_id() {
+  if [[ -n "${WORKER_ID:-}" ]]; then
+    printf "%s" "${WORKER_ID}"
+    return 0
+  fi
+  local host_id
+  host_id="$(hostname | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  printf "empyralis-local-%s" "${host_id}"
+}
+
+existing_worker_pids() {
+  local worker_id="$1"
+  ps -ef | awk -v root="${ROOT_DIR}" -v worker_id="${worker_id}" '
+    index($0, root "/scripts/orion_local_worker.py") && index($0, "--worker-id " worker_id) { print $2 }
+  '
+}
+
+cleanup_existing_worker_processes() {
+  local worker_id="$1"
+  local pids
+  pids="$(existing_worker_pids "${worker_id}")"
+  if [[ -z "${pids}" ]]; then
+    return 0
+  fi
+  local compact
+  compact="$(echo "${pids}" | tr '\n' ' ' | xargs)"
+  echo "Replacing existing local worker for ${worker_id}: ${compact}"
+  while IFS= read -r pid; do
+    [[ -z "${pid}" ]] && continue
+    kill "${pid}" 2>/dev/null || true
+  done <<< "${pids}"
+  sleep 0.3
+  while IFS= read -r pid; do
+    [[ -z "${pid}" ]] && continue
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done <<< "${pids}"
 }
 
 service_log_path() {
@@ -480,6 +527,7 @@ start_worker() {
   echo "Starting local worker ..."
   (
     cd "${ROOT_DIR}"
+    cleanup_existing_worker_processes "$(resolve_worker_id)"
     RUNTIME_KEY="${RUNTIME_KEY}" \
     ORION_API_URL="${ORION_API_URL}" \
     ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}" \

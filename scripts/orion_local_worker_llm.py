@@ -21,6 +21,13 @@ PROVIDER_COST_PER_1K = {
     "gemini": {"input": 0.0010, "output": 0.0030},
     "ollama": {"input": 0.0, "output": 0.0},
 }
+AUTH_SCOPE_ERROR_MARKERS = (
+    "api.responses.write",
+    "missing scopes",
+    "missing required scope",
+    "insufficient scope",
+    "insufficient permissions",
+)
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -75,6 +82,13 @@ def safe_read_json(path: Path, fallback: Any) -> Any:
         return parsed
     except Exception:
         return fallback
+
+
+def is_auth_scope_error(message: Any) -> bool:
+    lowered = str(message or "").strip().lower()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in AUTH_SCOPE_ERROR_MARKERS)
 
 
 def sanitize_bearer_token(value: Any) -> str:
@@ -751,6 +765,12 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
         "no",
         "off",
     }
+    prefer_direct_openai = str(os.getenv("ORION_LOCAL_WORKER_PREFER_DIRECT_OPENAI", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     context_provider = resolve_requested_provider(context, metadata)
 
     base = list(requested_order)
@@ -762,7 +782,13 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     for pid in SUPPORTED_PROVIDERS:
         if pid not in base:
             base.append(pid)
-    if use_codex_cli and auth_mode == "codex" and "codex_cli" in base:
+    if auth_mode == "codex" and prefer_direct_openai and "openai" in base and provider_has_key("openai"):
+        ordered: list[str] = ["openai"]
+        if use_codex_cli and "codex_cli" in base and provider_has_key("codex_cli"):
+            ordered.append("codex_cli")
+        ordered.extend(pid for pid in base if pid not in ordered)
+        base = ordered
+    elif use_codex_cli and auth_mode == "codex" and "codex_cli" in base:
         base = ["codex_cli"] + [pid for pid in base if pid != "codex_cli"]
 
     fallback_enabled = str(os.getenv("ORION_LOCAL_WORKER_PROVIDER_FALLBACK", "1")).strip().lower() not in {"0", "false", "no", "off"}
@@ -814,6 +840,7 @@ def generate_chat_reply_with_provider_fallback(
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     attempted: list[str] = []
     last_error = "no provider credentials available"
+    auth_mode = _openai_auth_mode()
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         if provider == "codex_cli":
@@ -848,6 +875,9 @@ def generate_chat_reply_with_provider_fallback(
                     ",".join(attempted),
                     "",
                 )
+            if auth_mode == "codex" and is_auth_scope_error(provider_error):
+                last_error = f"openai generation failed: {provider_error or 'missing_scope'}"
+                return "", None, ",".join(attempted), last_error
             # Fallback to chat-completions JSON wrapper if responses fails.
             json_prompt = (
                 f"User goal:\n{user_goal}\n\n"

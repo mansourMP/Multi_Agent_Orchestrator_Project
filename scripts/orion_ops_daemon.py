@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -23,6 +24,7 @@ STATE_DIR = ROOT_DIR / ".orion-stack"
 LOG_DIR = STATE_DIR / "logs"
 KEY_FILE = STATE_DIR / "ops_daemon_key"
 PID_DIR = STATE_DIR / "pids"
+START_META_FILE = STATE_DIR / "start.meta.json"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 DEFAULT_RUNTIME_URL = "http://127.0.0.1:8001"
@@ -69,6 +71,10 @@ AUTO_RECOVER_MAX_PER_HOUR = max(
 )
 AUTO_RECOVER_REQUIRE_WORKER = os.getenv("ORION_OPS_DAEMON_REQUIRE_WORKER", "1") == "1"
 AUTO_RECOVER_REQUIRE_TELEGRAM = os.getenv("ORION_OPS_DAEMON_REQUIRE_TELEGRAM", "1") == "1"
+AUTO_RECOVER_STARTUP_GRACE_SECONDS = max(
+    5,
+    min(int(os.getenv("ORION_OPS_DAEMON_STARTUP_GRACE_SECONDS", "45")), 600),
+)
 
 WATCHDOG_LOCK = threading.Lock()
 WATCHDOG_STOP = threading.Event()
@@ -80,6 +86,7 @@ WATCHDOG_STATE: Dict[str, Any] = {
     "max_recoveries_per_hour": AUTO_RECOVER_MAX_PER_HOUR,
     "require_worker": AUTO_RECOVER_REQUIRE_WORKER,
     "require_telegram": AUTO_RECOVER_REQUIRE_TELEGRAM,
+    "startup_grace_seconds": AUTO_RECOVER_STARTUP_GRACE_SECONDS,
     "last_probe_at": None,
     "last_probe": {},
     "healthy": None,
@@ -239,6 +246,30 @@ def _runtime_request(
         return 0, {"error": str(exc)}
 
 
+def _load_start_meta() -> Dict[str, Any]:
+    try:
+        payload = json.loads(START_META_FILE.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _runtime_start_age_seconds(now_ts: int) -> Optional[int]:
+    meta = _load_start_meta()
+    started_at = str(meta.get("started_at") or "").strip()
+    if not started_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    started_ts = int(dt.timestamp())
+    age = now_ts - started_ts
+    return age if age >= 0 else 0
+
+
 def _telegram_get(bot_token: str, method: str, query: str = "") -> Tuple[int, Any]:
     url = f"https://api.telegram.org/bot{bot_token}/{method}{query}"
     req = urllib.request.Request(url=url, method="GET")
@@ -376,10 +407,18 @@ def _action_telegram_rebind(runtime_key: str, payload: Dict[str, Any], runtime_u
 
 def _watchdog_probe(runtime_key: str, runtime_url: str) -> Dict[str, Any]:
     checked_at = int(time.time())
+    runtime_start_age_seconds = _runtime_start_age_seconds(checked_at)
+    startup_grace_active = (
+        isinstance(runtime_start_age_seconds, int)
+        and runtime_start_age_seconds < AUTO_RECOVER_STARTUP_GRACE_SECONDS
+    )
     health_status, health_payload = _runtime_request(runtime_key, "/health", runtime_url=runtime_url)
     runtime_ok = bool(health_status == 200 and _safe_status(health_payload, "ok", False))
     issues = []
     worker_online = 0
+    pending_runs = 0
+    claimed_runs = 0
+    active_local_work = False
     telegram_enabled = False
     telegram_active = False
     telegram_thread_alive = False
@@ -392,9 +431,13 @@ def _watchdog_probe(runtime_key: str, runtime_url: str) -> Dict[str, Any]:
             "/runtime/runtimes/status",
             runtime_url=runtime_url,
         )
-        worker_online = int(_safe_status(_safe_status(worker_payload, "summary", {}), "online", 0) or 0)
+        worker_summary = _safe_status(worker_payload, "summary", {})
+        worker_online = int(_safe_status(worker_summary, "online", 0) or 0)
+        pending_runs = int(_safe_status(worker_summary, "pending_runs", 0) or 0)
+        claimed_runs = int(_safe_status(worker_summary, "claimed_runs", 0) or 0)
+        active_local_work = pending_runs > 0 or claimed_runs > 0
         worker_ok = worker_status == 200 and worker_online > 0
-        if AUTO_RECOVER_REQUIRE_WORKER and not worker_ok:
+        if AUTO_RECOVER_REQUIRE_WORKER and not worker_ok and not startup_grace_active and not active_local_work:
             issues.append("local_worker_offline")
 
         telegram_enabled = bool(_safe_status(health_payload, "telegram_autopilot_enabled", False))
@@ -408,17 +451,22 @@ def _watchdog_probe(runtime_key: str, runtime_url: str) -> Dict[str, Any]:
             telegram_active = bool(_safe_status(tg_data, "active", False))
             telegram_thread_alive = bool(_safe_status(tg_data, "thread_alive", False))
             telegram_error = _safe_status(tg_data, "last_error", None)
-            if tg_status != 200:
+            if tg_status != 200 and not startup_grace_active and not active_local_work:
                 issues.append("telegram_autopilot_status_unavailable")
-            elif not telegram_active:
+            elif not telegram_active and not startup_grace_active and not active_local_work:
                 issues.append("telegram_autopilot_inactive")
-            elif not telegram_thread_alive:
+            elif not telegram_thread_alive and not startup_grace_active and not active_local_work:
                 issues.append("telegram_autopilot_thread_dead")
 
     return {
         "checked_at": checked_at,
+        "runtime_start_age_seconds": runtime_start_age_seconds,
+        "startup_grace_active": startup_grace_active,
         "runtime_ok": runtime_ok,
         "worker_online": worker_online,
+        "pending_runs": pending_runs,
+        "claimed_runs": claimed_runs,
+        "active_local_work": active_local_work,
         "telegram_enabled": telegram_enabled,
         "telegram_active": telegram_active,
         "telegram_thread_alive": telegram_thread_alive,

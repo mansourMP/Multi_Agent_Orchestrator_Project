@@ -12120,6 +12120,38 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+.orion-auth-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(246, 244, 238, 0.92);
+  border: 1px solid rgba(93, 99, 110, 0.12);
+}
+
+.orion-auth-switch__button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.orion-auth-switch__button:hover {
+  color: var(--text-primary);
+}
+
+.orion-auth-switch__button.active {
+  background: #ffffff;
+  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(27, 31, 39, 0.08);
+}
+
 .orion-auth-field {
   display: grid;
   gap: 8px;

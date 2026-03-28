@@ -42,6 +42,8 @@ type BrowserSignInPageProps = {
 
 export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMode = false }: BrowserSignInPageProps) {
   const [providers, setProviders] = useState<AuthProviders>(DEFAULT_PROVIDERS);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -76,13 +78,41 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
     };
   }, []);
 
+  useEffect(() => {
+    if (loadingProviders || error) return;
+    const socialProviders = [
+      providers.google.enabled ? 'google' : null,
+      providers.apple.enabled ? 'apple' : null,
+    ].filter(Boolean) as Array<'google' | 'apple'>;
+    if (socialProviders.length !== 1) return;
+    const provider = socialProviders[0];
+    const params = new URLSearchParams({ returnTo });
+    if (desktopMode) {
+      params.set('desktop', '1');
+    }
+    const target = provider === 'google'
+      ? `/api/control-plane/auth/google/start?${params.toString()}`
+      : `/api/control-plane/auth/apple/start?${params.toString()}`;
+    window.location.replace(target);
+  }, [desktopMode, error, loadingProviders, providers.apple.enabled, providers.google.enabled, returnTo]);
+
+  useEffect(() => {
+    if (loadingProviders) return;
+    if (!providers.google.enabled && !providers.apple.enabled) {
+      setAuthMode((current) => (current === 'signin' ? 'signup' : current));
+    }
+  }, [loadingProviders, providers.apple.enabled, providers.google.enabled]);
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitting(true);
     setError('');
 
     try {
-      const response = await fetch('/api/control-plane/auth/login', {
+      const endpoint = authMode === 'signup'
+        ? '/api/control-plane/auth/signup'
+        : '/api/control-plane/auth/login';
+      const response = await fetch(endpoint, {
         method: 'POST',
         cache: 'no-store',
         credentials: 'same-origin',
@@ -90,6 +120,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          name,
           email,
           password,
           desktop_handoff: desktopMode,
@@ -117,7 +148,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       setError(
         humanizeUiError(
           submitError instanceof Error ? submitError.message : '',
-          'Unable to sign in right now.',
+          authMode === 'signup' ? 'Unable to create your account right now.' : 'Unable to sign in right now.',
         ),
       );
     }
@@ -173,17 +204,53 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
 
         {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
           <div className="orion-auth-note">
-            Social sign-in appears automatically when your hosted control plane is configured for Google or Apple.
+            This local build is not configured for Google or Apple sign-in yet. Create a local account here, or sign in with an existing local account.
           </div>
         ) : null}
 
         {providers.email.enabled ? (
           <>
             <div className="orion-auth-divider">
-              <span>{providers.google.enabled || providers.apple.enabled ? 'or use email' : 'Email sign-in'}</span>
+              <span>{providers.google.enabled || providers.apple.enabled ? 'or use email' : 'Local account'}</span>
+            </div>
+
+            <div className="orion-auth-switch" role="tablist" aria-label="Authentication mode">
+              <button
+                type="button"
+                className={authMode === 'signup' ? 'orion-auth-switch__button active' : 'orion-auth-switch__button'}
+                onClick={() => {
+                  setAuthMode('signup');
+                  setError('');
+                }}
+              >
+                Create account
+              </button>
+              <button
+                type="button"
+                className={authMode === 'signin' ? 'orion-auth-switch__button active' : 'orion-auth-switch__button'}
+                onClick={() => {
+                  setAuthMode('signin');
+                  setError('');
+                }}
+              >
+                Sign in
+              </button>
             </div>
 
             <form className="orion-auth-form" onSubmit={handleSubmit}>
+              {authMode === 'signup' ? (
+                <label className="orion-auth-field">
+                  <span>Name</span>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Your name"
+                    autoComplete="name"
+                    required
+                  />
+                </label>
+              ) : null}
               <label className="orion-auth-field">
                 <span>Email</span>
                 <input
@@ -211,7 +278,9 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
 
               <button type="submit" className="btn-primary orion-auth-submit" disabled={submitting}>
                 <LockKeyhole size={14} />
-                {submitting ? 'Signing in…' : 'Continue'}
+                {submitting
+                  ? (authMode === 'signup' ? 'Creating account…' : 'Signing in…')
+                  : (authMode === 'signup' ? 'Create account' : 'Continue')}
               </button>
             </form>
           </>

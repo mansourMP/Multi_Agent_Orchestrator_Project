@@ -105,13 +105,22 @@ ensure_runtime() {
 }
 
 api_get() {
-  curl -fsS "${headers[@]}" "${API_URL}$1"
+  local path="$1"
+  if [[ "${path}" == http://* || "${path}" == https://* ]]; then
+    curl -fsS "${headers[@]}" "${path}"
+  else
+    curl -fsS "${headers[@]}" "${API_URL}${path}"
+  fi
 }
 
 api_post() {
   local path="$1"
   local payload="$2"
-  curl -fsS -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}"
+  if [[ "${path}" == http://* || "${path}" == https://* ]]; then
+    curl -fsS -X POST "${json_headers[@]}" -d "${payload}" "${path}"
+  else
+    curl -fsS -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}"
+  fi
 }
 
 api_post_expect_status() {
@@ -121,7 +130,11 @@ api_post_expect_status() {
   local tmp
   local status
   tmp="$(mktemp)"
-  status="$(curl -sS -o "${tmp}" -w "%{http_code}" -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}")"
+  if [[ "${path}" == http://* || "${path}" == https://* ]]; then
+    status="$(curl -sS -o "${tmp}" -w "%{http_code}" -X POST "${json_headers[@]}" -d "${payload}" "${path}")"
+  else
+    status="$(curl -sS -o "${tmp}" -w "%{http_code}" -X POST "${json_headers[@]}" -d "${payload}" "${API_URL}${path}")"
+  fi
   if [[ "${status}" != "${expected_status}" ]]; then
     cat "${tmp}" >&2
     rm -f "${tmp}"
@@ -1231,7 +1244,8 @@ headers = {"X-API-Key": runtime_key, "Content-Type": "application/json"}
 
 def req(method, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(f"{base}{path}", data=data, method=method)
+    url = path if path.startswith("http://") or path.startswith("https://") else f"{base}{path}"
+    request = urllib.request.Request(url, data=data, method=method)
     for key, value in headers.items():
         request.add_header(key, value)
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -1267,12 +1281,22 @@ status, created = req("POST", "/workflows?workspaceId=default", workflow_payload
 workflow_id = created["id"]
 status, fetched = req("GET", f"/workflows/{workflow_id}")
 status, published = req("POST", f"/workflows/{workflow_id}/publish")
-status, execution = req("POST", f"/executions/{workflow_id}/run", {"initialPrompt": "Smoke run for workflow plumbing"})
-execution_id = execution["executionId"]
+runtime_base = os.environ.get("EMPYRALIS_API_URL") or os.environ.get("ORION_API_URL") or "http://127.0.0.1:8001"
+status, execution = req("POST", f"{runtime_base.rstrip('/')}/runs/start", {
+    "engine": "orion",
+    "workflow_id": workflow_id,
+    "workspace_id": "default",
+    "user_goal": "Smoke run for workflow plumbing",
+    "metadata": {
+        "origin": "workflow_runtime_smoke",
+        "trust_mode": "guarded",
+    },
+})
+execution_id = execution["run_id"]
 final = None
 for _ in range(20):
-    status, final = req("GET", f"/executions/{execution_id}")
-    if final.get("status") in {"success", "waiting", "failed"}:
+    status, final = req("GET", f"{runtime_base.rstrip('/')}/runs/{execution_id}")
+    if final.get("status") in {"completed", "waiting_for_input", "failed"}:
         break
     time.sleep(0.5)
 
@@ -1286,14 +1310,14 @@ payload = {
 with open(out_file, "w", encoding="utf-8") as fh:
     json.dump(payload, fh, indent=2)
 
-if payload["publish_status"] != "published" or payload["execution_status"] != "success":
+if payload["publish_status"] != "published" or payload["execution_status"] != "completed":
     raise SystemExit(1)
 PY
 then
-  pass "A24 workflow create publish execute"
+  pass "A24 workflow create publish execute via runtime"
 else
   cat "${workflow_smoke_json}" 2>/dev/null || true
-  fail "A24 workflow create publish execute"
+  fail "A24 workflow create publish execute via runtime"
 fi
 
 if [[ "${SCREENSHOT_SMOKE}" == "1" ]]; then

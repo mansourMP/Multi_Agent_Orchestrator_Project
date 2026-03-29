@@ -164,17 +164,6 @@ def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List
     ]
 
 
-def _active_tool_lines(availability: Dict[str, Any]) -> List[str]:
-    active_labels: List[str] = []
-    for item in _normalize_tool_capabilities(availability):
-        if item.get("runtime_usable") is not True:
-            continue
-        label = str(item.get("label") or "").strip()
-        if label:
-            active_labels.append(label)
-    return active_labels
-
-
 def _connected_system_labels(availability: Dict[str, Any]) -> List[str]:
     return [str(item.get("label") or "").strip() for item in _normalize_tool_capabilities(availability) if item.get("connected")]
 
@@ -603,7 +592,6 @@ def build_direct_operator_reply(
     }
     system_prompt = build_operator_system_prompt(
         _availability_lines(normalized_workspace_id, availability_payload),
-        _active_tool_lines(availability_payload),
     ) or None
     history_mode = "raw_messages" if normalized_prior_messages else "none"
     prior_messages_used = bool(normalized_prior_messages)

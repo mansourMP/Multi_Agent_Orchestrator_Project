@@ -907,29 +907,10 @@ def _workflow_next_node_id(
 def _build_workflow_agent_system_prompt(config: Dict[str, Any]) -> str:
     runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
     tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
-    connectors = config.get("connectors") if isinstance(config.get("connectors"), dict) else {}
     availability_lines: List[str] = []
     execution_target = str(runtime.get("execution_target") or "").strip()
     if execution_target:
         availability_lines.append(f"Execution target: {execution_target}")
-    bindings = connectors.get("bindings") if isinstance(connectors.get("bindings"), list) else []
-    connector_labels: List[str] = []
-    for binding in bindings:
-        if not isinstance(binding, dict):
-            continue
-        label = str(
-            binding.get("connector_label")
-            or binding.get("label")
-            or binding.get("connector")
-            or binding.get("connector_id")
-            or ""
-        ).strip()
-        if label:
-            connector_labels.append(label)
-    availability_lines.append(
-        "Connected systems: "
-        + (", ".join(connector_labels) if connector_labels else "none")
-    )
     dynamic_allowed = tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []
     tool_lines = [str(item).strip() for item in dynamic_allowed if str(item).strip()]
     return build_operator_system_prompt(availability_lines, tool_lines)

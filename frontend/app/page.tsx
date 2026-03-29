@@ -37,16 +37,13 @@ import {
   type ChatStoreRecord,
 } from '@/components/orion/chat/chatSchema';
 import { WorkbenchShell } from '../components/orion/workbench/WorkbenchShell';
-import { WorkbenchActivityRail } from '../components/orion/workbench/WorkbenchActivityRail';
 import { type AuthenticatedEventStreamConnection } from '@/lib/authenticatedEventStream';
 import {
-  WorkbenchCenterPanel,
   type HomeLiveAgentCard,
   type HomeLiveLocalAction,
   type HomeLiveOverview,
 } from '../components/orion/workbench/WorkbenchCenterPanel';
 import {
-  WorkbenchControlDeck,
   type WorkbenchAgentChatMessage,
   type WorkbenchDeckMode,
   type WorkbenchInspectStreamState,
@@ -381,7 +378,7 @@ function createWorkbenchChatId(prefix: string): string {
 }
 
 export default function AutopilotHome() {
-  return <AutopilotWorkspace experience="simple" />;
+  return <AutopilotWorkspace />;
 }
 
 function normalizeRepeatedMessageContent(value: string): string {
@@ -1154,11 +1151,7 @@ function migrateLegacyWorkbenchChats(
   };
 }
 
-type AutopilotWorkspaceProps = {
-  experience: 'simple' | 'advanced';
-};
-
-export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
+export function AutopilotWorkspace() {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
@@ -1757,19 +1750,6 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     }
   }, [workbenchChatMode]);
 
-  const experienceMode: 'simple' | 'advanced' = experience;
-  const applyExperienceMode = useCallback(
-    (mode: 'simple' | 'advanced') => {
-      if (mode === 'simple') {
-        setWorkbenchChatMode('orchestrate');
-        setSelectedAgentRole('orchestrator');
-        setDeckMode('context');
-      }
-      router.push(mode === 'advanced' ? '/workspace' : '/');
-    },
-    [router, setSelectedAgentRole],
-  );
-
   useEffect(() => {
     if (!setupHydrated) return;
     const wantsFullAccess = accessMode === 'full';
@@ -1783,10 +1763,9 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [accessMode, guidedDefaultsEnabled, setGuidedDefaultsEnabled, setTrustMode, setupHydrated, trustMode]);
 
   useEffect(() => {
-    if (experienceMode !== 'simple') return;
     if (workbenchChatMode !== 'orchestrate') setWorkbenchChatMode('orchestrate');
     if (selectedAgentRole !== 'orchestrator') setSelectedAgentRole('orchestrator');
-  }, [experienceMode, selectedAgentRole, setSelectedAgentRole, workbenchChatMode]);
+  }, [selectedAgentRole, setSelectedAgentRole, workbenchChatMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1834,7 +1813,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   const simpleChatRuntimeRole = defaultAssistantProfile.backendRole;
   const workbenchAgentRoleOptions = useMemo(() => {
     const source =
-      singleAgentMode || experienceMode === 'simple' || workbenchChatMode === 'orchestrate'
+      singleAgentMode || workbenchChatMode === 'orchestrate'
         ? AGENT_ROLE_OPTIONS.filter((option) => option.id === 'orchestrator')
         : workbenchPinnedAgentRoles.length > 0
           ? AGENT_ROLE_OPTIONS.filter((option) =>
@@ -1848,7 +1827,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       label: workbenchAgentConfigs[option.id]?.name?.trim() || option.label,
       description: workbenchAgentConfigs[option.id]?.subtitle?.trim() || option.description,
     }));
-  }, [experienceMode, selectedAgentRole, singleAgentMode, workbenchAgentConfigs, workbenchPinnedAgentRoles, workbenchChatMode]);
+  }, [selectedAgentRole, singleAgentMode, workbenchAgentConfigs, workbenchPinnedAgentRoles, workbenchChatMode]);
 
   useEffect(() => {
     if (singleAgentMode) {
@@ -2325,7 +2304,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           setTopError(null);
           return;
         }
-        void startAutopilot(experienceMode === 'simple' ? simpleChatRunOverrides : directAgentRunOverrides);
+        void startAutopilot(simpleChatRunOverrides);
       }
     };
 
@@ -2354,7 +2333,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       window.removeEventListener(GLOBAL_COMMAND_EVENT, onGlobalCommand as EventListener);
       window.removeEventListener(LEGACY_ORION_GLOBAL_COMMAND_EVENT, onGlobalCommand as EventListener);
     };
-  }, [derivedSetupReady, directAgentRunOverrides, experienceMode, router, setTopError, simpleChatRunOverrides, startAutopilot]);
+  }, [derivedSetupReady, router, setTopError, simpleChatRunOverrides, startAutopilot]);
 
   useEffect(() => {
     if (!pendingSimpleRun) return;
@@ -2632,251 +2611,59 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     return () => closeStream();
   }, [closeStream]);
 
-  const deckColumnWidth = workbenchDeckSize === 'compact' ? 336 : workbenchDeckSize === 'expanded' ? 448 : 392;
-  const showActivityRail = experienceMode === 'advanced';
-  const showControlDeck = experienceMode === 'advanced' ? (isMobile ? true : workbenchDeckVisible) : false;
-  const workbenchColumns = isMobile
-    ? '1fr'
-    : showActivityRail && showControlDeck
-      ? isNarrow
-        ? '296px minmax(0, 1fr)'
-        : `296px minmax(0, 1fr) ${deckColumnWidth}px`
-      : showActivityRail
-        ? '296px minmax(0, 1fr)'
-        : showControlDeck
-          ? `minmax(0, 1fr) ${deckColumnWidth}px`
-          : 'minmax(0, 1fr)';
-  const approvalItems = controlCenter.pendingApprovals.slice(0, 6);
-  const approvalAuditItems = controlCenter.approvalAudit.slice(0, 10);
-  const inspectLogs = logs.slice(-80);
-  const inspectStreamState: WorkbenchInspectStreamState = (() => {
-    if (!runId) return controlCenter.latestRunId ? 'closed' : 'idle';
-    if (status === 'running' || status === 'queued_local' || status === 'waiting') {
-      const recent = logs.slice(-6);
-      const hasStreamDisconnect = recent.some((entry) =>
-        String(entry.message || '').toLowerCase().includes('stream disconnected'),
-      );
-      return hasStreamDisconnect ? 'reconnecting' : 'live';
-    }
-    return 'closed';
-  })();
-  const selectedWorkbenchRun = controlCenter.recentRuns.find((item) => item.run_id === selectedWorkbenchRunId) ?? null;
-  const applyWorkbenchAgentSelection = useCallback((role: AgentRoleId) => {
-    if (singleAgentMode) {
-      setWorkbenchChatMode('orchestrate');
-      setSelectedAgentRole('orchestrator');
-      setDeckMode('context');
-      return;
-    }
-    if (experienceMode === 'simple') {
-      setWorkbenchChatMode('orchestrate');
-      setSelectedAgentRole('orchestrator');
-      setDeckMode('context');
-      return;
-    }
-    if (role === 'orchestrator') {
-      setWorkbenchChatMode('orchestrate');
-    } else {
-      setWorkbenchChatMode('direct');
-    }
-    setSelectedAgentRole(role);
-    setDeckMode('context');
-  }, [experienceMode, setSelectedAgentRole, singleAgentMode]);
   return (
     <WorkbenchShell
       topError={topError}
-      chatMode={workbenchChatMode}
-      onChatModeChange={(mode) => {
-        if ((singleAgentMode || experienceMode === 'simple') && mode !== 'orchestrate') return;
-        setWorkbenchChatMode(mode);
-        if (mode === 'orchestrate') setSelectedAgentRole('orchestrator');
-        setDeckMode('context');
-      }}
-      experienceMode={experienceMode}
-      onExperienceModeChange={applyExperienceMode}
-      deckVisible={workbenchDeckVisible}
-      onDeckVisibleChange={setWorkbenchDeckVisible}
-      deckControlsEnabled={!isMobile}
-      singleAgentMode={singleAgentMode}
     >
       <div
         className="orion-workbench-grid"
         style={{
-          gridTemplateColumns: workbenchColumns,
+          gridTemplateColumns: 'minmax(0, 1fr)',
         }}
       >
-        {showActivityRail ? (
-          <WorkbenchActivityRail
-            isMobile={isMobile}
-            chatMode={workbenchChatMode}
-            singleAgentMode={singleAgentMode}
-            selectedAgentRole={selectedAgentRole}
-            onAgentRoleChange={applyWorkbenchAgentSelection}
-            agentRoleOptions={workbenchAgentRoleOptions}
-            selectedAgentChannels={selectedAgentChannels}
-            selectedAgentChannelsLoading={selectedAgentChannelsLoading}
-            pendingApprovals={approvalItems.length}
-            runtimeOk={controlCenter.runtimeOk}
-          />
-        ) : null}
-        {experienceMode === 'simple' ? (
-          <ChatSurface
-            isMobile={isMobile}
-            goal={goal}
-            setGoal={setGoal}
-            primaryGoalRef={primaryGoalRef}
-            onSend={() => {
-              void sendSimpleChat();
-            }}
-            onMessageAction={(messageId, action) => {
-              void handleSimpleChatMessageAction(messageId, action);
-            }}
-            onRunApprovalDecision={(scope) => {
-              if (scope === 'deny') {
-                void submitSimpleChatPermissionDecision('Hold', 'once');
-                return;
-              }
-              void submitSimpleChatPermissionDecision('Proceed', 'once');
-            }}
-            chatBusy={Boolean(pendingSimpleChat)}
-            messages={selectedChatMessages}
-            inlineStatus={inlineSimpleChatStatus}
-            inlineAction={inlineSimpleChatAction}
-            emptyAction={emptySimpleChatAction}
-            targetLabel={defaultAssistantProfile.label}
-            targetHref="/agents"
-            selectedModel={model}
-            modelOptions={modelOptions}
-            modelsLoading={modelsLoading}
-            onSelectModel={setModel}
-            trustLabel={simpleChatTrustLabel}
-            selectedDepth={simpleChatDepth}
-            depthLabel={simpleChatDepthLabel}
-            depthOptions={CHAT_DEPTH_OPTIONS}
-            onSelectDepth={(value) => {
-              if (value === 'low' || value === 'medium' || value === 'high') setSimpleChatDepth(value);
-            }}
-            permissionPrompt={null}
-            identityDrawerOpen={chatIdentityDrawerOpen}
-            onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
-            onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
-            identitySections={sessionIdentitySections}
-            identityActions={sessionIdentityActions}
-          />
-        ) : (
-          <WorkbenchCenterPanel
-            isMobile={isMobile}
-            isTablet={isTablet}
-            experienceMode={experienceMode}
-            chatMode={workbenchChatMode}
-            singleAgentMode={singleAgentMode}
-            selectedAgent={selectedAgent}
-            goal={goal}
-            setGoal={(value) => setGoal(value)}
-            primaryGoalRef={primaryGoalRef}
-            onSendChat={() => {
-              void sendWorkbenchAgentChat();
-            }}
-            onRunCommand={() => {
-              void runWorkbenchCommand();
-            }}
-            setupReady={setupReady}
-            hasConnectedTools={connectorCredentials.length > 0}
-            onRequireSetup={() => {
-              setTopError(null);
-            }}
-            setupGuidanceStatus={inlineWorkbenchChatStatus}
-            setupGuidanceAction={inlineWorkbenchChatAction}
-            chatBusy={Boolean(pendingWorkbenchChat)}
-            chatMessages={selectedWorkbenchAgentChat}
-            workerOnline={controlCenter.workerOnline}
-            workerPending={controlCenter.workerPending}
-            latestRunSummary={controlCenter.latestRunSummary}
-            autonomyStages={autonomyStages}
-            logs={logs}
-            showLiveLogs={showLiveLogs}
-            setShowLiveLogs={setShowLiveLogs}
-            runId={runId}
-            runReceipt={runReceipt}
-            copyRunReceipt={copyRunReceipt}
-            packResult={packResult}
-            executionSummary={executionSummary}
-            riskColor={riskColor}
-            trustMode={trustMode}
-            copyResultSummary={copyResultSummary}
-            exportRunJson={exportRunJson}
-            createFollowUpTask={createFollowUpTask}
-            approvalItems={approvalItems}
-            approvalActionBusy={approvalActionBusy}
-            onResolvePendingApproval={(runId, approvalId, decision) => {
-              void resolvePendingApproval(runId, approvalId, decision);
-            }}
-            approvalAuditItems={approvalAuditItems}
-            recentRuns={controlCenter.recentRuns}
-            selectedRunId={selectedWorkbenchRunId}
-            onSelectRun={(targetRunId) => {
-              setSelectedWorkbenchRunId(targetRunId);
-              setDeckMode('inspect');
-            }}
-            onOpenRun={(targetRunId) => {
-              router.push(`/runs/${encodeURIComponent(targetRunId)}/inspect`);
-            }}
-            onOpenRunOutput={(targetRunId) => {
-              router.push(`/runs/${encodeURIComponent(targetRunId)}/inspect?focus=artifacts`);
-            }}
-            onOpenRunsPage={() => {
-              router.push('/executions');
-            }}
-            onOpenApprovalsPage={() => {
-              router.push('/approvals');
-            }}
-            homeOverview={controlCenter.homeOverview}
-            latestInboxSession={controlCenter.latestInboxSession}
-          />
-        )}
-
-        {showControlDeck ? (
-          <WorkbenchControlDeck
-            isMobile={isMobile}
-            isNarrow={isNarrow}
-            mode={deckMode}
-            onModeChange={setDeckMode}
-            chatMode={workbenchChatMode}
-            singleAgentMode={singleAgentMode}
-            selectedAgentRole={selectedAgentRole}
-            agentRoleOptions={workbenchAgentRoleOptions}
-            status={status}
-            runId={runId}
-            selectedRun={selectedWorkbenchRun}
-            latestRunId={controlCenter.latestRunId}
-            latestRunSummary={controlCenter.latestRunSummary}
-            pendingApprovals={approvalItems.length}
-            inspectLogs={inspectLogs}
-            inspectStreamState={inspectStreamState}
-            onOpenRunInspect={(targetRunId) => {
-              router.push(`/runs/${encodeURIComponent(targetRunId)}/inspect?focus=artifacts`);
-            }}
-            selectedAgentChannels={selectedAgentChannels}
-            selectedAgentChannelsLoading={selectedAgentChannelsLoading}
-            selectedPackId={selectedPack.id}
-            onPackChange={(nextId) => {
-              setSelectedPackId(nextId);
-            }}
-            packOptions={OUTCOME_PACKS}
-            connectorCredentials={connectorCredentials}
-            packPrimaryInput={inboxInput}
-            onPackPrimaryInputChange={setInboxInput}
-            packSecondaryInput={leadsInput}
-            onPackSecondaryInputChange={setLeadsInput}
-            packTertiaryInput={slotsInput}
-            onPackTertiaryInputChange={setSlotsInput}
-            selectedPresetId={selectedPreset.id}
-            presetOptions={BUSINESS_PRESETS}
-            onApplyPreset={applyStarterTemplate}
-            localExecutionDraft={localExecutionDraft}
-            onLocalExecutionDraftChange={(updater) => setLocalExecutionDraft((prev) => updater(prev))}
-          />
-        ) : null}
+        <ChatSurface
+          isMobile={isMobile}
+          goal={goal}
+          setGoal={setGoal}
+          primaryGoalRef={primaryGoalRef}
+          onSend={() => {
+            void sendSimpleChat();
+          }}
+          onMessageAction={(messageId, action) => {
+            void handleSimpleChatMessageAction(messageId, action);
+          }}
+          onRunApprovalDecision={(scope) => {
+            if (scope === 'deny') {
+              void submitSimpleChatPermissionDecision('Hold', 'once');
+              return;
+            }
+            void submitSimpleChatPermissionDecision('Proceed', 'once');
+          }}
+          chatBusy={Boolean(pendingSimpleChat)}
+          messages={selectedChatMessages}
+          inlineStatus={inlineSimpleChatStatus}
+          inlineAction={inlineSimpleChatAction}
+          emptyAction={emptySimpleChatAction}
+          targetLabel={defaultAssistantProfile.label}
+          targetHref="/agents"
+          selectedModel={model}
+          modelOptions={modelOptions}
+          modelsLoading={modelsLoading}
+          onSelectModel={setModel}
+          trustLabel={simpleChatTrustLabel}
+          selectedDepth={simpleChatDepth}
+          depthLabel={simpleChatDepthLabel}
+          depthOptions={CHAT_DEPTH_OPTIONS}
+          onSelectDepth={(value) => {
+            if (value === 'low' || value === 'medium' || value === 'high') setSimpleChatDepth(value);
+          }}
+          permissionPrompt={null}
+          identityDrawerOpen={chatIdentityDrawerOpen}
+          onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
+          onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
+          identitySections={sessionIdentitySections}
+          identityActions={sessionIdentityActions}
+        />
       </div>
     </WorkbenchShell>
     );

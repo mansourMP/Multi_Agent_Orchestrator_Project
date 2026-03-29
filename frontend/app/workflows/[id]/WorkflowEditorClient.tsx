@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
-import { BRAND } from '@/lib/brand';
 
 interface WorkflowEditorClientProps {
     workflowId?: string;
@@ -58,7 +57,7 @@ export default function WorkflowEditorClient({ workflowId }: WorkflowEditorClien
                     fontSize: '12px',
                     background: 'rgba(245, 158, 11, 0.08)',
                 }}>
-                    {BRAND.company} is running in simple mode.
+                    Workflow fallback mode is active.
                 </div>
             )}
             <Editor workflowId={workflowId} />

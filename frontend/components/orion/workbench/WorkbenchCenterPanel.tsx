@@ -136,7 +136,6 @@ type HomeInboxSessionPreview = {
 type WorkbenchCenterPanelProps = {
   isMobile: boolean;
   isTablet: boolean;
-  experienceMode: 'simple' | 'advanced';
   chatMode: 'direct' | 'orchestrate';
   singleAgentMode: boolean;
   selectedAgent: AgentRoleOption;
@@ -1295,7 +1294,6 @@ void HomeOperationsScene;
 export function WorkbenchCenterPanel({
   isMobile,
   isTablet,
-  experienceMode,
   chatMode,
   singleAgentMode,
   selectedAgent,
@@ -1342,7 +1340,6 @@ export function WorkbenchCenterPanel({
   homeOverview,
   latestInboxSession,
 }: WorkbenchCenterPanelProps) {
-  const isSimpleMode = experienceMode === 'simple';
   const activeStage = autonomyStages.find((stage) => stage.state === 'active')?.label ?? null;
   const waitingStages = autonomyStages.filter((stage) => stage.state === 'waiting').length;
   const completedStages = autonomyStages.filter((stage) => stage.state === 'done').length;
@@ -1438,26 +1435,8 @@ export function WorkbenchCenterPanel({
         : homeOverview.activeAgentCount > 0 || homeOverview.localQueuePendingCount > 0 || homeOverview.localQueueClaimedCount > 0
           ? { color: UI.accent, background: UI.accentSoft, border: UI.accentBorder }
           : { color: UI.textMuted, background: UI.surfaceAlt, border: UI.borderSoft };
-  const snapshotStatusLabel = isSimpleMode
-    ? homeSceneStatusLabel
-    : focusApprovalItems.length > 0
-      ? 'Approval needed'
-      : runReceipt?.status
-        ? toTitleCase(runReceipt.status)
-        : activeStage
-          ? 'Running'
-          : latestRunSummary
-            ? 'Completed'
-            : 'Idle';
-  const snapshotStatusTone = isSimpleMode
-    ? homeSceneStatusTone
-    : focusApprovalItems.length > 0
-      ? { color: UI.warningFg, background: UI.warningBg, border: UI.warningBorder }
-      : runReceipt?.status === 'error'
-        ? { color: UI.errorFg, background: UI.errorBg, border: UI.errorBorder }
-        : activeStage || latestRunSummary
-          ? { color: UI.successFg, background: UI.successBg, border: UI.successBorder }
-          : { color: UI.textMuted, background: UI.surfaceAlt, border: UI.borderSoft };
+  const snapshotStatusLabel = homeSceneStatusLabel;
+  const snapshotStatusTone = homeSceneStatusTone;
   const snapshotRiskLabel = String(runContextSummary?.risk_level || 'low').toUpperCase();
   const snapshotTrustLabel = String(runContextSummary?.trust_mode_applied || trustMode || '--');
   const snapshotRouteLabel = runReceipt?.routeSelected || runReceipt?.routeRequested || '--';
@@ -1470,30 +1449,14 @@ export function WorkbenchCenterPanel({
       : chatMode === 'orchestrate'
         ? 'Describe the outcome you want so Empyralis can route the work.'
         : `Send the next message to ${selectedAgent.label}.`);
-  const showOperatingSnapshot = !isSimpleMode || !isIdleSession || Boolean(approvalLead);
-  const showApprovalQueue = !isSimpleMode || focusApprovalItems.length > 0 || Boolean(latestAuditItem);
-  const showRecentActivity = !isSimpleMode || recentRuns.length > 0;
-  const starterPrompts =
-    isSimpleMode
-      ? [
-          'Plan my next task.',
-          'Summarize what needs attention.',
-          'Help me finish setup.',
-        ]
-      : singleAgentMode
-        ? [
-            'Plan the next workflow and keep approvals grouped together.',
-            'Summarize open items and propose next steps.',
-          ]
-        : chatMode === 'orchestrate'
-          ? [
-              'Plan the next workflow and keep approvals grouped together.',
-              'Check the current blockers and route the next actions.',
-            ]
-          : [
-              `Ask ${selectedAgent.label} to handle one concrete task.`,
-              `Prepare the next message or follow-up for ${selectedAgent.label}.`,
-            ];
+  const showOperatingSnapshot = true;
+  const showApprovalQueue = true;
+  const showRecentActivity = true;
+  const starterPrompts = [
+    'Plan my next task.',
+    'Summarize what needs attention.',
+    'Help me finish setup.',
+  ];
   const applyStarterPrompt = (prompt: string) => {
     setGoal(prompt);
     primaryGoalRef.current?.focus();
@@ -1505,167 +1468,7 @@ export function WorkbenchCenterPanel({
     homeOverview.activeAgentCount > 0 ||
     focusApprovalItems.length > 0;
   const isReturningHome = setupReady && hasConnectedTools && hasReturningSignals;
-  const hasChatHistory = chatMessages.length > 0;
   const inlineProviderError = null;
-  const renderedSimpleChatMessages = useMemo(() => chatMessages, [chatMessages]);
-  const simpleChatThreadRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!isSimpleMode) return;
-    const element = primaryGoalRef.current;
-    if (!element) return;
-    const minHeight = 36;
-    const maxHeight = 140;
-    element.style.height = '0px';
-    const nextHeight = Math.max(minHeight, Math.min(element.scrollHeight, maxHeight));
-    element.style.height = `${nextHeight}px`;
-    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [goal, isSimpleMode, primaryGoalRef]);
-
-  useEffect(() => {
-    if (!isSimpleMode || renderedSimpleChatMessages.length === 0) return;
-    const element = simpleChatThreadRef.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
-  }, [isSimpleMode, renderedSimpleChatMessages.length]);
-
-  if (isSimpleMode) {
-    return (
-      <section
-        className={`orion-chat-surface${renderedSimpleChatMessages.length > 0 ? ' has-history' : ''}`}
-        style={{
-          minHeight: renderedSimpleChatMessages.length > 0 ? (isMobile ? 'calc(100vh - 146px)' : 'calc(100vh - 158px)') : isMobile ? 'calc(100vh - 124px)' : 'calc(100vh - 136px)',
-          borderRadius: 0,
-          border: 'none',
-          background: 'var(--bg-surface)',
-          padding: renderedSimpleChatMessages.length > 0 ? (isMobile ? '8px 8px 18px' : '6px 12px 22px') : isMobile ? '18px 8px 28px' : '30px 12px 40px',
-          display: 'grid',
-          justifyItems: 'center',
-          alignContent: renderedSimpleChatMessages.length > 0 ? 'start' : 'center',
-          alignSelf: 'stretch',
-          boxShadow: 'var(--shadow-card)',
-        }}
-      >
-        <div className="orion-chat-stage">
-          {renderedSimpleChatMessages.length === 0 ? (
-            <div className="orion-chat-hero">
-              {isReturningHome ? 'What’s next?' : 'What should we work on next?'}
-            </div>
-          ) : null}
-
-          <section className="orion-chat-thread-wrap">
-            {renderedSimpleChatMessages.length > 0 ? (
-              <div className="orion-chat-thread" ref={simpleChatThreadRef}>
-                {renderedSimpleChatMessages.slice(-12).map((message) => {
-                  const isUser = message.role === 'user';
-                  const isErrorMessage = message.status === 'error';
-                  const displayContent = isUser ? message.content : normalizeAssistantDisplayText(message.content);
-                  const inlineError = isErrorMessage ? normalizeInlineErrorMessage(displayContent) : '';
-                  return (
-                    <div key={message.id} className={`orion-chat-turn${isUser ? ' is-user' : ' is-assistant'}${isErrorMessage ? ' is-error' : ''}`}>
-                      {isUser ? (
-                        <div className="orion-chat-user-pill">
-                          <div className="orion-chat-user-text">{displayContent}</div>
-                          <div className="orion-chat-meta">
-                            <span>{fmtTime(message.ts)}</span>
-                          </div>
-                        </div>
-                      ) : isErrorMessage && inlineError ? (
-                        <div className="orion-chat-assistant-block">
-                          <div className="orion-chat-error-line">⚠ {inlineError}</div>
-                          <div className="orion-chat-meta">
-                            <span>{fmtTime(message.ts)}</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="orion-chat-assistant-block">
-                          <div className="orion-chat-markdown">{renderChatMarkdown(displayContent, message.id)}</div>
-                          <div className="orion-chat-meta">
-                            <span>{fmtTime(message.ts)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {inlineProviderError ? <div className="orion-chat-inline-error">⚠ {inlineProviderError}</div> : null}
-            {setupGuidanceStatus ? (
-              <div className="orion-chat-v2-status-line" style={{ marginBottom: 8 }}>
-                <span>⚠ {setupGuidanceStatus}</span>
-                {setupGuidanceAction ? (
-                  <button
-                    type="button"
-                    className="orion-chat-v2-status-action"
-                    onClick={() => safeNavigate(setupGuidanceAction.href)}
-                  >
-                    {setupGuidanceAction.label}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className={`orion-chat-composer${renderedSimpleChatMessages.length > 0 ? ' is-docked' : ''}`}>
-              <div className="orion-chat-composer-row">
-                <button
-                  type="button"
-                  className="orion-chat-composer-plus"
-                  aria-label="Add context"
-                >
-                  +
-                </button>
-                <textarea
-                  ref={primaryGoalRef}
-                  value={goal}
-                  onChange={(e) => setGoal(e.target.value)}
-                  placeholder={hasChatHistory ? 'Reply to your assistant' : 'Ask anything'}
-                  rows={1}
-                  style={{
-                    width: '100%',
-                    border: 'none',
-                    outline: 'none',
-                    background: 'transparent',
-                    color: 'var(--text-primary)',
-                    padding: 0,
-                    resize: 'none',
-                    fontSize: hasChatHistory ? (isMobile ? 17 : 18) : isMobile ? 18 : 19,
-                    lineHeight: 1.45,
-                    height: 36,
-                    minHeight: 36,
-                    maxHeight: 140,
-                    textAlign: 'left',
-                  }}
-                  className="orion-chat-composer-input"
-                  onKeyDown={(event) => {
-                    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                      event.preventDefault();
-                      invokePrimarySend();
-                    }
-                  }}
-                />
-                <button
-                  onClick={invokePrimarySend}
-                  disabled={sendDisabled}
-                  className="orion-chat-composer-send"
-                  aria-label="Send"
-                >
-                  →
-                </button>
-              </div>
-              {goal.trim().length > 0 ? (
-                <div className="orion-chat-composer-hint">
-                  Cmd+Enter to send.
-                </div>
-              ) : null}
-            </div>
-          </section>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section
       style={{
@@ -1888,20 +1691,14 @@ export function WorkbenchCenterPanel({
               Lane context
             </div>
             <div style={{ fontSize: 14, color: UI.textSoft, fontWeight: 700 }}>
-              {singleAgentMode
-                ? `Assistant · ${selectedAgent.description}`
-                : chatMode === 'orchestrate'
-                  ? `Orchestrator · ${selectedAgent.description}`
-                  : `${selectedAgent.label} · ${selectedAgent.description}`}
+              {singleAgentMode ? `Assistant · ${selectedAgent.description}` : `Orchestrator · ${selectedAgent.description}`}
             </div>
             <div style={{ fontSize: 12.5, color: UI.textMuted, lineHeight: 1.5 }}>
               {activeStage
                 ? `Current stage: ${activeStage}`
                 : singleAgentMode
                   ? 'No live run yet. Start with one outcome and the assistant will take it from there.'
-                  : chatMode === 'orchestrate'
-                    ? 'No live run yet. Route one outcome here and Empyralis will turn it into tracked work.'
-                    : 'No live run yet. Start here when you want to steer one focused lane directly.'}
+                  : 'No live run yet. Route one outcome here and Platform will turn it into tracked work.'}
             </div>
           </div>
           {isIdleSession ? (
@@ -1921,14 +1718,12 @@ export function WorkbenchCenterPanel({
               >
                 <div style={{ fontSize: 10.5, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Lead</div>
                 <div style={{ fontSize: 13.5, color: UI.textSoft, fontWeight: 700 }}>
-                  {singleAgentMode ? 'Assistant' : chatMode === 'orchestrate' ? 'Orchestrator' : selectedAgent.label}
+                  {singleAgentMode ? 'Assistant' : 'Orchestrator'}
                 </div>
                 <div style={{ fontSize: 12, color: UI.textMuted }}>
                   {singleAgentMode
                     ? 'Plans and executes the work end to end.'
-                    : chatMode === 'orchestrate'
-                      ? 'Plans the run, chooses tools, and keeps approvals together.'
-                      : selectedAgent.description}
+                    : 'Plans the run, chooses tools, and keeps approvals together.'}
                 </div>
               </div>
               <div
@@ -1940,17 +1735,15 @@ export function WorkbenchCenterPanel({
                 }}
                 >
                 <div style={{ fontSize: 10.5, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>
-                  Mode
+                  Flow
                 </div>
                 <div style={{ fontSize: 13.5, color: UI.textSoft, fontWeight: 700 }}>
-                  {singleAgentMode ? 'Assistant flow' : chatMode === 'orchestrate' ? 'Assistant routing' : `Direct ${selectedAgent.label}`}
+                  {singleAgentMode ? 'Assistant flow' : 'Tracked run'}
                 </div>
                 <div style={{ fontSize: 12, color: UI.textMuted }}>
                   {singleAgentMode
                     ? 'All tasks route through one assistant with shared context.'
-                    : chatMode === 'orchestrate'
-                      ? 'Empyralis picks the right tools and keeps the work linked together.'
-                      : 'Use this lane for direct task steering or one-off interventions.'}
+                    : 'Platform picks the right tools and keeps the work linked together.'}
                 </div>
               </div>
               <div
@@ -2148,7 +1941,7 @@ export function WorkbenchCenterPanel({
         <div style={panelSectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              {isSimpleMode ? 'Needs your decision' : 'Approvals'}
+              Needs your decision
             </div>
             <button
               onClick={onOpenApprovalsPage}
@@ -2241,24 +2034,14 @@ export function WorkbenchCenterPanel({
         {isIdleSession ? (
           <section style={panelSectionStyle}>
             <div style={{ fontSize: 11, fontWeight: 700, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              {isSimpleMode ? 'What to try' : 'Next steps'}
+              What to try
             </div>
             <div style={{ display: 'grid', gap: 7 }}>
               <div style={{ fontSize: 12, color: UI.textSoft }}>
-                {isSimpleMode
-                  ? 'Describe one concrete outcome for the assistant.'
-                  : singleAgentMode
-                    ? 'Describe one concrete outcome for the assistant.'
-                    : `Ask ${selectedAgent.label} to handle one concrete task.`}
+                {singleAgentMode ? 'Describe one concrete outcome for the assistant.' : 'Describe one concrete outcome for the assistant.'}
               </div>
               <div style={{ fontSize: 11.5, color: UI.textMuted }}>
-                {isSimpleMode
-                  ? 'Use Workflows when the pattern becomes repeatable, or open Runs after the first result lands.'
-                  : singleAgentMode
-                    ? 'Use Workflows when the pattern should be reusable, or open Runs after you start work.'
-                    : chatMode === 'orchestrate'
-                      ? 'Use orchestration for multi-step outcomes. Use Workflows when the pattern should be reusable.'
-                      : 'Use Workflows when the task should be reusable, or open Runs after you start work.'}
+                Use Workflows when the pattern becomes repeatable, or open Runs after the first result lands.
               </div>
             </div>
           </section>

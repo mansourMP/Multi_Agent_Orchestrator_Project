@@ -581,6 +581,34 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setShowProviderForm(true);
   }, [providerOptions, resetProviderForm]);
 
+  const openGeminiApiKeyForm = useCallback(() => {
+    resetProviderForm('gemini', 'api_key');
+    setProviderForm((prev) => ({
+      ...prev,
+      provider: 'gemini',
+      authMode: 'api_key',
+      label: defaultProviderLabel('gemini', 'api_key'),
+      model: defaultProviderModel('gemini', 'api_key', providerOptions),
+      secret: '',
+    }));
+    setShowProviderForm(true);
+  }, [providerOptions, resetProviderForm]);
+
+  const openVertexCredentialsForm = useCallback(() => {
+    resetProviderForm('vertex', 'access_token');
+    setProviderForm((prev) => ({
+      ...prev,
+      provider: 'vertex',
+      authMode: 'access_token',
+      label: defaultProviderLabel('vertex', 'access_token'),
+      model: defaultProviderModel('vertex', 'access_token', providerOptions),
+      secret: '',
+      projectId: '',
+      location: 'us-central1',
+    }));
+    setShowProviderForm(true);
+  }, [providerOptions, resetProviderForm]);
+
   const loadProviderAccounts = useCallback(async () => {
     setProviderLoading(true);
     setProviderError('');
@@ -1291,7 +1319,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
 
   return (
     <>
-      <section style={{ display: 'grid', gap: 16 }}>
+      <section style={{ display: 'grid', gap: 16, overflow: 'visible' }}>
         <div
           style={{
             display: 'grid',
@@ -1432,8 +1460,16 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
           </section>
         ) : (
-          <div style={{ display: 'grid', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gap: 12, overflow: 'visible' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gap: 12,
+                alignItems: 'start',
+                overflow: 'visible',
+              }}
+            >
               {providerCards.map((card) => {
                 const option = providerOptionFor(card.provider, providerOptions);
                 const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
@@ -1486,6 +1522,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     style={{
                       display: 'grid',
                       gap: 10,
+                      overflow: 'visible',
                       borderRadius: 0,
                       border: '1px solid var(--border-subtle)',
                       borderLeft: `4px solid ${accent.border}`,
@@ -1623,6 +1660,30 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                           onClick={() => void refreshClaudeAuthStatus()}
                         >
                           {providerBusy['claude-auth'] === 'status' ? 'Refreshing…' : 'Refresh Claude status'}
+                        </button>
+                      </div>
+                    ) : null}
+                    {card.provider === 'gemini' ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          onClick={openGeminiApiKeyForm}
+                        >
+                          Add API key
+                        </button>
+                      </div>
+                    ) : null}
+                    {card.provider === 'vertex' ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          onClick={openVertexCredentialsForm}
+                        >
+                          Add credentials
                         </button>
                       </div>
                     ) : null}

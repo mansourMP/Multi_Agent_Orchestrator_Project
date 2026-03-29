@@ -1446,6 +1446,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const topCardError = summarizeProviderCardError(card.errorMessage);
                 const hasActiveError = Boolean(topCardError);
                 const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
+                const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
                 const visibleActionBusy = connectMode
                   ? openAiNeedsApiKey
                     ? false
@@ -1485,8 +1486,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     style={{
                       display: 'grid',
                       gap: 10,
-                      gridTemplateRows: 'auto auto 1fr',
-                      minHeight: 276,
                       borderRadius: 0,
                       border: '1px solid var(--border-subtle)',
                       borderLeft: `4px solid ${accent.border}`,
@@ -1574,6 +1573,16 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     </button>
                     {card.provider === 'openai' ? (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {showOpenAiApiKeyRecovery && visibleActionLabel !== 'Add API key' ? (
+                          <button
+                            type="button"
+                            className="orion-btn orion-btn-primary"
+                            style={{ minHeight: 30, paddingInline: 10 }}
+                            onClick={openOpenAiApiKeyForm}
+                          >
+                            Add API key
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
@@ -1595,14 +1604,84 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         </button>
                       </div>
                     ) : null}
+                    {connectMode && card.provider === 'anthropic' && !card.credential ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          disabled={providerBusy['claude-auth'] === 'login'}
+                          onClick={() => void handleClaudeAuthLogin()}
+                        >
+                          {providerBusy['claude-auth'] === 'login' ? 'Signing in…' : 'Sign in to Claude'}
+                        </button>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          disabled={providerBusy['claude-auth'] === 'status'}
+                          onClick={() => void refreshClaudeAuthStatus()}
+                        >
+                          {providerBusy['claude-auth'] === 'status' ? 'Refreshing…' : 'Refresh Claude status'}
+                        </button>
+                      </div>
+                    ) : null}
+                    {!connectMode && card.credential ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          onClick={() => void handleToggleProviderProfile(card.credential!, card.profile)}
+                          disabled={Boolean(busyAction)}
+                        >
+                          {card.profile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
+                          {busyAction === 'disable-runtime'
+                            ? 'Disabling…'
+                            : busyAction === 'enable-runtime'
+                              ? 'Enabling…'
+                              : card.profile?.enabled
+                                ? 'Disable runtime'
+                                : card.profile
+                                  ? 'Enable runtime'
+                                  : 'Use in runtime'}
+                        </button>
+                        {card.profile && !card.isDefaultProfile ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 30, paddingInline: 10 }}
+                            onClick={() => void handlePromoteProviderProfile(card.profile!)}
+                            disabled={profileBusyAction === 'make-default'}
+                          >
+                            {profileBusyAction === 'make-default' ? 'Setting default…' : 'Make default'}
+                          </button>
+                        ) : null}
+                        {card.profile ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 30, paddingInline: 10 }}
+                            onClick={() => void handleDeleteProviderProfile(card.profile!)}
+                            disabled={profileBusyAction === 'remove-profile'}
+                          >
+                            <X size={13} />
+                            {profileBusyAction === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
+                          </button>
+                        ) : null}
+                        <button
+                          className="orion-btn orion-btn-danger"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          onClick={() => void handleRemoveProviderCredential(card.credential!)}
+                          disabled={busyAction === 'remove'}
+                        >
+                          <Trash2 size={13} />
+                          {busyAction === 'remove' ? 'Removing…' : 'Remove account'}
+                        </button>
+                      </div>
+                    ) : null}
                     <section
                       style={{
                         display: 'grid',
                         alignContent: 'start',
                         gap: 10,
-                        minHeight: 138,
-                        maxHeight: 138,
-                        overflow: 'hidden',
                         borderRadius: 12,
                         border: '1px solid var(--border-subtle)',
                         background: 'var(--bg-element)',
@@ -1639,12 +1718,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       </button>
                       <div
                         style={{
-                          display: 'grid',
+                          display: detailsOpen ? 'grid' : 'none',
                           gap: 8,
                           alignContent: 'start',
-                          minHeight: 0,
-                          overflowY: 'auto',
-                          paddingRight: 2,
                         }}
                       >
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
@@ -1659,102 +1735,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                               Runtime model: {runtimeModelLabel}
                             </div>
                           ) : null}
-                          {card.provider !== 'openai' && detailsOpen && catalogDefaultModel && catalogDefaultModel !== runtimeModelLabel ? (
-                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                              Catalog default: {catalogDefaultModel}
-                            </div>
-                          ) : null}
-                          {card.provider !== 'openai' && detailsOpen && typeof card.order === 'number' ? (
+                          {typeof card.order === 'number' ? (
                             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                               Order: #{card.order}
                             </div>
                           ) : null}
-                          {card.provider !== 'openai' && detailsOpen && card.isDefaultProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Default for runtime</div> : null}
-                          {card.provider !== 'openai' && detailsOpen && card.isActiveProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Active now</div> : null}
-                          {card.provider !== 'openai' && detailsOpen && card.availability?.detail ? (
-                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                              {card.availability.detail}
-                            </div>
-                          ) : null}
-                          {card.provider !== 'openai' && detailsOpen && card.errorMessage ? (
-                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                              Raw error: {card.errorMessage}
-                            </div>
-                          ) : null}
                         </div>
-                        {detailsOpen && card.provider === 'anthropic' && !card.credential ? (
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              disabled={providerBusy['claude-auth'] === 'login'}
-                              onClick={() => void handleClaudeAuthLogin()}
-                            >
-                              {providerBusy['claude-auth'] === 'login' ? 'Signing in…' : 'Sign in to Claude'}
-                            </button>
-                            <button
-                              type="button"
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              disabled={providerBusy['claude-auth'] === 'status'}
-                              onClick={() => void refreshClaudeAuthStatus()}
-                            >
-                              {providerBusy['claude-auth'] === 'status' ? 'Refreshing…' : 'Refresh Claude status'}
-                            </button>
-                          </div>
-                        ) : null}
-                        {detailsOpen && !connectMode && card.credential ? (
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <button
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              onClick={() => void handleToggleProviderProfile(card.credential!, card.profile)}
-                              disabled={Boolean(busyAction)}
-                            >
-                              {card.profile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
-                              {busyAction === 'disable-runtime'
-                                ? 'Disabling…'
-                                : busyAction === 'enable-runtime'
-                                  ? 'Enabling…'
-                                  : card.profile?.enabled
-                                    ? 'Disable runtime'
-                                    : card.profile
-                                      ? 'Enable runtime'
-                                      : 'Use in runtime'}
-                            </button>
-                            {card.profile && !card.isDefaultProfile ? (
-                              <button
-                                className="orion-btn orion-btn-ghost"
-                                style={{ minHeight: 30, paddingInline: 10 }}
-                                onClick={() => void handlePromoteProviderProfile(card.profile!)}
-                                disabled={profileBusyAction === 'make-default'}
-                              >
-                                {profileBusyAction === 'make-default' ? 'Setting default…' : 'Make default'}
-                              </button>
-                            ) : null}
-                            {card.profile ? (
-                              <button
-                                className="orion-btn orion-btn-ghost"
-                                style={{ minHeight: 30, paddingInline: 10 }}
-                                onClick={() => void handleDeleteProviderProfile(card.profile!)}
-                                disabled={profileBusyAction === 'remove-profile'}
-                              >
-                                <X size={13} />
-                                {profileBusyAction === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
-                              </button>
-                            ) : null}
-                            <button
-                              className="orion-btn orion-btn-danger"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              onClick={() => void handleRemoveProviderCredential(card.credential!)}
-                              disabled={busyAction === 'remove'}
-                            >
-                              <Trash2 size={13} />
-                              {busyAction === 'remove' ? 'Removing…' : 'Remove account'}
-                            </button>
-                          </div>
-                        ) : null}
                       </div>
                     </section>
                   </article>

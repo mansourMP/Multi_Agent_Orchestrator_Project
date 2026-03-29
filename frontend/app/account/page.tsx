@@ -117,7 +117,7 @@ export default function AccountPage() {
         }
       />
 
-      <section className="orion-panel" style={{ maxWidth: 860, marginInline: 'auto' }}>
+      <section className="orion-panel">
         <div className="orion-panel-header" style={{ marginBottom: 18 }}>
           <div>
             <div className="orion-panel-title">Your profile</div>
@@ -189,7 +189,7 @@ export default function AccountPage() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gap: 16, width: '100%', maxWidth: 520 }}>
+          <div style={{ display: 'grid', gap: 16, width: '100%' }}>
             <div className="orion-field">
               <label className="orion-field-label" htmlFor="account-display-name">
                 Display name

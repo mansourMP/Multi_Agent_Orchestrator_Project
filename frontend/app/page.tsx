@@ -14,7 +14,7 @@ import {
 import { usePageState } from './page.state';
 import { usePlatformApi } from './page.api';
 import { usePageActions } from './page.actions';
-import { usePlatformShell } from '@/components/orion/PlatformShellContext';
+import { type PlatformRunDetailContract, usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { EMPYRALIS_NEW_CHAT_EVENT } from '@/components/orion/PlatformTopBar';
 import { ChatSurface, type ChatIdentityAction, type ChatIdentityItem, type ChatIdentitySection } from '@/components/orion/chat/ChatSurface';
 import { RUN_COMPLETED_STATUS_COPY, RUN_FAILED_STATUS_COPY } from '@/lib/runStartCopy';
@@ -998,12 +998,20 @@ function summarizeCapabilityActions(
 function readRunProviderModelContract(
   payload: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const contract = payload.run_detail_contract;
-  if (!contract || typeof contract !== 'object') return null;
-  const providerModel = (contract as Record<string, unknown>).provider_model;
+  const contract = readRunDetailContract(payload);
+  const providerModel = contract?.provider_model;
   return providerModel && typeof providerModel === 'object'
     ? providerModel as Record<string, unknown>
+    : null;
+}
+
+function readRunDetailContract(
+  payload: Record<string, unknown> | null,
+): PlatformRunDetailContract {
+  if (!payload || typeof payload !== 'object') return null;
+  const contract = payload.run_detail_contract;
+  return contract && typeof contract === 'object'
+    ? contract as PlatformRunDetailContract
     : null;
 }
 
@@ -1155,7 +1163,7 @@ export function AutopilotWorkspace() {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
-  const { accessMode } = usePlatformShell();
+  const { accessMode, setInspectState } = usePlatformShell();
   const singleAgentMode = SINGLE_AGENT_MODE;
 
   const pageState = usePageState();
@@ -2073,6 +2081,25 @@ export function AutopilotWorkspace() {
       href: '/credentials?connector=telegram_bot&onboarding=1',
     };
   }, [derivedSetupReady]);
+  useEffect(() => {
+    const activeRunId = pendingSimpleRun?.runId || runId;
+    const isActiveRun = Boolean(activeRunId) && ['queued_local', 'running', 'waiting'].includes(status);
+    const contract = readRunDetailContract(lastRunPayload);
+    if (!isActiveRun || !contract) {
+      setInspectState(null);
+      return;
+    }
+    setInspectState({
+      runId: activeRunId,
+      status,
+      runDetailContract: contract,
+    });
+  }, [lastRunPayload, pendingSimpleRun?.runId, runId, setInspectState, status]);
+  useEffect(() => {
+    return () => {
+      setInspectState(null);
+    };
+  }, [setInspectState]);
   const simpleChatPermissionPrompt = useMemo<SimpleChatPermissionPrompt | null>(() => {
     if (status !== 'waiting') return null;
     const activeRunId = pendingSimpleRun?.runId || runId;

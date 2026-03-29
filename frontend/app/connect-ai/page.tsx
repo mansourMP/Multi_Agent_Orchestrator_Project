@@ -29,7 +29,7 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
         }
       />
 
-      <div style={{ maxWidth: 920, marginInline: 'auto' }}>
+      <div style={{ width: '100%' }}>
         <AiAccountsPanel workspaceId={WORKSPACE_ID} mode="connect" returnTo={returnTo} />
       </div>
     </div>

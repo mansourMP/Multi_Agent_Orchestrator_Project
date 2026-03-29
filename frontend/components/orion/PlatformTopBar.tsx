@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Edit3, Laptop, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
+import { ChevronDown, Edit3, Laptop, PanelRight, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
@@ -18,7 +18,7 @@ const PwaInstallControl = dynamic(() => import('@/components/orion/PwaInstallCon
 export default function PlatformTopBar() {
   const pathname = usePathname() ?? '/';
   const { hideShellChrome } = useShellChromeVisibility(pathname);
-  const { status } = usePlatformShell();
+  const { inspectPanelOpen, setInspectPanelOpen, status } = usePlatformShell();
 
   useEffect(() => {
     document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
@@ -97,6 +97,15 @@ export default function PlatformTopBar() {
             <span>New chat</span>
           </button>
         ) : null}
+        <button
+          type="button"
+          className={`orion-shellbar-action${inspectPanelOpen ? ' is-active' : ''}`}
+          onClick={() => setInspectPanelOpen(!inspectPanelOpen)}
+          aria-pressed={inspectPanelOpen}
+        >
+          <PanelRight size={13} />
+          <span>Inspect</span>
+        </button>
         <button
           type="button"
           className={`orion-shellbar-status-inline is-runtime is-${runtimeStatus.tone}`}

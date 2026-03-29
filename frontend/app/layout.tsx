@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import GlobalCommandPalette from "@/components/orion/GlobalCommandPalette";
 import ControlPlaneSessionBootstrap from "@/components/orion/ControlPlaneSessionBootstrap";
 import { PlatformShellProvider } from "@/components/orion/PlatformShellContext";
+import PlatformInspectPanel from "@/components/orion/PlatformInspectPanel";
 import PlatformTopBar from "@/components/orion/PlatformTopBar";
 import { BRAND } from "@/lib/brand";
 import "@xyflow/react/dist/style.css";
@@ -109,12 +110,12 @@ a {
   transition: opacity 180ms ease;
 }
 .orion-page-shell {
-  width: min(1460px, 100%);
-  max-width: 1460px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   height: calc(100vh - var(--topbar-height) - 26px);
   min-height: calc(100vh - var(--topbar-height) - 26px);
-  padding: 28px 30px 40px;
+  padding: 12px 18px 18px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -125,16 +126,16 @@ a {
   -webkit-overflow-scrolling: touch;
 }
 .orion-page-shell.narrow {
-  width: min(1200px, 100%);
-  max-width: 1200px;
+  width: 100%;
+  max-width: none;
 }
 .orion-page-shell.is-integrations-page {
-  width: min(1720px, 100%);
-  max-width: 1720px;
+  width: 100%;
+  max-width: none;
 }
 .orion-page-shell.is-health-page {
-  width: min(1320px, 100%);
-  max-width: 1320px;
+  width: 100%;
+  max-width: none;
 }
 .orion-page-shell.is-chat-home {
   width: 100%;
@@ -316,6 +317,7 @@ export default function RootLayout({
                 <main className="orion-main-shell">
                   <div className="orion-main-stage">{children}</div>
                 </main>
+                <PlatformInspectPanel />
               </div>
             </ToastProvider>
           </PlatformShellProvider>

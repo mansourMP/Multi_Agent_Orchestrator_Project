@@ -6,6 +6,49 @@ import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 export type PlatformAccessMode = 'default' | 'full';
 
+export type PlatformRunDetailContract = {
+  provider_model?: {
+    requested_provider?: string | null;
+    effective_provider?: string | null;
+    requested_model?: string | null;
+    effective_model?: string | null;
+    provider_overridden?: boolean;
+    model_overridden?: boolean;
+    fallback_used?: boolean;
+    fallback_reason?: string | null;
+  } | null;
+  approval_outcome?: {
+    status?: string | null;
+    label?: string | null;
+  } | null;
+  connector_mutation?: {
+    binding?: {
+      label?: string | null;
+      connector?: string | null;
+      channel?: string | null;
+      identity_label?: string | null;
+      routing_scope?: string | null;
+    } | null;
+    action?: Record<string, unknown> | null;
+    execution_label?: string | null;
+    action_label?: string | null;
+    system_label?: string | null;
+    target_label?: string | null;
+    result_label?: string | null;
+  } | null;
+  evidence_items?: Array<{
+    id?: string | null;
+    label?: string | null;
+    value?: string | null;
+  }> | null;
+} | null;
+
+export type PlatformInspectState = {
+  runId: string | null;
+  status: string | null;
+  runDetailContract: PlatformRunDetailContract;
+} | null;
+
 type PlatformShellStatus = {
   setupReady: boolean;
   setupProgressCount: number;
@@ -20,6 +63,10 @@ type PlatformShellContextValue = {
   accessMode: PlatformAccessMode;
   setAccessMode: (mode: PlatformAccessMode) => void;
   status: PlatformShellStatus;
+  inspectPanelOpen: boolean;
+  setInspectPanelOpen: (open: boolean) => void;
+  inspectState: PlatformInspectState;
+  setInspectState: (state: PlatformInspectState) => void;
 };
 
 const ACCESS_MODE_STORAGE_KEY = 'orion.platform.access.mode.v1';
@@ -75,6 +122,8 @@ function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStat
 export function PlatformShellProvider({ children }: { children: React.ReactNode }) {
   const [accessMode, setAccessMode] = useState<PlatformAccessMode>('default');
   const [status, setStatus] = useState<PlatformShellStatus>(INITIAL_STATUS);
+  const [inspectPanelOpen, setInspectPanelOpen] = useState(false);
+  const [inspectState, setInspectState] = useState<PlatformInspectState>(null);
 
   useEffect(() => {
     try {
@@ -174,8 +223,12 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
       accessMode,
       setAccessMode,
       status,
+      inspectPanelOpen,
+      setInspectPanelOpen,
+      inspectState,
+      setInspectState,
     }),
-    [accessMode, status],
+    [accessMode, inspectPanelOpen, inspectState, status],
   );
 
   return <PlatformShellContext.Provider value={value}>{children}</PlatformShellContext.Provider>;

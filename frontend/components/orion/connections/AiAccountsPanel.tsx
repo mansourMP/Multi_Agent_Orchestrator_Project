@@ -262,7 +262,7 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
 function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
   if (provider === 'openai') {
     if (authMode === 'oauth_token') {
-      return 'Paste a saved OpenAI or Codex token you already control, or use Sign in with ChatGPT on the Connect AI page in the desktop app.';
+      return 'Paste a saved OpenAI token you already control, or use Sign in with ChatGPT above.';
     }
     if (authMode === 'access_token') {
       return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
@@ -361,6 +361,8 @@ function summarizeProviderCardError(message: string | null): string | null {
 
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
+  const openAiDesktopBridge = getDesktopBridge();
+  const openAiDesktopSignInAvailable = Boolean(openAiDesktopBridge?.openaiCodexOauthLogin);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -455,6 +457,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       }))
       .sort((left, right) => left.label.localeCompare(right.label));
   }, [orphanProviderProfiles, providerOptions, providerProfiles]);
+  const openAiHasApiKeyCredential = useMemo(
+    () => providerCredentials.some((credential) => credential.provider === 'openai' && String(credential.authMode || '').trim().toLowerCase() === 'api_key'),
+    [providerCredentials],
+  );
 
   const profileOrderById = useMemo(() => {
     const map = new Map<string, number>();
@@ -561,6 +567,19 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       enableRuntime: true,
     });
   }, [providerOptions]);
+
+  const openOpenAiApiKeyForm = useCallback(() => {
+    resetProviderForm('openai', 'api_key');
+    setProviderForm((prev) => ({
+      ...prev,
+      provider: 'openai',
+      authMode: 'api_key',
+      label: defaultProviderLabel('openai', 'api_key'),
+      model: defaultProviderModel('openai', 'api_key', providerOptions),
+      secret: '',
+    }));
+    setShowProviderForm(true);
+  }, [providerOptions, resetProviderForm]);
 
   const loadProviderAccounts = useCallback(async () => {
     setProviderLoading(true);
@@ -1175,9 +1194,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [controlPlaneFetch, providerCredentials, providerProfilesByCredential, workspaceId]);
 
   const handleOpenAiCodexOauthSignIn = useCallback(async () => {
-    const desktopBridge = getDesktopBridge();
-    if (!desktopBridge?.openaiCodexOauthLogin) {
-      setProviderError('Sign in with ChatGPT is available in the Empyralis desktop app.');
+    if (!openAiDesktopBridge?.openaiCodexOauthLogin) {
       return;
     }
 
@@ -1187,7 +1204,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setLastConnectedAccountLabel('');
 
     try {
-      const result = await desktopBridge.openaiCodexOauthLogin();
+      const result = await openAiDesktopBridge.openaiCodexOauthLogin();
       const accessToken = String(result?.access_token || '').trim();
       const refreshToken = String(result?.refresh_token || '').trim();
       const accountId = String(result?.account_id || '').trim();
@@ -1264,6 +1281,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [
     controlPlaneFetch,
     loadProviderAccounts,
+    openAiDesktopBridge,
     providerOptions,
     removeImportedOpenAiCredentials,
     setProviderActionBusy,
@@ -1427,8 +1445,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const catalogDefaultModel = String(option.defaultModel || '').trim();
                 const topCardError = summarizeProviderCardError(card.errorMessage);
                 const hasActiveError = Boolean(topCardError);
+                const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
                 const visibleActionBusy = connectMode
-                  ? hasActiveError
+                  ? openAiNeedsApiKey
+                    ? false
+                    : hasActiveError
                     ? busyAction === 'test'
                     : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
                       ? providerBusy['openai-local-import'] === 'import'
@@ -1441,7 +1462,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
                     : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
                 const visibleActionLabel = connectMode
-                  ? hasActiveError
+                  ? openAiNeedsApiKey
+                    ? 'Add API key'
+                    : hasActiveError
                     ? card.credential
                       ? 'Retest'
                       : 'Reconnect'
@@ -1509,6 +1532,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       style={{ minHeight: 34, paddingInline: 14, width: 'fit-content' }}
                       onClick={() => {
                         if (connectMode) {
+                          if (openAiNeedsApiKey) {
+                            openOpenAiApiKeyForm();
+                            return;
+                          }
                           if (hasActiveError) {
                             if (card.credential) {
                               void handleTestProviderCredential(card.credential);
@@ -1545,6 +1572,29 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     >
                       {visibleActionBusy ? (connectMode ? 'Working…' : 'Testing…') : visibleActionLabel}
                     </button>
+                    {card.provider === 'openai' ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          disabled={!openAiDesktopSignInAvailable || providerBusy['openai-codex-oauth'] === 'login'}
+                          title={openAiDesktopSignInAvailable ? undefined : 'Desktop app required'}
+                          onClick={() => void handleOpenAiCodexOauthSignIn()}
+                        >
+                          {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
+                        </button>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 30, paddingInline: 10 }}
+                          disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
+                          onClick={() => void handleImportLocalOpenAiAuth()}
+                        >
+                          {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
+                        </button>
+                      </div>
+                    ) : null}
                     <section
                       style={{
                         display: 'grid',
@@ -1609,51 +1659,29 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                               Runtime model: {runtimeModelLabel}
                             </div>
                           ) : null}
-                          {detailsOpen && catalogDefaultModel && catalogDefaultModel !== runtimeModelLabel ? (
+                          {card.provider !== 'openai' && detailsOpen && catalogDefaultModel && catalogDefaultModel !== runtimeModelLabel ? (
                             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                               Catalog default: {catalogDefaultModel}
                             </div>
                           ) : null}
-                          {detailsOpen && typeof card.order === 'number' ? (
+                          {card.provider !== 'openai' && detailsOpen && typeof card.order === 'number' ? (
                             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                               Order: #{card.order}
                             </div>
                           ) : null}
-                          {detailsOpen && card.isDefaultProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Default for runtime</div> : null}
-                          {detailsOpen && card.isActiveProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Active now</div> : null}
-                          {detailsOpen && card.availability?.detail ? (
+                          {card.provider !== 'openai' && detailsOpen && card.isDefaultProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Default for runtime</div> : null}
+                          {card.provider !== 'openai' && detailsOpen && card.isActiveProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Active now</div> : null}
+                          {card.provider !== 'openai' && detailsOpen && card.availability?.detail ? (
                             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                               {card.availability.detail}
                             </div>
                           ) : null}
-                          {detailsOpen && card.errorMessage ? (
+                          {card.provider !== 'openai' && detailsOpen && card.errorMessage ? (
                             <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                               Raw error: {card.errorMessage}
                             </div>
                           ) : null}
                         </div>
-                        {detailsOpen && card.provider === 'openai' ? (
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              disabled={providerBusy['openai-codex-oauth'] === 'login'}
-                              onClick={() => void handleOpenAiCodexOauthSignIn()}
-                            >
-                              {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
-                            </button>
-                            <button
-                              type="button"
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 30, paddingInline: 10 }}
-                              disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
-                              onClick={() => void handleImportLocalOpenAiAuth()}
-                            >
-                              {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
-                            </button>
-                          </div>
-                        ) : null}
                         {detailsOpen && card.provider === 'anthropic' && !card.credential ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <button

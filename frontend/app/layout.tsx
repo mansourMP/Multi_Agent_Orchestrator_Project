@@ -84,7 +84,8 @@ html,
 body {
   height: 100%;
   margin: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--critical-bg-app);
   color: var(--critical-text);
   font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -105,18 +106,19 @@ a {
   width: calc(100vw - var(--sidebar-width));
   max-width: calc(100vw - var(--sidebar-width));
   padding-top: var(--topbar-height);
-  height: 100vh;
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
   box-sizing: border-box;
   position: relative;
   z-index: 1;
   transition: margin-left 180ms ease, width 180ms ease, max-width 180ms ease, padding-top 180ms ease;
 }
 .orion-main-stage {
-  height: calc(100vh - var(--topbar-height));
   min-height: calc(100vh - var(--topbar-height));
-  overflow: hidden;
+  overflow: visible;
   padding: 8px 12px 18px 4px;
   background: var(--critical-bg-app);
   position: relative;
@@ -135,7 +137,6 @@ a {
   width: 100%;
   max-width: none;
   margin: 0;
-  height: calc(100vh - var(--topbar-height) - 26px);
   min-height: calc(100vh - var(--topbar-height) - 26px);
   padding: 12px 18px 18px;
   display: flex;

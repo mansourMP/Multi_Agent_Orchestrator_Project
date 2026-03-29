@@ -384,7 +384,6 @@ const secondaryProviderActionButtonStyle: CSSProperties = {
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
   const openAiDesktopBridge = getDesktopBridge();
-  const openAiDesktopSignInAvailable = Boolean(openAiDesktopBridge?.openaiCodexOauthLogin);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -1250,16 +1249,29 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [controlPlaneFetch, providerCredentials, providerProfilesByCredential, workspaceId]);
 
   const handleOpenAiCodexOauthSignIn = useCallback(async () => {
-    if (!openAiDesktopBridge?.openaiCodexOauthLogin) {
-      return;
-    }
-
     setProviderActionBusy('openai-codex-oauth', 'login');
     setProviderError('');
     setProviderNotice('');
     setLastConnectedAccountLabel('');
 
     try {
+      if (!openAiDesktopBridge?.openaiCodexOauthLogin) {
+        const signInUrl = String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login').trim() || 'https://chatgpt.com/auth/login';
+        let opened = false;
+        if (openAiDesktopBridge?.openExternal) {
+          const result = await openAiDesktopBridge.openExternal(signInUrl).catch(() => false);
+          opened = result === true || (typeof result === 'string' && result.trim().length > 0);
+        }
+        if (!opened && typeof window !== 'undefined') {
+          opened = Boolean(window.open(signInUrl, '_blank', 'noopener,noreferrer'));
+        }
+        if (!opened) {
+          throw new Error('Could not open ChatGPT sign-in automatically. Open https://chatgpt.com/auth/login, then return here.');
+        }
+        setProviderNotice('Finish ChatGPT sign-in in the browser, then return here and click Import local session.');
+        return;
+      }
+
       const result = await openAiDesktopBridge.openaiCodexOauthLogin();
       const accessToken = String(result?.access_token || '').trim();
       const refreshToken = String(result?.refresh_token || '').trim();
@@ -1336,6 +1348,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [
     controlPlaneFetch,
+    localOpenAiAuth?.sign_in_url,
     loadProviderAccounts,
     openAiDesktopBridge,
     providerOptions,
@@ -1655,8 +1668,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             type="button"
                             className="orion-btn orion-btn-ghost"
                             style={secondaryProviderActionButtonStyle}
-                            disabled={!openAiDesktopSignInAvailable || providerBusy['openai-codex-oauth'] === 'login'}
-                            title={openAiDesktopSignInAvailable ? undefined : 'Desktop app required'}
+                            disabled={providerBusy['openai-codex-oauth'] === 'login'}
                             onClick={() => void handleOpenAiCodexOauthSignIn()}
                         >
                           {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}

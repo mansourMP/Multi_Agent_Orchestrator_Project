@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from scripts.orion_local_worker_llm import (
     SUPPORTED_PROVIDERS,
-    claude_code_cli_available,
     generate_chat_reply_with_provider_fallback,
+    get_claude_code_session_token,
     provider_has_key,
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
@@ -458,7 +458,7 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
     normalized_provider = str(provider or "").strip().lower()
     if normalized_provider == "anthropic":
         if auth_mode == "local_cli":
-            return claude_code_cli_available()
+            return bool(get_claude_code_session_token())
         return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("anthropic")
     if normalized_provider == "openai":
         return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("openai")

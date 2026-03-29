@@ -518,13 +518,13 @@ def provider_has_usable_credentials(provider: str, context: Dict[str, Any], meta
         )
         return bool(inline_token) or provider_has_key("codex_cli")
     if pid == "claude_code_cli":
-        return bool(get_claude_code_session_token()) or claude_code_cli_available()
+        return bool(get_claude_code_session_token())
     if pid == "openai":
         inline_key = sanitize_bearer_token(inline_credentials.get("api_key") or "")
         return bool(inline_key) or provider_has_key("openai")
     if pid == "anthropic":
         if auth_mode in LOCAL_CLI_AUTH_MODES:
-            return bool(get_claude_code_session_token()) or claude_code_cli_available()
+            return bool(get_claude_code_session_token())
         inline_key = sanitize_bearer_token(
             inline_credentials.get("api_key")
             or inline_credentials.get("access_token")

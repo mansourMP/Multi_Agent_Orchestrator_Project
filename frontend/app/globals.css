@@ -8518,7 +8518,7 @@ body.orion-chat-home .orion-main-stage,
   min-height: calc(100dvh - var(--topbar-height) - 26px);
   padding: 12px 18px 18px;
   border: 1px solid var(--border-subtle);
-  border-radius: 18px;
+  border-radius: 0;
   background: var(--bg-surface);
   box-shadow: var(--shadow-card);
 }

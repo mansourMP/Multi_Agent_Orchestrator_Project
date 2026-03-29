@@ -1537,13 +1537,13 @@ export function WorkbenchCenterPanel({
           minHeight: renderedSimpleChatMessages.length > 0 ? (isMobile ? 'calc(100vh - 146px)' : 'calc(100vh - 158px)') : isMobile ? 'calc(100vh - 124px)' : 'calc(100vh - 136px)',
           borderRadius: 0,
           border: 'none',
-          background: 'transparent',
+          background: 'var(--bg-surface)',
           padding: renderedSimpleChatMessages.length > 0 ? (isMobile ? '8px 8px 18px' : '6px 12px 22px') : isMobile ? '18px 8px 28px' : '30px 12px 40px',
           display: 'grid',
           justifyItems: 'center',
           alignContent: renderedSimpleChatMessages.length > 0 ? 'start' : 'center',
           alignSelf: 'stretch',
-          boxShadow: 'none',
+          boxShadow: 'var(--shadow-card)',
         }}
       >
         <div className="orion-chat-stage">
@@ -1816,7 +1816,7 @@ export function WorkbenchCenterPanel({
                   fontSize: 14,
                   lineHeight: 1.55,
                   minHeight: isMobile ? 116 : 132,
-                  boxShadow: 'none',
+                  boxShadow: 'var(--shadow-card)',
                 }}
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {

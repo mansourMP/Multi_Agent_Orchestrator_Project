@@ -1060,7 +1060,7 @@ export default function HealthPage() {
   const localRuntimeGuideTitle = opsDaemon.running ? 'Bring a local machine online' : 'Start a local runtime';
   const localRuntimeGuideCopy = opsDaemon.running
     ? 'The platform runtime is reachable, but no local machine is online yet. Start the local companion on this device and confirm it appears below.'
-    : 'Hekor is ready for a local runtime, but the local companion is not running yet. Start it here, then confirm the machine appears online.';
+    : 'Platform is ready for a local runtime, but the local companion is not running yet. Start it here, then confirm the machine appears online.';
 
   return (
     <div className="orion-page-shell orion-animate-in is-health-page">

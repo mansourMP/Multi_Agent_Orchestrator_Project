@@ -514,7 +514,7 @@ const CONNECTOR_CHIP_STYLE_SUBTLE: React.CSSProperties = {
 const ROADMAP_TIER_META: Record<ConnectorRoadmapTier, { label: string; description: string; style: React.CSSProperties }> = {
   core: {
     label: 'Direct support',
-    description: 'Managed directly in Hekor.',
+    description: 'Managed directly in Platform.',
     style: CONNECTOR_CHIP_STYLE_NEUTRAL,
   },
   next: {
@@ -1290,7 +1290,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
       <PageFilterBar
         title="Tool directory"
-        description="Choose the tools Hekor can use. Connect a tool only when a task depends on it."
+        description="Choose the tools Platform can use. Connect a tool only when a task depends on it."
         summary={summary.total > 0 ? <span className="orion-chip">{summary.active} active</span> : null}
         actions={
           <>
@@ -1628,7 +1628,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
       <PageSection
         title="AI providers"
-        description="Manage saved AI accounts and choose what Hekor should use by default."
+        description="Manage saved AI accounts and choose what Platform should use by default."
         className="orion-home-list-panel"
       >
         <AiAccountsPanel workspaceId={WORKSPACE_ID} />
@@ -1689,7 +1689,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       ) : selectedConnectorRow ? (
         <PageSection
           title="Connected tool"
-          description="Test access, pause it, or update how Hekor should use it."
+          description="Test access, pause it, or update how Platform should use it."
           bodyClassName="orion-connector-detail-body"
         >
           <section className="orion-list">

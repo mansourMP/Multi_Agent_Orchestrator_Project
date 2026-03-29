@@ -4,6 +4,7 @@ import { Fragment, createElement, useEffect, useMemo, useRef, type ReactNode, ty
 import { Bot, Camera, CheckCircle2, FileText, Globe, Send, ShieldCheck, Sparkles, Terminal } from 'lucide-react';
 import { UI, fmtTime, formatDurationMs, type AgentRoleOption, type ExecutionSummary, type LogEntry, type PackResult as PackResultType } from '@/app/page.catalog';
 import { LogViewer } from '@/components/orion/LogViewer';
+import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from '@/components/orion/chat/displayText';
 import { formatExecutionTargetLabel } from '@/lib/executionTargets';
 import { safeNavigate } from '@/lib/safeNavigate';
 import type { WorkbenchAgentChatMessage } from './WorkbenchControlDeck';
@@ -389,30 +390,6 @@ function renderChatMarkdown(content: string, keyPrefix: string): ReactNode {
   }
 
   return parts;
-}
-
-function normalizeInlineErrorMessage(message: string): string {
-  const normalized = message.trim().toLowerCase();
-  if (normalized.includes('provider profiles path is not writable')) {
-    return '';
-  }
-  return message.trim();
-}
-
-function hasAbsolutePath(line: string): boolean {
-  return /(?:^|[\s`(])(?:\/Users\/|\/home\/|\/tmp\/|\/var\/|[A-Z]:[\\/])/.test(line);
-}
-
-function sanitizeAssistantDisplayText(content: string): string {
-  const lines = content.replace(/\r\n/g, '\n').trim().split('\n');
-  const filtered = lines.filter((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return true;
-    if (trimmed.toLowerCase().includes('provider profiles path is not writable')) return false;
-    if (hasAbsolutePath(trimmed)) return false;
-    return true;
-  });
-  return filtered.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 type HomeOperationsSceneProps = {
@@ -1529,19 +1506,8 @@ export function WorkbenchCenterPanel({
     focusApprovalItems.length > 0;
   const isReturningHome = setupReady && hasConnectedTools && hasReturningSignals;
   const hasChatHistory = chatMessages.length > 0;
-  const inlineProviderError = useMemo(() => {
-    const providerError = [...chatMessages]
-      .reverse()
-      .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
-    return providerError ? normalizeInlineErrorMessage(providerError.content) : null;
-  }, [chatMessages]);
-  const renderedSimpleChatMessages = useMemo(
-    () =>
-      chatMessages.filter(
-        (message) => !(message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable')),
-      ),
-    [chatMessages],
-  );
+  const inlineProviderError = null;
+  const renderedSimpleChatMessages = useMemo(() => chatMessages, [chatMessages]);
   const simpleChatThreadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1593,7 +1559,7 @@ export function WorkbenchCenterPanel({
                 {renderedSimpleChatMessages.slice(-12).map((message) => {
                   const isUser = message.role === 'user';
                   const isErrorMessage = message.status === 'error';
-                  const displayContent = isUser ? message.content : sanitizeAssistantDisplayText(message.content);
+                  const displayContent = isUser ? message.content : normalizeAssistantDisplayText(message.content);
                   const inlineError = isErrorMessage ? normalizeInlineErrorMessage(displayContent) : '';
                   return (
                     <div key={message.id} className={`orion-chat-turn${isUser ? ' is-user' : ' is-assistant'}${isErrorMessage ? ' is-error' : ''}`}>

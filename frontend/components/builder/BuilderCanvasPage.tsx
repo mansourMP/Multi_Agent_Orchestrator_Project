@@ -4385,7 +4385,7 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
                   <div className="orion-builder-preview-head-copy">
                     <div className="orion-builder-preview-title">Build with AI</div>
                     <div className="orion-builder-preview-subtitle">
-                      Describe the workflow, tools, approvals, and outcome you want, and Hekor will draft the canvas.
+                      Describe the workflow, tools, approvals, and outcome you want, and Platform will draft the canvas.
                     </div>
                   </div>
                   <div className="orion-builder-preview-head-actions">

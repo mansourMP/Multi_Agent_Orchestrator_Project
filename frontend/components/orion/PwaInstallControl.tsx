@@ -121,7 +121,7 @@ export default function PwaInstallControl() {
           <div className="orion-modal orion-pwa-modal" onClick={(event) => event.stopPropagation()}>
             <div className="orion-pwa-modal-head">
               <div>
-                <div className="orion-panel-title">Install Hekor</div>
+                <div className="orion-panel-title">Install Platform</div>
                 <div className="orion-panel-copy">Add to your dock for instant access.</div>
               </div>
               <button type="button" className="orion-pwa-modal-close" onClick={() => setShowInstructions(false)} aria-label="Close">

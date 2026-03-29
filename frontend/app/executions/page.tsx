@@ -414,7 +414,7 @@ function executionStateNote(execution: ExecutionRecord): string {
     return 'Review what blocked this task and decide the next step.';
   }
   if (status === 'running') {
-    return 'Hekor is still working on this task.';
+    return 'Platform is still working on this task.';
   }
   if (status === 'success' || status === 'completed') {
     return 'Completed. Open the run to review the result.';

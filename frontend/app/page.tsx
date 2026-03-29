@@ -998,53 +998,41 @@ function summarizeCapabilityActions(
   return out.length > 0 ? out.join(', ') : 'Not verified';
 }
 
+function readRunProviderModelContract(
+  payload: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const contract = payload.run_detail_contract;
+  if (!contract || typeof contract !== 'object') return null;
+  const providerModel = (contract as Record<string, unknown>).provider_model;
+  return providerModel && typeof providerModel === 'object'
+    ? providerModel as Record<string, unknown>
+    : null;
+}
+
 function readRequestedProvider(payload: Record<string, unknown> | null): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const context = payload.context && typeof payload.context === 'object'
-    ? payload.context as Record<string, unknown>
-    : {};
-  return String(payload.requested_provider || context.provider || '').trim();
+  const contract = readRunProviderModelContract(payload);
+  return String(contract?.requested_provider || '').trim();
 }
 
 function readEffectiveProvider(payload: Record<string, unknown> | null): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const usageMasked = payload.usage_masked && typeof payload.usage_masked === 'object'
-    ? payload.usage_masked as Record<string, unknown>
-    : {};
-  return String(
-    payload.effective_provider
-    || usageMasked.provider
-    || payload.usage_provider
-    || payload.active_profile_provider
-    || '',
-  ).trim();
+  const contract = readRunProviderModelContract(payload);
+  return String(contract?.effective_provider || '').trim();
 }
 
 function readRequestedModel(payload: Record<string, unknown> | null): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const context = payload.context && typeof payload.context === 'object'
-    ? payload.context as Record<string, unknown>
-    : {};
-  return String(payload.requested_model || context.model || '').trim();
+  const contract = readRunProviderModelContract(payload);
+  return String(contract?.requested_model || '').trim();
 }
 
 function readEffectiveModel(payload: Record<string, unknown> | null): string {
-  if (!payload || typeof payload !== 'object') return '';
-  const usageMasked = payload.usage_masked && typeof payload.usage_masked === 'object'
-    ? payload.usage_masked as Record<string, unknown>
-    : {};
-  return String(
-    payload.effective_model
-    || usageMasked.model
-    || payload.usage_model
-    || payload.active_profile_model
-    || '',
-  ).trim();
+  const contract = readRunProviderModelContract(payload);
+  return String(contract?.effective_model || '').trim();
 }
 
 function readRunFallbackUsed(payload: Record<string, unknown> | null): boolean {
-  if (!payload || typeof payload !== 'object') return false;
-  return Boolean(payload.fallback_used);
+  const contract = readRunProviderModelContract(payload);
+  return Boolean(contract?.fallback_used);
 }
 
 function truncateRunCardTitle(goal: string, limit = 58): string {

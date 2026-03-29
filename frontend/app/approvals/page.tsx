@@ -502,7 +502,7 @@ export default function ApprovalsPage() {
     <div className="orion-page-shell orion-animate-in">
       <PageHero
         kicker="Confirmations"
-        title="Review the next blocked step before Hekor continues."
+        title="Review the next blocked step before Platform continues."
         copy="Focus on the next blocking confirmation first, then clear the rest of the queue with the same decision rules."
         actions={
           <button className="orion-btn" onClick={() => void refresh()}>
@@ -644,7 +644,7 @@ export default function ApprovalsPage() {
           <PageStatePanel
             variant={audit.length === 0 ? 'empty' : 'filtered-empty'}
             title={audit.length === 0 ? 'No confirmation history yet' : 'No history items match these filters'}
-            copy={audit.length === 0 ? 'Confirmed and declined actions will appear here once Hekor records them.' : 'Change the filters to see the decision history that matches this view.'}
+            copy={audit.length === 0 ? 'Confirmed and declined actions will appear here once Platform records them.' : 'Change the filters to see the decision history that matches this view.'}
           />
         ) : (
           <div className="hekor-approval-audit-list">

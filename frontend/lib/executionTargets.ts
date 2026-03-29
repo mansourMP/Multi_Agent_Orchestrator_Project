@@ -57,7 +57,7 @@ export function getExecutionTargetGuides(hasLocalRuntime: boolean): ExecutionTar
     {
       value: 'auto',
       label: 'Automatic',
-      summary: 'Hekor chooses the best place to run the task.',
+      summary: 'Platform chooses the best place to run the task.',
       hint: hasLocalRuntime
         ? 'Best default. Use this when you do not care where work runs.'
         : 'Best default. Right now this will stay in cloud mode until a machine comes online.',
@@ -73,7 +73,7 @@ export function getExecutionTargetGuides(hasLocalRuntime: boolean): ExecutionTar
     {
       value: 'cloud',
       label: 'Cloud runtime',
-      summary: 'Run in Hekor without depending on this device.',
+      summary: 'Run in Platform without depending on this device.',
       hint: 'Use this for hosted work, remote execution, or when your machine should stay out of the loop.',
     },
   ];

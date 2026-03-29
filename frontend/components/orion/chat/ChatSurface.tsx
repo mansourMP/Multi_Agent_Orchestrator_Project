@@ -4,9 +4,9 @@ import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useSt
 import { useRouter } from 'next/navigation';
 import { ArrowUp, ChevronDown, Plus, SlidersHorizontal, X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
-import { RUN_COMPLETED_STATUS_COPY } from '@/lib/runStartCopy';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus } from './chatSchema';
+import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 
 export type ChatIdentityItem = {
   label: string;
@@ -198,64 +198,6 @@ function renderChatMarkdown(content: string, keyPrefix: string) {
   return parts;
 }
 
-function normalizeInlineErrorMessage(message: string): string {
-  const normalized = message.trim().toLowerCase();
-  if (normalized.includes('provider profiles path is not writable')) {
-    return '';
-  }
-  return message.trim();
-}
-
-function hasAbsolutePath(line: string): boolean {
-  return /(?:^|[\s`(])(?:\/Users\/|\/home\/|\/tmp\/|\/var\/|[A-Z]:[\\/])/.test(line);
-}
-
-function isSuppressedTechnicalMessage(content: string): boolean {
-  return content.trim().toLowerCase().includes('provider profiles path is not writable');
-}
-
-function sanitizeAssistantDisplayText(content: string): string {
-  let text = content.replace(/\r\n/g, '\n').trim();
-  if (!text) return '';
-  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
-    return `${RUN_COMPLETED_STATUS_COPY} Open Runs for structured details.`;
-  }
-
-  const filtered: string[] = [];
-  let skippingTechnicalTail = false;
-
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-
-    if (!trimmed) {
-      if (!skippingTechnicalTail && filtered[filtered.length - 1] !== '') filtered.push('');
-      continue;
-    }
-
-    if (hasAbsolutePath(trimmed)) continue;
-
-    if (/^validation:?/i.test(trimmed) || /^sources?:/i.test(trimmed) || /^source refs?:/i.test(trimmed)) {
-      skippingTechnicalTail = true;
-      continue;
-    }
-
-    if (skippingTechnicalTail) {
-      if (/^[-*]\s*`/.test(trimmed) || /^`/.test(trimmed) || /^[-*]\s*[A-Za-z0-9_./-]+:\d+/.test(trimmed) || /^\.\//.test(trimmed)) {
-        continue;
-      }
-      skippingTechnicalTail = false;
-    }
-
-    if (/^next move/i.test(trimmed) || /^next step/i.test(trimmed)) continue;
-    if (/^open (control center|admin|runs) for details\.?$/i.test(trimmed)) continue;
-
-    filtered.push(line);
-  }
-
-  text = filtered.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  return text || 'Done.';
-}
-
 function resolveAssistantLifecycle(status: ChatMessageRecord['status']): { label: string; tone: AssistantLifecycleTone } | null {
   if (status === 'sending') return { label: 'Thinking', tone: 'thinking' };
   if (status === 'running') return { label: 'Working', tone: 'working' };
@@ -316,10 +258,7 @@ export function ChatSurface({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
-  const renderedMessages = useMemo(
-    () => messages.filter((message) => !(message.status === 'error' && isSuppressedTechnicalMessage(message.content))),
-    [messages],
-  );
+  const renderedMessages = useMemo(() => messages, [messages]);
   const isFirstThread = renderedMessages.length > 0 && renderedMessages.length <= 2;
 
   const invokeSend = useCallback(() => {
@@ -403,7 +342,7 @@ export function ChatSurface({
               const followsUser = !isUser && previousMessage?.role === 'user';
               const lifecycle = !isUser ? resolveAssistantLifecycle(message.status) : null;
               const showLoadingIndicator = Boolean(lifecycle && (lifecycle.tone === 'thinking' || lifecycle.tone === 'working'));
-              const displayContent = isUser ? message.content : sanitizeAssistantDisplayText(message.content);
+              const displayContent = isUser ? message.content : normalizeAssistantDisplayText(message.content);
               const suppressBody = !isUser && shouldSuppressAssistantBody(displayContent, message.status);
               const inlineError = isError ? normalizeInlineErrorMessage(displayContent) : '';
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;

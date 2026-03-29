@@ -86,11 +86,11 @@ export async function fetchDoctorPreflight(headers?: HeadersInit): Promise<Docto
       cache: 'no-store',
     });
   } catch {
-    return buildUnavailableReport('Hekor could not confirm runtime health right now.');
+    return buildUnavailableReport('Platform could not confirm runtime health right now.');
   }
 
   if (!response.ok) {
-    let detail = 'Hekor could not confirm runtime health right now.';
+    let detail = 'Platform could not confirm runtime health right now.';
     try {
       const payload = (await response.json()) as { detail?: string; error?: string; message?: string };
       detail = payload.detail || payload.error || payload.message || detail;
@@ -117,7 +117,7 @@ export async function fetchDoctorPreflight(headers?: HeadersInit): Promise<Docto
     overview: {
       status: overviewStatus,
       title: String(payload.overview?.title || (overviewStatus === 'pass' ? 'Runtime healthy' : overviewStatus === 'warn' ? 'Runtime has warnings' : 'Runtime needs attention')).trim(),
-      detail: String(payload.overview?.detail || (overviewStatus === 'pass' ? 'Hekor is ready to run tasks.' : 'Review Health before starting sensitive work.')).trim(),
+      detail: String(payload.overview?.detail || (overviewStatus === 'pass' ? 'Platform is ready to run tasks.' : 'Review Health before starting sensitive work.')).trim(),
     },
     summary,
     checks,
@@ -177,7 +177,7 @@ export function evaluateDoctorRunGate(
       status: 'warn',
       blocking: false,
       title: 'Runtime needs attention',
-      detail: `${firstFail.detail || report.overview.detail} Hekor can still try ${routeLabel}, but you should review Health first.`,
+      detail: `${firstFail.detail || report.overview.detail} Platform can still try ${routeLabel}, but you should review Health first.`,
       recommendation: firstFail.recommendation || 'Open Health before starting high-trust work.',
       report,
     };

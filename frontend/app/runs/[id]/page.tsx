@@ -6,11 +6,8 @@ import { useParams } from 'next/navigation';
 import {
   Bot,
   CheckCircle2,
-  FileText,
   Loader2,
-  Mail,
   RefreshCw,
-  Search,
   ShieldCheck,
 } from 'lucide-react';
 import {
@@ -239,7 +236,7 @@ function formatProviderLabel(value: string | null | undefined): string {
   if (provider === 'anthropic') return 'Anthropic';
   if (provider === 'gemini' || provider === 'google') return 'Google';
   if (provider === 'openai') return 'OpenAI';
-  return String(value || '').trim() || 'Hekor AI';
+  return String(value || '').trim() || 'Platform';
 }
 
 function formatRiskSignal(value: string | null | undefined): string | null {
@@ -270,49 +267,21 @@ function formatStatusLabel(
   replayPayload: ReplayPayload['item'],
   liveEvents: ReplayEvent[],
 ): { label: string; toolLabel: string | null; icon: typeof Bot } {
-  const waitingForRuntime = Boolean(
-    detail?.execution_target_waiting_for_runtime
-      ?? detail?.route?.waiting_for_runtime,
-  );
-  const waitingForCapacity = Boolean(
-    detail?.execution_target_waiting_for_capacity
-      ?? detail?.route?.waiting_for_capacity,
-  );
-  const latestEvent = liveEvents[liveEvents.length - 1] || replayPayload?.events?.[replayPayload.events.length - 1] || null;
-  const latestText = [
-    String(latestEvent?.message || '').trim(),
-    String(latestEvent?.event || '').trim(),
-    String(detail?.run_detail_contract?.connector_mutation?.binding?.label || '').trim(),
-    String(detail?.context?.user_goal || '').trim(),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  if (waitingForCapacity) {
-    return { label: 'Waiting for machine capacity...', toolLabel: 'Local runtime', icon: Bot };
-  }
-  if (waitingForRuntime) {
-    return { label: 'Waiting for a capable machine...', toolLabel: 'Local runtime', icon: Bot };
-  }
-  if (detail?.pending_confirmation?.approval_id || detail?.pending_approval?.approval_id) {
-    return { label: 'Confirmation required...', toolLabel: null, icon: ShieldCheck };
-  }
-  if (/email|gmail|inbox|mail/.test(latestText)) {
-    return { label: 'Reading your emails...', toolLabel: 'Gmail', icon: Mail };
-  }
-  if (/search|web|browser|research|competitor/.test(latestText)) {
-    return { label: 'Searching the web...', toolLabel: 'Web', icon: Search };
-  }
-  if (/draft|prepare|reply|summary|report|write/.test(latestText)) {
-    return { label: 'Preparing your draft...', toolLabel: 'Draft', icon: FileText };
-  }
-
   const status = String(detail?.status || replayPayload?.status || historyItem?.status || '').toLowerCase();
-  if (status === 'completed') {
-    return { label: 'Done', toolLabel: null, icon: CheckCircle2 };
+  if (!status) {
+    return { label: '', toolLabel: null, icon: Bot };
   }
-  return { label: 'Planning your task...', toolLabel: null, icon: Bot };
+  if (status === 'waiting_for_input') {
+    return { label: 'Waiting for input', toolLabel: null, icon: ShieldCheck };
+  }
+  if (status === 'completed') {
+    return { label: 'Completed', toolLabel: null, icon: CheckCircle2 };
+  }
+  return {
+    label: status.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim(),
+    toolLabel: null,
+    icon: Bot,
+  };
 }
 
 export default function RunDetailPage() {
@@ -596,7 +565,7 @@ export default function RunDetailPage() {
     if (executionTargetWaitingForCapacity) {
       return compactText(
         executionTargetReason,
-        'Capable local machines are online, but they are busy right now. Hekor will start this run as soon as one frees up.',
+        'Capable local machines are online, but they are busy right now. Platform will start this run as soon as one frees up.',
         260,
       );
     }
@@ -608,7 +577,7 @@ export default function RunDetailPage() {
       );
     }
     if (pendingConfirmation?.approval_id) {
-      return 'Hekor paused before the next action so you can review it first.';
+      return 'Platform paused before the next action so you can review it first.';
     }
     if (isFailureStatus(effectiveStatus)) {
       return compactText(previewText, 'The task stopped before a final result was produced.', 260);
@@ -665,7 +634,7 @@ export default function RunDetailPage() {
           runId,
           approvalId: pendingConfirmation.approval_id,
           decision,
-          note: 'Resolved from Hekor run view',
+          note: 'Resolved from Platform run view',
         }),
       });
       if (!response.ok) {
@@ -725,7 +694,7 @@ export default function RunDetailPage() {
               <div className="hekor-run-hero-copy">
                 <div className="hekor-run-hero-title">{heroTitle}</div>
                 <div className="hekor-run-status-note">
-                  {currentStatus.toolLabel || contractConnectorMutation?.system_label || contractConnectorBinding?.label || 'Hekor Agent'}
+                  {currentStatus.toolLabel || contractConnectorMutation?.system_label || contractConnectorBinding?.label || 'Platform'}
                 </div>
                 <div className="hekor-run-hero-summary">{plainLanguageSummary}</div>
               </div>

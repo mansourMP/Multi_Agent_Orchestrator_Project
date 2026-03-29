@@ -158,7 +158,7 @@ export default function MachinesPage() {
         title={machines.length > 0 ? `${summary.online ?? 0} machine${(summary.online ?? 0) === 1 ? '' : 's'} online` : 'No machines registered yet'}
         copy={
           machines.length > 0
-            ? 'Monitor every registered runtime that can execute work for Hekor. Local and headless execution both flow through this machine registry.'
+            ? 'Monitor every registered runtime that can execute work for Platform. Local and headless execution both flow through this machine registry.'
             : 'Install or start a runtime to unlock local or headless execution outside the browser.'
         }
         actions={
@@ -314,7 +314,7 @@ export default function MachinesPage() {
           description={
             hasKnownMachines
               ? 'A runtime is registered, but no local machine is online right now. Bring one online to unlock local execution.'
-              : 'Install or start the local runtime on this device. Once it appears here, Hekor can run work locally when needed.'
+              : 'Install or start the local runtime on this device. Once it appears here, Platform can run work locally when needed.'
           }
           className="orion-machines-connect-panel"
           muted
@@ -391,7 +391,7 @@ export default function MachinesPage() {
           variant="empty"
           icon={<Cpu size={18} />}
           title="No machines registered"
-          copy="Hekor is ready for runtimes, but no local or headless machine has registered yet."
+          copy="Platform is ready for runtimes, but no local or headless machine has registered yet."
           actions={
             <>
               <Link href="/setup" className="btn-primary">

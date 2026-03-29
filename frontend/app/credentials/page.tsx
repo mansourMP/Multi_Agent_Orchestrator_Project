@@ -159,49 +159,49 @@ const EMPTY_FORM: ConnectModalState = {
   timezone: 'UTC',
 };
 
-const ASSET_TILE_BG = 'rgba(255, 255, 255, 0.94)';
-const ASSET_TILE_BORDER = 'rgba(10, 10, 10, 0.12)';
+const ASSET_TILE_BG = 'var(--bg-element)';
+const ASSET_TILE_BORDER = 'var(--border-subtle)';
 
 const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   google_workspace: {
     assetSrc: '/connector-logos/google-workspace.svg',
-    accent: '#4285F4',
+    accent: 'var(--tone-success)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   telegram_bot: {
     assetSrc: '/connector-logos/telegram.png',
-    accent: '#229ED9',
+    accent: 'var(--tone-accent)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   wechat_work: {
     assetSrc: '/connector-logos/webhook.png',
-    accent: '#07C160',
+    accent: 'var(--tone-success)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   whatsapp_twilio: {
     assetSrc: '/connector-logos/whatsapp-business.png',
-    accent: '#25D366',
+    accent: 'var(--tone-success)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   discord_bot: {
     assetSrc: '/connector-logos/discord.png',
-    accent: '#5865F2',
+    accent: 'var(--tone-accent)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   instagram_business: {
     assetSrc: '/connector-logos/meta-business.png',
-    accent: '#DD2A7B',
+    accent: 'var(--tone-danger)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   microsoft_365: {
     assetSrc: '/connector-logos/microsoft-365.png',
-    accent: '#D83B01',
+    accent: 'var(--tone-warning)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -213,7 +213,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   },
   youtube: {
     assetSrc: '/connector-logos/youtube.png',
-    accent: '#FF0033',
+    accent: 'var(--tone-danger)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -231,7 +231,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   },
   discord: {
     assetSrc: '/connector-logos/discord.png',
-    accent: '#5865F2',
+    accent: 'var(--tone-accent)',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -500,14 +500,14 @@ function connectorRoadmapTier(entry: ConnectorCatalogEntry): ConnectorRoadmapTie
 }
 
 const CONNECTOR_CHIP_STYLE_NEUTRAL: React.CSSProperties = {
-  color: 'rgba(10, 10, 10, 0.72)',
-  border: '1px solid rgba(10, 10, 10, 0.08)',
-  background: 'rgba(255, 255, 255, 0.92)',
+  color: 'var(--text-secondary)',
+  border: '1px solid var(--border-subtle)',
+  background: 'var(--bg-element)',
 };
 
 const CONNECTOR_CHIP_STYLE_SUBTLE: React.CSSProperties = {
-  color: 'rgba(10, 10, 10, 0.56)',
-  border: '1px solid rgba(10, 10, 10, 0.08)',
+  color: 'var(--text-secondary)',
+  border: '1px solid var(--border-subtle)',
   background: 'var(--bg-element)',
 };
 
@@ -1391,9 +1391,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                           className="orion-chip"
                           style={{
                             minHeight: 24,
-                            color: 'rgba(10, 10, 10, 0.82)',
-                            border: '1px solid rgba(10, 10, 10, 0.08)',
-                            background: 'rgba(255, 255, 255, 0.92)',
+                            color: 'var(--tone-success)',
+                            border: '1px solid var(--success-border)',
+                            background: 'var(--bg-element)',
                           }}
                         >
                           Connected
@@ -1687,394 +1687,384 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           className="orion-state-panel"
         />
       ) : selectedConnectorRow ? (
-        <PageSection
-          title="Connected tool"
-          description="Test access, pause it, or update how Platform should use it."
-          bodyClassName="orion-connector-detail-body"
-        >
-          <section className="orion-list">
-            {[selectedConnectorRow].map((row) => {
-              const paused = rowPaused(row);
-              const assignedRole = rowAssignedRole(row);
-              const busyAction = rowBusy[row.id] || '';
-              const test = testResults[row.id];
-              const googleDriveBrowser = googleDriveBrowsers[row.id];
-              const driveBrowser = driveBrowsers[row.id];
-              const visual = connectorVisual(row.connector);
-              const busyCopy = busyActionLabel(busyAction);
-              const isSuite = row.connector === 'google_workspace' || row.connector === 'microsoft_365';
-              const isConfiguredOpen = configuredRowId === row.id;
-              const googleSuite = row.connector === 'google_workspace' ? googleSuiteSummary(row, test) : null;
-              const microsoftSuite = row.connector === 'microsoft_365' ? microsoftSuiteSummary(row, test) : null;
-              const suiteCapabilities = row.connector === 'google_workspace'
-                ? googleSuiteCapabilities(test)
-                : row.connector === 'microsoft_365'
-                  ? microsoftSuiteCapabilities(test)
-                  : [];
-              const filesPanelOpen = row.connector === 'google_workspace' ? Boolean(googleDriveBrowser?.open) : Boolean(driveBrowser?.open);
-              const filesPanelLoading = row.connector === 'google_workspace' ? Boolean(googleDriveBrowser?.loading) : Boolean(driveBrowser?.loading);
-              return (
-                <article
-                  id={`connector-row-${row.id}`}
-                  key={row.id}
-                  className="orion-list-row orion-connector-detail-card"
-                >
-                  <div className="orion-connector-detail-header">
-                    <div className="orion-connector-detail-main">
-                      <ConnectorMark visual={visual} size={58} />
-                      <div className="orion-list-row-main orion-connector-detail-copy">
-                        <div className="orion-connector-detail-title-row">
-                          <div className="orion-list-row-title">{row.label}</div>
-                          <span
-                            className="orion-chip"
-                            style={{
-                              color: visual.accent,
-                              border: `1px solid ${visual.border}`,
-                              background: visual.bg,
-                              minHeight: 24,
-                            }}
-                          >
-                            {connectorLabel(row.connector)}
-                          </span>
-                          {isSuite ? (
-                            <span
-                              className="orion-chip"
-                              style={{ border: '1px solid var(--border-default)', background: 'var(--bg-element)', color: 'var(--text-secondary)' }}
-                            >
-                              {suiteReadinessLabel(suiteCapabilities)}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="orion-list-row-subtitle">
-                          {rowIdentity(row)} • Added {formatDate(row.created_at)}
-                        </div>
-                        <div className="orion-connector-detail-meta-row">
-                          <span className="orion-chip" style={statusStyles(!paused)}>
-                            {paused ? 'Paused' : 'Active'}
-                          </span>
-                          <span className="orion-chip" style={{ border: '1px solid var(--border-default)', background: 'var(--bg-element)', color: 'var(--text-secondary)' }}>
-                            {assignedRole ? `Used by ${agentRoleLabel(assignedRole)}` : 'Shared'}
-                          </span>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{rowRoutingLabel(row)}</span>
-                        </div>
-                        {test ? (
-                          <div style={{ marginTop: 8, fontSize: 12, color: test.ok ? 'var(--success-fg)' : 'var(--warning-fg)' }}>
-                            {test.message}
-                            {test.warning ? <span style={{ color: 'var(--text-secondary)' }}> • {test.warning}</span> : null}
-                          </div>
-                        ) : isSuite ? (
-                          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-tertiary)' }}>
-                            Test this once, then open files or launch work from the actions here.
-                          </div>
-                        ) : null}
-                        {busyCopy ? (
-                          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>{busyCopy}</div>
-                        ) : null}
-                      </div>
-                    </div>
+        (() => {
+          const row = selectedConnectorRow;
+          const paused = rowPaused(row);
+          const assignedRole = rowAssignedRole(row);
+          const busyAction = rowBusy[row.id] || '';
+          const test = testResults[row.id];
+          const googleDriveBrowser = googleDriveBrowsers[row.id];
+          const driveBrowser = driveBrowsers[row.id];
+          const visual = connectorVisual(row.connector);
+          const busyCopy = busyActionLabel(busyAction);
+          const isSuite = row.connector === 'google_workspace' || row.connector === 'microsoft_365';
+          const isConfiguredOpen = configuredRowId === row.id;
+          const googleSuite = row.connector === 'google_workspace' ? googleSuiteSummary(row, test) : null;
+          const microsoftSuite = row.connector === 'microsoft_365' ? microsoftSuiteSummary(row, test) : null;
+          const suiteCapabilities = row.connector === 'google_workspace'
+            ? googleSuiteCapabilities(test)
+            : row.connector === 'microsoft_365'
+              ? microsoftSuiteCapabilities(test)
+              : [];
+          const filesPanelOpen = row.connector === 'google_workspace' ? Boolean(googleDriveBrowser?.open) : Boolean(driveBrowser?.open);
+          const filesPanelLoading = row.connector === 'google_workspace' ? Boolean(googleDriveBrowser?.loading) : Boolean(driveBrowser?.loading);
 
-                    <div className="orion-connector-detail-actions">
-                      <div className="orion-connector-detail-action-row">
-                        {row.connector === 'google_workspace' ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => {
-                              if (googleDriveBrowser?.open) {
-                                collapseGoogleDriveBrowser(row.id);
-                              } else {
-                                void handleBrowseGoogleDrive(row);
-                              }
-                            }}
-                            disabled={Boolean(busyAction) || filesPanelLoading}
-                          >
-                            {filesPanelOpen ? <ChevronLeft size={13} /> : <FolderOpen size={13} />}
-                            {filesPanelLoading ? 'Loading…' : filesPanelOpen ? 'Hide files' : 'Open files'}
-                          </button>
-                        ) : null}
-                        {row.connector === 'microsoft_365' ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => {
-                              if (driveBrowser?.open) {
-                                collapseDriveBrowser(row.id);
-                              } else {
-                                void handleBrowseMicrosoftDrive(row);
-                              }
-                            }}
-                            disabled={Boolean(busyAction) || filesPanelLoading}
-                          >
-                            {filesPanelOpen ? <ChevronLeft size={13} /> : <FolderOpen size={13} />}
-                            {filesPanelLoading ? 'Loading…' : filesPanelOpen ? 'Hide files' : 'Open files'}
-                          </button>
-                        ) : null}
-                        {!isSuite ? (
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
-                            <ShieldCheck size={13} />
-                            {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
-                          </button>
-                        ) : null}
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 34, paddingInline: 12 }}
-                          onClick={() => setConfiguredRowId((current) => (current === row.id ? '' : row.id))}
+          return (
+            <div id={`connector-row-${row.id}`} className="orion-connector-detail-card">
+              <div className="orion-connector-detail-header">
+                <ConnectorMark visual={visual} size={58} />
+                <div className="orion-connector-detail-copy">
+                  <div className="orion-connector-detail-title-row">
+                    <div className="orion-list-row-title">{row.label}</div>
+                    <span className="orion-chip" style={statusStyles(!paused)}>
+                      {paused ? 'Paused' : 'Active'}
+                    </span>
+                  </div>
+                  <div className="orion-list-row-subtitle">
+                    {rowIdentity(row)} • Added {formatDate(row.created_at)}
+                  </div>
+                  {test ? (
+                    <div style={{ marginTop: 8, fontSize: 12, color: test.ok ? 'var(--success-fg)' : 'var(--warning-fg)' }}>
+                      {test.message}
+                      {test.warning ? <span style={{ color: 'var(--text-secondary)' }}> • {test.warning}</span> : null}
+                    </div>
+                  ) : isSuite ? (
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-tertiary)' }}>
+                      Test this once, then open files or launch work from the actions here.
+                    </div>
+                  ) : null}
+                  {busyCopy ? (
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>{busyCopy}</div>
+                  ) : null}
+                </div>
+                <div className="orion-connector-detail-actions">
+                  <div className="orion-connector-detail-action-row">
+                    {row.connector === 'google_workspace' ? (
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 34, paddingInline: 12 }}
+                        onClick={() => {
+                          if (googleDriveBrowser?.open) {
+                            collapseGoogleDriveBrowser(row.id);
+                          } else {
+                            void handleBrowseGoogleDrive(row);
+                          }
+                        }}
+                        disabled={Boolean(busyAction) || filesPanelLoading}
+                      >
+                        {filesPanelOpen ? <ChevronLeft size={13} /> : <FolderOpen size={13} />}
+                        {filesPanelLoading ? 'Loading…' : filesPanelOpen ? 'Hide files' : 'Open files'}
+                      </button>
+                    ) : null}
+                    {row.connector === 'microsoft_365' ? (
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 34, paddingInline: 12 }}
+                        onClick={() => {
+                          if (driveBrowser?.open) {
+                            collapseDriveBrowser(row.id);
+                          } else {
+                            void handleBrowseMicrosoftDrive(row);
+                          }
+                        }}
+                        disabled={Boolean(busyAction) || filesPanelLoading}
+                      >
+                        {filesPanelOpen ? <ChevronLeft size={13} /> : <FolderOpen size={13} />}
+                        {filesPanelLoading ? 'Loading…' : filesPanelOpen ? 'Hide files' : 'Open files'}
+                      </button>
+                    ) : null}
+                    {!isSuite ? (
+                      <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
+                        <ShieldCheck size={13} />
+                        {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
+                      </button>
+                    ) : null}
+                    <button
+                      className="orion-btn orion-btn-ghost"
+                      style={{ minHeight: 34, paddingInline: 12 }}
+                      onClick={() => setConfiguredRowId((current) => (current === row.id ? '' : row.id))}
+                    >
+                      {isConfiguredOpen ? 'Hide setup' : 'Configure'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="orion-connector-detail-content">
+                <details className="orion-connector-inline-details">
+                  <summary>Details</summary>
+                  <div className="orion-connector-inline-meta">
+                    <span
+                      className="orion-chip"
+                      style={{
+                        color: visual.accent,
+                        border: `1px solid ${visual.border}`,
+                        background: visual.bg,
+                        minHeight: 24,
+                      }}
+                    >
+                      {connectorLabel(row.connector)}
+                    </span>
+                    {isSuite ? (
+                      <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                        {suiteReadinessLabel(suiteCapabilities)}
+                      </span>
+                    ) : null}
+                    <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                      {assignedRole ? `Used by ${agentRoleLabel(assignedRole)}` : 'Shared'}
+                    </span>
+                    <span className="orion-connector-inline-note">{rowRoutingLabel(row)}</span>
+                  </div>
+                </details>
+
+                {isConfiguredOpen ? (
+                  <div className="orion-connector-config-panel">
+                    <div className="orion-connector-config-head">
+                      <div className="orion-connector-config-copy">
+                        <div className="orion-connector-config-kicker">
+                          Configure
+                        </div>
+                        <div className="orion-connector-config-note">
+                          Choose who uses this connection, test it, or pause it.
+                        </div>
+                      </div>
+                      <div className="orion-connector-config-actions">
+                        <select
+                          className="input"
+                          value={assignedRole}
+                          disabled={Boolean(busyAction)}
+                          onChange={(event) => {
+                            void handleAssignRole(row, (event.target.value || '') as '' | AgentRoleId);
+                          }}
+                          style={{ minWidth: 188, minHeight: 34, paddingInline: 10 }}
                         >
-                          {isConfiguredOpen ? 'Hide setup' : 'Configure'}
+                          <option value="">Shared access</option>
+                          {AGENT_ROLE_OPTIONS.map((role) => (
+                            <option key={role.id} value={role.id}>{role.label}</option>
+                          ))}
+                        </select>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
+                          <ShieldCheck size={13} />
+                          {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
+                        </button>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTogglePaused(row)} disabled={Boolean(busyAction)}>
+                          {paused ? <PlayCircle size={13} /> : <PauseCircle size={13} />}
+                          {busyAction === 'pause' ? 'Saving…' : paused ? 'Resume' : 'Pause'}
+                        </button>
+                        <button className="orion-btn orion-btn-danger" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleRemove(row)} disabled={Boolean(busyAction)}>
+                          <Trash2 size={13} />
+                          {busyAction === 'remove' ? 'Removing…' : 'Remove'}
                         </button>
                       </div>
                     </div>
-                  </div>
-
-                  {isConfiguredOpen ? (
-                    <div className="orion-connector-config-panel">
-                      <div className="orion-connector-config-head">
-                        <div className="orion-connector-config-copy">
-                          <div className="orion-connector-config-kicker">
-                            Configure
+                    {isSuite ? (
+                      <div className="orion-connector-suite-panel">
+                        <div className="orion-connector-suite-account">
+                          <div className="orion-connector-suite-account-title">
+                            {googleSuite?.accountName || microsoftSuite?.accountName}
                           </div>
-                          <div className="orion-connector-config-note">
-                            Choose who uses this connection, test it, or pause it.
+                          <div className="orion-connector-suite-account-note">
+                            {googleSuite?.accountEmail || microsoftSuite?.accountEmail} · {googleSuite?.driveLabel || microsoftSuite?.driveLabel}
                           </div>
                         </div>
-                        <div className="orion-connector-config-actions">
-                          <select
-                            className="input"
-                            value={assignedRole}
-                            disabled={Boolean(busyAction)}
-                            onChange={(event) => {
-                              void handleAssignRole(row, (event.target.value || '') as '' | AgentRoleId);
-                            }}
-                            style={{ minWidth: 188, minHeight: 34, paddingInline: 10 }}
-                          >
-                            <option value="">Shared access</option>
-                            {AGENT_ROLE_OPTIONS.map((role) => (
-                              <option key={role.id} value={role.id}>{role.label}</option>
-                            ))}
-                          </select>
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
-                            <ShieldCheck size={13} />
-                            {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
-                          </button>
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTogglePaused(row)} disabled={Boolean(busyAction)}>
-                            {paused ? <PlayCircle size={13} /> : <PauseCircle size={13} />}
-                            {busyAction === 'pause' ? 'Saving…' : paused ? 'Resume' : 'Pause'}
-                          </button>
-                          <button className="orion-btn orion-btn-danger" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleRemove(row)} disabled={Boolean(busyAction)}>
-                            <Trash2 size={13} />
-                            {busyAction === 'remove' ? 'Removing…' : 'Remove'}
-                          </button>
-                        </div>
-                      </div>
-                      {isSuite ? (
-                        <div className="orion-connector-suite-panel">
-                          <div className="orion-connector-suite-account">
-                            <div className="orion-connector-suite-account-title">
-                              {googleSuite?.accountName || microsoftSuite?.accountName}
-                            </div>
-                            <div className="orion-connector-suite-account-note">
-                              {googleSuite?.accountEmail || microsoftSuite?.accountEmail} · {googleSuite?.driveLabel || microsoftSuite?.driveLabel}
-                            </div>
-                          </div>
-                          <div className="orion-connector-suite-grid">
-                            {suiteCapabilities.map((capability) => (
-                              <div key={capability.label} className="orion-connector-suite-capability">
-                                <div className="orion-connector-suite-capability-head">
-                                  <div className="orion-connector-suite-capability-title">{capability.label}</div>
-                                  <span className="orion-chip" style={capabilityTone(capability.enabled)}>
-                                    {capability.enabled ? 'Ready' : 'Scope needed'}
-                                  </span>
-                                </div>
-                                <div className="orion-connector-suite-capability-note">{capability.note}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {(googleSuite?.calendars.length || microsoftSuite?.calendars.length) ? (
-                            <div className="orion-connector-suite-calendars">
-                              {(googleSuite?.calendars || microsoftSuite?.calendars || []).slice(0, 3).map((calendar, index) => (
-                                <span
-                                  key={`${calendar.id || calendar.name || 'calendar'}:${index}`}
-                                  className="orion-chip"
-                                  style={{ border: '1px solid var(--border-default)', background: 'var(--bg-element)', color: 'var(--text-secondary)' }}
-                                >
-                                  Calendar · {String(calendar.name || calendar.id || 'Untitled')}
+                        <div className="orion-connector-suite-grid">
+                          {suiteCapabilities.map((capability) => (
+                            <div key={capability.label} className="orion-connector-suite-capability">
+                              <div className="orion-connector-suite-capability-head">
+                                <div className="orion-connector-suite-capability-title">{capability.label}</div>
+                                <span className="orion-chip" style={capabilityTone(capability.enabled)}>
+                                  {capability.enabled ? 'Ready' : 'Scope needed'}
                                 </span>
-                              ))}
+                              </div>
+                              <div className="orion-connector-suite-capability-note">{capability.note}</div>
                             </div>
-                          ) : null}
+                          ))}
                         </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {row.connector === 'google_workspace' && googleDriveBrowser?.open ? (
-                    <div className="orion-drive-browser-panel">
-                      <div className="orion-drive-browser-head">
-                        <div className="orion-drive-browser-title-wrap">
-                          <div className="orion-drive-browser-kicker">
-                            Google Drive
+                        {(googleSuite?.calendars.length || microsoftSuite?.calendars.length) ? (
+                          <div className="orion-connector-suite-calendars">
+                            {(googleSuite?.calendars || microsoftSuite?.calendars || []).slice(0, 3).map((calendar, index) => (
+                              <span
+                                key={`${calendar.id || calendar.name || 'calendar'}:${index}`}
+                                className="orion-chip"
+                                style={CONNECTOR_CHIP_STYLE_SUBTLE}
+                              >
+                                Calendar · {String(calendar.name || calendar.id || 'Untitled')}
+                              </span>
+                            ))}
                           </div>
-                          <div className="orion-drive-browser-path">{googleDriveBrowser.path || 'gdrive:/'}</div>
-                        </div>
-                        <div className="orion-drive-browser-toolbar">
-                          {googleDriveBrowser.path && googleDriveBrowser.path !== 'gdrive:/' ? (
-                            <button
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 10 }}
-                              onClick={() => {
-                                const current = String(googleDriveBrowser.path || 'gdrive:/');
-                                const normalized = current.replace(/^gdrive:\//, '').replace(/\/$/, '');
-                                const parts = normalized ? normalized.split('/') : [];
-                                parts.pop();
-                                const parent = parts.length ? `gdrive:/${parts.join('/')}` : 'gdrive:/';
-                                void handleBrowseGoogleDrive(row, parent);
-                              }}
-                            >
-                              <ChevronLeft size={13} />
-                              Up
-                            </button>
-                          ) : null}
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, googleDriveBrowser.path)}>
-                            <RefreshCw size={13} />
-                            Refresh
-                          </button>
-                        </div>
-                      </div>
-                      <div className="orion-drive-browser-copy">
-                        Open folders here inside Empyralis. Google Docs, Sheets, and other provider-native files will hand off to your default browser when you open them.
-                      </div>
-                      {googleDriveBrowser.error ? (
-                        <div className="orion-drive-browser-error">
-                          {googleDriveBrowser.error}
-                        </div>
-                      ) : null}
-                      <div className="orion-drive-browser-list">
-                        {googleDriveBrowser.items.length === 0 && !googleDriveBrowser.loading ? (
-                          <div className="orion-drive-browser-empty">No items in this folder.</div>
                         ) : null}
-                        {googleDriveBrowser.items.map((item, index) => {
-                          const itemPath = String(item.path || '').trim();
-                          const isFolder = String(item.kind || '').toLowerCase() === 'folder';
-                          return (
-                            <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
-                              <div className="orion-drive-browser-item-copy">
-                                <div className="orion-drive-browser-item-title">
-                                  {item.name || 'Untitled'}
-                                </div>
-                                <div className="orion-drive-browser-item-path">
-                                  {itemPath || 'gdrive:/'}
-                                </div>
-                              </div>
-                              <div className="orion-drive-browser-item-actions">
-                                {isFolder ? (
-                                  <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, itemPath)}>
-                                    <FolderOpen size={13} />
-                                    Open
-                                  </button>
-                                ) : null}
-                                {item.webUrl ? (
-                                  <button
-                                    className="orion-btn orion-btn-ghost"
-                                    style={{ minHeight: 30, paddingInline: 10 }}
-                                    onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Google Drive file'))}
-                                  >
-                                    <ArrowUpRight size={13} />
-                                    {googleDriveOpenLabel(item)}
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          );
-                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {row.connector === 'google_workspace' && googleDriveBrowser?.open ? (
+                  <div className="orion-drive-browser-panel">
+                    <div className="orion-drive-browser-head">
+                      <div className="orion-drive-browser-title-wrap">
+                        <div className="orion-drive-browser-kicker">
+                          Google Drive
+                        </div>
+                        <div className="orion-drive-browser-path">{googleDriveBrowser.path || 'gdrive:/'}</div>
+                      </div>
+                      <div className="orion-drive-browser-toolbar">
+                        {googleDriveBrowser.path && googleDriveBrowser.path !== 'gdrive:/' ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 32, paddingInline: 10 }}
+                            onClick={() => {
+                              const current = String(googleDriveBrowser.path || 'gdrive:/');
+                              const normalized = current.replace(/^gdrive:\//, '').replace(/\/$/, '');
+                              const parts = normalized ? normalized.split('/') : [];
+                              parts.pop();
+                              const parent = parts.length ? `gdrive:/${parts.join('/')}` : 'gdrive:/';
+                              void handleBrowseGoogleDrive(row, parent);
+                            }}
+                          >
+                            <ChevronLeft size={13} />
+                            Up
+                          </button>
+                        ) : null}
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, googleDriveBrowser.path)}>
+                          <RefreshCw size={13} />
+                          Refresh
+                        </button>
                       </div>
                     </div>
-                  ) : null}
-                  {row.connector === 'microsoft_365' && driveBrowser?.open ? (
-                    <div className="orion-drive-browser-panel">
-                      <div className="orion-drive-browser-head">
-                        <div className="orion-drive-browser-title-wrap">
-                          <div className="orion-drive-browser-kicker">
-                            OneDrive
+                    <div className="orion-drive-browser-copy">
+                      Open folders here inside Empyralis. Google Docs, Sheets, and other provider-native files will hand off to your default browser when you open them.
+                    </div>
+                    {googleDriveBrowser.error ? (
+                      <div className="orion-drive-browser-error">
+                        {googleDriveBrowser.error}
+                      </div>
+                    ) : null}
+                    <div className="orion-drive-browser-list">
+                      {googleDriveBrowser.items.length === 0 && !googleDriveBrowser.loading ? (
+                        <div className="orion-drive-browser-empty">No items in this folder.</div>
+                      ) : null}
+                      {googleDriveBrowser.items.map((item, index) => {
+                        const itemPath = String(item.path || '').trim();
+                        const isFolder = String(item.kind || '').toLowerCase() === 'folder';
+                        return (
+                          <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
+                            <div className="orion-drive-browser-item-copy">
+                              <div className="orion-drive-browser-item-title">
+                                {item.name || 'Untitled'}
+                              </div>
+                              <div className="orion-drive-browser-item-path">
+                                {itemPath || 'gdrive:/'}
+                              </div>
+                            </div>
+                            <div className="orion-drive-browser-item-actions">
+                              {isFolder ? (
+                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, itemPath)}>
+                                  <FolderOpen size={13} />
+                                  Open
+                                </button>
+                              ) : null}
+                              {item.webUrl ? (
+                                <button
+                                  className="orion-btn orion-btn-ghost"
+                                  style={{ minHeight: 30, paddingInline: 10 }}
+                                  onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Google Drive file'))}
+                                >
+                                  <ArrowUpRight size={13} />
+                                  {googleDriveOpenLabel(item)}
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
-                          <div className="orion-drive-browser-path">{driveBrowser.path || 'onedrive:/'}</div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                {row.connector === 'microsoft_365' && driveBrowser?.open ? (
+                  <div className="orion-drive-browser-panel">
+                    <div className="orion-drive-browser-head">
+                      <div className="orion-drive-browser-title-wrap">
+                        <div className="orion-drive-browser-kicker">
+                          OneDrive
                         </div>
-                        <div className="orion-drive-browser-toolbar">
-                          {driveBrowser.path && driveBrowser.path !== 'onedrive:/' ? (
-                            <button
-                              className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 10 }}
-                              onClick={() => {
-                                const current = String(driveBrowser.path || 'onedrive:/');
-                                const normalized = current.replace(/^onedrive:\//, '').replace(/\/$/, '');
-                                const parts = normalized ? normalized.split('/') : [];
-                                parts.pop();
-                                const parent = parts.length ? `onedrive:/${parts.join('/')}` : 'onedrive:/';
-                                void handleBrowseMicrosoftDrive(row, parent);
-                              }}
-                            >
-                              <ChevronLeft size={13} />
-                              Up
-                            </button>
-                          ) : null}
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, driveBrowser.path)}>
-                            <RefreshCw size={13} />
-                            Refresh
+                        <div className="orion-drive-browser-path">{driveBrowser.path || 'onedrive:/'}</div>
+                      </div>
+                      <div className="orion-drive-browser-toolbar">
+                        {driveBrowser.path && driveBrowser.path !== 'onedrive:/' ? (
+                          <button
+                            className="orion-btn orion-btn-ghost"
+                            style={{ minHeight: 32, paddingInline: 10 }}
+                            onClick={() => {
+                              const current = String(driveBrowser.path || 'onedrive:/');
+                              const normalized = current.replace(/^onedrive:\//, '').replace(/\/$/, '');
+                              const parts = normalized ? normalized.split('/') : [];
+                              parts.pop();
+                              const parent = parts.length ? `onedrive:/${parts.join('/')}` : 'onedrive:/';
+                              void handleBrowseMicrosoftDrive(row, parent);
+                            }}
+                          >
+                            <ChevronLeft size={13} />
+                            Up
                           </button>
-                        </div>
-                      </div>
-                      <div className="orion-drive-browser-copy">
-                        Use these paths directly in Spreadsheet Ops, for example <span style={{ color: 'var(--text-primary)' }}>onedrive:/Sales/customers.xlsx</span>. Microsoft files open through the native Microsoft web editors when you hand off.
-                      </div>
-                      {driveBrowser.error ? (
-                        <div className="orion-drive-browser-error">
-                          {driveBrowser.error}
-                        </div>
-                      ) : null}
-                      <div className="orion-drive-browser-list">
-                        {driveBrowser.items.length === 0 && !driveBrowser.loading ? (
-                          <div className="orion-drive-browser-empty">No items in this folder.</div>
                         ) : null}
-                        {driveBrowser.items.map((item, index) => {
-                          const itemPath = String(item.path || '').trim();
-                          const isFolder = String(item.kind || '').toLowerCase() === 'folder';
-                          return (
-                            <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
-                              <div className="orion-drive-browser-item-copy">
-                                <div className="orion-drive-browser-item-title">
-                                  {item.name || 'Untitled'}
-                                </div>
-                                <div className="orion-drive-browser-item-path">
-                                  {itemPath || 'onedrive:/'}
-                                </div>
-                              </div>
-                              <div className="orion-drive-browser-item-actions">
-                                {isFolder ? (
-                                  <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, itemPath)}>
-                                    <FolderOpen size={13} />
-                                    Open
-                                  </button>
-                                ) : null}
-                                {item.webUrl ? (
-                                  <button
-                                    className="orion-btn orion-btn-ghost"
-                                    style={{ minHeight: 30, paddingInline: 10 }}
-                                    onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Microsoft file'))}
-                                  >
-                                    <ArrowUpRight size={13} />
-                                    {microsoftDriveOpenLabel()}
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          );
-                        })}
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, driveBrowser.path)}>
+                          <RefreshCw size={13} />
+                          Refresh
+                        </button>
                       </div>
                     </div>
-                  ) : null}
-                </article>
-              );
-            })}
-          </section>
-        </PageSection>
+                    <div className="orion-drive-browser-copy">
+                      Use these paths directly in Spreadsheet Ops, for example <span style={{ color: 'var(--text-primary)' }}>onedrive:/Sales/customers.xlsx</span>. Microsoft files open through the native Microsoft web editors when you hand off.
+                    </div>
+                    {driveBrowser.error ? (
+                      <div className="orion-drive-browser-error">
+                        {driveBrowser.error}
+                      </div>
+                    ) : null}
+                    <div className="orion-drive-browser-list">
+                      {driveBrowser.items.length === 0 && !driveBrowser.loading ? (
+                        <div className="orion-drive-browser-empty">No items in this folder.</div>
+                      ) : null}
+                      {driveBrowser.items.map((item, index) => {
+                        const itemPath = String(item.path || '').trim();
+                        const isFolder = String(item.kind || '').toLowerCase() === 'folder';
+                        return (
+                          <div key={String(item.id || itemPath || index)} className="orion-drive-browser-item">
+                            <div className="orion-drive-browser-item-copy">
+                              <div className="orion-drive-browser-item-title">
+                                {item.name || 'Untitled'}
+                              </div>
+                              <div className="orion-drive-browser-item-path">
+                                {itemPath || 'onedrive:/'}
+                              </div>
+                            </div>
+                            <div className="orion-drive-browser-item-actions">
+                              {isFolder ? (
+                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, itemPath)}>
+                                  <FolderOpen size={13} />
+                                  Open
+                                </button>
+                              ) : null}
+                              {item.webUrl ? (
+                                <button
+                                  className="orion-btn orion-btn-ghost"
+                                  style={{ minHeight: 30, paddingInline: 10 }}
+                                  onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Microsoft file'))}
+                                >
+                                  <ArrowUpRight size={13} />
+                                  {microsoftDriveOpenLabel()}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        })()
       ) : null}
       {showAddModal ? (
         <div className="orion-modal-overlay is-centered" onClick={resetModal}>
@@ -2308,7 +2298,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       gap: 10,
                       borderRadius: 14,
                       border: '1px solid var(--border-subtle)',
-                      background: 'color-mix(in srgb, var(--bg-element) 76%, transparent 24%)',
+                      background: 'var(--bg-element)',
                       padding: 14,
                     }}
                   >

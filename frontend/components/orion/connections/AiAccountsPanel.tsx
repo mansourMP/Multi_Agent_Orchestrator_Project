@@ -262,7 +262,7 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
 function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
   if (provider === 'openai') {
     if (authMode === 'oauth_token') {
-      return 'Paste a saved OpenAI token you already control, or use Sign in with ChatGPT above.';
+      return 'Paste a saved OpenAI token you already control, or use the ChatGPT action above when desktop sign-in or local session import is available.';
     }
     if (authMode === 'access_token') {
       return 'Paste a direct OpenAI access token. Use this only if your organization issues access tokens instead of API keys.';
@@ -384,6 +384,7 @@ const secondaryProviderActionButtonStyle: CSSProperties = {
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
   const openAiDesktopBridge = getDesktopBridge();
+  const openAiDesktopOauthAvailable = Boolean(openAiDesktopBridge?.openaiCodexOauthLogin);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -1268,7 +1269,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         if (!opened) {
           throw new Error('Could not open ChatGPT sign-in automatically. Open https://chatgpt.com/auth/login, then return here.');
         }
-        setProviderNotice('Finish ChatGPT sign-in in the browser, then return here and click Import local session.');
+        setProviderNotice(
+          localOpenAiAuth?.importable
+            ? 'ChatGPT opened in the browser. This Mac already has a local OpenAI / Codex session, so you can return here and click Import local session.'
+            : 'ChatGPT opened in the browser. Browser sign-in alone does not connect this app. Use Add API key, or return here and import a local OpenAI / Codex session if one becomes available on this Mac.',
+        );
         return;
       }
 
@@ -1523,6 +1528,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const topCardError = summarizeProviderCardError(card.errorMessage);
                 const hasActiveError = Boolean(topCardError);
                 const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
+                const openAiBrowserOnlyFlow = card.provider === 'openai' && !openAiDesktopOauthAvailable;
                 const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
                 const showGeminiApiKeyAction = card.provider === 'gemini';
                 const showVertexCredentialsAction = card.provider === 'vertex';
@@ -1669,19 +1675,36 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             className="orion-btn orion-btn-ghost"
                             style={secondaryProviderActionButtonStyle}
                             disabled={providerBusy['openai-codex-oauth'] === 'login'}
+                            title={openAiBrowserOnlyFlow ? 'Opens ChatGPT in the browser. Browser sign-in alone does not connect this app.' : undefined}
                             onClick={() => void handleOpenAiCodexOauthSignIn()}
                         >
-                          {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
+                          {providerBusy['openai-codex-oauth'] === 'login'
+                            ? 'Opening ChatGPT…'
+                            : openAiBrowserOnlyFlow
+                              ? 'Open ChatGPT'
+                              : 'Sign in with ChatGPT'}
                         </button>
                           <button
                             type="button"
                             className="orion-btn orion-btn-ghost"
                             style={secondaryProviderActionButtonStyle}
                             disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
+                            title={!localOpenAiAuth?.importable ? 'Import requires a saved local OpenAI / Codex session on this Mac.' : undefined}
                             onClick={() => void handleImportLocalOpenAiAuth()}
                           >
                           {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
                         </button>
+                      </div>
+                    ) : null}
+                    {card.provider === 'openai' && openAiBrowserOnlyFlow ? (
+                      <div
+                        style={{
+                          fontSize: 11.5,
+                          lineHeight: 1.45,
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        Browser ChatGPT sign-in does not directly connect this app. Use Add API key, or import a saved local OpenAI / Codex session from this Mac.
                       </div>
                     ) : null}
                     {connectMode && card.provider === 'anthropic' && !card.credential ? (

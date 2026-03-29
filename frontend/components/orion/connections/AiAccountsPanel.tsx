@@ -529,6 +529,14 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     runtimeAvailabilityByProvider,
     runtimeProfileGroups,
   ]);
+  const hasProviderCardError = useMemo(
+    () => providerCards.some((card) => Boolean(String(card.errorMessage || '').trim())),
+    [providerCards],
+  );
+  const readyProviderCard = useMemo(
+    () => providerCards.find((card) => card.enabled && !String(card.errorMessage || '').trim()) || null,
+    [providerCards],
+  );
 
   const connectMode = mode === 'connect';
 
@@ -1329,7 +1337,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           </div>
         ) : null}
 
-        {providerNotice ? (
+        {providerNotice && !hasProviderCardError ? (
           <div
             style={{
               borderRadius: 12,
@@ -1345,7 +1353,30 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           </div>
         ) : null}
 
-        {connectMode && providerCredentials.length > 0 ? (
+        {connectMode && hasProviderCardError ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              borderRadius: 12,
+              border: '1px solid var(--error-border)',
+              background: 'var(--error-bg)',
+              color: 'var(--error-fg)',
+              padding: '11px 13px',
+            }}
+          >
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                AI provider needs attention
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+                Fix the provider error below before using chat.
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {connectMode && providerCredentials.length > 0 && readyProviderCard && !hasProviderCardError ? (
           <div
             style={{
               display: 'grid',
@@ -1359,7 +1390,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           >
             <div style={{ display: 'grid', gap: 3 }}>
               <div style={{ fontSize: 13, fontWeight: 700 }}>
-                {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} connected` : 'AI provider connected'}
+                {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} connected` : `${readyProviderCard.label} connected`}
               </div>
               <div style={{ fontSize: 12, lineHeight: 1.5 }}>
                 Return to chat and continue. You can manage provider order later from Integrations if you need to.
@@ -1390,27 +1421,40 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
                 const busyAction = card.credential ? providerBusy[card.credential.id] || '' : '';
                 const profileBusyAction = card.profile ? providerBusy[card.profile.id] || '' : '';
-                const visibleActionLabel = connectMode
-                  ? card.enabled
-                    ? 'Use account'
-                    : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
-                      ? 'Use this Mac'
-                      : card.credential
-                        ? 'Enable'
-                        : 'Connect'
-                  : card.credential
-                    ? 'Test'
-                    : 'Add account';
-                const visibleActionBusy = connectMode
-                  ? (card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
-                      ? providerBusy['openai-local-import'] === 'import'
-                      : busyAction === 'enable-runtime')
-                  : busyAction === 'test';
                 const accent = providerAccentStyles(card.provider);
                 const detailsOpen = Boolean(providerDetailsOpen[card.provider]);
                 const runtimeModelLabel = String(card.profile?.model || '').trim();
                 const catalogDefaultModel = String(option.defaultModel || '').trim();
                 const topCardError = summarizeProviderCardError(card.errorMessage);
+                const hasActiveError = Boolean(topCardError);
+                const visibleActionBusy = connectMode
+                  ? hasActiveError
+                    ? busyAction === 'test'
+                    : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
+                      ? providerBusy['openai-local-import'] === 'import'
+                      : busyAction === 'enable-runtime'
+                  : busyAction === 'test';
+                const visibleBadgeLabel = hasActiveError ? 'Error' : card.enabled ? 'Enabled' : 'Disabled';
+                const visibleBadgeStyle = hasActiveError
+                  ? { color: 'var(--error-fg)', border: '1px solid var(--error-border)', background: 'var(--error-bg)' }
+                  : card.enabled
+                    ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
+                    : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
+                const visibleActionLabel = connectMode
+                  ? hasActiveError
+                    ? card.credential
+                      ? 'Retest'
+                      : 'Reconnect'
+                    : card.enabled
+                      ? 'Use account'
+                      : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
+                        ? 'Use this Mac'
+                        : card.credential
+                          ? 'Enable'
+                          : 'Connect'
+                  : card.credential
+                    ? 'Test'
+                    : 'Add account';
 
                 return (
                   <article
@@ -1420,7 +1464,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       gap: 10,
                       gridTemplateRows: 'auto auto 1fr',
                       minHeight: 276,
-                      borderRadius: 16,
+                      borderRadius: 0,
                       border: '1px solid var(--border-subtle)',
                       borderLeft: `4px solid ${accent.border}`,
                       background: accent.tint,
@@ -1455,13 +1499,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       </div>
                       <span
                         className="orion-chip"
-                        style={
-                          card.enabled
-                            ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
-                            : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' }
-                        }
+                        style={visibleBadgeStyle}
                       >
-                        {card.enabled ? 'Enabled' : 'Disabled'}
+                        {visibleBadgeLabel}
                       </span>
                     </div>
                     <button
@@ -1469,6 +1509,15 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       style={{ minHeight: 34, paddingInline: 14, width: 'fit-content' }}
                       onClick={() => {
                         if (connectMode) {
+                          if (hasActiveError) {
+                            if (card.credential) {
+                              void handleTestProviderCredential(card.credential);
+                              return;
+                            }
+                            resetProviderForm(card.provider, defaultAuthMode);
+                            setShowProviderForm(true);
+                            return;
+                          }
                           if (card.enabled) {
                             router.push(returnTo);
                             return;

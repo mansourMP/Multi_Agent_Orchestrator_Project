@@ -273,36 +273,36 @@
   --error-bg: rgba(192, 98, 98, 0.15);
   --error-border: rgba(192, 98, 98, 0.34);
 
-  --bg-shell: #f3f2ee;
-  --bg-app: #f4f4f1;
+  --bg-shell: #f7f7f7;
+  --bg-app: #f4f4f4;
   --bg-sidebar: var(--bg-shell);
-  --bg-sidebar-open: #f7f5ef;
-  --bg-sidebar-collapsed: #f1efe8;
+  --bg-sidebar-open: #f4f4f4;
+  --bg-sidebar-collapsed: #efefef;
   --bg-surface: #ffffff;
   --bg-panel: #ffffff;
-  --bg-element: #f6f6f4;
-  --bg-hover: rgba(255, 255, 255, 0.56);
-  --app-chrome-top: #f4f4f1;
-  --app-chrome-mid: #f3f2ee;
-  --app-chrome-bottom: #f2f1ed;
+  --bg-element: #efefef;
+  --bg-hover: rgba(0, 0, 0, 0.03);
+  --app-chrome-top: #f7f7f7;
+  --app-chrome-mid: #f4f4f4;
+  --app-chrome-bottom: #f4f4f4;
   --main-stage-top-wash: transparent;
-  --main-stage-bottom-wash: var(--bg-shell);
+  --main-stage-bottom-wash: var(--bg-app);
   --overlay-scrim: color-mix(in srgb, var(--bg-app) 38%, transparent);
 
-  --glass-panel: rgba(252, 250, 255, 0.88);
-  --glass-border: rgba(93, 99, 110, 0.14);
-  --glass-highlight: rgba(47, 49, 54, 0.08);
+  --glass-panel: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.38);
 
-  --border-subtle: rgba(93, 99, 110, 0.12);
-  --border-default: rgba(93, 99, 110, 0.2);
-  --border: rgba(93, 99, 110, 0.2);
+  --border-subtle: #e2e2e2;
+  --border-default: #d8d8d8;
+  --border: #d8d8d8;
   --border-active: var(--primary-base);
-  --shellbar-divider: rgba(10, 10, 10, 0.05);
+  --shellbar-divider: #e2e2e2;
 
-  --shadow-sm: 0 1px 2px rgba(43, 31, 65, 0.08);
-  --shadow-md: 0 12px 28px rgba(43, 31, 65, 0.10);
-  --shadow-card: 0 2px 8px rgba(43, 31, 65, 0.08);
-  --shadow-card-hover: 0 14px 30px rgba(43, 31, 65, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.10);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 14px 30px rgba(0, 0, 0, 0.12);
 }
 
 [data-theme='light'] .orion-log,

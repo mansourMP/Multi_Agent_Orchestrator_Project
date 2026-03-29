@@ -40,18 +40,40 @@ const CRITICAL_SHELL_CSS = `
 :root {
   --sidebar-width: 56px;
   --topbar-height: 56px;
-  --critical-bg-shell: #f3f2ee;
-  --critical-bg-app: #f4f4f1;
+  --critical-bg-shell: #f7f7f7;
+  --critical-bg-app: #f4f4f4;
   --critical-bg-surface: #ffffff;
-  --critical-border: rgba(93, 99, 110, 0.2);
+  --critical-border: #e2e2e2;
   --critical-text: #1a1c21;
   --critical-text-secondary: #5d636e;
   --critical-primary: #3d63dd;
   --critical-primary-soft: rgba(61, 99, 221, 0.12);
   --critical-success: #3f8a5f;
   --critical-danger: #c06262;
+  --critical-success-soft: rgba(63, 138, 95, 0.12);
+  --critical-success-text: #2e6b49;
   --critical-danger-soft: rgba(192, 98, 98, 0.12);
-  --critical-overlay: rgba(244, 244, 241, 0.22);
+  --critical-danger-text: #8a4343;
+  --critical-secondary-bg: #ffffff;
+  --critical-overlay: rgba(244, 244, 244, 0.22);
+}
+html[data-theme='dark'] {
+  --critical-bg-shell: #0f0f10;
+  --critical-bg-app: #141415;
+  --critical-bg-surface: #1c1c1e;
+  --critical-border: rgba(255, 255, 255, 0.07);
+  --critical-text: #f0f0f0;
+  --critical-text-secondary: #9a9a9f;
+  --critical-primary: #4f6ff7;
+  --critical-primary-soft: rgba(79, 111, 247, 0.18);
+  --critical-success: #3ecf8e;
+  --critical-danger: #f06060;
+  --critical-success-soft: rgba(62, 207, 142, 0.14);
+  --critical-success-text: #c7f2d7;
+  --critical-danger-soft: rgba(240, 96, 96, 0.14);
+  --critical-danger-text: #f5cdcd;
+  --critical-secondary-bg: #1c1c1e;
+  --critical-overlay: rgba(20, 20, 21, 0.22);
 }
 *,
 *::before,
@@ -210,22 +232,22 @@ a {
 }
 .orion-btn-success,
 .orion-btn.success {
-  background: rgba(63, 138, 95, 0.12);
-  color: #2e6b49;
-  border: 1px solid rgba(63, 138, 95, 0.32);
+  background: var(--critical-success-soft);
+  color: var(--critical-success-text);
+  border: 1px solid var(--critical-success);
 }
 .orion-btn-danger,
 .orion-btn.danger {
   background: var(--critical-danger-soft);
-  color: #8a4343;
-  border: 1px solid rgba(192, 98, 98, 0.32);
+  color: var(--critical-danger-text);
+  border: 1px solid var(--critical-danger);
 }
 .btn-secondary,
 .btn,
 .orion-btn,
 .orion-btn-secondary,
 .orion-btn.secondary {
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--critical-secondary-bg);
   color: var(--critical-text);
   border: 1px solid var(--critical-border);
 }
@@ -287,7 +309,7 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
     root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '200px');
     root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
-    document.body?.style?.setProperty('background', resolved === 'dark' ? '#0a0a0a' : '#ffffff');
+    document.body?.style?.setProperty('background', resolved === 'dark' ? '#141415' : '#f4f4f4');
   } catch {}
 })();
 `;

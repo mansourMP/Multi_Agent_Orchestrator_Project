@@ -30,6 +30,7 @@ AUTH_SCOPE_ERROR_MARKERS = (
     "insufficient permissions",
 )
 DIRECT_CHAT_TRANSPORT_UNAVAILABLE = "direct_chat_transport_unavailable"
+OPENAI_API_KEY_MISSING_ERROR = "No OpenAI API key configured. Add one from the AI accounts page."
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -229,16 +230,19 @@ def _first_valid_token(candidates: list[Any]) -> str:
 
 
 def _openai_oauth_candidates() -> list[Any]:
-    auth_file = Path(
-        os.getenv("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))
-    ).expanduser()
     return [
         os.getenv("ORION_LOCAL_WORKER_OPENAI_TOKEN"),
         os.getenv("CODEX_OAUTH_TOKEN"),
         os.getenv("OPENAI_OAUTH_TOKEN"),
         os.getenv("OPENAI_ACCESS_TOKEN"),
-        codex_token_from_vault(auth_file),
     ]
+
+
+def _codex_oauth_candidates() -> list[Any]:
+    auth_file = Path(
+        os.getenv("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))
+    ).expanduser()
+    return _openai_oauth_candidates() + [codex_token_from_vault(auth_file)]
 
 
 def _openai_api_key_candidates() -> list[Any]:
@@ -251,27 +255,15 @@ def _openai_api_key_candidates() -> list[Any]:
 
 
 def get_openai_bearer_token() -> str:
-    disable_api_key = str(os.getenv("ORION_DISABLE_OPENAI_API_KEY", "0")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    auth_mode = _openai_auth_mode()
-    oauth_candidates = _openai_oauth_candidates()
-    api_key_candidates = [] if disable_api_key else _openai_api_key_candidates()
-    if auth_mode == "api_key":
-        # In api_key mode, prefer API keys first, then OAuth/Codex token fallback.
-        return _first_valid_token(api_key_candidates + oauth_candidates)
-    # Default/codex mode: prefer OAuth/Codex token, then API key fallback.
-    return _first_valid_token(oauth_candidates + api_key_candidates)
+    return _first_valid_token(_openai_oauth_candidates())
+
+
+def get_codex_oauth_token() -> str:
+    return _first_valid_token(_codex_oauth_candidates())
 
 
 def get_openai_api_key() -> str:
-    api_key = _first_valid_token(_openai_api_key_candidates())
-    if api_key:
-        return api_key
-    return get_openai_bearer_token().strip()
+    return _first_valid_token(_openai_api_key_candidates())
 
 
 def get_anthropic_api_key() -> str:
@@ -303,7 +295,7 @@ def provider_has_key(provider: str) -> bool:
     if pid == "claude_code_cli":
         return claude_code_cli_available()
     if pid == "openai":
-        return bool(get_openai_bearer_token())
+        return bool(get_openai_api_key())
     if pid == "anthropic":
         return bool(get_anthropic_api_key())
     if pid == "gemini":
@@ -410,7 +402,7 @@ def openai_chat_json(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     api_key = get_openai_api_key()
     if not api_key:
-        return None, None, "", "missing_api_key"
+        return None, None, "", OPENAI_API_KEY_MISSING_ERROR
 
     model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
@@ -466,7 +458,7 @@ def openai_chat_text(
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     api_key = get_openai_api_key()
     if not api_key:
-        return "", None, "", "missing_api_key"
+        return "", None, "", OPENAI_API_KEY_MISSING_ERROR
 
     model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
@@ -562,7 +554,7 @@ def openai_codex_backend_text(
     reasoning_effort_override: Optional[str] = None,
     prior_messages: Any = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    token = get_openai_bearer_token()
+    token = get_codex_oauth_token()
     if not token:
         return "", None, "", "missing_oauth_token"
 
@@ -701,9 +693,9 @@ def openai_responses_text(
     model_override: Optional[str] = None,
     prior_messages: Any = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    token = get_openai_bearer_token()
-    if not token:
-        return "", None, "", "missing_api_key"
+    api_key = get_openai_api_key()
+    if not api_key:
+        return "", None, "", OPENAI_API_KEY_MISSING_ERROR
 
     model = (
         str(model_override or "").strip()
@@ -728,7 +720,7 @@ def openai_responses_text(
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
     )

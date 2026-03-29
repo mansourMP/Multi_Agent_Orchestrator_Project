@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -225,6 +226,51 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             )
 
         self.assertEqual(order, ["openai"])
+
+    def test_openai_path_does_not_use_codex_auth_vault_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auth_file = Path(tmpdir) / "auth.json"
+            auth_file.write_text('{"tokens":{"access_token":"codex-vault-token"}}', encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "CODEX_AUTH_FILE": str(auth_file),
+                    "ORION_LOCAL_WORKER_OPENAI_API_KEY": "",
+                    "OPENAI_API_KEY": "",
+                    "ORION_LOCAL_WORKER_OPENAI_TOKEN": "",
+                    "CODEX_OAUTH_TOKEN": "",
+                    "OPENAI_OAUTH_TOKEN": "",
+                    "OPENAI_ACCESS_TOKEN": "",
+                },
+                clear=False,
+            ):
+                self.assertEqual(worker_llm.get_openai_api_key(), "")
+                self.assertEqual(worker_llm.get_openai_bearer_token(), "")
+                self.assertEqual(worker_llm.get_codex_oauth_token(), "codex-vault-token")
+                self.assertFalse(worker_llm.provider_has_key("openai"))
+
+    def test_openai_responses_text_requires_real_api_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ORION_LOCAL_WORKER_OPENAI_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "ORION_LOCAL_WORKER_OPENAI_TOKEN": "",
+                "CODEX_OAUTH_TOKEN": "codex-oauth-token",
+                "OPENAI_OAUTH_TOKEN": "",
+                "OPENAI_ACCESS_TOKEN": "",
+            },
+            clear=False,
+        ):
+            text, usage, model, error = worker_llm.openai_responses_text(
+                "You are concise.",
+                "Say hello.",
+            )
+
+        self.assertEqual(text, "")
+        self.assertIsNone(usage)
+        self.assertEqual(model, "")
+        self.assertEqual(error, worker_llm.OPENAI_API_KEY_MISSING_ERROR)
 
 
 if __name__ == "__main__":

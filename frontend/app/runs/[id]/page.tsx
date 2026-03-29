@@ -650,7 +650,7 @@ export default function RunDetailPage() {
   }, [load, pendingConfirmation?.approval_id, runId]);
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in" style={{ padding: '12px 18px 18px' }}>
+    <div className="orion-page-shell narrow orion-animate-in">
       <div className="orion-page-header">
         <div className="orion-page-title-wrap">
           <div className="orion-page-title">Run</div>

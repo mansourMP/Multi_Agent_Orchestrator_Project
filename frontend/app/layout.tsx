@@ -119,7 +119,7 @@ a {
 .orion-main-stage {
   min-height: calc(100vh - var(--topbar-height));
   overflow: visible;
-  padding: 8px 12px 18px 4px;
+  padding: 0;
   background: var(--critical-bg-app);
   position: relative;
   transition: transform 180ms ease, filter 180ms ease;
@@ -137,16 +137,17 @@ a {
   width: 100%;
   max-width: none;
   margin: 0;
-  min-height: calc(100vh - var(--topbar-height) - 26px);
-  padding: 12px 18px 18px;
+  min-height: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 24px;
   position: relative;
   box-sizing: border-box;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 .orion-page-shell.narrow {
   width: 100%;
@@ -167,7 +168,7 @@ a {
   height: 100%;
   min-height: 100%;
   overflow: hidden;
-  padding: 12px 18px 18px;
+  padding: 0;
 }
 .orion-shellbar {
   position: fixed;

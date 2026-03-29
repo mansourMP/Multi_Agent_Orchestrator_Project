@@ -1226,7 +1226,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
   }
 
   return (
-    <div className="orion-page-shell is-integrations-page orion-animate-in" style={{ padding: '12px 18px 18px' }}>
+    <div className="orion-page-shell is-integrations-page orion-animate-in">
       <PageHero
         kicker="Integrations"
         title="Start with one or two tools, not the whole directory."

@@ -48,9 +48,13 @@ function initialsForName(name: string): string {
 }
 
 export default function AccountPage() {
-  const [draft, setDraft] = useState<AccountProfile>(() => loadStoredProfile());
+  const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
   const [authEmail, setAuthEmail] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
+
+  useEffect(() => {
+    setDraft(loadStoredProfile());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

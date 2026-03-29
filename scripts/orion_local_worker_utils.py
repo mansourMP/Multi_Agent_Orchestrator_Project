@@ -44,7 +44,12 @@ def build_operator_system_prompt(
     availability_lines: list[str] | None = None,
     tool_lines: list[str] | None = None,
 ) -> str:
-    availability = [str(item or "").strip() for item in (availability_lines or []) if str(item or "").strip()]
+    allowed_availability_prefixes = ("Workspace:", "AI account:")
+    availability = [
+        entry
+        for entry in (str(item or "").strip() for item in (availability_lines or []))
+        if entry and entry.startswith(allowed_availability_prefixes)
+    ]
     tools = [str(item or "").strip() for item in (tool_lines or []) if str(item or "").strip()]
     lines: list[str] = []
     if availability:

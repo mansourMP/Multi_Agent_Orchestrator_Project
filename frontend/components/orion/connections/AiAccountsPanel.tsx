@@ -117,6 +117,19 @@ type ClaudeAuthStatus = {
   message?: string;
 };
 
+type ProviderCardState = {
+  provider: ProviderId;
+  label: string;
+  credential: ProviderCredentialRow | null;
+  profile: ProviderProfileRow | null;
+  availability: RuntimeAvailabilityItem | null;
+  order: number | null;
+  isDefaultProfile: boolean;
+  isActiveProfile: boolean;
+  enabled: boolean;
+  errorMessage: string | null;
+};
+
 const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   provider: 'anthropic',
   label: 'My Claude Subscription',
@@ -455,6 +468,45 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const credentialLabelById = useMemo(() => {
     return new Map(providerCredentials.map((item) => [item.id, item.label]));
   }, [providerCredentials]);
+
+  const runtimeAvailabilityByProvider = useMemo(() => {
+    return new Map(runtimeAvailability.map((item) => [item.provider, item]));
+  }, [runtimeAvailability]);
+
+  const providerCards = useMemo<ProviderCardState[]>(() => {
+    return providerOptions.map((option) => {
+      const credentials = providerCredentials.filter((item) => item.provider === option.id);
+      const profiles = runtimeProfileGroups.find((group) => group.provider === option.id)?.items || [];
+      const profile = profiles.find((item) => item.enabled && item.health !== 'cooldown') || profiles[0] || null;
+      const credential = profile?.credential_id
+        ? credentials.find((item) => item.id === profile.credential_id) || credentials[0] || null
+        : credentials[0] || null;
+      const availability = runtimeAvailabilityByProvider.get(option.id) || null;
+      const errorMessage = String(profile?.last_error || '').trim()
+        || (profile && availability?.status === 'attention' ? String(availability.detail || '').trim() : '')
+        || null;
+      return {
+        provider: option.id,
+        label: option.label,
+        credential,
+        profile,
+        availability,
+        order: profile ? profileOrderById.get(profile.id) || null : null,
+        isDefaultProfile: profile ? defaultProfileIdByProvider.get(option.id) === profile.id : false,
+        isActiveProfile: profile ? activeProfileIdByProvider.get(option.id) === profile.id : false,
+        enabled: Boolean(profile?.enabled),
+        errorMessage,
+      };
+    });
+  }, [
+    activeProfileIdByProvider,
+    defaultProfileIdByProvider,
+    profileOrderById,
+    providerCredentials,
+    providerOptions,
+    runtimeAvailabilityByProvider,
+    runtimeProfileGroups,
+  ]);
 
   const connectMode = mode === 'connect';
 
@@ -1191,7 +1243,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
 
   return (
     <>
-      <section className="orion-panel muted" style={{ display: 'grid', gap: 12, padding: '14px 16px' }}>
+      <section style={{ display: 'grid', gap: 16 }}>
         <div
           style={{
             display: 'grid',
@@ -1204,7 +1256,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div className="orion-panel-title">{connectMode ? 'Connect a provider' : 'AI accounts'}</div>
             <div className="orion-panel-copy">
               {connectMode
-                ? 'Use a direct provider key, or reuse the OpenAI / Codex session already on this Mac.'
+                ? 'Choose one provider and connect it. Use the details toggle only when you need account metadata or alternate setup paths.'
                 : 'Connect direct provider accounts here, then decide which one the runtime should use by default.'}
             </div>
           </div>
@@ -1213,17 +1265,19 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               <RefreshCw size={14} />
               Refresh
             </button>
-            <button
-              className="orion-btn orion-btn-primary"
-              style={{ minHeight: 38, paddingInline: 14 }}
-              onClick={() => {
-                resetProviderForm(providerForm.provider, providerForm.authMode);
-                setShowProviderForm(true);
-              }}
-            >
-              <Plus size={14} />
-              {connectMode ? 'Connect provider' : 'Add AI account'}
-            </button>
+            {!connectMode ? (
+              <button
+                className="orion-btn orion-btn-primary"
+                style={{ minHeight: 38, paddingInline: 14 }}
+                onClick={() => {
+                  resetProviderForm(providerForm.provider, providerForm.authMode);
+                  setShowProviderForm(true);
+                }}
+              >
+                <Plus size={14} />
+                Add AI account
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -1237,94 +1291,13 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           </div>
         ) : null}
 
-        {connectMode ? (
-          <div
-            style={{
-              display: 'grid',
-              gap: 8,
-              borderRadius: 14,
-              border: '1px solid var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
-              padding: '12px 14px',
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>Start with a provider</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {providerOptions.map((option) => {
-                const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
-                return (
-                  <button
-                    key={option.id}
-                    className="orion-btn orion-btn-secondary"
-                    style={{ minHeight: 34, paddingInline: 12 }}
-                    onClick={() => {
-                      resetProviderForm(option.id, defaultAuthMode);
-                      setShowProviderForm(true);
-                    }}
-                  >
-                    <Plus size={13} />
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {connectMode ? (
-          <div
-            style={{
-              display: 'grid',
-              gap: 10,
-              borderRadius: 14,
-              border: '1px solid var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--bg-elevated) 84%, transparent 16%)',
-              padding: '12px 14px',
-            }}
-          >
-            <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>OpenAI / Codex on this Mac</div>
-              <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                Sign in with ChatGPT to connect a fresh OAuth session directly, or reuse the local OpenAI / Codex session already saved on this Mac.
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="orion-btn orion-btn-secondary"
-                style={{ minHeight: 36, paddingInline: 14 }}
-                disabled={providerBusy['openai-codex-oauth'] === 'login'}
-                onClick={() => void handleOpenAiCodexOauthSignIn()}
-              >
-                {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
-              </button>
-              <button
-                type="button"
-                className="orion-btn orion-btn-primary"
-                style={{ minHeight: 36, paddingInline: 14 }}
-                disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
-                onClick={() => void handleImportLocalOpenAiAuth()}
-              >
-                {providerBusy['openai-local-import'] === 'import'
-                  ? 'Importing…'
-                  : localOpenAiAuth?.importable
-                    ? 'Use OpenAI / Codex from this Mac'
-                    : 'Sign in first'}
-              </button>
-            </div>
-            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
-              ChatGPT sign-in uses a real OAuth browser flow in the desktop app. The local-session import remains as a fallback if you already have Codex signed in on this machine.
-            </div>
-          </div>
-        ) : null}
-
         {providerError ? (
           <div
             style={{
               borderRadius: 14,
-              border: '1px solid var(--warning-border)',
-              background: 'var(--warning-bg)',
-              color: 'var(--warning-fg)',
+              border: '1px solid var(--error-border)',
+              background: 'var(--error-bg)',
+              color: 'var(--error-fg)',
               padding: '10px 12px',
               fontSize: 12.5,
               lineHeight: 1.5,
@@ -1387,181 +1360,242 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div className="orion-empty-title">Loading AI accounts</div>
             <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
           </section>
-        ) : providerCredentials.length === 0 && orphanProviderProfiles.length === 0 ? (
-          <section className="orion-empty" style={{ minHeight: 180 }}>
-            <div className="orion-empty-title">No AI accounts yet</div>
-            <div className="orion-empty-copy" style={{ marginBottom: 16 }}>
-              {connectMode
-                ? 'Connect OpenAI, Anthropic, Gemini, or Vertex directly to start chatting and running agents.'
-                : 'Save OpenAI, Anthropic, Gemini, or Vertex here so runs and workflows can reuse them cleanly.'}
-            </div>
-            <button
-              className="orion-btn orion-btn-primary"
-              onClick={() => {
-                resetProviderForm();
-                setShowProviderForm(true);
-              }}
-            >
-              <Plus size={14} />
-              {connectMode ? 'Connect provider' : 'Add AI account'}
-            </button>
-          </section>
         ) : (
           <div style={{ display: 'grid', gap: 12 }}>
-            {providerCredentials.length > 0 ? (
-              <div
-                style={
-                  connectMode
-                    ? { display: 'grid', gap: 10 }
-                    : { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }
-                }
-              >
-                {providerCredentials.map((credential) => {
-                  const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
-                  const primaryProfile = linkedProfiles.find((item) => item.enabled || item.health === 'cooldown') || linkedProfiles[0] || null;
-                  const busyAction = providerBusy[credential.id] || '';
-                  const isDefaultProfile = primaryProfile ? defaultProfileIdByProvider.get(primaryProfile.provider) === primaryProfile.id : false;
-                  const isActiveProfile = primaryProfile ? activeProfileIdByProvider.get(primaryProfile.provider) === primaryProfile.id : false;
-                  const profileOrder = primaryProfile ? profileOrderById.get(primaryProfile.id) || null : null;
-                  return (
-                    <article
-                      key={credential.id}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+              {providerCards.map((card) => {
+                const option = providerOptionFor(card.provider, providerOptions);
+                const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
+                const busyAction = card.credential ? providerBusy[card.credential.id] || '' : '';
+                const profileBusyAction = card.profile ? providerBusy[card.profile.id] || '' : '';
+                const visibleActionLabel = connectMode
+                  ? card.enabled
+                    ? 'Use account'
+                    : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
+                      ? 'Use this Mac'
+                      : card.credential
+                        ? 'Enable'
+                        : 'Connect'
+                  : card.credential
+                    ? 'Test'
+                    : 'Add account';
+                const visibleActionBusy = connectMode
+                  ? (card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
+                      ? providerBusy['openai-local-import'] === 'import'
+                      : busyAction === 'enable-runtime')
+                  : busyAction === 'test';
+
+                return (
+                  <article
+                    key={card.provider}
+                    style={{
+                      display: 'grid',
+                      gap: 12,
+                      borderRadius: 16,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      padding: '14px 16px',
+                    }}
+                  >
+                    {card.errorMessage ? (
+                      <div
+                        style={{
+                          borderRadius: 12,
+                          border: '1px solid var(--error-border)',
+                          background: 'var(--error-bg)',
+                          color: 'var(--error-fg)',
+                          padding: '10px 12px',
+                          fontSize: 12.5,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {card.errorMessage}
+                      </div>
+                    ) : null}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{card.label}</div>
+                      <span
+                        className="orion-chip"
+                        style={
+                          card.enabled
+                            ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
+                            : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' }
+                        }
+                      >
+                        {card.enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <button
+                      className="orion-btn orion-btn-primary"
+                      style={{ minHeight: 36, paddingInline: 14, width: 'fit-content' }}
+                      onClick={() => {
+                        if (connectMode) {
+                          if (card.enabled) {
+                            router.push(returnTo);
+                            return;
+                          }
+                          if (card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable) {
+                            void handleImportLocalOpenAiAuth();
+                            return;
+                          }
+                          if (card.credential) {
+                            void handleToggleProviderProfile(card.credential, card.profile);
+                            return;
+                          }
+                          resetProviderForm(card.provider, defaultAuthMode);
+                          setShowProviderForm(true);
+                          return;
+                        }
+                        if (card.credential) {
+                          void handleTestProviderCredential(card.credential);
+                          return;
+                        }
+                        resetProviderForm(card.provider, defaultAuthMode);
+                        setShowProviderForm(true);
+                      }}
+                      disabled={visibleActionBusy}
+                    >
+                      {visibleActionBusy ? (connectMode ? 'Working…' : 'Testing…') : visibleActionLabel}
+                    </button>
+                    <details
                       style={{
-                        display: 'grid',
-                        gap: 10,
-                        borderRadius: connectMode ? 14 : 16,
+                        borderRadius: 12,
                         border: '1px solid var(--border-subtle)',
-                        background: 'linear-gradient(180deg, color-mix(in srgb, var(--bg-element) 84%, transparent 16%), var(--bg-surface))',
-                        padding: connectMode ? '12px 14px' : 12,
+                        background: 'var(--bg-element)',
+                        padding: '10px 12px',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                        <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{credential.label}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            {providerAccountContextLine(credential)}
-                          </div>
-                        </div>
-                        <span className="orion-chip" style={profileTone(primaryProfile)}>
-                          {profileStatusLabel(primaryProfile, mode)}
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <span className="orion-chip">{providerLabel(credential.provider, providerOptions)}</span>
-                        <span className="orion-chip">{providerAuthModeLabel(credential.provider, credential.authMode, providerOptions)}</span>
-                        {primaryProfile?.model ? <span className="orion-chip">Model {primaryProfile.model}</span> : null}
-                        {!connectMode && profileOrder ? <span className="orion-chip">Order #{profileOrder}</span> : null}
-                        {!connectMode && isDefaultProfile ? <span className="orion-chip">Default for runtime</span> : null}
-                        {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
-                      </div>
-
-                      {primaryProfile ? (
+                      <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        Details
+                      </summary>
+                      <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
                         <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                          {primaryProfile.last_error
-                            ? primaryProfile.last_error
-                            : primaryProfile.last_success_at
-                              ? `Last success ${formatDate(primaryProfile.last_success_at)}`
-                              : primaryProfile.health === 'cooldown'
-                                ? `Cooling down until ${formatDate(primaryProfile.cooldown_until)}`
-                                : 'Runtime profile is ready for runs.'}
+                          Account: {card.credential?.label || 'Not connected'}
                         </div>
-                      ) : (
-                        <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                          Saved in vault only. Enable runtime when you want this account available to runs.
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                          Auth: {card.credential ? providerAuthModeLabel(card.provider, card.credential.authMode, providerOptions) : providerSetupGuidance(card.provider, defaultAuthMode, option)}
                         </div>
-                      )}
-
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-primary"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => router.push(returnTo)}
-                          >
-                            Use this account
-                          </button>
+                        {card.profile?.model ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            Model: {card.profile.model}
+                          </div>
                         ) : null}
-                        {!connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => void handleTestProviderCredential(credential)}
-                            disabled={Boolean(busyAction)}
-                          >
-                            <ShieldCheck size={13} />
-                            {busyAction === 'test' ? 'Testing…' : 'Test'}
-                          </button>
+                        {typeof card.order === 'number' ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            Order: #{card.order}
+                          </div>
                         ) : null}
-                        {!connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => void handleToggleProviderProfile(credential, primaryProfile)}
-                            disabled={Boolean(busyAction)}
-                          >
-                            {primaryProfile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
-                            {busyAction === 'disable-runtime'
-                              ? 'Disabling…'
-                              : busyAction === 'enable-runtime'
-                                ? 'Enabling…'
-                                : primaryProfile?.enabled
-                                  ? 'Disable runtime'
-                                  : primaryProfile
-                                    ? 'Enable runtime'
-                                    : 'Use in runtime'}
-                          </button>
+                        {card.isDefaultProfile ? <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>Default for runtime</div> : null}
+                        {card.isActiveProfile ? <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>Active now</div> : null}
+                        {card.availability?.detail ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            {card.availability.detail}
+                          </div>
                         ) : null}
-                        {primaryProfile && !isDefaultProfile && !connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => void handlePromoteProviderProfile(primaryProfile)}
-                            disabled={Boolean(busyAction) || providerBusy[primaryProfile.id] === 'make-default'}
-                          >
-                            {providerBusy[primaryProfile.id] === 'make-default' ? 'Setting default…' : 'Make default'}
-                          </button>
+                        {card.provider === 'openai' ? (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="orion-btn orion-btn-ghost"
+                              style={{ minHeight: 32, paddingInline: 12 }}
+                              disabled={providerBusy['openai-codex-oauth'] === 'login'}
+                              onClick={() => void handleOpenAiCodexOauthSignIn()}
+                            >
+                              {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
+                            </button>
+                            <button
+                              type="button"
+                              className="orion-btn orion-btn-ghost"
+                              style={{ minHeight: 32, paddingInline: 12 }}
+                              disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
+                              onClick={() => void handleImportLocalOpenAiAuth()}
+                            >
+                              {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
+                            </button>
+                          </div>
                         ) : null}
-                        {primaryProfile && !connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => void handleDeleteProviderProfile(primaryProfile)}
-                            disabled={Boolean(busyAction)}
-                          >
-                            <X size={13} />
-                            {providerBusy[primaryProfile.id] === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
-                          </button>
+                        {card.provider === 'anthropic' && !card.credential ? (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="orion-btn orion-btn-ghost"
+                              style={{ minHeight: 32, paddingInline: 12 }}
+                              disabled={providerBusy['claude-auth'] === 'login'}
+                              onClick={() => void handleClaudeAuthLogin()}
+                            >
+                              {providerBusy['claude-auth'] === 'login' ? 'Signing in…' : 'Sign in to Claude'}
+                            </button>
+                            <button
+                              type="button"
+                              className="orion-btn orion-btn-ghost"
+                              style={{ minHeight: 32, paddingInline: 12 }}
+                              disabled={providerBusy['claude-auth'] === 'status'}
+                              onClick={() => void refreshClaudeAuthStatus()}
+                            >
+                              {providerBusy['claude-auth'] === 'status' ? 'Refreshing…' : 'Refresh Claude status'}
+                            </button>
+                          </div>
                         ) : null}
-                        {!connectMode ? (
-                          <button
-                            className="orion-btn orion-btn-danger"
-                            style={{ minHeight: 34, paddingInline: 12 }}
-                            onClick={() => void handleRemoveProviderCredential(credential)}
-                            disabled={Boolean(busyAction)}
-                          >
-                            <Trash2 size={13} />
-                            {busyAction === 'remove' ? 'Removing…' : 'Remove'}
-                          </button>
+                        {!connectMode && card.credential ? (
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button
+                              className="orion-btn orion-btn-ghost"
+                              style={{ minHeight: 32, paddingInline: 10 }}
+                              onClick={() => void handleToggleProviderProfile(card.credential!, card.profile)}
+                              disabled={Boolean(busyAction)}
+                            >
+                              {card.profile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
+                              {busyAction === 'disable-runtime'
+                                ? 'Disabling…'
+                                : busyAction === 'enable-runtime'
+                                  ? 'Enabling…'
+                                  : card.profile?.enabled
+                                    ? 'Disable runtime'
+                                    : card.profile
+                                      ? 'Enable runtime'
+                                      : 'Use in runtime'}
+                            </button>
+                            {card.profile && !card.isDefaultProfile ? (
+                              <button
+                                className="orion-btn orion-btn-ghost"
+                                style={{ minHeight: 32, paddingInline: 10 }}
+                                onClick={() => void handlePromoteProviderProfile(card.profile!)}
+                                disabled={profileBusyAction === 'make-default'}
+                              >
+                                {profileBusyAction === 'make-default' ? 'Setting default…' : 'Make default'}
+                              </button>
+                            ) : null}
+                            {card.profile ? (
+                              <button
+                                className="orion-btn orion-btn-ghost"
+                                style={{ minHeight: 32, paddingInline: 10 }}
+                                onClick={() => void handleDeleteProviderProfile(card.profile!)}
+                                disabled={profileBusyAction === 'remove-profile'}
+                              >
+                                <X size={13} />
+                                {profileBusyAction === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
+                              </button>
+                            ) : null}
+                            <button
+                              className="orion-btn orion-btn-danger"
+                              style={{ minHeight: 32, paddingInline: 10 }}
+                              onClick={() => void handleRemoveProviderCredential(card.credential!)}
+                              disabled={busyAction === 'remove'}
+                            >
+                              <Trash2 size={13} />
+                              {busyAction === 'remove' ? 'Removing…' : 'Remove account'}
+                            </button>
+                          </div>
                         ) : null}
                       </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : null}
+                    </details>
+                  </article>
+                );
+              })}
+            </div>
 
             {!connectMode && runtimeProfileGroups.length > 0 ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gap: 10,
-                  borderRadius: 16,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
-                  padding: 14,
-                }}
-              >
+              <section style={{ display: 'grid', gap: 10 }}>
                 <div style={{ display: 'grid', gap: 3 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
                     Runtime profile order
@@ -1593,7 +1627,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                                 alignItems: 'center',
                                 borderRadius: 12,
                                 border: '1px solid var(--border-subtle)',
-                                background: 'var(--bg-surface)',
+                                background: 'var(--bg-element)',
                                 padding: '10px 12px',
                               }}
                             >
@@ -1643,7 +1677,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
             ) : null}
 
             {!connectMode && orphanProviderProfiles.length > 0 ? (
@@ -1653,7 +1687,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                   gap: 10,
                   borderRadius: 16,
                   border: '1px solid var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
+                  background: 'var(--bg-element)',
                   padding: 14,
                 }}
               >
@@ -1713,7 +1747,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             display: 'grid',
             placeItems: 'center',
             padding: 24,
-            background: 'rgba(12, 10, 18, 0.18)',
+            background: 'var(--overlay-scrim)',
             backdropFilter: 'blur(10px)',
           }}
           onClick={() => setShowProviderForm(false)}
@@ -1728,7 +1762,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               gap: 22,
               padding: 28,
               borderRadius: 28,
-              boxShadow: '0 24px 80px rgba(10, 8, 18, 0.18)',
+              boxShadow: 'var(--shadow-card)',
             }}
             onClick={(event) => event.stopPropagation()}
           >
@@ -1759,7 +1793,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 gap: 16,
                 borderRadius: 20,
                 border: '1px solid var(--border-subtle)',
-                background: 'color-mix(in srgb, var(--bg-element) 82%, transparent 18%)',
+                background: 'var(--bg-element)',
                 padding: 22,
               }}
             >

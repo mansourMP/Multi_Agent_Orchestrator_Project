@@ -26,6 +26,22 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
 
         self.assertEqual(account_id, "acc_123")
 
+    def test_build_responses_input_uses_output_text_for_assistant_history(self):
+        items = worker_llm._build_responses_input(
+            "whats up ?",
+            prior_messages=[
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "Hello! How can I help?"},
+            ],
+        )
+
+        self.assertEqual(items[0]["role"], "user")
+        self.assertEqual(items[0]["content"][0]["type"], "input_text")
+        self.assertEqual(items[1]["role"], "assistant")
+        self.assertEqual(items[1]["content"][0]["type"], "output_text")
+        self.assertEqual(items[2]["role"], "user")
+        self.assertEqual(items[2]["content"][0]["type"], "input_text")
+
     def test_provider_order_prefers_codex_cli_before_openai_in_codex_mode(self):
         with patch.dict(
             os.environ,
@@ -77,18 +93,18 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(error, "")
         openai_chat_text_mock.assert_called_once()
 
-    def test_generate_chat_uses_plain_chat_transport_for_explicit_oauth_token_mode(self):
+    def test_generate_chat_rejects_explicit_oauth_token_mode_for_openai_direct(self):
         with patch.dict(os.environ, {"ORION_AUTH_MODE": "api_key"}, clear=False):
             with patch.object(worker_llm, "provider_order_for_run", return_value=["openai"]):
                 with patch.object(
                     worker_llm,
                     "openai_responses_text",
-                    side_effect=AssertionError("responses api should be skipped for oauth_token auth mode"),
+                    side_effect=AssertionError("responses api should not be used for rejected oauth_token auth mode"),
                 ):
                     with patch.object(
                         worker_llm,
                         "openai_chat_text",
-                        return_value=("OAuth reply", {"total_tokens": 7}, "gpt-4.1", ""),
+                        side_effect=AssertionError("chat api should not be used for rejected oauth_token auth mode"),
                     ) as openai_chat_text_mock:
                         with patch.object(
                             worker_llm,
@@ -102,11 +118,11 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
                                 system_prompt="You are concise.",
                             )
 
-        self.assertEqual(text, "OAuth reply")
-        self.assertIsNotNone(usage)
+        self.assertEqual(text, "")
+        self.assertIsNone(usage)
         self.assertEqual(attempted, "openai")
-        self.assertEqual(error, "")
-        openai_chat_text_mock.assert_called_once()
+        self.assertIn(worker_llm.OPENAI_CODEX_DIRECT_AUTH_ERROR, error)
+        openai_chat_text_mock.assert_not_called()
 
     def test_codex_exec_prefers_direct_backend_before_cli(self):
         with patch.object(
@@ -149,6 +165,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             model_override="gpt-5.3-codex",
             reasoning_effort_override=None,
             prior_messages=None,
+            credential_override=None,
         )
 
     def test_generate_chat_coerces_unsupported_openai_model_for_codex_cli(self):
@@ -175,6 +192,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             model_override="gpt-5.4",
             reasoning_effort_override=None,
             prior_messages=None,
+            credential_override=None,
         )
 
     def test_generate_chat_fails_closed_when_codex_cli_has_only_prompt_transport(self):
@@ -201,24 +219,30 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(attempted, "codex_cli")
         self.assertIn(worker_llm.DIRECT_CHAT_TRANSPORT_UNAVAILABLE, error)
 
-    def test_generate_chat_fails_closed_for_claude_code_cli(self):
+    def test_generate_chat_routes_claude_code_cli_through_anthropic_transport(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["claude_code_cli"]):
             with patch.object(
                 worker_llm,
                 "claude_code_exec_text",
                 side_effect=AssertionError("claude cli prompt transport should not be used for direct chat"),
             ):
-                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
-                    context={},
-                    metadata={},
-                    user_goal="hello",
-                    system_prompt="You are concise.",
-                )
+                with patch.object(
+                    worker_llm,
+                    "anthropic_chat_text",
+                    return_value=("Claude reply", {"input_tokens": 5}, "claude-3-5-sonnet-20241022", ""),
+                ) as anthropic_chat_text_mock:
+                    text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                        context={},
+                        metadata={},
+                        user_goal="hello",
+                        system_prompt="You are concise.",
+                    )
 
-        self.assertEqual(text, "")
-        self.assertIsNone(usage)
+        self.assertEqual(text, "Claude reply")
+        self.assertIsNotNone(usage)
         self.assertEqual(attempted, "claude_code_cli")
-        self.assertIn(worker_llm.DIRECT_CHAT_TRANSPORT_UNAVAILABLE, error)
+        self.assertEqual(error, "")
+        anthropic_chat_text_mock.assert_called_once()
 
     def test_generate_pack_keeps_json_transport(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["openai"]):

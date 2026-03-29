@@ -126,12 +126,14 @@ def _build_responses_input(
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for message in _build_chat_messages(user_prompt, prior_messages=prior_messages):
+        role = message["role"]
+        content_type = "output_text" if role == "assistant" else "input_text"
         items.append(
             {
-                "role": message["role"],
+                "role": role,
                 "content": [
                     {
-                        "type": "input_text",
+                        "type": content_type,
                         "text": message["content"],
                     }
                 ],

@@ -31,6 +31,9 @@ AUTH_SCOPE_ERROR_MARKERS = (
 )
 DIRECT_CHAT_TRANSPORT_UNAVAILABLE = "direct_chat_transport_unavailable"
 OPENAI_API_KEY_MISSING_ERROR = "No OpenAI API key configured. Add one from the AI accounts page."
+OPENAI_CODEX_DIRECT_AUTH_ERROR = (
+    "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
+)
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -316,6 +319,20 @@ def requested_auth_mode(context: Dict[str, Any], metadata: Dict[str, Any]) -> st
     ).strip().lower()
 
 
+def openai_direct_auth_error(context: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    inline_credentials = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else {}
+    if requested_auth_mode(context, metadata) == "oauth_token":
+        return OPENAI_CODEX_DIRECT_AUTH_ERROR
+    oauth_token = sanitize_bearer_token(
+        inline_credentials.get("oauth_token")
+        or inline_credentials.get("oauthToken")
+        or metadata.get("oauth_token")
+    )
+    if oauth_token:
+        return OPENAI_CODEX_DIRECT_AUTH_ERROR
+    return ""
+
+
 def should_use_openai_chat_completions(context: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
     requested_mode = requested_auth_mode(context, metadata)
     if requested_mode == "oauth_token":
@@ -328,6 +345,8 @@ def resolve_requested_provider(context: Dict[str, Any], metadata: Dict[str, Any]
     auth_mode = requested_auth_mode(context, metadata)
     if raw_provider == "claude_code_cli":
         return "claude_code_cli"
+    if raw_provider == "openai-codex":
+        return "codex_cli"
     if raw_provider == "anthropic" and auth_mode in LOCAL_CLI_AUTH_MODES:
         return "claude_code_cli"
     return raw_provider
@@ -576,12 +595,18 @@ def openai_codex_backend_text(
     model_override: Optional[str] = None,
     reasoning_effort_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    token = get_codex_oauth_token()
+    override = credential_override if isinstance(credential_override, dict) else {}
+    token = sanitize_bearer_token(
+        override.get("oauth_token")
+        or override.get("access_token")
+        or ""
+    ) or get_codex_oauth_token()
     if not token:
         return "", None, "", "missing_oauth_token"
 
-    account_id = codex_account_id_from_token(token)
+    account_id = str(override.get("account_id") or "").strip() or codex_account_id_from_token(token)
     if not account_id:
         return "", None, "", "missing_chatgpt_account_id"
 
@@ -768,6 +793,7 @@ def codex_exec_text(
     model_override: Optional[str] = None,
     reasoning_effort_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     direct_text, direct_usage, direct_model, direct_error = openai_codex_backend_text(
         system_prompt,
@@ -775,6 +801,7 @@ def codex_exec_text(
         model_override=model_override,
         reasoning_effort_override=reasoning_effort_override,
         prior_messages=prior_messages,
+        credential_override=credential_override,
     )
     if direct_text:
         return direct_text, direct_usage, direct_model, ""
@@ -844,12 +871,22 @@ def codex_exec_text(
             pass
 
 
-def codex_exec_json(system_prompt: str, user_prompt: str, model_override: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def codex_exec_json(
+    system_prompt: str,
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     prompt = (
         f"{user_prompt}\n\n"
         'Return strictly valid JSON only with keys: "summary", "content_plan", "next_steps".'
     )
-    text, usage, model, err = codex_exec_text(system_prompt, prompt, model_override=model_override)
+    text, usage, model, err = codex_exec_text(
+        system_prompt,
+        prompt,
+        model_override=model_override,
+        credential_override=credential_override,
+    )
     if not text:
         return None, usage, model, err or "codex_empty_output"
     parsed = parse_json_object_loose(text)
@@ -1393,10 +1430,19 @@ def generate_pack_with_provider_fallback(
         attempted.append(provider)
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
-            result, usage, model, provider_error = codex_exec_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = codex_exec_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                credential_override=metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None,
+            )
         elif provider == "claude_code_cli":
             result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "openai":
+            direct_auth_error = openai_direct_auth_error(context, metadata)
+            if direct_auth_error:
+                last_error = direct_auth_error
+                continue
             result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "anthropic":
             result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt, model_override=provider_model)
@@ -1438,6 +1484,7 @@ def generate_chat_reply_with_provider_fallback(
                 model_override=provider_model,
                 reasoning_effort_override=requested_reasoning_effort or None,
                 prior_messages=prior_messages,
+                credential_override=metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None,
             )
             if text:
                 return (
@@ -1458,6 +1505,10 @@ def generate_chat_reply_with_provider_fallback(
             )
             continue
         if provider == "openai":
+            direct_auth_error = openai_direct_auth_error(context, metadata)
+            if direct_auth_error:
+                last_error = f"openai generation failed: {direct_auth_error}"
+                continue
             if not prefer_openai_chat:
                 text, usage, model, provider_error = openai_responses_text(
                     system_prompt,

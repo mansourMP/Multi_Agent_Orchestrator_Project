@@ -283,6 +283,17 @@ def _provider_kwargs(provider: str, credentials: Optional[Dict[str, Any]]) -> Di
             raise RuntimeError("Anthropic credential requires api_key.")
         return {"api_key": key}
     if provider == "gemini":
+        auth_mode = str(credentials.get("auth_mode") or "").strip().lower()
+        access_token = str(credentials.get("access_token") or "").strip()
+        if access_token.lower().startswith("bearer "):
+            access_token = access_token[7:].strip()
+        project_id = str(credentials.get("project_id") or "").strip()
+        if auth_mode == "gemini_cli_oauth" or access_token:
+            if not access_token:
+                raise RuntimeError("Gemini credential requires access_token for gemini_cli_oauth.")
+            if not project_id:
+                raise RuntimeError("Gemini credential requires project_id for gemini_cli_oauth.")
+            return {"access_token": access_token, "project_id": project_id}
         key = str(credentials.get("api_key") or "").strip()
         if not key:
             raise RuntimeError("Gemini credential requires api_key.")
@@ -503,12 +514,24 @@ def _sync_provider_completion(
         }
         if system_instruction:
             payload["systemInstruction"] = system_instruction
-        response = http_json_request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(model_id)}:generateContent?key={quote_plus(kwargs['api_key'])}",
-            headers={"Content-Type": "application/json"},
-            payload=payload,
-            timeout=60,
-        )
+        if "api_key" in kwargs:
+            response = http_json_request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(model_id)}:generateContent?key={quote_plus(kwargs['api_key'])}",
+                headers={"Content-Type": "application/json"},
+                payload=payload,
+                timeout=60,
+            )
+        else:
+            response = http_json_request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{quote_plus(model_id)}:generateContent",
+                headers={
+                    "Authorization": f"Bearer {kwargs['access_token']}",
+                    "x-goog-user-project": str(kwargs["project_id"]),
+                    "Content-Type": "application/json",
+                },
+                payload=payload,
+                timeout=60,
+            )
         if int(response.get("status") or 500) >= 400:
             _raise_provider_error(resolved_provider, resolved_model, response)
         body = response.get("json")

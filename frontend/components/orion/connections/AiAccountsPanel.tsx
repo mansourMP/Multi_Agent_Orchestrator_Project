@@ -20,7 +20,6 @@ import {
   DEFAULT_PROVIDER_OPTIONS,
   getProviderAuthModes,
   isProviderId,
-  mapModelOptionsToAliases,
   normalizeProviderId,
   resolveModelAlias,
   type ModelAliasOption,
@@ -28,12 +27,12 @@ import {
   type ProviderOption,
 } from '@/app/page.catalog';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
-import { getDesktopBridge, type OpenAiCodexOauthResult } from '@/lib/desktopBridge';
 
 type ProviderCredentialRow = {
   id: string;
   label: string;
   provider: ProviderId;
+  rawProvider?: string;
   metadata?: Record<string, unknown>;
   authMode?: string;
   created_at?: string;
@@ -43,6 +42,7 @@ type ProviderCredentialRow = {
 type ProviderProfileRow = {
   id: string;
   provider: ProviderId;
+  rawProvider?: string;
   label: string;
   credential_id?: string | null;
   auth_mode?: string | null;
@@ -115,6 +115,12 @@ type ClaudeAuthStatus = {
   loggedIn?: boolean;
   authMethod?: string;
   apiProvider?: string;
+  message?: string;
+};
+
+type GeminiCliStatus = {
+  ok?: boolean;
+  available?: boolean;
   message?: string;
 };
 
@@ -201,6 +207,7 @@ function defaultProviderLabel(provider: ProviderId, authMode: string): string {
 function knownProviderId(value?: unknown): ProviderId | null {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'claude_code_cli') return 'anthropic';
+  if (raw === 'openai-codex') return 'openai';
   return isProviderId(raw) ? raw : null;
 }
 
@@ -239,6 +246,7 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
     return { api_key: state.secret.trim(), auth_mode: state.authMode || 'api_key' };
   }
   if (state.provider === 'gemini') {
+    if (state.authMode === 'gemini_cli_oauth') return { auth_mode: 'gemini_cli_oauth' };
     return { api_key: state.secret.trim(), auth_mode: state.authMode || 'api_key' };
   }
   if (state.provider === 'vertex') {
@@ -269,6 +277,9 @@ function providerSetupGuidance(provider: ProviderId, authMode: string, option: P
     }
     return option.note || 'Use a direct OpenAI API key. Empyralis does not route your requests through third-party model gateways.';
   }
+  if (provider === 'gemini' && authMode === 'gemini_cli_oauth') {
+    return option.note || 'Use the Gemini CLI OAuth action on the provider card.';
+  }
   if (provider === 'anthropic' && authMode === 'local_cli') {
     return option.note || 'Use the Claude subscription already signed into the local Claude CLI on this machine.';
   }
@@ -287,11 +298,6 @@ function providerAccountContextLine(item: ProviderCredentialRow): string {
       .join(' • ') || 'Saved access token for Vertex AI.';
   }
   return 'Saved in the encrypted Empyralis vault for this workspace.';
-}
-
-function openAiCodexCredentialLabel(result: OpenAiCodexOauthResult): string {
-  const email = String(result.email || '').trim();
-  return email ? `ChatGPT / Codex (${email})` : 'ChatGPT / Codex';
 }
 
 function profileTone(profile: ProviderProfileRow | null): CSSProperties {
@@ -383,8 +389,6 @@ const secondaryProviderActionButtonStyle: CSSProperties = {
 
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
-  const openAiDesktopBridge = getDesktopBridge();
-  const openAiDesktopOauthAvailable = Boolean(openAiDesktopBridge?.openaiCodexOauthLogin);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -401,6 +405,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
   const [claudeAuthStatus, setClaudeAuthStatus] = useState<ClaudeAuthStatus | null>(null);
+  const [geminiCliStatus, setGeminiCliStatus] = useState<GeminiCliStatus | null>(null);
 
   const controlPlaneFetch = useCallback(async (input: string, init?: RequestInit) => {
     await ensureControlPlaneSession();
@@ -729,6 +734,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             id: typeof item.id === 'string' ? item.id : '',
             label: typeof item.label === 'string' ? item.label : 'AI Account',
             provider: normalizedProvider,
+            rawProvider: typeof item.provider === 'string' ? item.provider : undefined,
             metadata: item.metadata && typeof item.metadata === 'object' ? item.metadata as Record<string, unknown> : {},
             authMode: item.metadata && typeof item.metadata === 'object' && typeof (item.metadata as Record<string, unknown>).auth_mode === 'string'
               ? String((item.metadata as Record<string, unknown>).auth_mode)
@@ -749,6 +755,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           return {
             id: typeof item.id === 'string' ? item.id : '',
             provider: normalizedProvider,
+            rawProvider: typeof item.provider === 'string' ? item.provider : undefined,
             label: typeof item.label === 'string' ? item.label : 'Runtime profile',
             credential_id: typeof item.credential_id === 'string' ? item.credential_id : null,
             auth_mode: typeof item.auth_mode === 'string' ? item.auth_mode : null,
@@ -897,9 +904,35 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [controlPlaneFetch]);
 
   useEffect(() => {
+    void refreshClaudeAuthStatus(true);
+  }, [refreshClaudeAuthStatus]);
+
+  useEffect(() => {
     if (!showProviderForm || !usesClaudeLocalCli) return;
     void refreshClaudeAuthStatus(true);
   }, [refreshClaudeAuthStatus, showProviderForm, usesClaudeLocalCli]);
+
+  const refreshGeminiCliStatus = useCallback(async () => {
+    try {
+      const res = await controlPlaneFetch('/api/control-plane/providers/gemini/local-cli/status');
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Could not read Gemini CLI status.'));
+      }
+      setGeminiCliStatus(body as GeminiCliStatus);
+    } catch (error) {
+      setGeminiCliStatus({
+        ok: false,
+        available: false,
+        message: error instanceof Error ? error.message : 'Could not read Gemini CLI status.',
+      });
+    }
+  }, [controlPlaneFetch]);
+
+  useEffect(() => {
+    void refreshGeminiCliStatus();
+  }, [refreshGeminiCliStatus]);
 
   const upsertRuntimeProfileForCredential = useCallback(async (
     credential: ProviderCredentialRow,
@@ -912,7 +945,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     ).trim() || 'api_key';
     const payload = {
       id: existingProfile?.id || undefined,
-      provider: credential.provider,
+      provider: credential.rawProvider || credential.provider,
       label: existingProfile?.label || credential.label,
       credential_id: credential.id,
       auth_mode: authMode,
@@ -934,6 +967,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     const authMode = providerForm.authMode || selectedProviderOption.defaultAuthMode || selectedProviderAuthModes[0]?.id || 'api_key';
     const authConfig = selectedProviderAuthModes.find((item) => item.id === authMode);
     const needsSecret = authConfig?.secretRequired !== false;
+    if (providerForm.provider === 'gemini' && authMode === 'gemini_cli_oauth') {
+      setProviderError('Use Sign in with Google (Gemini CLI) on the Gemini card instead of the manual form.');
+      return;
+    }
     if (usesClaudeLocalCli && claudeAuthStatus && claudeAuthStatus.loggedIn === false) {
       setProviderError('Claude is not signed in on this machine yet. Use Sign in to Claude first, then refresh status.');
       return;
@@ -1025,23 +1062,25 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setProviderError('');
     setProviderNotice('');
     try {
-      const res = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credential.id)}/test?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      const providerId = encodeURIComponent(String(credential.rawProvider || credential.provider).trim());
+      const res = await controlPlaneFetch(`/api/control-plane/providers/${providerId}/probe?workspace_id=${encodeURIComponent(workspaceId)}&credential_id=${encodeURIComponent(credential.id)}`, {
         method: 'POST',
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
-      if (!res.ok) throw new Error(String(body?.detail || body?.message || 'AI account test failed.'));
-      const preview = Array.isArray(body?.models_preview)
-        ? body.models_preview.filter((item: unknown): item is string => typeof item === 'string')
-        : [];
-      const previewAliases = mapModelOptionsToAliases(credential.provider, preview, effectiveModelAliases);
+      if (!res.ok) throw new Error(String(body?.detail || body?.message || 'AI account live probe failed.'));
+      const model = String(body?.model || '').trim();
+      const reply = String(body?.reply || '').replace(/\s+/g, ' ').trim();
+      const replyPreview = reply.length > 72 ? `${reply.slice(0, 72).trimEnd()}…` : reply;
       setProviderNotice(
-        previewAliases.length > 0
-          ? `${body?.message || 'Connection verified.'} Models: ${previewAliases.slice(0, 3).join(', ')}`
-          : String(body?.message || 'Connection verified.'),
+        [
+          String(body?.message || 'Live probe succeeded.').trim(),
+          model ? `Model: ${resolveModelAlias(credential.provider, model, effectiveModelAliases) || model}` : '',
+          replyPreview ? `Reply: ${replyPreview}` : '',
+        ].filter(Boolean).join(' '),
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'AI account test failed.';
+      const message = error instanceof Error ? error.message : 'AI account live probe failed.';
       setProviderError(credential.provider === 'anthropic' && credential.authMode === 'local_cli' ? normalizeClaudeCliError(message) : message);
     } finally {
       setProviderActionBusy(credential.id, null);
@@ -1088,7 +1127,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           method: 'POST',
           body: JSON.stringify({
             id: item.id,
-            provider: item.provider,
+            provider: item.rawProvider || item.provider,
             label: item.label,
             credential_id: item.credential_id || undefined,
             auth_mode: item.auth_mode || undefined,
@@ -1189,6 +1228,61 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [controlPlaneFetch, refreshClaudeAuthStatus, setProviderActionBusy]);
 
+  const handleImportLocalClaudeAuth = useCallback(async () => {
+    setProviderActionBusy('anthropic-local-import', 'import');
+    setProviderError('');
+    setProviderNotice('');
+    try {
+      const res = await controlPlaneFetch('/api/control-plane/providers/anthropic/local-auth/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          enable_runtime: true,
+        }),
+      });
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to import the local Claude session.'));
+      }
+      await Promise.all([loadProviderAccounts(), refreshClaudeAuthStatus(true)]);
+      setLastConnectedAccountLabel('Claude on this Mac');
+      setProviderNotice(String(body?.message || 'Claude local session imported from this Mac.'));
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : 'Failed to import the local Claude session.');
+    } finally {
+      setProviderActionBusy('anthropic-local-import', null);
+    }
+  }, [controlPlaneFetch, loadProviderAccounts, refreshClaudeAuthStatus, setProviderActionBusy, workspaceId]);
+
+  const handleGeminiCliOauthImport = useCallback(async () => {
+    setProviderActionBusy('gemini-cli-oauth', 'import');
+    setProviderError('');
+    setProviderNotice('');
+    setLastConnectedAccountLabel('');
+    try {
+      const res = await controlPlaneFetch('/api/control-plane/providers/gemini/local-auth/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          enable_runtime: true,
+        }),
+      });
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok) {
+        throw new Error(String(body?.detail || body?.message || 'Failed to complete Gemini CLI OAuth.'));
+      }
+      await Promise.all([loadProviderAccounts(), refreshGeminiCliStatus()]);
+      setLastConnectedAccountLabel(String(body?.label || 'Google Gemini CLI'));
+      setProviderNotice(String(body?.message || 'Gemini CLI OAuth connected.'));
+    } catch (error) {
+      setProviderError(error instanceof Error ? error.message : 'Failed to complete Gemini CLI OAuth.');
+    } finally {
+      setProviderActionBusy('gemini-cli-oauth', null);
+    }
+  }, [controlPlaneFetch, loadProviderAccounts, refreshGeminiCliStatus, setProviderActionBusy, workspaceId]);
+
   const handleImportLocalOpenAiAuth = useCallback(async () => {
     setProviderActionBusy('openai-local-import', 'import');
     setProviderError('');
@@ -1216,39 +1310,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     }
   }, [controlPlaneFetch, loadLocalOpenAiAuth, loadProviderAccounts, setProviderActionBusy, workspaceId]);
 
-  const removeImportedOpenAiCredentials = useCallback(async (sources: string[]) => {
-    const sourceSet = new Set(sources.map((item) => item.trim().toLowerCase()).filter(Boolean));
-    if (sourceSet.size === 0) return;
-
-    const importedCredentials = providerCredentials.filter((credential) => {
-      if (credential.provider !== 'openai') return false;
-      const importSource = String(credential.metadata?.import_source || '').trim().toLowerCase();
-      return sourceSet.has(importSource);
-    });
-
-    for (const credential of importedCredentials) {
-      const linkedProfiles = providerProfilesByCredential.get(credential.id) || [];
-      for (const profile of linkedProfiles) {
-        const profileRes = await controlPlaneFetch(`/api/control-plane/providers/profiles/${encodeURIComponent(profile.id)}`, {
-          method: 'DELETE',
-        });
-        const profileRaw = await profileRes.text().catch(() => '');
-        const profileBody = profileRaw ? JSON.parse(profileRaw) : {};
-        if (!profileRes.ok) {
-          throw new Error(String(profileBody?.detail || profileBody?.message || 'Failed to remove an existing OpenAI runtime profile.'));
-        }
-      }
-      const credentialRes = await controlPlaneFetch(`/api/control-plane/credentials/${encodeURIComponent(credential.id)}?workspace_id=${encodeURIComponent(workspaceId)}`, {
-        method: 'DELETE',
-      });
-      const credentialRaw = await credentialRes.text().catch(() => '');
-      const credentialBody = credentialRaw ? JSON.parse(credentialRaw) : {};
-      if (!credentialRes.ok) {
-        throw new Error(String(credentialBody?.detail || credentialBody?.message || 'Failed to remove an existing OpenAI account.'));
-      }
-    }
-  }, [controlPlaneFetch, providerCredentials, providerProfilesByCredential, workspaceId]);
-
   const handleOpenAiCodexOauthSignIn = useCallback(async () => {
     setProviderActionBusy('openai-codex-oauth', 'login');
     setProviderError('');
@@ -1256,110 +1317,32 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setLastConnectedAccountLabel('');
 
     try {
-      if (!openAiDesktopBridge?.openaiCodexOauthLogin) {
-        const signInUrl = String(localOpenAiAuth?.sign_in_url || 'https://chatgpt.com/auth/login').trim() || 'https://chatgpt.com/auth/login';
-        let opened = false;
-        if (openAiDesktopBridge?.openExternal) {
-          const result = await openAiDesktopBridge.openExternal(signInUrl).catch(() => false);
-          opened = result === true || (typeof result === 'string' && result.trim().length > 0);
-        }
-        if (!opened && typeof window !== 'undefined') {
-          opened = Boolean(window.open(signInUrl, '_blank', 'noopener,noreferrer'));
-        }
-        if (!opened) {
-          throw new Error('Could not open ChatGPT sign-in automatically. Open https://chatgpt.com/auth/login, then return here.');
-        }
-        setProviderNotice(
-          localOpenAiAuth?.importable
-            ? 'ChatGPT opened in the browser. This Mac already has a local OpenAI / Codex session, so you can return here and click Import local session.'
-            : 'ChatGPT opened in the browser. Browser sign-in alone does not connect this app. Use Add API key, or return here and import a local OpenAI / Codex session if one becomes available on this Mac.',
-        );
-        return;
-      }
-
-      const result = await openAiDesktopBridge.openaiCodexOauthLogin();
-      const accessToken = String(result?.access_token || '').trim();
-      const refreshToken = String(result?.refresh_token || '').trim();
-      const accountId = String(result?.account_id || '').trim();
-      const email = String(result?.email || '').trim();
-      const profileName = String(result?.profile_name || '').trim();
-      const expiresAt = Number(result?.expires_at || 0);
-
-      if (!accessToken || !refreshToken || !accountId || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-        throw new Error('ChatGPT sign-in did not return a complete OAuth session.');
-      }
-
-      await removeImportedOpenAiCredentials(['openai_codex_oauth', 'codex_auth_file']);
-
-      const label = openAiCodexCredentialLabel(result);
-      const res = await controlPlaneFetch('/api/control-plane/credentials', {
+      const res = await controlPlaneFetch('/api/control-plane/providers/openai/local-auth/import', {
         method: 'POST',
         body: JSON.stringify({
-          label,
-          provider: 'openai',
           workspace_id: workspaceId,
-          mode: 'byok',
-          metadata: {
-            auth_mode: 'oauth_token',
-            import_source: 'openai_codex_oauth',
-            source_label: 'ChatGPT OAuth',
-            account_id: accountId,
-            ...(email ? { email } : {}),
-            ...(profileName ? { profile_name: profileName } : {}),
-            expires_at: expiresAt,
-          },
-          skip_validation: true,
-          credentials: {
-            oauth_token: accessToken,
-            refresh_token: refreshToken,
-            expires_at: expiresAt,
-            account_id: accountId,
-            ...(email ? { email } : {}),
-            ...(profileName ? { profile_name: profileName } : {}),
-            auth_mode: 'oauth_token',
-          },
+          enable_runtime: true,
+          auth_flow: 'browser_oauth',
         }),
       });
       const raw = await res.text().catch(() => '');
       const body = raw ? JSON.parse(raw) : {};
       if (!res.ok) {
-        throw new Error(String(body?.detail || body?.message || 'Failed to save ChatGPT OAuth account.'));
-      }
-
-      const credentialId = typeof body?.id === 'string' ? body.id : '';
-      const credential: ProviderCredentialRow = {
-        id: credentialId,
-        label,
-        provider: 'openai',
-        authMode: 'oauth_token',
-        metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata as Record<string, unknown> : {},
-      };
-      if (credentialId) {
-        await upsertRuntimeProfileForCredential(
-          credential,
-          null,
-          true,
-          defaultProviderModel('openai', 'oauth_token', providerOptions),
-        );
+        throw new Error(String(body?.detail || body?.message || 'Failed to complete OpenAI browser OAuth.'));
       }
 
       await loadProviderAccounts();
-      setLastConnectedAccountLabel(label);
-      setProviderNotice('ChatGPT / Codex connected and ready.');
+      setLastConnectedAccountLabel(String(body?.label || 'OpenAI / Codex'));
+      setProviderNotice(String(body?.message || 'OpenAI / Codex connected and ready.'));
     } catch (error) {
-      setProviderError(error instanceof Error ? error.message : 'Failed to complete ChatGPT sign-in.');
+      setProviderError(error instanceof Error ? error.message : 'Failed to complete OpenAI sign-in.');
     } finally {
       setProviderActionBusy('openai-codex-oauth', null);
     }
   }, [
     controlPlaneFetch,
-    localOpenAiAuth?.sign_in_url,
     loadProviderAccounts,
-    openAiDesktopBridge,
-    providerOptions,
-    removeImportedOpenAiCredentials,
     setProviderActionBusy,
-    upsertRuntimeProfileForCredential,
     workspaceId,
   ]);
 
@@ -1527,10 +1510,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const catalogDefaultModel = String(option.defaultModel || '').trim();
                 const topCardError = summarizeProviderCardError(card.errorMessage);
                 const hasActiveError = Boolean(topCardError);
-                const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
-                const openAiBrowserOnlyFlow = card.provider === 'openai' && !openAiDesktopOauthAvailable;
+                const openAiNeedsApiKey = card.provider === 'openai' && !card.credential && !openAiHasApiKeyCredential;
                 const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
                 const showGeminiApiKeyAction = card.provider === 'gemini';
+                const showGeminiCliOauthAction = card.provider === 'gemini' && geminiCliStatus?.available === true;
                 const showVertexCredentialsAction = card.provider === 'vertex';
                 const visibleActionBusy = connectMode
                   ? openAiNeedsApiKey
@@ -1675,14 +1658,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             className="orion-btn orion-btn-ghost"
                             style={secondaryProviderActionButtonStyle}
                             disabled={providerBusy['openai-codex-oauth'] === 'login'}
-                            title={openAiBrowserOnlyFlow ? 'Opens ChatGPT in the browser. Browser sign-in alone does not connect this app.' : undefined}
                             onClick={() => void handleOpenAiCodexOauthSignIn()}
                         >
                           {providerBusy['openai-codex-oauth'] === 'login'
-                            ? 'Opening ChatGPT…'
-                            : openAiBrowserOnlyFlow
-                              ? 'Open ChatGPT'
-                              : 'Sign in with ChatGPT'}
+                            ? 'Opening OpenAI…'
+                            : 'Sign in with OpenAI'}
                         </button>
                           <button
                             type="button"
@@ -1696,19 +1676,18 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         </button>
                       </div>
                     ) : null}
-                    {card.provider === 'openai' && openAiBrowserOnlyFlow ? (
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          lineHeight: 1.45,
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        Browser ChatGPT sign-in does not directly connect this app. Use Add API key, or import a saved local OpenAI / Codex session from this Mac.
-                      </div>
-                    ) : null}
-                    {connectMode && card.provider === 'anthropic' && !card.credential ? (
+                    {card.provider === 'anthropic' && claudeAuthStatus?.available ? (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={secondaryProviderActionButtonStyle}
+                          disabled={providerBusy['anthropic-local-import'] === 'import' || claudeAuthStatus.loggedIn !== true}
+                          title={claudeAuthStatus.loggedIn === true ? undefined : 'Sign in to Claude on this machine first.'}
+                          onClick={() => void handleImportLocalClaudeAuth()}
+                        >
+                          {providerBusy['anthropic-local-import'] === 'import' ? 'Importing…' : 'Use local Claude session'}
+                        </button>
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
@@ -1730,7 +1709,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       </div>
                     ) : null}
                     {showGeminiApiKeyAction ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
@@ -1739,6 +1719,23 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         >
                           Add API key
                         </button>
+                          {showGeminiCliOauthAction ? (
+                            <button
+                              type="button"
+                              className="orion-btn orion-btn-ghost"
+                              style={secondaryProviderActionButtonStyle}
+                              disabled={providerBusy['gemini-cli-oauth'] === 'import'}
+                              onClick={() => void handleGeminiCliOauthImport()}
+                            >
+                              {providerBusy['gemini-cli-oauth'] === 'import' ? 'Opening Google…' : 'Sign in with Google (Gemini CLI)'}
+                            </button>
+                          ) : null}
+                        </div>
+                        {showGeminiCliOauthAction ? (
+                          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--warning-fg)' }}>
+                            Unofficial integration. Use at your own risk.
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     {showVertexCredentialsAction ? (

@@ -55,6 +55,8 @@ from server_modules.provider_profiles import (
     provider_requires_credential,
     secretless_provider_credentials,
     resolve_provider_adapter,
+    claude_code_cli_available,
+    gemini_cli_available,
     ProviderAdapter,
     OpenAIAdapter,
     AnthropicAdapter,

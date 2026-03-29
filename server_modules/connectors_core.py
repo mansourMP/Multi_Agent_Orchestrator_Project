@@ -251,6 +251,15 @@ async def get_anthropic_local_cli_status():
         "message": "Claude subscription is signed in on this machine." if logged_in else "Claude subscription is not signed in yet.",
     }
 
+
+async def get_gemini_local_cli_status():
+    available = gemini_cli_available()
+    return {
+        "ok": True,
+        "available": available,
+        "message": "Gemini CLI is installed on this machine." if available else "Gemini CLI is not installed on this machine.",
+    }
+
 async def start_anthropic_local_cli_login():
     if not shutil.which("claude"):
         raise HTTPException(status_code=400, detail="Claude CLI is not installed on this machine.")
@@ -282,6 +291,89 @@ async def test_provider_credentials(body: CredentialTestRequest):
             "message": result.get("message", "Validation complete."),
             "provider": provider,
             "models_preview": models[:25],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def probe_provider(
+    provider: str,
+    credential_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+):
+    provider_id = normalize_provider_id(provider)
+    if provider_id not in PROVIDER_CATALOG:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider '{provider}'")
+
+    credentials: Dict[str, Any] = {}
+    resolved_provider = provider_id
+    if profile_id:
+        with PROFILES_LOCK:
+            profile = PROVIDER_PROFILES.get(profile_id)
+        if not isinstance(profile, dict):
+            raise HTTPException(status_code=404, detail="Profile not found.")
+        resolved_provider = normalize_provider_id(profile.get("provider") or provider_id)
+        ws = _normalize_workspace_id(workspace_id) or str(profile.get("workspace_id") or "default").strip() or "default"
+        profile_auth_mode = normalize_auth_mode(resolved_provider, profile.get("auth_mode"))
+        profile_credential_id = str(profile.get("credential_id") or "").strip()
+        if profile_credential_id:
+            try:
+                credentials = resolve_vault_credential(profile_credential_id, ws)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+        elif not provider_requires_credential(resolved_provider, profile_auth_mode):
+            credentials = secretless_provider_credentials(resolved_provider, profile_auth_mode)
+        workspace_id = ws
+    elif credential_id:
+        try:
+            credentials = resolve_vault_credential(credential_id, workspace_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        resolved_provider = normalize_provider_id(credentials.get("_provider") or provider_id)
+    elif provider_id == "openai":
+        try:
+            credentials = resolve_default_vault_credential("openai", workspace_id)
+        except Exception:
+            key, _ = _openai_env_bearer_with_source()
+            if key:
+                credentials = {
+                    "access_token": key,
+                    "org_id": OPENAI_ORG_ID,
+                    "project_id": OPENAI_PROJECT_ID,
+                }
+    elif provider_id == "openai-codex":
+        try:
+            credentials = resolve_default_vault_credential("openai-codex", workspace_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif provider_id == "anthropic":
+        try:
+            credentials = resolve_default_vault_credential("anthropic", workspace_id)
+        except Exception:
+            if claude_code_cli_available():
+                credentials = secretless_provider_credentials("anthropic", "local_cli")
+    elif provider_id == "gemini":
+        try:
+            credentials = resolve_default_vault_credential("gemini", workspace_id)
+        except Exception:
+            env_key = str(os.getenv("GEMINI_API_KEY") or "").strip()
+            if env_key:
+                credentials = {"api_key": env_key}
+
+    if not credentials:
+        raise HTTPException(status_code=400, detail="No credential available for this provider.")
+
+    try:
+        resolved_provider, _, adapter = resolve_provider_adapter(resolved_provider, credentials)
+        result = adapter.probe(credentials)
+        return {
+            "ok": bool(result.get("ok")),
+            "status": result.get("status"),
+            "message": result.get("message", "Live probe complete."),
+            "provider": resolved_provider,
+            "model": result.get("model"),
+            "reply": result.get("reply"),
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))

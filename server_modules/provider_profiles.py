@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote_plus
@@ -128,6 +129,7 @@ def _validation_result(provider_label: str, response: Dict[str, Any]) -> Dict[st
 
 LEGACY_PROVIDER_ALIASES = {
     "claude_code_cli": "anthropic",
+    "openai_codex": "openai-codex",
 }
 
 LOCAL_CLI_AUTH_MODES = {
@@ -150,6 +152,17 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "api_key",
         "default_model": "gpt-5.4",
         "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
+    },
+    "openai-codex": {
+        "label": "OpenAI Codex",
+        "auth": ["oauth_token"],
+        "auth_modes": [
+            {"id": "oauth_token", "label": "ChatGPT / Codex OAuth", "secret_required": True},
+        ],
+        "default_auth_mode": "oauth_token",
+        "default_model": "gpt-5.4",
+        "note": "ChatGPT / Codex OAuth session for the Codex transport.",
+        "hidden": True,
     },
     "anthropic": {
         "label": "Anthropic",
@@ -175,13 +188,14 @@ PROVIDER_CATALOG = {
     },
     "gemini": {
         "label": "Google Gemini",
-        "auth": ["api_key"],
+        "auth": ["api_key", "gemini_cli_oauth"],
         "auth_modes": [
             {"id": "api_key", "label": "API Key", "secret_required": True},
+            {"id": "gemini_cli_oauth", "label": "Gemini CLI OAuth", "secret_required": False},
         ],
         "default_auth_mode": "api_key",
         "default_model": "gemini-2.0-flash",
-        "note": "Direct Gemini API key only.",
+        "note": "Direct Gemini API key or Gemini CLI OAuth.",
     },
     "vertex": {
         "label": "Google Vertex AI",
@@ -253,6 +267,8 @@ def resolve_provider_adapter(provider: Any, credentials: Optional[Dict[str, Any]
     adapter_key = provider_id
     if provider_id == "anthropic" and auth_mode == "local_cli":
         adapter_key = "claude_code_cli"
+    if provider_id == "openai-codex":
+        adapter_key = "openai-codex"
     adapter = PROVIDER_ADAPTERS.get(adapter_key)
     if adapter is None:
         raise RuntimeError(f"Unsupported provider '{provider}'.")
@@ -273,6 +289,10 @@ OPENAI_CODEX_MODEL_CATALOG = [
     "gpt-5.2-codex",
     "gpt-5.1-codex",
 ]
+OPENAI_CODEX_DIRECT_AUTH_ERROR = (
+    "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
+)
+PROVIDER_LIVE_PROBE_PROMPT = "Reply with OK. Do not use tools."
 
 
 class ProviderAdapter:
@@ -287,9 +307,37 @@ class ProviderAdapter:
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         raise NotImplementedError
 
+    def probe_model(self, credentials: Dict[str, Any]) -> str:
+        _ = credentials
+        entry = provider_catalog_entry(self.provider_id)
+        return str(entry.get("default_model") or "").strip()
+
+    def probe(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        selected_model = self.probe_model(credentials)
+        if not selected_model:
+            models = self.list_models(credentials)
+            selected_model = str(models[0] if models else "").strip()
+        if not selected_model:
+            raise RuntimeError(f"No probe model available for provider '{self.provider_id}'.")
+        reply = self.generate("", PROVIDER_LIVE_PROBE_PROMPT, selected_model, credentials)
+        normalized_reply = str(reply or "").strip()
+        if not normalized_reply:
+            raise RuntimeError(f"{self.provider_id} probe returned empty output.")
+        return {
+            "ok": True,
+            "status": 200,
+            "message": "Live probe succeeded.",
+            "model": selected_model,
+            "reply": normalized_reply,
+        }
+
 
 def claude_code_cli_available() -> bool:
     return bool(shutil.which("claude"))
+
+
+def gemini_cli_available() -> bool:
+    return bool(shutil.which("gemini"))
 
 
 def claude_code_cli_status(timeout: int = 15) -> Dict[str, Any]:
@@ -385,6 +433,7 @@ class OpenAIAdapter(ProviderAdapter):
         return auth_mode == "oauth_token" or (not auth_mode and bool(oauth_token))
 
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
+        self._ensure_direct_api_credentials(credentials)
         token = _openai_bearer_from_credentials(credentials)
         if not token:
             raise RuntimeError("OpenAI credential requires api_key, access_token, or oauth_token.")
@@ -400,19 +449,17 @@ class OpenAIAdapter(ProviderAdapter):
             headers["OpenAI-Project"] = str(project_id)
         return headers
 
-    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+    def _ensure_direct_api_credentials(self, credentials: Dict[str, Any]) -> None:
         if self._uses_oauth_token(credentials):
-            return {
-                "ok": True,
-                "status": 200,
-                "message": "OpenAI / Codex session imported.",
-            }
+            raise RuntimeError(OPENAI_CODEX_DIRECT_AUTH_ERROR)
+
+    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         return _validation_result("OpenAI", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
-        if self._uses_oauth_token(credentials):
-            return list(OPENAI_CODEX_MODEL_CATALOG)
+        self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         data = res.get("json", {}) or {}
         models = []
@@ -426,6 +473,7 @@ class OpenAIAdapter(ProviderAdapter):
     def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
         from server_modules.model_router import call_model_sync
 
+        self._ensure_direct_api_credentials(credentials)
         result = call_model_sync(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -436,6 +484,99 @@ class OpenAIAdapter(ProviderAdapter):
             credentials=credentials,
         )
         return str(result.get("content") or "").strip()
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("utf-8"))
+
+
+def codex_account_id_from_token(token: Any) -> str:
+    raw = str(token or "").strip()
+    if not raw:
+        return ""
+    parts = raw.split(".")
+    if len(parts) < 2:
+        return ""
+    try:
+        payload = json.loads(_urlsafe_b64decode(parts[1]).decode("utf-8", "ignore"))
+    except Exception:
+        return ""
+    auth_payload = payload.get("https://api.openai.com/auth")
+    if isinstance(auth_payload, dict):
+        account_id = str(auth_payload.get("chatgpt_account_id") or "").strip()
+        if account_id:
+            return account_id
+    return str(payload.get("sub") or "").strip()
+
+
+class OpenAICodexAdapter(ProviderAdapter):
+    provider_id = "openai-codex"
+
+    def _oauth_token(self, credentials: Dict[str, Any]) -> str:
+        token = str(credentials.get("oauth_token") or credentials.get("access_token") or "").strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            raise RuntimeError("OpenAI Codex OAuth token is required.")
+        return token
+
+    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        token = self._oauth_token(credentials)
+        account_id = str(credentials.get("account_id") or "").strip() or codex_account_id_from_token(token)
+        if not account_id:
+            raise RuntimeError("OpenAI Codex OAuth token is missing a ChatGPT account id.")
+        return {
+            "ok": True,
+            "status": 200,
+            "message": "ChatGPT / Codex OAuth session imported.",
+        }
+
+    def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        self._oauth_token(credentials)
+        return list(OPENAI_CODEX_MODEL_CATALOG)
+
+    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
+        _ = system_prompt, user_input, model, credentials
+        raise RuntimeError("openai-codex uses the Codex transport and is not available through the direct adapter.")
+
+    def probe(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        token = self._oauth_token(credentials)
+        selected_model = self.probe_model(credentials) or "gpt-5.4"
+        try:
+            import sys
+            from pathlib import Path
+
+            scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            import orion_local_worker_llm as worker_llm  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(f"Could not load Codex probe transport: {exc}") from exc
+
+        text, _usage, used_model, error = worker_llm.openai_codex_backend_text(
+            "",
+            PROVIDER_LIVE_PROBE_PROMPT,
+            model_override=selected_model,
+            credential_override={
+                "oauth_token": token,
+                "account_id": str(credentials.get("account_id") or "").strip() or codex_account_id_from_token(token),
+                "email": str(credentials.get("email") or "").strip(),
+                "profile_name": str(credentials.get("profile_name") or "").strip(),
+            },
+        )
+        if error:
+            raise RuntimeError(str(error))
+        reply = str(text or "").strip()
+        if not reply:
+            raise RuntimeError("openai-codex probe returned empty output.")
+        return {
+            "ok": True,
+            "status": 200,
+            "message": "Live probe succeeded.",
+            "model": str(used_model or selected_model),
+            "reply": reply,
+        }
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -514,20 +655,53 @@ class ClaudeCodeCLIAdapter(ProviderAdapter):
 class GeminiAdapter(ProviderAdapter):
     provider_id = "gemini"
 
-    def _api_key(self, credentials: Dict[str, Any]) -> str:
-        key = credentials.get("api_key") or ""
+    def _auth_params(self, credentials: Dict[str, Any]) -> Dict[str, str]:
+        auth_mode = normalize_auth_mode(self.provider_id, credentials=credentials)
+        access_token = str(credentials.get("access_token") or "").strip()
+        if access_token.lower().startswith("bearer "):
+            access_token = access_token[7:].strip()
+        project_id = str(credentials.get("project_id") or "").strip()
+        if auth_mode == "gemini_cli_oauth" or access_token:
+            if not access_token:
+                raise RuntimeError("Gemini CLI OAuth credential requires access_token.")
+            if not project_id:
+                raise RuntimeError("Gemini CLI OAuth credential requires project_id.")
+            return {
+                "mode": "oauth",
+                "access_token": access_token,
+                "project_id": project_id,
+            }
+        key = str(credentials.get("api_key") or "").strip()
         if not key:
             raise RuntimeError("Gemini api_key is required.")
-        return str(key)
+        return {"mode": "api_key", "api_key": key}
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        key = self._api_key(credentials)
-        res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(key)}")
+        auth = self._auth_params(credentials)
+        if auth["mode"] == "oauth":
+            res = http_json_request(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={
+                    "Authorization": f"Bearer {auth['access_token']}",
+                    "x-goog-user-project": auth["project_id"],
+                },
+            )
+        else:
+            res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(auth['api_key'])}")
         return _validation_result("Gemini", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
-        key = self._api_key(credentials)
-        res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(key)}")
+        auth = self._auth_params(credentials)
+        if auth["mode"] == "oauth":
+            res = http_json_request(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={
+                    "Authorization": f"Bearer {auth['access_token']}",
+                    "x-goog-user-project": auth["project_id"],
+                },
+            )
+        else:
+            res = http_json_request(f"https://generativelanguage.googleapis.com/v1beta/models?key={quote_plus(auth['api_key'])}")
         body = res.get("json") or {}
         out = []
         for item in body.get("models", []) if isinstance(body.get("models"), list) else []:
@@ -631,6 +805,7 @@ class VertexAdapter(ProviderAdapter):
 
 PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
     "openai": OpenAIAdapter(),
+    "openai-codex": OpenAICodexAdapter(),
     "anthropic": AnthropicAdapter(),
     "claude_code_cli": ClaudeCodeCLIAdapter(),
     "gemini": GeminiAdapter(),
@@ -640,6 +815,7 @@ PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
 # Approximate token pricing per 1K tokens; used only for masked telemetry.
 PROVIDER_COST_PER_1K = {
     "openai": {"input": 0.0050, "output": 0.0150},
+    "openai-codex": {"input": 0.0, "output": 0.0},
     "anthropic": {"input": 0.0030, "output": 0.0150},
     "claude_code_cli": {"input": 0.0, "output": 0.0},
     "gemini": {"input": 0.0010, "output": 0.0030},
@@ -877,6 +1053,22 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 }
             )
             seen_labels.add("env-openai")
+
+    if canonical_provider == "openai-codex":
+        try:
+            fallback = resolve_default_vault_credential("openai-codex", workspace_id)
+            if "vault-default-codex" not in seen_labels:
+                candidates.append(
+                    {
+                        "source": "vault_default",
+                        "credentials": fallback,
+                        "profile_id": None,
+                        "label": "vault-default-codex",
+                    }
+                )
+                seen_labels.add("vault-default-codex")
+        except Exception:
+            pass
 
     if canonical_provider == "anthropic":
         env_key = str(os.getenv("ANTHROPIC_API_KEY") or "").strip()

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from scripts.orion_local_worker_llm import SUPPORTED_PROVIDERS, generate_chat_reply_with_provider_fallback, provider_has_key
 from scripts.orion_local_worker_utils import build_operator_system_prompt
+from server_modules.provider_profiles import _build_provider_credential_candidates
 try:
     from server_modules.tool_availability_truth import resolve_workspace_tool_capabilities
 except Exception:
@@ -481,6 +482,30 @@ def _provider_unavailable_response(provider: str) -> Dict[str, Any]:
     }
 
 
+def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    normalized_provider = str(provider or "").strip().lower()
+    candidate_provider = "openai-codex" if normalized_provider == "codex_cli" else normalized_provider
+    candidates = _build_provider_credential_candidates(
+        {"workspace_id": normalized_workspace_id},
+        {"source": "chat_direct"},
+        candidate_provider,
+    )
+    if normalized_provider == "codex_cli" and not candidates:
+        openai_candidates = _build_provider_credential_candidates(
+            {"workspace_id": normalized_workspace_id},
+            {"source": "chat_direct"},
+            "openai",
+        )
+        candidates = [
+            item for item in openai_candidates
+            if isinstance(item.get("credentials"), dict)
+            and str((item.get("credentials") or {}).get("auth_mode") or "").strip().lower() == "oauth_token"
+        ]
+    first = candidates[0].get("credentials") if candidates else {}
+    return dict(first) if isinstance(first, dict) else {}
+
+
 def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
     normalized = str(value or "").strip().lower()
     if normalized in {"low", "medium", "high"}:
@@ -590,6 +615,10 @@ def build_direct_operator_reply(
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
     }
+    if provider == "codex_cli":
+        direct_chat_credentials = _direct_chat_credentials(normalized_workspace_id, provider)
+        if direct_chat_credentials:
+            metadata["credentials"] = direct_chat_credentials
     system_prompt = build_operator_system_prompt(
         _availability_lines(normalized_workspace_id, availability_payload),
     ) or None

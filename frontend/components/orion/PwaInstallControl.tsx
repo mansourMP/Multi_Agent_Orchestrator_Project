@@ -23,6 +23,12 @@ function detectSafari(): { isSafari: boolean; isIOS: boolean } {
   return { isSafari, isIOS };
 }
 
+function isLocalDevHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hostname = window.location.hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
 export default function PwaInstallControl() {
   const isDesktopShell = useDesktopShell();
   const [mounted, setMounted] = useState(false);
@@ -44,6 +50,23 @@ export default function PwaInstallControl() {
 
   useEffect(() => {
     if (!mounted || typeof window === 'undefined' || !('serviceWorker' in navigator) || isDesktopShell) return;
+    if (isLocalDevHost()) {
+      void navigator.serviceWorker.getRegistrations().then((registrations) =>
+        Promise.all(registrations.map((registration) => registration.unregister())).catch(() => undefined),
+      );
+      if ('caches' in window) {
+        void caches.keys()
+          .then((keys) =>
+            Promise.all(
+              keys
+                .filter((key) => key.startsWith('empyralis-pwa'))
+                .map((key) => caches.delete(key)),
+            ),
+          )
+          .catch(() => undefined);
+      }
+      return;
+    }
     if (!(window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
       return;
     }

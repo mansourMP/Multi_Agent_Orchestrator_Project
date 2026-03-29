@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
+from server_modules.runtime_state_store import replace_local_runtime_state
 
 _server = None
 
@@ -89,6 +90,7 @@ def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], statu
         if note:
             next_record["note"] = str(note)[:280]
         _server.LOCAL_WORKER_REGISTRY[worker] = next_record
+    _persist_local_runtime_state()
 
 
 def _capability_digest(capabilities: Optional[List[str]]) -> Optional[str]:
@@ -119,6 +121,31 @@ def _normalize_runtime_ids(raw_items: Any) -> List[str]:
             seen.add(clean)
             normalized.append(clean)
     return normalized
+
+
+def _persist_local_runtime_state() -> None:
+    _init()
+    try:
+        with _server.LOCAL_QUEUE_LOCK:
+            pending_run_ids = list(_server.LOCAL_PENDING_RUN_IDS)
+            claimed_runs = {
+                run_id: dict(info)
+                for run_id, info in _server.LOCAL_CLAIMED_RUNS.items()
+                if isinstance(info, dict)
+            }
+            runtime_registrations = {
+                runtime_id: dict(record)
+                for runtime_id, record in _server.LOCAL_WORKER_REGISTRY.items()
+                if isinstance(record, dict)
+            }
+        replace_local_runtime_state(
+            _server.ORION_RUNTIME_STATE_DB,
+            pending_run_ids=pending_run_ids,
+            claimed_runs=claimed_runs,
+            runtime_registrations=runtime_registrations,
+        )
+    except Exception:
+        return
 
 
 def _required_capabilities_for_run(run: Dict[str, Any]) -> List[str]:
@@ -264,7 +291,9 @@ def _assert_runtime_session(runtime_id: str, session_token: Optional[str], *, in
             raise HTTPException(status_code=409, detail="runtime instance changed. Re-register this machine.")
         _touch_runtime_session(record)
         _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
-        return dict(record)
+        next_record = dict(record)
+    _persist_local_runtime_state()
+    return next_record
 
 
 def _upsert_runtime_registration(
@@ -273,6 +302,7 @@ def _upsert_runtime_registration(
     runtime_type: str = "local",
     display_name: Optional[str] = None,
     platform: Optional[str] = None,
+    policy_mode: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
     execution_targets: Optional[List[str]] = None,
     instance_id: Optional[str] = None,
@@ -290,6 +320,11 @@ def _upsert_runtime_registration(
         record["runtime_type"] = str(runtime_type or previous.get("runtime_type") or "local").strip() or "local"
         record["display_name"] = str(display_name or previous.get("display_name") or worker).strip() or worker
         record["platform"] = str(platform or previous.get("platform") or "").strip() or None
+        record["policy_mode"] = _server.normalize_policy_mode(
+            policy_mode
+            or previous.get("policy_mode")
+            or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT
+        )
         normalized_capabilities = [
             str(item).strip()
             for item in (capabilities if isinstance(capabilities, list) else previous.get("capabilities") or [])
@@ -311,6 +346,7 @@ def _upsert_runtime_registration(
         record["last_registered_at"] = _server._utc_now_iso()
         session = _issue_runtime_session(record)
         _server.LOCAL_WORKER_REGISTRY[worker] = record
+    _persist_local_runtime_state()
     return {
         "runtime_id": worker,
         "instance_id": record.get("instance_id"),
@@ -334,11 +370,13 @@ def _cleanup_stale_local_claims() -> List[str]:
     _init()
     now = _server._utc_now()
     stale: List[Dict[str, Any]] = []
+    changed = False
 
     with _server.LOCAL_QUEUE_LOCK:
         for run_id, claim in list(_server.LOCAL_CLAIMED_RUNS.items()):
             if not isinstance(claim, dict):
                 _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
+                changed = True
                 continue
             lease_seconds = max(10, int(claim.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS))
             last_heartbeat = _server._parse_utc_ts(claim.get("last_heartbeat_at")) or _server._parse_utc_ts(claim.get("claimed_at"))
@@ -349,8 +387,10 @@ def _cleanup_stale_local_claims() -> List[str]:
 
             worker_id = str(claim.get("worker_id") or "").strip() or None
             _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
+            changed = True
             if run_id not in _server.LOCAL_PENDING_RUN_IDS:
                 _server.LOCAL_PENDING_RUN_IDS.append(run_id)
+                changed = True
             if worker_id:
                 worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
                 worker_state["worker_id"] = worker_id
@@ -359,6 +399,7 @@ def _cleanup_stale_local_claims() -> List[str]:
                 worker_state["lease_seconds"] = int(worker_state.get("lease_seconds") or lease_seconds)
                 worker_state["last_seen_at"] = worker_state.get("last_seen_at") or claim.get("last_heartbeat_at") or claim.get("claimed_at") or _server._utc_now_iso()
                 _server.LOCAL_WORKER_REGISTRY[worker_id] = worker_state
+                changed = True
             stale.append(
                 {
                     "run_id": run_id,
@@ -367,6 +408,8 @@ def _cleanup_stale_local_claims() -> List[str]:
                     "last_heartbeat_at": claim.get("last_heartbeat_at"),
                 }
             )
+    if changed:
+        _persist_local_runtime_state()
 
     for item in stale:
         run_id = str(item.get("run_id") or "")
@@ -404,6 +447,7 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
     claimed_run_id: Optional[str] = None
     deferred_run_ids: List[str] = []
     capability_filtered = False
+    state_changed = False
 
     with _server.LOCAL_QUEUE_LOCK:
         worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
@@ -412,6 +456,7 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
         requested_capability_filter = set(_normalize_capability_ids(required_capabilities))
         while _server.LOCAL_PENDING_RUN_IDS:
             run_id = _server.LOCAL_PENDING_RUN_IDS.pop(0)
+            state_changed = True
             run = _server.runs.get(run_id)
             if not isinstance(run, dict):
                 continue
@@ -440,10 +485,14 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
                 "last_heartbeat_at": datetime.utcnow().isoformat() + "Z",
                 "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
             }
+            state_changed = True
             claimed_run_id = run_id
             break
         if deferred_run_ids:
             _server.LOCAL_PENDING_RUN_IDS[:] = deferred_run_ids + list(_server.LOCAL_PENDING_RUN_IDS)
+            state_changed = True
+    if state_changed:
+        _persist_local_runtime_state()
     if claimed_run_id:
         _mark_local_worker_seen(worker_id, claimed_run_id, "busy", note="claimed_local_run")
     else:
@@ -671,6 +720,7 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
                     "runtime_type": record.get("runtime_type") or "local",
                     "display_name": record.get("display_name") or worker_id,
                     "platform": record.get("platform"),
+                    "policy_mode": record.get("policy_mode") or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT,
                     "capabilities": list(record.get("capabilities") or []),
                     "execution_targets": list(record.get("execution_targets") or []),
                     "trust_state": record.get("trust_state") or "unverified",
@@ -741,6 +791,7 @@ def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerH
                     claim["last_heartbeat_at"] = now_iso
                     _server.LOCAL_CLAIMED_RUNS[current_run_id] = claim
                     run["local_last_heartbeat_at"] = now_iso
+            _persist_local_runtime_state()
 
     return {"status": "ok", "worker_id": worker, "current_run_id": current_run_id or None, "last_seen_at": _server._utc_now_iso()}
 
@@ -762,6 +813,17 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
     run = _server.runs.get(run_id)
     if not isinstance(run, dict):
         return {"ok": True, "worker_id": worker_id, "run": None}
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
+    if isinstance(metadata, dict):
+        metadata["runtime_id"] = worker_id
+        metadata["policy_mode"] = _server.normalize_policy_mode(
+            worker_state.get("policy_mode") if isinstance(worker_state, dict) else None
+        )
+        context["metadata"] = metadata
+        run["context"] = context
 
     now = datetime.utcnow().isoformat() + "Z"
     run["local_worker_id"] = worker_id

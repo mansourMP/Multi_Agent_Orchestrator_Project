@@ -224,10 +224,17 @@ def wait_for_human_response(
     source: str = "runtime_wait",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    from server_modules.runs_core import _begin_run_pending_approval, emit_log, set_run_status
+    from server_modules.runs_core import (
+        _begin_run_pending_confirmation,
+        _clear_pending_confirmation,
+        _get_pending_confirmation,
+        _set_pending_confirmation,
+        emit_log,
+        set_run_status,
+    )
 
     run = runs[run_id]
-    pending_payload = _begin_run_pending_approval(
+    pending_payload = _begin_run_pending_confirmation(
         run_id,
         prompt,
         source=source,
@@ -244,14 +251,14 @@ def wait_for_human_response(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+            pending = _get_pending_confirmation(run)
             pending["status"] = "expired"
             pending["expired_at"] = _utc_now_iso()
-            run["pending_approval"] = pending
+            _set_pending_confirmation(run, pending)
             emit_log(
                 run["logs"],
                 "error",
-                "Approval request expired before user decision.",
+                "Confirmation request expired before user decision.",
                 event="approval_timeout",
                 data={"approval_id": approval_id, "correlation_id": correlation_id, "ttl_seconds": ttl_seconds},
             )
@@ -262,10 +269,10 @@ def wait_for_human_response(
                 actor="system",
                 source="runtime_wait",
                 run_id=run_id,
-                note="Approval timeout reached while waiting for user decision.",
+                note="Confirmation timeout reached while waiting for user decision.",
                 correlation_id=correlation_id,
             )
-            raise RuntimeError("Approval timeout reached while waiting for user decision.")
+            raise RuntimeError("Confirmation timeout reached while waiting for user decision.")
         try:
             decision_raw = run["input_queue"].get(timeout=remaining)
         except queue.Empty:
@@ -288,7 +295,7 @@ def wait_for_human_response(
             emit_log(
                 run["logs"],
                 "warn",
-                "Ignored stale approval resolution for different approval_id.",
+                "Ignored stale confirmation resolution for different approval_id.",
                 event="approval_ignored",
                 data={
                     "approval_id": incoming_approval_id,
@@ -309,18 +316,18 @@ def wait_for_human_response(
             )
             continue
 
-        pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+        pending = _get_pending_confirmation(run)
         pending["status"] = "resolved"
         pending["resolved_at"] = _utc_now_iso()
         pending["decision"] = decision_text
-        run["pending_approval"] = pending
+        _set_pending_confirmation(run, pending)
         set_run_status(run_id, "running")
         emit_log(
             run["logs"],
             "info",
             f"Decision received: {decision_text}",
             event="approval_received",
-            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text},
+            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": "once", "reusable": False},
         )
         _append_approval_audit(
             approval_id=approval_id,
@@ -331,6 +338,7 @@ def wait_for_human_response(
             run_id=run_id,
             note=decision_note or str(decision_raw),
             correlation_id=correlation_id,
+            metadata={"scope": "once", "reusable": False},
         )
 
         approved = decision_text in approve_tokens
@@ -341,7 +349,7 @@ def wait_for_human_response(
         emit_log(
             run["logs"],
             "info" if approved else "warn",
-            "Approval resolved.",
+            "Confirmation resolved.",
             event="approval_resolved",
             data={
                 "approval_id": approval_id,
@@ -350,6 +358,8 @@ def wait_for_human_response(
                 "approved": approved,
                 "rejected": bool(rejected),
                 "escalated": bool(escalated),
+                "scope": "once",
+                "reusable": False,
             },
         )
         _append_approval_audit(
@@ -365,9 +375,11 @@ def wait_for_human_response(
                 "approved": bool(approved),
                 "rejected": bool(rejected),
                 "escalated": bool(escalated),
+                "scope": "once",
+                "reusable": False,
             },
         )
-        run["pending_approval"] = None
+        _clear_pending_confirmation(run)
         return {
             "approval_id": approval_id,
             "correlation_id": correlation_id,

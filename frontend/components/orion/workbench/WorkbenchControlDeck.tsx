@@ -39,6 +39,11 @@ type WorkbenchRecentRun = {
   execution_target_selected?: string | null;
   usage_provider?: string | null;
   usage_model?: string | null;
+  requested_provider?: string | null;
+  effective_provider?: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  fallback_used?: boolean;
   agent_role?: string | null;
 };
 
@@ -83,6 +88,18 @@ type WorkbenchControlDeckProps = {
   localExecutionDraft: LocalExecutionDraft;
   onLocalExecutionDraftChange: (updater: (prev: LocalExecutionDraft) => LocalExecutionDraft) => void;
 };
+
+function humanizeProviderLabel(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Unknown';
+  if (normalized === 'openai') return 'OpenAI';
+  if (normalized === 'anthropic') return 'Anthropic';
+  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'vertex') return 'Vertex AI';
+  if (normalized === 'codex_cli') return 'Codex/OpenAI';
+  if (normalized === 'claude_code_cli') return 'Claude Code';
+  return normalized.replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
 
 export function WorkbenchControlDeck({
   isMobile,
@@ -1488,10 +1505,25 @@ export function WorkbenchControlDeck({
               <div style={{ color: streamColor }}>{streamLabel}</div>
             </div>
             <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Source</div>
-              <div style={{ color: UI.textMuted }}>
-                {(selectedRun?.usage_provider || '--').toString()}
-                {selectedRun?.usage_model ? ` · ${selectedRun.usage_model}` : ''}
+              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Requested provider</div>
+              <div style={{ color: UI.textMuted }}>{humanizeProviderLabel(selectedRun?.requested_provider)}</div>
+            </div>
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Effective provider</div>
+              <div style={{ color: UI.textMuted }}>{humanizeProviderLabel(selectedRun?.effective_provider || selectedRun?.usage_provider)}</div>
+            </div>
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Requested model</div>
+              <div style={{ color: UI.textMuted }}>{selectedRun?.requested_model || 'Unknown'}</div>
+            </div>
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Effective model</div>
+              <div style={{ color: UI.textMuted }}>{selectedRun?.effective_model || selectedRun?.usage_model || 'Unknown'}</div>
+            </div>
+            <div style={{ display: 'grid', gap: 3 }}>
+              <div style={{ fontSize: 10, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>Fallback</div>
+              <div style={{ color: selectedRun?.fallback_used === true ? UI.warning : UI.textMuted }}>
+                {selectedRun?.fallback_used === true ? 'Used' : selectedRun?.fallback_used === false ? 'Not used' : 'Unknown'}
               </div>
             </div>
             <div style={{ display: 'grid', gap: 3 }}>

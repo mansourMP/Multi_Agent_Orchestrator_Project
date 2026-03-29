@@ -2019,6 +2019,13 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
         active_profile_label?: string;
         active_profile_provider?: string;
         active_profile_model?: string;
+        requested_provider?: string;
+        effective_provider?: string;
+        requested_model?: string;
+        effective_model?: string;
+        provider_overridden?: boolean;
+        model_overridden?: boolean;
+        fallback_used?: boolean;
         execution_target_selected?: string;
       } | null;
       if (!response.ok) {
@@ -2037,15 +2044,22 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
           created_at: new Date().toISOString(),
           agent_role: 'builder',
           triggered_by: 'Direct',
-        active_profile_id: payload.active_profile_id || selectedProfileId || null,
-        active_profile_label: payload.active_profile_label || selectedRuntimeProfile?.label || null,
-        active_profile_provider: payload.active_profile_provider || runtimeProvider,
-        active_profile_model: payload.active_profile_model || runtimeModel,
-        execution_target_selected:
-          (typeof payload.execution_target_selected === 'string' && payload.execution_target_selected)
-            ? payload.execution_target_selected
-            : executionTarget,
-      });
+          active_profile_id: typeof payload.active_profile_id === 'string' ? payload.active_profile_id : null,
+          active_profile_label: typeof payload.active_profile_label === 'string' ? payload.active_profile_label : null,
+          active_profile_provider: typeof payload.active_profile_provider === 'string' ? payload.active_profile_provider : null,
+          active_profile_model: typeof payload.active_profile_model === 'string' ? payload.active_profile_model : null,
+          requested_provider: typeof payload.requested_provider === 'string' ? payload.requested_provider : null,
+          effective_provider: typeof payload.effective_provider === 'string' ? payload.effective_provider : null,
+          requested_model: typeof payload.requested_model === 'string' ? payload.requested_model : null,
+          effective_model: typeof payload.effective_model === 'string' ? payload.effective_model : null,
+          provider_overridden: typeof payload?.provider_overridden === 'boolean' ? payload.provider_overridden : undefined,
+          model_overridden: typeof payload?.model_overridden === 'boolean' ? payload.model_overridden : undefined,
+          fallback_used: typeof payload?.fallback_used === 'boolean' ? payload.fallback_used : undefined,
+          execution_target_selected:
+            (typeof payload.execution_target_selected === 'string' && payload.execution_target_selected)
+              ? payload.execution_target_selected
+              : executionTarget,
+        });
       }
       setMessageRunId(payload?.run_id || null);
       if (payload?.run_id) {

@@ -17,6 +17,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
                     "runtime_type": "local_companion",
                     "display_name": "Empyralis Local Worker",
                     "platform": "macos",
+                    "policy_mode": "trusted_full_access",
                     "capabilities": ["read_write_files"],
                     "execution_targets": ["local_companion"],
                     "status": "idle",
@@ -36,6 +37,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["online"], 1)
         self.assertEqual(payload["items"][0]["runtime_id"], "empyralis-tauri-local")
         self.assertEqual(payload["items"][0]["status"], "idle")
+        self.assertEqual(payload["items"][0]["policy_mode"], "trusted_full_access")
 
     @patch("server_modules.runtime_runtime_api.runtime_status_payload")
     def test_legacy_local_workers_status_payload_preserves_counts(self, mock_status_payload):

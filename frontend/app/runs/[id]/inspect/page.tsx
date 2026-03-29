@@ -149,6 +149,11 @@ type RunDetailPayload = {
     prompt?: string;
     status?: string;
     expires_at?: string;
+    scope?: string | null;
+    reusable?: boolean | null;
+    consequence?: string | null;
+    actions?: string[] | null;
+    target?: string | null;
     metadata?: {
       approval_labels?: string[];
       approval_capabilities?: string[];
@@ -2502,6 +2507,12 @@ export default function RunInspectPage() {
                       runDetail.pending_approval.metadata?.approval_capabilities,
                       'Approval required.',
                     )}
+                  </div>
+                  <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <div>Action: {Array.isArray(runDetail.pending_approval.actions) && runDetail.pending_approval.actions.length > 0 ? runDetail.pending_approval.actions.join(', ') : 'Not recorded'}</div>
+                    <div>Target: {runDetail.pending_approval.target || 'Not recorded'}</div>
+                    <div>Scope: {String(runDetail.pending_approval.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(runDetail.pending_approval.scope || 'Unknown')}</div>
+                    <div>{runDetail.pending_approval.consequence || 'This approval applies only to this pending step in this run. Later runs or later approval points will ask again.'}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/approvals">

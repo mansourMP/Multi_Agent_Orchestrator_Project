@@ -1,7 +1,6 @@
 import re
 from typing import Any, Dict
 
-
 def split_items(raw: str) -> list[str]:
     if not raw:
         return []
@@ -14,41 +13,10 @@ def split_items(raw: str) -> list[str]:
 
 
 def skill_prompt_append_from_metadata(metadata: Dict[str, Any]) -> str:
-    direct = str(metadata.get("skill_prompt_append") or "").strip()
-    if direct:
-        return direct[:6000]
-    bundle = metadata.get("skill_bundle") if isinstance(metadata.get("skill_bundle"), dict) else {}
-    skills = bundle.get("skills") if isinstance(bundle, dict) and isinstance(bundle.get("skills"), list) else []
-    if not skills:
-        return ""
-    lines = ["Active skill directives (follow unless user overrides explicitly):"]
-    for raw in skills:
-        if not isinstance(raw, dict):
-            continue
-        title = str(raw.get("title") or "").strip()
-        intent = str(raw.get("intent") or "").strip()
-        guardrail = str(raw.get("guardrail") or "").strip()
-        tools_raw = raw.get("tools") if isinstance(raw.get("tools"), list) else []
-        tools = ", ".join(str(item).strip() for item in tools_raw if str(item).strip()) or "none"
-        if title and intent:
-            lines.append(f"- {title}: {intent} Guardrail: {guardrail or 'none'}. Tools: {tools}.")
-    text = "\n".join(lines).strip()
-    return text[:6000]
+    return ""
 
 
 def agent_role_prompt_append_from_metadata(metadata: Dict[str, Any]) -> str:
-    role = str(metadata.get("agent_role") or "").strip().lower()
-    if role == "private-assistant":
-        return (
-            "You are acting as Private Assistant. Be concise and practical. "
-            "When the user asks about files or folders, default to a user-facing summary: "
-            "show main folders, important files, and hide internal/runtime files unless the user explicitly asks for hidden or raw output."
-        )
-    if role == "builder":
-        return (
-            "You are acting as Builder Ops. Prefer precise technical summaries. "
-            "For file listings, group results by useful project areas before dumping raw paths."
-        )
     return ""
 
 
@@ -70,3 +38,21 @@ def collapse_duplicate_reply_sections(text: str) -> str:
         if first_half and first_half == second_half:
             return "\n\n".join(paragraphs[:halfway]).strip()
     return cleaned
+
+
+def build_operator_system_prompt(
+    availability_lines: list[str] | None = None,
+    tool_lines: list[str] | None = None,
+) -> str:
+    availability = [str(item or "").strip() for item in (availability_lines or []) if str(item or "").strip()]
+    tools = [str(item or "").strip() for item in (tool_lines or []) if str(item or "").strip()]
+    lines: list[str] = []
+    if availability:
+        lines.append("Workspace availability:")
+        lines.extend(f"- {item}" for item in availability)
+    if tools:
+        if lines:
+            lines.append("")
+        lines.append("Available tools:")
+        lines.extend(f"- {item}" for item in tools)
+    return "\n".join(lines).strip()

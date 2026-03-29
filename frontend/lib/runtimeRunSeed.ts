@@ -16,6 +16,13 @@ export type RuntimeRunSeed = {
   active_profile_label?: string | null;
   active_profile_provider?: string | null;
   active_profile_model?: string | null;
+  requested_provider?: string | null;
+  effective_provider?: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  provider_overridden?: boolean;
+  model_overridden?: boolean;
+  fallback_used?: boolean;
   execution_target_selected?: string | null;
 };
 
@@ -40,6 +47,13 @@ function normalizeSeed(raw: unknown): RuntimeRunSeed | null {
     active_profile_label: String(raw.active_profile_label || '').trim() || null,
     active_profile_provider: String(raw.active_profile_provider || '').trim() || null,
     active_profile_model: String(raw.active_profile_model || '').trim() || null,
+    requested_provider: String(raw.requested_provider || '').trim() || null,
+    effective_provider: String(raw.effective_provider || '').trim() || null,
+    requested_model: String(raw.requested_model || '').trim() || null,
+    effective_model: String(raw.effective_model || '').trim() || null,
+    provider_overridden: typeof raw.provider_overridden === 'boolean' ? raw.provider_overridden : undefined,
+    model_overridden: typeof raw.model_overridden === 'boolean' ? raw.model_overridden : undefined,
+    fallback_used: typeof raw.fallback_used === 'boolean' ? raw.fallback_used : undefined,
     execution_target_selected: String(raw.execution_target_selected || '').trim() || null,
   };
 }

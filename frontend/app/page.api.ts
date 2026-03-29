@@ -49,6 +49,94 @@ export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
 const SCREENSHOT_PATH_PATTERN = /\.(png|jpg|jpeg|webp)$/i;
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';
+const PROVIDER_POLL_MIN_INTERVAL_MS = 30_000;
+const MODEL_ALIAS_DEBOUNCE_MS = 120;
+const PROVIDER_CATALOG_DEBOUNCE_MS = 260;
+const PROVIDER_MODELS_DEBOUNCE_MS = 420;
+
+type TimedResourceCache<T> = {
+  value: T | null;
+  fetchedAt: number;
+  promise: Promise<T> | null;
+};
+
+const modelAliasCatalogCache: TimedResourceCache<ModelAliasOption[]> = {
+  value: null,
+  fetchedAt: 0,
+  promise: null,
+};
+
+const providerCatalogCache: TimedResourceCache<ProviderOption[]> = {
+  value: null,
+  fetchedAt: 0,
+  promise: null,
+};
+
+const providerModelsCache = new Map<string, TimedResourceCache<string[]>>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function readFreshCache<T>(cache: TimedResourceCache<T>, staleMs: number): T | null {
+  if (cache.value === null) return null;
+  return Date.now() - cache.fetchedAt < staleMs ? cache.value : null;
+}
+
+function readAnyCache<T>(cache: TimedResourceCache<T>): T | null {
+  return cache.value;
+}
+
+function getProviderModelsCacheKey(providerId: ProviderId, credentialId?: string): string {
+  return `${providerId}::${String(credentialId || '').trim()}`;
+}
+
+function getProviderModelsCacheEntry(providerId: ProviderId, credentialId?: string): TimedResourceCache<string[]> {
+  const key = getProviderModelsCacheKey(providerId, credentialId);
+  let cache = providerModelsCache.get(key);
+  if (!cache) {
+    cache = { value: null, fetchedAt: 0, promise: null };
+    providerModelsCache.set(key, cache);
+  }
+  return cache;
+}
+
+async function getOrRefreshCachedResource<T>(
+  cache: TimedResourceCache<T>,
+  staleMs: number,
+  debounceMs: number,
+  loader: () => Promise<T>,
+  fallback: () => T,
+): Promise<T> {
+  const fresh = readFreshCache(cache, staleMs);
+  if (fresh !== null) return fresh;
+  if (cache.promise) return cache.promise;
+
+  cache.promise = (async () => {
+    if (debounceMs > 0) {
+      await sleep(debounceMs);
+      const refreshedDuringDebounce = readFreshCache(cache, staleMs);
+      if (refreshedDuringDebounce !== null) return refreshedDuringDebounce;
+    }
+    try {
+      const next = await loader();
+      cache.value = next;
+      cache.fetchedAt = Date.now();
+      return next;
+    } catch {
+      const existing = readAnyCache(cache);
+      if (existing !== null) return existing;
+      const next = fallback();
+      cache.value = next;
+      cache.fetchedAt = Date.now();
+      return next;
+    } finally {
+      cache.promise = null;
+    }
+  })();
+
+  return cache.promise;
+}
 
 function resolveAgentProfileSkills(agentRole: string | null | undefined): ReturnType<typeof resolveSkillsByIds> {
   const roleId = String(agentRole || '').trim();
@@ -85,6 +173,59 @@ type RuntimeAccountAvailabilityItem = {
   source_label?: string;
   detail?: string;
   profile_count?: number;
+};
+
+export type OperatorChatActionPayload = {
+  id: string;
+  kind: 'run' | 'workflow' | 'connect' | 'open';
+  label: string;
+  variant?: 'primary' | 'secondary';
+  href?: string | null;
+  goal?: string | null;
+};
+
+export type OperatorChatPriorMessagePayload = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type OperatorChatContextUsedPayload = {
+  tool_capabilities?: Array<{
+    id: string;
+    label: string;
+    connected: boolean;
+    authenticated?: boolean | null;
+    runtime_usable?: boolean | null;
+    read_actions?: string[];
+    write_actions?: string[];
+    approval_required_actions?: string[];
+  }>;
+  workspace: string;
+  requested_provider?: string | null;
+  effective_provider?: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  provider_overridden?: boolean;
+  model_overridden?: boolean;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
+  reasoning_effort?: string | null;
+  connected_systems?: string[];
+  prior_messages_used: boolean;
+  history_mode: 'none' | 'raw_messages' | 'summary';
+  run_created: boolean;
+};
+
+export type OperatorChatResponsePayload = {
+  reply: string;
+  actions?: OperatorChatActionPayload[];
+  mode?: string;
+  usage_masked?: Record<string, unknown> | null;
+  provider?: string | null;
+  model?: string | null;
+  attempted_providers?: string;
+  error?: string;
+  context_used?: OperatorChatContextUsedPayload | null;
 };
 
 export function humanizeError(message: string): string {
@@ -133,6 +274,24 @@ function describeLocalExecutionOperation(operation: LocalExecutionDraft['operati
   if (operation.fileMode === 'read') return path ? `read ${path}` : 'read file';
   if (operation.fileMode === 'append') return path ? `append ${path}` : 'append file';
   return path ? `write ${path}` : 'write file';
+}
+
+function normalizeOperatorChatPriorMessages(
+  items: OperatorChatPriorMessagePayload[] | undefined,
+): OperatorChatPriorMessagePayload[] {
+  if (!Array.isArray(items)) return [];
+  const bounded = items
+    .map((item) => ({
+      role: (item?.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: String(item?.content || '').replace(/\s+/g, ' ').trim(),
+    }))
+    .filter((item) => item.content.length > 0)
+    .slice(-6)
+    .map((item) => ({
+      ...item,
+      content: item.content.length > 280 ? `${item.content.slice(0, 279).trimEnd()}…` : item.content,
+    }));
+  return bounded;
 }
 
 export function usePlatformApi(state: PageState, streamRef: MutableRefObject<AuthenticatedEventStreamConnection | null>) {
@@ -185,9 +344,11 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setTopError,
     setCredentials,
     setCredentialId,
+    setupStatus,
     setSetupStatus,
     setIsCredentialsLoading,
     setIsConnectorsLoading,
+    connectorCredentials,
     setConnectorCredentials,
     setConnectorCredentialId,
     setConnectorType,
@@ -444,105 +605,112 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   }, [setWorkersLoading, setLocalWorkerStatus]);
 
   const refreshModelAliasCatalog = useCallback(async (): Promise<ModelAliasOption[]> => {
-    try {
-      const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
-      if (!res.ok) {
-        throw new Error('Failed to load model aliases.');
-      }
-      const payload = await res.json();
-      const items = Array.isArray(payload?.models) ? payload.models : [];
-      const mapped = items
-        .map((item: unknown) => {
-          const value = item as {
-            alias?: unknown;
-            provider?: unknown;
-            model?: unknown;
-            resolved_model?: unknown;
-            is_global_default?: unknown;
-            is_provider_default?: unknown;
-          };
-          const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
-          const providerId = normalizeProviderId(rawProvider);
-          const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
-          const modelId = typeof value.model === 'string' ? value.model.trim() : '';
-          const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
-          if (!rawProvider || !alias || !modelId || !resolvedModel || !isProviderId(providerId)) return null;
-          return {
-            alias,
-            provider: providerId,
-            model: modelId,
-            resolvedModel,
-            isGlobalDefault: Boolean(value.is_global_default),
-            isProviderDefault: Boolean(value.is_provider_default),
-          } satisfies ModelAliasOption;
-        })
-        .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
-      if (mapped.length > 0) {
-        setModelAliases(mapped);
-        return mapped;
-      }
-    } catch {
-      // Keep fallback aliases when the catalog endpoint is unavailable.
-    }
-    return modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS;
-  }, [controlPlaneFetch, modelAliases, setModelAliases]);
+    const aliases = await getOrRefreshCachedResource(
+      modelAliasCatalogCache,
+      PROVIDER_POLL_MIN_INTERVAL_MS,
+      MODEL_ALIAS_DEBOUNCE_MS,
+      async () => {
+        const res = await controlPlaneFetch('/api/control-plane/providers/model-aliases');
+        if (!res.ok) {
+          throw new Error('Failed to load model aliases.');
+        }
+        const payload = await res.json();
+        const items = Array.isArray(payload?.models) ? payload.models : [];
+        const mapped = items
+          .map((item: unknown) => {
+            const value = item as {
+              alias?: unknown;
+              provider?: unknown;
+              model?: unknown;
+              resolved_model?: unknown;
+              is_global_default?: unknown;
+              is_provider_default?: unknown;
+            };
+            const rawProvider = typeof value.provider === 'string' ? value.provider.trim().toLowerCase() : '';
+            const providerId = normalizeProviderId(rawProvider);
+            const alias = typeof value.alias === 'string' ? value.alias.trim() : '';
+            const modelId = typeof value.model === 'string' ? value.model.trim() : '';
+            const resolvedModel = typeof value.resolved_model === 'string' ? value.resolved_model.trim() : '';
+            if (!rawProvider || !alias || !modelId || !resolvedModel || !isProviderId(providerId)) return null;
+            return {
+              alias,
+              provider: providerId,
+              model: modelId,
+              resolvedModel,
+              isGlobalDefault: Boolean(value.is_global_default),
+              isProviderDefault: Boolean(value.is_provider_default),
+            } satisfies ModelAliasOption;
+          })
+          .filter((item: ModelAliasOption | null): item is ModelAliasOption => item !== null);
+        return mapped.length > 0 ? mapped : DEFAULT_MODEL_ALIAS_OPTIONS;
+      },
+      () => readAnyCache(modelAliasCatalogCache) ?? DEFAULT_MODEL_ALIAS_OPTIONS,
+    );
+    setModelAliases(aliases);
+    return aliases;
+  }, [controlPlaneFetch, setModelAliases]);
 
   const refreshProviderCatalog = useCallback(async () => {
-    try {
-      const aliases = await refreshModelAliasCatalog();
-      const res = await controlPlaneFetch('/api/control-plane/providers');
-      if (!res.ok) return;
-      const payload = await res.json();
-      const items = Array.isArray(payload?.providers) ? payload.providers : [];
-      const mapped: ProviderOption[] = items
-        .map((item: unknown) => {
-          const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
-          const rawId = typeof i.id === 'string' ? i.id.trim().toLowerCase() : '';
-          const id = normalizeProviderId(rawId);
-          if (!isProviderId(id)) return null;
-          const fallback = DEFAULT_PROVIDER_OPTIONS.find((entry) => entry.id === id);
-          const authModes = Array.isArray(i.auth_modes)
-            ? i.auth_modes
-                .filter((value): value is { id?: unknown; label?: unknown; secret_required?: unknown } => Boolean(value && typeof value === 'object'))
-                .map((value) => ({
-                  id: typeof value.id === 'string' ? value.id : 'api_key',
-                  label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : String(value.id || 'API Key'),
-                  secretRequired: Boolean(value.secret_required),
-                }))
-            : fallback?.authModes ?? [];
-          return {
-            id,
-            label: typeof i.label === 'string' && i.label.trim() ? i.label.trim() : fallback?.label ?? id,
-            defaultModel: (() => {
-              const rawDefaultModel =
-                typeof i.default_model === 'string' && i.default_model.trim()
-                  ? i.default_model.trim()
-                  : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0];
-              return resolveModelAlias(id, rawDefaultModel, aliases) ?? rawDefaultModel;
-            })(),
-            auth: Array.isArray(i.auth) ? i.auth.filter((v) => typeof v === 'string') as string[] : fallback?.auth ?? ['api_key'],
-            defaultAuthMode:
-              typeof i.default_auth_mode === 'string' && i.default_auth_mode.trim()
-                ? i.default_auth_mode.trim()
-                : fallback?.defaultAuthMode ?? fallback?.auth[0] ?? 'api_key',
-            authModes,
-            note: typeof i.note === 'string' && i.note.trim() ? i.note.trim() : fallback?.note,
-          } as ProviderOption;
-        })
-        .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
-      if (mapped.length > 0) {
-        setProviderOptions(mapped);
-      }
-    } catch {
-      // Keep defaults when catalog cannot be fetched.
-    }
+    const catalog = await getOrRefreshCachedResource(
+      providerCatalogCache,
+      PROVIDER_POLL_MIN_INTERVAL_MS,
+      PROVIDER_CATALOG_DEBOUNCE_MS,
+      async () => {
+        const aliases = await refreshModelAliasCatalog();
+        const res = await controlPlaneFetch('/api/control-plane/providers');
+        if (!res.ok) {
+          throw new Error('Failed to load provider catalog.');
+        }
+        const payload = await res.json();
+        const items = Array.isArray(payload?.providers) ? payload.providers : [];
+        const mapped: ProviderOption[] = items
+          .map((item: unknown) => {
+            const i = item as { id?: unknown; label?: unknown; default_model?: unknown; auth?: unknown; auth_modes?: unknown; default_auth_mode?: unknown; note?: unknown };
+            const rawId = typeof i.id === 'string' ? i.id.trim().toLowerCase() : '';
+            const id = normalizeProviderId(rawId);
+            if (!isProviderId(id)) return null;
+            const fallback = DEFAULT_PROVIDER_OPTIONS.find((entry) => entry.id === id);
+            const authModes = Array.isArray(i.auth_modes)
+              ? i.auth_modes
+                  .filter((value): value is { id?: unknown; label?: unknown; secret_required?: unknown } => Boolean(value && typeof value === 'object'))
+                  .map((value) => ({
+                    id: typeof value.id === 'string' ? value.id : 'api_key',
+                    label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : String(value.id || 'API Key'),
+                    secretRequired: Boolean(value.secret_required),
+                  }))
+              : fallback?.authModes ?? [];
+            return {
+              id,
+              label: typeof i.label === 'string' && i.label.trim() ? i.label.trim() : fallback?.label ?? id,
+              defaultModel: (() => {
+                const rawDefaultModel =
+                  typeof i.default_model === 'string' && i.default_model.trim()
+                    ? i.default_model.trim()
+                    : fallback?.defaultModel ?? DEFAULT_PROVIDER_MODELS[id][0];
+                return resolveModelAlias(id, rawDefaultModel, aliases) ?? rawDefaultModel;
+              })(),
+              auth: Array.isArray(i.auth) ? i.auth.filter((v) => typeof v === 'string') as string[] : fallback?.auth ?? ['api_key'],
+              defaultAuthMode:
+                typeof i.default_auth_mode === 'string' && i.default_auth_mode.trim()
+                  ? i.default_auth_mode.trim()
+                  : fallback?.defaultAuthMode ?? fallback?.auth[0] ?? 'api_key',
+              authModes,
+              note: typeof i.note === 'string' && i.note.trim() ? i.note.trim() : fallback?.note,
+            } as ProviderOption;
+          })
+          .filter((item: ProviderOption | null): item is ProviderOption => item !== null);
+        return mapped.length > 0 ? mapped : DEFAULT_PROVIDER_OPTIONS;
+      },
+      () => readAnyCache(providerCatalogCache) ?? DEFAULT_PROVIDER_OPTIONS,
+    );
+    setProviderOptions(catalog);
   }, [controlPlaneFetch, refreshModelAliasCatalog, setProviderOptions]);
 
   const refreshProviderModels = useCallback(
     async (providerId: ProviderId, credentialForProvider?: string) => {
-      const aliases = modelAliases.length > 0 ? modelAliases : await refreshModelAliasCatalog();
+      const aliases = readAnyCache(modelAliasCatalogCache) ?? await refreshModelAliasCatalog();
       const fallbackOption =
-        providerOptions.find((item) => item.id === providerId) ||
+        (readAnyCache(providerCatalogCache) ?? DEFAULT_PROVIDER_OPTIONS).find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === providerId) ||
         DEFAULT_PROVIDER_OPTIONS[0];
       const fallbackModels = mapModelOptionsToAliases(
@@ -561,27 +729,40 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         return;
       }
 
+      const modelsCache = getProviderModelsCacheEntry(providerId, credentialForProvider);
+      const freshModels = readFreshCache(modelsCache, PROVIDER_POLL_MIN_INTERVAL_MS);
+      if (freshModels !== null) {
+        setModelOptions(freshModels);
+        setModel((prev) => resolveSelectedModel(prev, freshModels));
+        return;
+      }
+
       setModelsLoading(true);
       try {
-        const search = new URLSearchParams({ workspace_id: WORKSPACE_ID });
-        if (credentialForProvider) {
-          search.set('credential_id', credentialForProvider);
-        }
-        const res = await controlPlaneFetch(`/api/control-plane/providers/${encodeURIComponent(providerId)}/models?${search.toString()}`);
-        if (!res.ok) {
-          setModelOptions(fallbackModels);
-          setModel((prev) => resolveSelectedModel(prev, fallbackModels));
-          return;
-        }
-        const payload = await res.json();
-        const rawModels = Array.isArray(payload?.models) ? payload.models : [];
-        const models = rawModels
-          .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
-          .slice(0, 120);
-        const nextModels =
-          models.length > 0
-            ? mapModelOptionsToAliases(providerId, models, aliases)
-            : fallbackModels;
+        const nextModels = await getOrRefreshCachedResource(
+          modelsCache,
+          PROVIDER_POLL_MIN_INTERVAL_MS,
+          PROVIDER_MODELS_DEBOUNCE_MS,
+          async () => {
+            const search = new URLSearchParams({ workspace_id: WORKSPACE_ID });
+            if (credentialForProvider) {
+              search.set('credential_id', credentialForProvider);
+            }
+            const res = await controlPlaneFetch(`/api/control-plane/providers/${encodeURIComponent(providerId)}/models?${search.toString()}`);
+            if (!res.ok) {
+              throw new Error('Failed to load provider models.');
+            }
+            const payload = await res.json();
+            const rawModels = Array.isArray(payload?.models) ? payload.models : [];
+            const models = rawModels
+              .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+              .slice(0, 120);
+            return models.length > 0
+              ? mapModelOptionsToAliases(providerId, models, aliases)
+              : fallbackModels;
+          },
+          () => readAnyCache(modelsCache) ?? fallbackModels,
+        );
         setModelOptions(nextModels);
         setModel((prev) => resolveSelectedModel(prev, nextModels));
       } catch {
@@ -591,7 +772,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         setModelsLoading(false);
       }
     },
-    [connectionMode, controlPlaneFetch, modelAliases, providerOptions, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
+    [connectionMode, controlPlaneFetch, refreshModelAliasCatalog, setModelsLoading, setModelOptions, setModel],
   );
 
   const hasRuntimeProviderAccount = useCallback(async (providerId: ProviderId) => {
@@ -1703,6 +1884,60 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
 
+  const buildOperatorChatAvailability = useCallback(() => ({
+    ai_ready: Boolean(setupStatus?.accountConnected && setupStatus?.connectionTested),
+    runtime_ok: Boolean(setupStatus?.runtimeReady),
+    provider: provider,
+    provider_label: providerOptions.find((item) => item.id === provider)?.label || provider,
+    connection_mode: connectionMode,
+  }), [connectionMode, provider, providerOptions, setupStatus?.accountConnected, setupStatus?.connectionTested, setupStatus?.runtimeReady]);
+
+  const sendOperatorChat = useCallback(async (
+    message: string,
+    options?: {
+      reasoningEffort?: string | null;
+      threadId?: string | null;
+      priorMessages?: OperatorChatPriorMessagePayload[];
+    },
+  ): Promise<OperatorChatResponsePayload> => {
+    const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
+    await ensureControlPlaneSession();
+    const res = await fetch('/api/chat/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: WORKSPACE_ID,
+        thread_id: options?.threadId || undefined,
+        message: message.trim(),
+        provider,
+        model,
+        reasoning_effort: options?.reasoningEffort || undefined,
+        availability: buildOperatorChatAvailability(),
+        prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      throw new Error(await readResponseMessage(res, 'Failed to get assistant reply.'));
+    }
+    const payload = await res.json();
+    return {
+      reply: typeof payload?.reply === 'string' ? payload.reply : '',
+      actions: Array.isArray(payload?.actions) ? payload.actions as OperatorChatActionPayload[] : [],
+      mode: typeof payload?.mode === 'string' ? payload.mode : undefined,
+      usage_masked: payload?.usage_masked && typeof payload.usage_masked === 'object'
+        ? payload.usage_masked as Record<string, unknown>
+        : null,
+      provider: typeof payload?.provider === 'string' ? payload.provider : null,
+      model: typeof payload?.model === 'string' ? payload.model : null,
+      attempted_providers: typeof payload?.attempted_providers === 'string' ? payload.attempted_providers : undefined,
+      error: typeof payload?.error === 'string' ? payload.error : undefined,
+      context_used: payload?.context_used && typeof payload.context_used === 'object'
+        ? payload.context_used as OperatorChatContextUsedPayload
+        : null,
+    };
+  }, [buildOperatorChatAvailability, model, provider]);
+
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {
     const operations = Array.isArray(draft.operations) ? draft.operations : [];
     if (operations.length === 0) return 'Run a local execution plan.';
@@ -1710,6 +1945,219 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     const suffix = operations.length > 3 ? ` +${operations.length - 3} more` : '';
     return `Run local execution plan: ${labels.join(' · ')}${suffix}`;
   }, []);
+
+  const startOperatorRun = useCallback(async (
+    input: { goal: string; agentRole?: AgentRoleId; metadata?: Record<string, unknown> },
+  ) => {
+    const effectiveGoal = input.goal.trim();
+    const effectiveAgentRole = input.agentRole || state.selectedAgentRole;
+    if (!effectiveGoal) {
+      state.setTopError(`Tell ${BRAND.assistant} what you want done first.`);
+      return null;
+    }
+    if (state.status === 'running' || state.status === 'queued_local') return null;
+    if (state.connectionMode === 'byok' && !state.credentialId) {
+      state.setTopError('Connect your AI account first.');
+      return null;
+    }
+
+    closeStream();
+    state.setTopError(null);
+    state.setLogs([]);
+    state.setRunId(null);
+    state.setPendingApprovalId(null);
+    state.setLastRouteInfo(null);
+    state.setPackResult(null);
+    state.setLastRunPayload(null);
+    state.setStatus('running');
+    state.setIsStarting(true);
+
+    try {
+      state.setIsChecking(true);
+      const checks = await fetchDoctorChecks();
+      const failCheck = checks.find((check) => check.status === 'fail');
+      if (failCheck) {
+        const problem = [failCheck.detail || 'System setup failed.', failCheck.recommendation || ''].filter(Boolean).join(' ');
+        throw new Error(problem);
+      }
+      if (state.connectionMode === 'managed') {
+        const hasRuntimeAccount = await hasRuntimeProviderAccount(state.provider);
+        if (!hasRuntimeAccount) {
+          const providerLabel = state.providerOptions.find((item) => item.id === state.provider)?.label || state.provider;
+          throw new Error(`${providerLabel} runtime account is not ready. Open Setup and connect a direct ${providerLabel} account.`);
+        }
+      }
+      state.setIsChecking(false);
+
+      await ensureControlPlaneSession();
+      const runRes = await fetch('/api/runs/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engine: 'orion',
+          user_goal: effectiveGoal,
+          agent_role: effectiveAgentRole,
+          provider: state.provider,
+          model: state.model,
+          credential_id: state.connectionMode === 'byok' ? state.credentialId : undefined,
+          metadata: {
+            source: 'operator_chat',
+            direct_chat: true,
+            connection_mode: state.connectionMode,
+            execution_target: state.connectionMode === 'local_companion' ? 'local_companion' : 'auto',
+            ...(input.metadata || {}),
+          },
+        }),
+      });
+
+      if (!runRes.ok) {
+        if (runRes.status === 401) throw new Error('Invalid API key.');
+        throw new Error(await readResponseMessage(runRes, 'Failed to start operator run.'));
+      }
+
+      const runPayload = await runRes.json();
+      state.setLastRunPayload(runPayload as Record<string, unknown>);
+      const nextRunId = runPayload?.run_id;
+      if (!nextRunId) throw new Error('Run ID missing.');
+
+      const route = runPayload?.route;
+      if (route && typeof route === 'object') {
+        state.setLastRouteInfo(route);
+        if (route.selected === 'local_companion') state.setStatus('queued_local');
+      }
+      const pending = runPayload?.pending_approval;
+      if (pending && typeof pending === 'object') {
+        const approvalId = String((pending as { approval_id?: unknown }).approval_id || '').trim();
+        if (approvalId) {
+          state.setPendingApprovalId(approvalId);
+          state.setStatus('waiting');
+        }
+      }
+
+      state.setRunId(nextRunId);
+      upsertSeededRuntimeRun({
+        run_id: nextRunId,
+        status: 'running',
+        workflow_name: 'Operator run',
+        user_goal: effectiveGoal,
+        created_at: new Date().toISOString(),
+        agent_role: effectiveAgentRole,
+        triggered_by: 'Chat',
+        active_profile_id: typeof runPayload?.active_profile_id === 'string' ? runPayload.active_profile_id : null,
+        active_profile_label: typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
+        active_profile_provider:
+          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : null,
+        active_profile_model:
+          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : null,
+        requested_provider:
+          typeof runPayload?.requested_provider === 'string' ? runPayload.requested_provider : null,
+        effective_provider:
+          typeof runPayload?.effective_provider === 'string'
+            ? runPayload.effective_provider
+            : null,
+        requested_model:
+          typeof runPayload?.requested_model === 'string' ? runPayload.requested_model : null,
+        effective_model:
+          typeof runPayload?.effective_model === 'string'
+            ? runPayload.effective_model
+            : null,
+        provider_overridden: typeof runPayload?.provider_overridden === 'boolean' ? runPayload.provider_overridden : undefined,
+        model_overridden: typeof runPayload?.model_overridden === 'boolean' ? runPayload.model_overridden : undefined,
+        fallback_used: typeof runPayload?.fallback_used === 'boolean' ? runPayload.fallback_used : undefined,
+        execution_target_selected:
+          route && typeof route.selected === 'string'
+            ? route.selected
+            : state.connectionMode === 'local_companion'
+              ? 'local_companion'
+              : 'auto',
+      });
+      appendLog(
+        buildRunStartedMessage(
+          typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
+          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : state.provider,
+          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : state.model,
+        ),
+      );
+      void fetchLocalWorkerStatus(true);
+      void fetchRuntimeMetrics();
+      state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
+
+      const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
+      const source = openAuthenticatedEventStream({
+        url: streamUrl,
+        onEvent: (event) => {
+          if (event.event === 'pause') {
+            state.setStatus('waiting');
+            appendLog(RUN_WAITING_STATUS_COPY, 'warn');
+            return;
+          }
+          if (event.event !== 'log') {
+            appendLog(String(event.data || ''), 'info', event.event || 'stream_raw');
+            return;
+          }
+          const parsed = parseJson(event.data) as {
+            event?: string;
+            message?: string;
+            level?: LogLevel;
+            data?: { node_id?: string; approval_id?: string; pack_id?: string };
+          } | null;
+          if (parsed && typeof parsed === 'object') {
+            const evt = parsed.event || '';
+            const msg = evt === 'run_error' ? humanizeError(parsed.message || '') : parsed.message || event.data;
+            const level = (parsed.level as LogLevel) || 'info';
+            if (evt === 'local_queued') { state.setStatus('queued_local'); void fetchLocalWorkerStatus(true); }
+            if (evt === 'local_claimed') { state.setStatus('running'); void fetchLocalWorkerStatus(true); }
+            if (evt === 'approval_requested' || evt === 'approval_waiting' || evt === 'approval_required') {
+              const approvalId = parsed.data?.approval_id;
+              if (approvalId) state.setPendingApprovalId(approvalId);
+              state.setStatus('waiting');
+              void fetchRunResult(nextRunId);
+            }
+            if (['approval_received', 'approval_resolved', 'approval_skipped'].includes(evt)) state.setPendingApprovalId(null);
+            if (evt === 'approval_timeout') { state.setPendingApprovalId(null); state.setStatus('error'); }
+            appendLog(msg, level, evt || undefined, parsed.data?.node_id);
+            if (evt === 'run_complete') {
+              state.setStatus('completed');
+              state.setPendingApprovalId(null);
+              void fetchLocalWorkerStatus(true);
+              void fetchRunResult(nextRunId);
+            }
+            if (evt === 'run_error') {
+              state.setStatus('error');
+              state.setPendingApprovalId(null);
+              void fetchLocalWorkerStatus(true);
+            }
+            return;
+          }
+          appendLog(String(event.data), 'info', 'stream_raw');
+        },
+        onError: () => {
+          if (streamRef.current === source) streamRef.current = null;
+          appendLog('Stream disconnected. Syncing...', 'warn');
+          void fetchLocalWorkerStatus(true);
+          void (async () => {
+            const synced = await fetchRunResult(nextRunId);
+            if (synced) state.setStatus(synced as RunStatus);
+            else state.setStatus((current) => (current === 'running' ? 'error' : current));
+          })();
+        },
+        onClose: () => {
+          if (streamRef.current === source) streamRef.current = null;
+        },
+      });
+      streamRef.current = source;
+      return runPayload as Record<string, unknown>;
+    } catch (error: unknown) {
+      const message = humanizeError(error instanceof Error ? error.message : 'Operator run failed.');
+      state.setStatus('error');
+      state.setTopError(message);
+      appendLog(message, 'error');
+      return null;
+    } finally {
+      state.setIsChecking(false);
+      state.setIsStarting(false);
+    }
+  }, [appendLog, closeStream, fetchDoctorChecks, fetchLocalWorkerStatus, fetchRunResult, fetchRuntimeMetrics, hasRuntimeProviderAccount, state, streamRef]);
 
   const startAutopilot = useCallback(async (overrides?: { goal?: string; agentRole?: AgentRoleId; metadata?: Record<string, unknown> }) => {
     if (state.status === 'running' || state.status === 'queued_local') return;
@@ -1975,9 +2423,24 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         active_profile_id: typeof runPayload?.active_profile_id === 'string' ? runPayload.active_profile_id : null,
         active_profile_label: typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
         active_profile_provider:
-          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : state.provider,
+          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : null,
         active_profile_model:
-          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : state.model,
+          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : null,
+        requested_provider:
+          typeof runPayload?.requested_provider === 'string' ? runPayload.requested_provider : null,
+        effective_provider:
+          typeof runPayload?.effective_provider === 'string'
+            ? runPayload.effective_provider
+            : null,
+        requested_model:
+          typeof runPayload?.requested_model === 'string' ? runPayload.requested_model : null,
+        effective_model:
+          typeof runPayload?.effective_model === 'string'
+            ? runPayload.effective_model
+            : null,
+        provider_overridden: typeof runPayload?.provider_overridden === 'boolean' ? runPayload.provider_overridden : undefined,
+        model_overridden: typeof runPayload?.model_overridden === 'boolean' ? runPayload.model_overridden : undefined,
+        fallback_used: typeof runPayload?.fallback_used === 'boolean' ? runPayload.fallback_used : undefined,
         execution_target_selected:
           route && typeof route.selected === 'string'
             ? route.selected
@@ -2110,6 +2573,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     checkCompatibility,
     submitDecision,
     fetchRunResult,
+    sendOperatorChat,
+    startOperatorRun,
     startAutopilot,
   };
 }

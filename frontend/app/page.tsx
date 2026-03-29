@@ -28,6 +28,11 @@ import {
   normalizeChatContent,
   sanitizeChatStore,
   upsertSessionMessages,
+  type ChatContextUsedRecord,
+  type ChatMessageActionRecord,
+  type ChatRunCardApprovalRecord,
+  type ChatRunCardRecord,
+  type ChatRunCardStatus,
   type ChatSessionSelectDetail,
   type ChatStoreRecord,
 } from '@/components/orion/chat/chatSchema';
@@ -84,6 +89,21 @@ type AssistantProfileMeta = {
   backendRole: AgentRoleId;
 };
 
+type ChatDepthValue = 'low' | 'medium' | 'high';
+
+type PendingSimpleChatResponse = {
+  sessionId: string;
+  messageId: string;
+  goal: string;
+};
+
+type PendingSimpleRun = {
+  sessionId: string;
+  messageId: string;
+  runId: string | null;
+  goal: string;
+};
+
 const ASSISTANT_PROFILE_LIBRARY: AssistantProfileMeta[] = [
   { id: 'support', label: 'Support', subtitle: 'Customer replies, inbox triage, and follow-up', backendRole: 'support' },
   { id: 'research', label: 'Research', subtitle: 'Briefs, analysis, memory, and synthesis', backendRole: 'research' },
@@ -91,6 +111,12 @@ const ASSISTANT_PROFILE_LIBRARY: AssistantProfileMeta[] = [
   { id: 'crypto-analyst', label: 'Crypto Analyst', subtitle: 'Market research, watchlists, and risk review', backendRole: 'research' },
   { id: 'private-assistant', label: 'Personal', subtitle: 'Planning, study, reminders, and daily organization', backendRole: 'private-assistant' },
   { id: 'custom', label: 'General', subtitle: 'Flexible general assistant for mixed work', backendRole: 'orchestrator' },
+];
+
+const CHAT_DEPTH_OPTIONS: Array<{ value: ChatDepthValue; label: string; description: string }> = [
+  { value: 'low', label: 'Quick', description: 'Fastest response' },
+  { value: 'medium', label: 'Standard', description: 'Balanced depth' },
+  { value: 'high', label: 'Deep', description: 'More reasoning' },
 ];
 
 function normalizeAssistantProfileId(value: unknown): StoredAssistantProfileId {
@@ -101,13 +127,19 @@ function getAssistantProfileMeta(profileId: StoredAssistantProfileId): Assistant
   return ASSISTANT_PROFILE_LIBRARY.find((item) => item.id === profileId) || ASSISTANT_PROFILE_LIBRARY[ASSISTANT_PROFILE_LIBRARY.length - 1];
 }
 
+function truncateChatContext(value: string, limit = 84): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'No conversation yet';
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1).trimEnd()}…` : normalized;
+}
+
 type PendingWorkbenchChat = {
   agentRole: string;
   placeholderId: string;
   runId: string | null;
 };
 
-type SimpleChatPermissionScope = 'once' | 'workflow' | 'agent';
+type SimpleChatPermissionScope = 'once';
 
 type SimpleChatPermissionPrompt = {
   runId: string;
@@ -115,8 +147,11 @@ type SimpleChatPermissionPrompt = {
   prompt: string;
   labels: string[];
   capabilities: string[];
-  canRememberWorkflow: boolean;
-  canRememberAgent: boolean;
+  actions: string[];
+  target?: string | null;
+  scope: 'once';
+  reusable: boolean;
+  consequence?: string | null;
 };
 
 type WorkbenchAgentChannelBinding = {
@@ -140,6 +175,13 @@ type HomeWorkspaceRunItem = {
   execution_target_selected?: string | null;
   usage_provider?: string | null;
   usage_model?: string | null;
+  requested_provider?: string | null;
+  effective_provider?: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  provider_overridden?: boolean;
+  model_overridden?: boolean;
+  fallback_used?: boolean;
 };
 
 type HomeWorkspaceApprovalItem = {
@@ -296,6 +338,13 @@ type ControlCenterSnapshot = {
     result_summary: string | null;
     usage_provider?: string | null;
     usage_model?: string | null;
+    requested_provider?: string | null;
+    effective_provider?: string | null;
+    requested_model?: string | null;
+    effective_model?: string | null;
+    provider_overridden?: boolean;
+    model_overridden?: boolean;
+    fallback_used?: boolean;
     execution_target_selected?: string | null;
   }>;
   homeOverview: HomeLiveOverview;
@@ -829,10 +878,277 @@ function resolveWorkbenchMessageStatus(
   return status === 'error' ? 'error' : 'running';
 }
 
+function shouldHoldForStructuredReply(
+  status: string,
+  lastRunPayload: Record<string, unknown> | null,
+  latestRunSummary: string | null,
+  topError: string | null,
+): boolean {
+  if (!['completed', 'error'].includes(status)) return false;
+  if (hasStructuredAssistantReply(lastRunPayload, latestRunSummary)) return false;
+  if (status === 'error' && topError && topError.trim()) return false;
+  return true;
+}
+
 function extractRunIdFromPayload(lastRunPayload: Record<string, unknown> | null): string | null {
   if (!lastRunPayload || typeof lastRunPayload !== 'object') return null;
   const runId = String(lastRunPayload.run_id || '').trim();
   return runId || null;
+}
+
+function matchLatestRunSummary(
+  expectedRunId: string | null,
+  latestRunId: string | null,
+  latestRunSummary: string | null,
+): string | null {
+  if (!expectedRunId || !latestRunId || expectedRunId !== latestRunId) return null;
+  return latestRunSummary;
+}
+
+function mapRunStatusToChatRunCardStatus(status: string): ChatRunCardStatus {
+  if (status === 'queued_local') return 'preparing';
+  if (status === 'running') return 'running';
+  if (status === 'waiting') return 'waiting';
+  if (status === 'completed') return 'completed';
+  return 'failed';
+}
+
+function humanizeRunCardLabel(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function humanizeProviderLabel(value: string): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Unknown';
+  if (normalized === 'openai') return 'OpenAI';
+  if (normalized === 'anthropic') return 'Anthropic';
+  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'vertex') return 'Vertex AI';
+  if (normalized === 'codex_cli') return 'Codex/OpenAI';
+  if (normalized === 'claude_code_cli') return 'Claude Code';
+  return humanizeRunCardLabel(normalized);
+}
+
+function readPendingApprovalRecord(payload: Record<string, unknown> | null): SimpleChatPermissionPrompt | null {
+  const pending = payload?.pending_approval;
+  if (!pending || typeof pending !== 'object') return null;
+  const pendingRecord = pending as Record<string, unknown>;
+  const approvalId = String(pendingRecord.approval_id || '').trim();
+  const prompt = String(pendingRecord.prompt || '').trim();
+  if (!approvalId || !prompt) return null;
+  const metadata = pendingRecord.metadata && typeof pendingRecord.metadata === 'object'
+    ? pendingRecord.metadata as Record<string, unknown>
+    : {};
+  return {
+    runId: String(payload?.run_id || '').trim(),
+    approvalId,
+    prompt,
+    labels: Array.isArray(metadata.approval_labels)
+      ? metadata.approval_labels.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    capabilities: Array.isArray(metadata.approval_capabilities)
+      ? metadata.approval_capabilities.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    actions: Array.isArray(pendingRecord.actions)
+      ? pendingRecord.actions.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    target: String(pendingRecord.target || '').trim() || null,
+    scope: 'once',
+    reusable: typeof pendingRecord.reusable === 'boolean' ? pendingRecord.reusable : false,
+    consequence: String(pendingRecord.consequence || '').trim() || null,
+  };
+}
+
+function summarizeCapabilitySystems(
+  items: NonNullable<ChatContextUsedRecord['tool_capabilities']> | undefined,
+  mode: 'connected' | 'usable' | 'unavailable' | 'unverified',
+): string {
+  const labels = (Array.isArray(items) ? items : [])
+    .filter((item) => {
+      if (mode === 'connected') return item.connected;
+      if (mode === 'usable') return item.runtime_usable === true;
+      if (mode === 'unavailable') return item.connected && item.runtime_usable === false;
+      return item.connected && item.runtime_usable == null;
+    })
+    .map((item) => item.label)
+    .filter(Boolean);
+  return labels.length > 0 ? labels.join(', ') : mode === 'connected' ? 'None' : 'Not verified';
+}
+
+function summarizeCapabilityActions(
+  items: NonNullable<ChatContextUsedRecord['tool_capabilities']> | undefined,
+  key: 'read_actions' | 'write_actions' | 'approval_required_actions',
+): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const values = Array.isArray(item[key]) ? item[key] : [];
+    for (const entry of values) {
+      const token = String(entry || '').trim();
+      if (!token || seen.has(token)) continue;
+      seen.add(token);
+      out.push(token);
+    }
+  }
+  return out.length > 0 ? out.join(', ') : 'Not verified';
+}
+
+function readRequestedProvider(payload: Record<string, unknown> | null): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const context = payload.context && typeof payload.context === 'object'
+    ? payload.context as Record<string, unknown>
+    : {};
+  return String(payload.requested_provider || context.provider || '').trim();
+}
+
+function readEffectiveProvider(payload: Record<string, unknown> | null): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const usageMasked = payload.usage_masked && typeof payload.usage_masked === 'object'
+    ? payload.usage_masked as Record<string, unknown>
+    : {};
+  return String(
+    payload.effective_provider
+    || usageMasked.provider
+    || payload.usage_provider
+    || payload.active_profile_provider
+    || '',
+  ).trim();
+}
+
+function readRequestedModel(payload: Record<string, unknown> | null): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const context = payload.context && typeof payload.context === 'object'
+    ? payload.context as Record<string, unknown>
+    : {};
+  return String(payload.requested_model || context.model || '').trim();
+}
+
+function readEffectiveModel(payload: Record<string, unknown> | null): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const usageMasked = payload.usage_masked && typeof payload.usage_masked === 'object'
+    ? payload.usage_masked as Record<string, unknown>
+    : {};
+  return String(
+    payload.effective_model
+    || usageMasked.model
+    || payload.usage_model
+    || payload.active_profile_model
+    || '',
+  ).trim();
+}
+
+function readRunFallbackUsed(payload: Record<string, unknown> | null): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  return Boolean(payload.fallback_used);
+}
+
+function truncateRunCardTitle(goal: string, limit = 58): string {
+  const compact = String(goal || '').replace(/\s+/g, ' ').trim();
+  if (!compact) return 'Execution';
+  return compact.length > limit ? `${compact.slice(0, limit - 1).trimEnd()}…` : compact;
+}
+
+function buildRunCardSummary(args: {
+  status: string;
+  lastRunPayload: Record<string, unknown> | null;
+  latestRunSummary: string | null;
+  topError: string | null;
+}): string {
+  const { status, lastRunPayload, latestRunSummary, topError } = args;
+  if (status === 'queued_local') return 'Preparing execution on your machine.';
+  if (status === 'running') return 'Working on this now.';
+  if (status === 'waiting') return 'Waiting for your approval to continue.';
+  if (status === 'error') return topError || 'This run needs attention.';
+  return extractWorkbenchReplyText(lastRunPayload, latestRunSummary, topError, status);
+}
+
+function buildRunCardMeta(lastRunPayload: Record<string, unknown> | null): ChatRunCardRecord['meta'] {
+  const meta: NonNullable<ChatRunCardRecord['meta']> = [];
+  if (!lastRunPayload || typeof lastRunPayload !== 'object') return meta;
+  meta.push({
+    id: 'request:summary',
+    label: 'Requested',
+    value: `${humanizeProviderLabel(readRequestedProvider(lastRunPayload))} · ${readRequestedModel(lastRunPayload) || 'Unknown'}`,
+  });
+  meta.push({
+    id: 'effective:summary',
+    label: 'Effective',
+    value: `${humanizeProviderLabel(readEffectiveProvider(lastRunPayload))} · ${readEffectiveModel(lastRunPayload) || 'Unknown'}`,
+  });
+  if (readRunFallbackUsed(lastRunPayload)) {
+    meta.push({ id: 'fallback:used', label: 'Fallback', value: 'Used' });
+  }
+  return meta.slice(0, 3);
+}
+
+function buildRunCardEvidence(lastRunPayload: Record<string, unknown> | null): ChatRunCardRecord['evidence'] {
+  if (!lastRunPayload || typeof lastRunPayload !== 'object') {
+    return [{ id: 'evidence:none', label: 'Evidence', value: 'No evidence captured' }];
+  }
+  const rawItems = Array.isArray(lastRunPayload.evidence_items) ? lastRunPayload.evidence_items : [];
+  const evidence = rawItems
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const label = String(record.label || '').trim();
+      const value = String(record.value || '').trim();
+      if (!label || !value) return null;
+      return {
+        id: String(record.id || `evidence:${index}`),
+        label,
+        value,
+      };
+    })
+    .filter((item): item is NonNullable<ChatRunCardRecord['evidence']>[number] => item !== null);
+  if (evidence.length === 0) {
+    return [{ id: 'evidence:none', label: 'Evidence', value: 'No evidence captured' }];
+  }
+  return evidence.slice(0, 4);
+}
+
+function buildRunCardApproval(
+  lastRunPayload: Record<string, unknown> | null,
+): ChatRunCardApprovalRecord | null {
+  const approval = readPendingApprovalRecord(lastRunPayload);
+  if (!approval) return null;
+  return {
+    prompt: approval.prompt,
+    labels: approval.labels,
+    capabilities: approval.capabilities,
+    actions: approval.actions,
+    target: approval.target,
+    scope: 'once',
+    reusable: approval.reusable,
+    consequence: approval.consequence,
+  };
+}
+
+function buildRunCardFromPayload(args: {
+  goal: string;
+  runId: string | null;
+  status: string;
+  lastRunPayload: Record<string, unknown> | null;
+  latestRunSummary: string | null;
+  topError: string | null;
+}): ChatRunCardRecord {
+  const { goal, runId, status, lastRunPayload, latestRunSummary, topError } = args;
+  const summary = buildRunCardSummary({ status, lastRunPayload, latestRunSummary, topError });
+  return {
+    title: truncateRunCardTitle(goal),
+    summary,
+    status: mapRunStatusToChatRunCardStatus(status),
+    runId,
+    provider: readEffectiveProvider(lastRunPayload) || null,
+    model: readEffectiveModel(lastRunPayload) || null,
+    sourceGoal: goal,
+    meta: buildRunCardMeta(lastRunPayload),
+    evidence: buildRunCardEvidence(lastRunPayload),
+    approval: status === 'waiting' ? buildRunCardApproval(lastRunPayload) : null,
+  };
 }
 
 function migrateLegacyWorkbenchChats(
@@ -912,6 +1228,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     closeStream,
     checkCompatibility,
     fetchRunResult,
+    sendOperatorChat,
+    startOperatorRun,
     startAutopilot,
   } = api;
 
@@ -931,8 +1249,10 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     };
   });
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
-  const [pendingSimpleChat, setPendingSimpleChat] = useState<{ sessionId: string; placeholderId: string; runId: string | null } | null>(null);
-  const [simplePermissionActionBusy, setSimplePermissionActionBusy] = useState<string | null>(null);
+  const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
+  const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
+  const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
+  const [, setSimplePermissionActionBusy] = useState<string | null>(null);
   const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
   const [selectedAgentChannelsLoading, setSelectedAgentChannelsLoading] = useState(false);
   const [workbenchDeckVisible, setWorkbenchDeckVisible] = useState(true);
@@ -1066,6 +1386,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       setChatIdentityDrawerOpen(false);
       setPendingWorkbenchChat(null);
       setPendingSimpleChat(null);
+      setPendingSimpleRun(null);
       setSelectedWorkbenchRunId(null);
       setWorkbenchAgentChats({});
       setChatStore((current) => {
@@ -1161,6 +1482,13 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           result_summary: String(item?.result_summary || '').trim() || null,
           usage_provider: String(item?.usage_provider || '').trim() || null,
           usage_model: String(item?.usage_model || '').trim() || null,
+          requested_provider: String(item?.requested_provider || '').trim() || null,
+          effective_provider: String(item?.effective_provider || '').trim() || null,
+          requested_model: String(item?.requested_model || '').trim() || null,
+          effective_model: String(item?.effective_model || '').trim() || null,
+          provider_overridden: typeof item?.provider_overridden === 'boolean' ? item.provider_overridden : undefined,
+          model_overridden: typeof item?.model_overridden === 'boolean' ? item.model_overridden : undefined,
+          fallback_used: typeof item?.fallback_used === 'boolean' ? item.fallback_used : undefined,
           execution_target_selected: String(item?.execution_target_selected || '').trim() || null,
         }))
         .filter((item) => item.run_id);
@@ -1168,7 +1496,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       const latestRun = recentRuns[0] ?? null;
       const latestRunId = latestRun?.run_id || null;
       const latestRunStatus = latestRun?.status || null;
-      const latestRunProvider = latestRun?.usage_provider || null;
+      const latestRunProvider = latestRun?.effective_provider || latestRun?.usage_provider || null;
       const latestRunSummary = latestRun?.result_summary || null;
       const inboxPayload = payload?.inbox ?? null;
       const latestInboxSession = buildHomeInboxSessionPreview(
@@ -1563,17 +1891,23 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     return chatStore.sessions.find((session) => session.id === chatStore.selectedSessionId) || chatStore.sessions[0] || null;
   }, [chatStore]);
   const selectedChatMessages = useMemo(() => selectedChatSession?.messages || [], [selectedChatSession]);
+  const latestSessionRunCard = useMemo(() => {
+    return [...selectedChatMessages].reverse().find((message) => message.runCard)?.runCard || null;
+  }, [selectedChatMessages]);
+  const latestDirectChatContext = useMemo<ChatContextUsedRecord | null>(() => {
+    return [...selectedChatMessages].reverse().find((message) => message.role === 'assistant' && message.contextUsed)?.contextUsed || null;
+  }, [selectedChatMessages]);
   const activeProviderOption = useMemo(
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
   );
-  const simpleChatModelLabel = useMemo(() => {
-    const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
-    return `${providerLabel} · ${model}`;
-  }, [activeProviderOption, model, provider]);
   const simpleChatTrustLabel = useMemo(
     () => formatSimpleChatTrustLabel(trustMode, accessMode),
     [accessMode, trustMode],
+  );
+  const simpleChatDepthLabel = useMemo(
+    () => CHAT_DEPTH_OPTIONS.find((option) => option.value === simpleChatDepth)?.label || 'Standard',
+    [simpleChatDepth],
   );
   const sessionNextRecommendation = useMemo(() => {
     const executionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
@@ -1594,66 +1928,54 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     setupReady,
   ]);
   const sessionIdentitySections = useMemo<ChatIdentitySection[]>(() => {
-    const providerLabel = activeProviderOption?.label || homeTitleCase(provider);
-    const effectiveModel = controlCenter.recentRuns[0]?.usage_model || model || 'Unknown';
-    const effectiveExecutionTarget = lastRouteInfo?.selected || controlCenter.recentRuns[0]?.execution_target_selected || null;
-    const preferredExecutionLabel = formatPreferredExecutionLabel(selectedPack.id, connectionMode);
-    const executionLabel = formatChatExecutionLabel(selectedPack.id, connectionMode, effectiveExecutionTarget);
-    const latestRun = controlCenter.recentRuns[0] || null;
-    const connectedToolsValue =
-      connectorCredentials.length > 0
-        ? connectorCredentials
-            .slice(0, 3)
-            .map((item) => item.label)
-            .filter(Boolean)
-            .join(', ')
-        : 'No channels connected yet';
-
-    return [
-      {
-        title: 'Before you run',
-        note: 'This is the quickest summary of what still needs attention.',
-        items: [
-          { label: 'Status', value: setupReady ? 'Ready to run' : 'Finish setup', tone: setupReady ? 'success' : 'warning' },
-          { label: 'Route', value: preferredExecutionLabel, tone: preferredExecutionLabel === 'Local machine' ? 'success' : 'neutral' },
-          { label: 'Tools', value: connectedToolsValue, tone: connectorCredentials.length > 0 ? 'success' : 'warning' },
-          { label: 'Next step', value: sessionNextRecommendation.actionLabel, tone: sessionNextRecommendation.chipTone },
-        ],
-      },
-      {
-        title: 'AI access',
-        note: 'This is the AI source backing the current task.',
-        items: [
-          { label: 'Profile', value: defaultAssistantProfile.label },
-          { label: 'Provider', value: providerLabel },
-          { label: 'Model', value: effectiveModel },
-          { label: 'Role', value: defaultAssistantProfile.subtitle },
-        ],
-      },
-      {
-        title: 'Latest result',
-        note: 'This shows the latest outcome and where it ran.',
-        items: [
-          { label: 'Latest result', value: latestRun?.result_summary || 'Nothing has run yet' },
-          { label: 'Latest route', value: executionLabel },
-          { label: 'Latest run', value: latestRun?.run_id ? latestRun.run_id.slice(0, 8) : 'No runs yet' },
-          { label: 'Latest provider', value: latestRun?.usage_provider || providerLabel },
-        ],
-      },
-    ];
+    if (!latestDirectChatContext) return [];
+    const connectedSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'connected');
+    const usableSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'usable');
+    const unavailableSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'unavailable');
+    const unverifiedSystems = summarizeCapabilitySystems(latestDirectChatContext.tool_capabilities, 'unverified');
+    const readActions = summarizeCapabilityActions(latestDirectChatContext.tool_capabilities, 'read_actions');
+    const writeActions = summarizeCapabilityActions(latestDirectChatContext.tool_capabilities, 'write_actions');
+    const approvalActions = summarizeCapabilityActions(latestDirectChatContext.tool_capabilities, 'approval_required_actions');
+    const note = latestDirectChatContext.prior_messages_used
+      ? 'This reply uses: current message, workspace, requested model, connected systems, prior thread messages.'
+      : 'This reply uses: current message, workspace, requested model, connected systems. This reply does not yet use prior thread messages.';
+    return [{
+      title: 'Direct chat',
+      note,
+      items: [
+        { label: 'Workspace', value: latestDirectChatContext.workspace || 'Unknown' },
+        { label: 'Requested provider', value: humanizeProviderLabel(latestDirectChatContext.requested_provider || '') },
+        { label: 'Effective provider', value: humanizeProviderLabel(latestDirectChatContext.effective_provider || '') },
+        { label: 'Requested model', value: latestDirectChatContext.requested_model || 'Unknown' },
+        { label: 'Effective model', value: latestDirectChatContext.effective_model || 'Unknown' },
+        { label: 'Reasoning effort', value: latestDirectChatContext.reasoning_effort || 'Standard' },
+        {
+          label: 'Fallback',
+          value: latestDirectChatContext.fallback_used ? 'Used' : 'Not used',
+          tone: latestDirectChatContext.fallback_used ? 'warning' : 'success',
+        },
+        {
+          label: 'Connected systems',
+          value: connectedSystems,
+          tone: connectedSystems === 'None' ? 'warning' : 'success',
+        },
+        { label: 'Usable systems', value: usableSystems, tone: usableSystems === 'Not verified' ? 'warning' : 'success' },
+        { label: 'Unavailable systems', value: unavailableSystems },
+        { label: 'Read actions', value: readActions },
+        { label: 'Write actions', value: writeActions },
+        { label: 'Approval-required', value: approvalActions, tone: approvalActions === 'Not verified' ? 'warning' : undefined },
+        { label: 'Capability state', value: unverifiedSystems },
+        {
+          label: 'Prior thread messages',
+          value: latestDirectChatContext.prior_messages_used ? 'Used' : 'Not used yet',
+          tone: latestDirectChatContext.prior_messages_used ? 'success' : 'warning',
+        },
+        { label: 'History mode', value: latestDirectChatContext.history_mode },
+        { label: 'Run created', value: latestDirectChatContext.run_created ? 'Yes' : 'No' },
+      ],
+    }];
   }, [
-    activeProviderOption,
-    connectionMode,
-    connectorCredentials,
-    controlCenter.recentRuns,
-    defaultAssistantProfile,
-    lastRouteInfo?.selected,
-    model,
-    provider,
-    selectedPack.id,
-    sessionNextRecommendation.actionLabel,
-    sessionNextRecommendation.chipTone,
-    setupReady,
+    latestDirectChatContext,
   ]);
   const sessionIdentityActions = useMemo<ChatIdentityAction[]>(
     () => {
@@ -1666,17 +1988,27 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         },
       });
 
-      const primaryAction = createAction(sessionNextRecommendation.actionLabel, sessionNextRecommendation.href, 'primary');
-
-      const secondaryActions = [
-        createAction('Open Integrations', '/credentials'),
-        createAction('Open Workflows', '/workflows'),
-        createAction('Open Approvals', '/approvals'),
-      ].filter((item) => item.label !== primaryAction.label);
-
-      return [primaryAction, ...secondaryActions];
+      if (controlCenter.pendingApprovals.length > 0) {
+        return [createAction('Open Approvals', '/approvals', 'primary')];
+      }
+      if (!setupStatus.accountConnected) {
+        return [createAction('Connect AI account', '/connect-ai', 'primary')];
+      }
+      if (!setupStatus.connectionTested) {
+        return [createAction('Verify AI account', '/connect-ai', 'primary')];
+      }
+      if (latestSessionRunCard?.runId) {
+        return [createAction('Open Runs', '/executions', 'primary')];
+      }
+      return [];
     },
-    [router, sessionNextRecommendation],
+    [
+      controlCenter.pendingApprovals.length,
+      latestSessionRunCard?.runId,
+      router,
+      setupStatus.accountConnected,
+      setupStatus.connectionTested,
+    ],
   );
   const simpleChatRunOverrides = useMemo(
     () => ({
@@ -1775,42 +2107,25 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [derivedSetupReady]);
   const simpleChatPermissionPrompt = useMemo<SimpleChatPermissionPrompt | null>(() => {
     if (status !== 'waiting') return null;
-    const activeRunId = pendingSimpleChat?.runId || runId;
+    const activeRunId = pendingSimpleRun?.runId || runId;
     if (!activeRunId) return null;
     const payloadRunId = extractRunIdFromPayload(lastRunPayload);
     if (payloadRunId && payloadRunId !== activeRunId) return null;
-    const pending = lastRunPayload?.pending_approval;
-    if (!pending || typeof pending !== 'object') return null;
-
-    const pendingRecord = pending as Record<string, unknown>;
-    const approvalId = String(pendingRecord.approval_id || '').trim();
-    if (!approvalId) return null;
-    const prompt = String(pendingRecord.prompt || '').trim() || 'This run needs approval before it can continue.';
-    const metadata = pendingRecord.metadata && typeof pendingRecord.metadata === 'object'
-      ? (pendingRecord.metadata as Record<string, unknown>)
-      : {};
-    const labels = Array.isArray(metadata.approval_labels)
-      ? metadata.approval_labels.map((item) => String(item || '').trim()).filter(Boolean)
-      : [];
-    const capabilities = Array.isArray(metadata.approval_capabilities)
-      ? metadata.approval_capabilities.map((item) => String(item || '').trim()).filter(Boolean)
-      : [];
-    const context = lastRunPayload?.context && typeof lastRunPayload.context === 'object'
-      ? (lastRunPayload.context as Record<string, unknown>)
-      : {};
-    const contextMetadata = context.metadata && typeof context.metadata === 'object'
-      ? (context.metadata as Record<string, unknown>)
-      : {};
+    const approval = readPendingApprovalRecord(lastRunPayload);
+    if (!approval || !approval.approvalId) return null;
     return {
       runId: activeRunId,
-      approvalId,
-      prompt,
-      labels,
-      capabilities,
-      canRememberWorkflow: String(context.workflow_id || contextMetadata.workflow_id || '').trim().length > 0,
-      canRememberAgent: String(context.agent_role || contextMetadata.agent_role || selectedAgentRole || '').trim().length > 0,
+      approvalId: approval.approvalId,
+      prompt: approval.prompt || 'This run needs approval before it can continue.',
+      labels: approval.labels,
+      capabilities: approval.capabilities,
+      actions: approval.actions,
+      target: approval.target,
+      scope: 'once',
+      reusable: approval.reusable,
+      consequence: approval.consequence,
     };
-  }, [lastRunPayload, pendingSimpleChat, runId, selectedAgentRole, status]);
+  }, [lastRunPayload, pendingSimpleRun, runId, status]);
 
   const appendWorkbenchAgentChat = useCallback((agentRole: string, message: WorkbenchAgentChatMessage) => {
     setWorkbenchAgentChats((current) => ({
@@ -1851,6 +2166,78 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       ),
     }));
   }, []);
+
+  const handleSimpleChatMessageAction = useCallback(async (messageId: string, action: ChatMessageActionRecord) => {
+    const sessionId = selectedChatSession?.id;
+    if (!sessionId) return;
+    if (action.kind === 'connect' || action.kind === 'open') {
+      if (action.href) router.push(action.href);
+      return;
+    }
+    if (action.kind === 'workflow') {
+      router.push(action.href || '/builder/new');
+      return;
+    }
+    if (action.kind !== 'run') return;
+
+    const runGoal = String(action.goal || '').trim();
+    if (!runGoal) return;
+    patchSimpleChatMessage(sessionId, messageId, {
+      status: 'running',
+      actions: [],
+      runCard: {
+        title: truncateRunCardTitle(runGoal),
+        summary: 'Preparing execution on your machine.',
+        status: 'preparing',
+        runId: null,
+        sourceGoal: runGoal,
+        meta: [{ id: 'route:selected', label: 'Route', value: 'On your machine' }],
+        evidence: [],
+        approval: null,
+      },
+    });
+    setPendingSimpleRun({
+      sessionId,
+      messageId,
+      runId: null,
+      goal: runGoal,
+    });
+    const runPayload = await startOperatorRun({
+      goal: runGoal,
+      agentRole: simpleChatRuntimeRole,
+      metadata: {
+        assistant_profile_id: defaultAssistantProfile.id,
+        assistant_profile_label: defaultAssistantProfile.label,
+        assistant_profile_subtitle: defaultAssistantProfile.subtitle,
+      },
+    });
+    if (!runPayload || typeof runPayload !== 'object') {
+      patchSimpleChatMessage(sessionId, messageId, {
+        status: 'error',
+        runCard: {
+          title: truncateRunCardTitle(runGoal),
+          summary: topError || 'The run could not be started.',
+          status: 'failed',
+          runId: null,
+          sourceGoal: runGoal,
+          meta: [{ id: 'route:selected', label: 'Route', value: 'On your machine' }],
+          evidence: [],
+          approval: null,
+        },
+      });
+      setPendingSimpleRun(null);
+    }
+  }, [
+    defaultAssistantProfile.id,
+    defaultAssistantProfile.label,
+    defaultAssistantProfile.subtitle,
+    patchSimpleChatMessage,
+    router,
+    selectedChatSession?.id,
+    simpleChatRuntimeRole,
+    startOperatorRun,
+    topError,
+  ]);
 
   const runWorkbenchCommand = useCallback(async (input?: string) => {
     const raw = String(input ?? goal).trim();
@@ -1981,36 +2368,72 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
   }, [derivedSetupReady, directAgentRunOverrides, experienceMode, router, setTopError, simpleChatRunOverrides, startAutopilot]);
 
   useEffect(() => {
-    if (!pendingSimpleChat) return;
-    if (!pendingSimpleChat.runId && runId && ['running', 'queued_local', 'waiting'].includes(status)) {
-      setPendingSimpleChat((current) => (current ? { ...current, runId } : current));
-      patchSimpleChatMessage(pendingSimpleChat.sessionId, pendingSimpleChat.placeholderId, {
+    if (!pendingSimpleRun) return;
+    if (!pendingSimpleRun.runId && runId && ['running', 'queued_local', 'waiting'].includes(status)) {
+      setPendingSimpleRun((current) => (current ? { ...current, runId } : current));
+      patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
         run_id: runId,
-        status: status === 'waiting' ? 'waiting' : status === 'error' ? 'error' : 'running',
+        status: status === 'waiting' ? 'waiting' : 'running',
+        runCard: {
+          title: truncateRunCardTitle(pendingSimpleRun.goal),
+          summary: status === 'queued_local' ? 'Preparing execution on your machine.' : status === 'waiting' ? 'Waiting for your approval to continue.' : 'Working on this now.',
+          status: status === 'queued_local' ? 'preparing' : status === 'waiting' ? 'waiting' : 'running',
+          runId,
+          sourceGoal: pendingSimpleRun.goal,
+          meta: [{ id: 'route:selected', label: 'Route', value: 'On your machine' }],
+          evidence: [],
+          approval: null,
+        },
       });
     }
-  }, [patchSimpleChatMessage, pendingSimpleChat, runId, status]);
+  }, [patchSimpleChatMessage, pendingSimpleRun, runId, status]);
 
   useEffect(() => {
-    if (!pendingSimpleChat) return;
-    if (!pendingSimpleChat.runId) return;
+    if (!pendingSimpleRun) return;
+    if (!pendingSimpleRun.runId) return;
     if (!['completed', 'waiting', 'error'].includes(status)) return;
     const payloadRunId = extractRunIdFromPayload(lastRunPayload);
     const isMatchingRun =
-      (payloadRunId && payloadRunId === pendingSimpleChat.runId) ||
-      ((!payloadRunId || status === 'waiting') && runId === pendingSimpleChat.runId);
+      (payloadRunId && payloadRunId === pendingSimpleRun.runId) ||
+      ((!payloadRunId || status === 'waiting') && runId === pendingSimpleRun.runId);
     if (!isMatchingRun) return;
 
-    const replyText = extractWorkbenchReplyText(lastRunPayload, controlCenter.latestRunSummary, topError, status);
-    patchSimpleChatMessage(pendingSimpleChat.sessionId, pendingSimpleChat.placeholderId, {
-      content: replyText,
-      status: resolveWorkbenchMessageStatus(status, lastRunPayload, controlCenter.latestRunSummary),
-      run_id: pendingSimpleChat.runId || runId,
+    const matchingLatestRunSummary = matchLatestRunSummary(
+      pendingSimpleRun.runId,
+      controlCenter.latestRunId,
+      controlCenter.latestRunSummary,
+    );
+    const existingMessage = chatStore.sessions
+      .find((session) => session.id === pendingSimpleRun.sessionId)
+      ?.messages.find((message) => message.id === pendingSimpleRun.messageId);
+    const nextRunCard = buildRunCardFromPayload({
+      goal: pendingSimpleRun.goal,
+      runId: pendingSimpleRun.runId || runId,
+      status,
+      lastRunPayload,
+      latestRunSummary: matchingLatestRunSummary,
+      topError,
+    });
+    patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
+      status: nextRunCard.status === 'failed' ? 'error' : status === 'waiting' ? 'waiting' : 'completed',
+      run_id: pendingSimpleRun.runId || runId,
+      runCard: nextRunCard,
+      actions: existingMessage?.actions || [],
       ts: new Date().toISOString(),
     });
     if (status === 'waiting') return;
-    setPendingSimpleChat(null);
-  }, [controlCenter.latestRunSummary, lastRunPayload, patchSimpleChatMessage, pendingSimpleChat, runId, status, topError]);
+    setPendingSimpleRun(null);
+  }, [
+    chatStore.sessions,
+    controlCenter.latestRunId,
+    controlCenter.latestRunSummary,
+    lastRunPayload,
+    patchSimpleChatMessage,
+    pendingSimpleRun,
+    runId,
+    status,
+    topError,
+  ]);
 
   const submitSimpleChatPermissionDecision = useCallback(async (
     decision: 'Proceed' | 'Hold',
@@ -2035,10 +2458,19 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         const text = await res.text().catch(() => '');
         throw new Error(text || 'Failed to send decision.');
       }
-      if (decision === 'Proceed' && pendingSimpleChat) {
-        patchSimpleChatMessage(pendingSimpleChat.sessionId, pendingSimpleChat.placeholderId, {
-          content: 'Continuing with the approved action…',
+      if (decision === 'Proceed' && pendingSimpleRun) {
+        patchSimpleChatMessage(pendingSimpleRun.sessionId, pendingSimpleRun.messageId, {
           status: 'running',
+          runCard: {
+            title: truncateRunCardTitle(pendingSimpleRun.goal),
+            summary: 'Continuing after your approval.',
+            status: 'running',
+            runId: prompt.runId,
+            sourceGoal: pendingSimpleRun.goal,
+            meta: [{ id: 'route:selected', label: 'Route', value: 'On your machine' }],
+            evidence: [],
+            approval: null,
+          },
           ts: new Date().toISOString(),
         });
       }
@@ -2054,23 +2486,19 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       }
       appendLog(
         decision === 'Proceed'
-          ? scope === 'once'
-            ? 'Permission granted for this run.'
-            : scope === 'workflow'
-              ? 'Permission granted for this workflow scope.'
-              : 'Permission granted for this agent scope.'
+          ? 'Approval granted for this pending step.'
           : 'Permission denied. The run will not continue.',
         decision === 'Proceed' ? 'info' : 'warn',
       );
       if (decision !== 'Proceed' && nextStatus && nextStatus !== 'waiting') {
-        setPendingSimpleChat(null);
+        setPendingSimpleRun(null);
       }
     } catch (error) {
       appendLog(error instanceof Error ? error.message : 'Failed to send decision.', 'error');
     } finally {
       setSimplePermissionActionBusy(null);
     }
-  }, [appendLog, fetchRunResult, patchSimpleChatMessage, pendingSimpleChat, setStatus, simpleChatPermissionPrompt]);
+  }, [appendLog, fetchRunResult, patchSimpleChatMessage, pendingSimpleRun, setStatus, simpleChatPermissionPrompt]);
 
   useEffect(() => {
     if (!pendingWorkbenchChat) return;
@@ -2093,20 +2521,42 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       ((!payloadRunId || status === 'waiting') && runId === pendingWorkbenchChat.runId);
     if (!isMatchingRun) return;
 
-    const replyText = extractWorkbenchReplyText(lastRunPayload, controlCenter.latestRunSummary, topError, status);
+    const matchingLatestRunSummary = matchLatestRunSummary(
+      pendingWorkbenchChat.runId,
+      controlCenter.latestRunId,
+      controlCenter.latestRunSummary,
+    );
+    if (shouldHoldForStructuredReply(status, lastRunPayload, matchingLatestRunSummary, topError)) {
+      return;
+    }
+    const replyText = extractWorkbenchReplyText(lastRunPayload, matchingLatestRunSummary, topError, status);
     patchWorkbenchAgentChat(pendingWorkbenchChat.agentRole, pendingWorkbenchChat.placeholderId, {
       content: replyText,
-      status: resolveWorkbenchMessageStatus(status, lastRunPayload, controlCenter.latestRunSummary),
+      status: resolveWorkbenchMessageStatus(status, lastRunPayload, matchingLatestRunSummary),
       run_id: pendingWorkbenchChat.runId || runId,
       ts: new Date().toISOString(),
     });
     setPendingWorkbenchChat(null);
-  }, [controlCenter.latestRunSummary, lastRunPayload, patchWorkbenchAgentChat, pendingWorkbenchChat, runId, status, topError]);
+  }, [controlCenter.latestRunId, controlCenter.latestRunSummary, lastRunPayload, patchWorkbenchAgentChat, pendingWorkbenchChat, runId, status, topError]);
 
   const sendSimpleChat = useCallback(async () => {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
+    const priorMessages = selectedChatMessages
+      .filter((message) => {
+        const content = normalizeChatContent(message.content);
+        if (!content) return false;
+        if (message.role === 'assistant') {
+          return message.status === 'completed';
+        }
+        return message.role === 'user';
+      })
+      .map((message) => ({
+        role: (message.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+        content: normalizeChatContent(message.content),
+      }))
+      .slice(-6);
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -2119,7 +2569,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     const placeholder: WorkbenchAgentChatMessage = {
       id: placeholderId,
       role: 'assistant',
-      content: 'Working on it...',
+      content: '',
       ts: now,
       status: 'sending',
       run_id: null,
@@ -2127,10 +2577,33 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
 
     appendSimpleChatMessage(sessionId, userMessage);
     appendSimpleChatMessage(sessionId, placeholder);
-    setPendingSimpleChat({ sessionId, placeholderId, runId: null });
+    setPendingSimpleChat({ sessionId, messageId: placeholderId, goal: text });
     setGoal('');
-    await startAutopilot({ goal: text, ...simpleChatRunOverrides });
-  }, [appendSimpleChatMessage, goal, selectedChatSession?.id, setGoal, simpleChatRunOverrides, startAutopilot]);
+    try {
+      const payload = await sendOperatorChat(text, {
+        reasoningEffort: simpleChatDepth,
+        threadId: sessionId,
+        priorMessages,
+      });
+      patchSimpleChatMessage(sessionId, placeholderId, {
+        content: payload.reply || 'I couldn’t form a clean reply just now.',
+        status: 'completed',
+        actions: Array.isArray(payload.actions) ? payload.actions : [],
+        contextUsed: payload.context_used || null,
+        ts: new Date().toISOString(),
+      });
+    } catch (error) {
+      patchSimpleChatMessage(sessionId, placeholderId, {
+        content: error instanceof Error ? error.message : 'Failed to get assistant reply.',
+        status: 'error',
+        actions: [],
+        contextUsed: null,
+        ts: new Date().toISOString(),
+      });
+    } finally {
+      setPendingSimpleChat(null);
+    }
+  }, [appendSimpleChatMessage, goal, patchSimpleChatMessage, selectedChatMessages, selectedChatSession?.id, sendOperatorChat, setGoal, simpleChatDepth]);
 
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
@@ -2237,7 +2710,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       deckControlsEnabled={!isMobile}
       singleAgentMode={singleAgentMode}
     >
-      <div style={{ display: 'grid', gridTemplateColumns: workbenchColumns, gap: 10, alignItems: 'start', alignContent: 'start' }}>
+      <div
+        className="orion-workbench-grid"
+        style={{
+          gridTemplateColumns: workbenchColumns,
+        }}
+      >
         {showActivityRail ? (
           <WorkbenchActivityRail
             isMobile={isMobile}
@@ -2261,6 +2739,16 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             onSend={() => {
               void sendSimpleChat();
             }}
+            onMessageAction={(messageId, action) => {
+              void handleSimpleChatMessageAction(messageId, action);
+            }}
+            onRunApprovalDecision={(scope) => {
+              if (scope === 'deny') {
+                void submitSimpleChatPermissionDecision('Hold', 'once');
+                return;
+              }
+              void submitSimpleChatPermissionDecision('Proceed', 'once');
+            }}
             chatBusy={Boolean(pendingSimpleChat)}
             messages={selectedChatMessages}
             inlineStatus={inlineSimpleChatStatus}
@@ -2268,27 +2756,18 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
             emptyAction={emptySimpleChatAction}
             targetLabel={defaultAssistantProfile.label}
             targetHref="/agents"
-            modelLabel={simpleChatModelLabel}
             selectedModel={model}
             modelOptions={modelOptions}
             modelsLoading={modelsLoading}
             onSelectModel={setModel}
             trustLabel={simpleChatTrustLabel}
-            permissionPrompt={simpleChatPermissionPrompt ? {
-              title: 'Permission required',
-              prompt: simpleChatPermissionPrompt.prompt,
-              labels: simpleChatPermissionPrompt.labels,
-              capabilities: simpleChatPermissionPrompt.capabilities,
-              busyKey: simplePermissionActionBusy,
-              onAllowOnce: () => { void submitSimpleChatPermissionDecision('Proceed', 'once'); },
-              onAllowWorkflow: simpleChatPermissionPrompt.canRememberWorkflow
-                ? () => { void submitSimpleChatPermissionDecision('Proceed', 'workflow'); }
-                : undefined,
-              onAllowAgent: simpleChatPermissionPrompt.canRememberAgent
-                ? () => { void submitSimpleChatPermissionDecision('Proceed', 'agent'); }
-                : undefined,
-              onDeny: () => { void submitSimpleChatPermissionDecision('Hold', 'once'); },
-            } : null}
+            selectedDepth={simpleChatDepth}
+            depthLabel={simpleChatDepthLabel}
+            depthOptions={CHAT_DEPTH_OPTIONS}
+            onSelectDepth={(value) => {
+              if (value === 'low' || value === 'medium' || value === 'high') setSimpleChatDepth(value);
+            }}
+            permissionPrompt={null}
             identityDrawerOpen={chatIdentityDrawerOpen}
             onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
             onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}

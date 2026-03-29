@@ -21,12 +21,12 @@ class ProviderValidationMessageTests(unittest.TestCase):
         http_json_request_mock.assert_not_called()
 
     @patch("server_modules.provider_profiles.http_json_request")
-    def test_openai_oauth_token_list_models_returns_empty_without_probe(self, http_json_request_mock):
+    def test_openai_oauth_token_list_models_returns_codex_catalog_without_probe(self, http_json_request_mock):
         models = provider_profiles.OpenAIAdapter().list_models(
             {"oauth_token": "token-123", "auth_mode": "oauth_token"}
         )
 
-        self.assertEqual(models, [])
+        self.assertEqual(models, provider_profiles.OPENAI_CODEX_MODEL_CATALOG)
         http_json_request_mock.assert_not_called()
 
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")

@@ -163,6 +163,7 @@ async def evaluate_tools_policy(body: ToolPolicyEvaluateRequest):
     trust_mode = normalize_trust_mode(body.trust_mode)
     target = normalize_execution_target(body.target)
     metadata = body.metadata if isinstance(body.metadata, dict) else {}
+    runtime_policy = resolve_runtime_policy_mode(metadata, selected_target=target)
 
     evaluations: List[Dict[str, Any]] = []
     for raw_tool in body.tool_ids:
@@ -181,6 +182,7 @@ async def evaluate_tools_policy(body: ToolPolicyEvaluateRequest):
     return {
         "ok": True,
         "trust_mode": trust_mode,
+        "policy_mode": runtime_policy.get("policy_mode"),
         "target": target,
         "count": len(evaluations),
         "items": evaluations,

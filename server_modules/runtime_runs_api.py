@@ -115,16 +115,17 @@ def _resolve_local_execution_start_approval(
     approval_id: str,
     decision_text: str,
     note: str = "",
-    scope: str = "once",
 ) -> dict:
-    pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+    scope_value = "once"
+    consequence = "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
+    pending = _get_pending_confirmation(run)
     correlation_id = str(pending.get("correlation_id") or "").strip() or _approval_correlation_id(approval_id, run_id=run_id_str)
     expires_at = _parse_utc_ts(pending.get("expires_at"))
     if expires_at is not None and _utc_now() > expires_at:
         pending["status"] = "expired"
         pending["expired_at"] = _utc_now_iso()
-        run["pending_approval"] = pending
-        raise HTTPException(status_code=409, detail="Approval request has already expired.")
+        _set_pending_confirmation(run, pending)
+        raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
 
     approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
     reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
@@ -136,13 +137,13 @@ def _resolve_local_execution_start_approval(
     pending["status"] = "resolved"
     pending["resolved_at"] = _utc_now_iso()
     pending["decision"] = decision_text
-    run["pending_approval"] = pending
+    _set_pending_confirmation(run, pending)
     emit_log(
         run["logs"],
         "info" if approved else "warn",
         f"Decision received: {decision_text}",
         event="approval_received",
-        data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": scope},
+        data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": scope_value, "reusable": False},
     )
     _append_approval_audit(
         approval_id=approval_id,
@@ -153,24 +154,25 @@ def _resolve_local_execution_start_approval(
         run_id=run_id_str,
         note=note,
         correlation_id=correlation_id,
-        metadata={"scope": scope},
+        metadata={"scope": scope_value, "reusable": False},
     )
 
     if approved:
-        run["pending_approval"] = None
+        _clear_pending_confirmation(run)
         context = run.get("context")
         if isinstance(context, dict):
             metadata = context.get("metadata")
             if isinstance(metadata, dict):
+                metadata.pop("local_execution_waiting_confirmation", None)
                 metadata.pop("local_execution_waiting_approval", None)
                 _mark_local_execution_tools_approved(metadata)
                 context["metadata"] = metadata
         emit_log(
             run["logs"],
             "info",
-            "Approval granted. Run queued for Local Companion execution.",
+            "Confirmation received. Run queued for Local Companion execution.",
             event="approval_resolved",
-            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "approved": True, "scope": scope},
+            data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "approved": True, "scope": scope_value, "reusable": False},
         )
         _append_approval_audit(
             approval_id=approval_id,
@@ -180,11 +182,11 @@ def _resolve_local_execution_start_approval(
             source="local_execution_start",
             run_id=run_id_str,
             correlation_id=correlation_id,
-            metadata={"scope": scope},
+            metadata={"scope": scope_value, "reusable": False},
         )
         _enqueue_local_companion_run(
             run_id_str,
-            message="Approval granted. Run queued for Local Companion execution.",
+            message="Confirmation received. Run queued for Local Companion execution.",
             event="local_queued_after_approval",
         )
         return {
@@ -193,20 +195,23 @@ def _resolve_local_execution_start_approval(
             "approval_id": approval_id,
             "correlation_id": correlation_id,
             "decision_kind": "approved",
-            "scope": scope,
+            "scope": scope_value,
+            "reusable": False,
+            "consequence": consequence,
         }
 
-    run["pending_approval"] = None
+    _clear_pending_confirmation(run)
     context = run.get("context")
     if isinstance(context, dict):
         metadata = context.get("metadata")
         if isinstance(metadata, dict):
+            metadata.pop("local_execution_waiting_confirmation", None)
             metadata.pop("local_execution_waiting_approval", None)
             context["metadata"] = metadata
     emit_log(
         run["logs"],
         "warn",
-        "Local companion execution was not started because approval was not granted.",
+        "Local companion execution was not started because confirmation was not granted.",
         event="approval_resolved",
         data={
             "approval_id": approval_id,
@@ -215,7 +220,8 @@ def _resolve_local_execution_start_approval(
             "approved": False,
             "rejected": bool(rejected),
             "escalated": bool(escalated),
-            "scope": scope,
+            "scope": scope_value,
+            "reusable": False,
         },
     )
     _append_approval_audit(
@@ -231,10 +237,11 @@ def _resolve_local_execution_start_approval(
             "approved": False,
             "rejected": bool(rejected),
             "escalated": bool(escalated),
-            "scope": scope,
+            "scope": scope_value,
+            "reusable": False,
         },
     )
-    run["result"] = "Local companion execution was not started because approval was not granted."
+    run["result"] = "Local companion execution was not started because confirmation was not granted."
     set_run_status(run_id_str, "failed")
     run["logs"].put(None)
     return {
@@ -243,12 +250,15 @@ def _resolve_local_execution_start_approval(
         "approval_id": approval_id,
         "correlation_id": correlation_id,
         "decision_kind": ("escalated" if escalated else "rejected"),
-        "scope": scope,
+        "scope": scope_value,
+        "reusable": False,
+        "consequence": consequence,
     }
 
 
 def register_run_routes(app) -> None:
     import server as _server
+    from server_modules.operator_chat import build_direct_operator_reply
 
     module_globals = globals()
     for key, value in _server.__dict__.items():
@@ -275,6 +285,34 @@ def register_run_routes(app) -> None:
         if isinstance(result, dict):
             result["doctor_preflight"] = doctor_preflight
         return result
+
+    @app.post("/chat/respond", dependencies=[Depends(require_api_key)])
+    async def respond_chat(request: Request, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        if not isinstance(current_user, dict):
+            raise HTTPException(status_code=401, detail="Authentication required.")
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid chat payload: {exc}") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Invalid chat payload.")
+
+        message = str(body.get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="Chat message is required.")
+
+        payload = build_direct_operator_reply(
+            message=message,
+            workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
+            requested_model=str(body.get("model") or "").strip(),
+            requested_provider=str(body.get("provider") or "").strip(),
+            thread_id=str(body.get("thread_id") or "").strip(),
+            prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+            reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
+            availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
+        )
+        return payload
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):
@@ -567,7 +605,7 @@ def register_run_routes(app) -> None:
             parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
             delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
             safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-            return {
+            response = {
                 "run_id": run_id_str,
                 "engine": snapshot.get("engine", "orion"),
                 "status": snapshot.get("status", "unknown"),
@@ -584,6 +622,13 @@ def register_run_routes(app) -> None:
                 "active_profile_provider": snapshot.get("active_profile_provider"),
                 "active_profile_model": snapshot.get("active_profile_model"),
                 "active_adapter": snapshot.get("active_adapter"),
+                "requested_provider": snapshot.get("requested_provider"),
+                "effective_provider": snapshot.get("effective_provider"),
+                "requested_model": snapshot.get("requested_model"),
+                "effective_model": snapshot.get("effective_model"),
+                "provider_overridden": bool(snapshot.get("provider_overridden")),
+                "model_overridden": bool(snapshot.get("model_overridden")),
+                "fallback_used": bool(snapshot.get("fallback_used")),
                 "result": snapshot.get("result_summary"),
                 "result_data": snapshot.get("result_data") if include_sensitive else _limited_result_data_view(snapshot.get("result_data")),
                 "agent_role": metadata.get("agent_role"),
@@ -597,11 +642,15 @@ def register_run_routes(app) -> None:
                 "child_runs": child_runs,
                 "delegation_summary": delegation_summary,
                 "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
+                "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
+                "approval_outcome": snapshot.get("approval_outcome"),
+                "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
                 "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
                 "tool_policy_precheck": snapshot.get("tool_policy_precheck") if include_sensitive else None,
                 "tool_policy_audit": snapshot.get("tool_policy_audit") if include_sensitive else [],
                 "memory_trace": snapshot.get("memory_trace") if include_sensitive else {},
-                "pending_approval": None,
+                "pending_confirmation": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
+                "pending_approval": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
                 "dag": snapshot.get("dag") if include_sensitive else None,
                 "context": safe_context,
                 "execution_target_requested": snapshot.get("execution_target_requested"),
@@ -642,6 +691,9 @@ def register_run_routes(app) -> None:
                 },
                 "archived": True,
             }
+            if snapshot.get("fallback_reason"):
+                response["fallback_reason"] = snapshot.get("fallback_reason")
+            return response
 
         context = run.get("context", {})
         metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
@@ -650,7 +702,7 @@ def register_run_routes(app) -> None:
         parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
         delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
         safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-        return {
+        response = {
             "run_id": run_id_str,
             "engine": run.get("engine", "orion"),
             "status": run.get("status", "unknown"),
@@ -667,6 +719,13 @@ def register_run_routes(app) -> None:
             "active_profile_provider": snapshot.get("active_profile_provider"),
             "active_profile_model": snapshot.get("active_profile_model"),
             "active_adapter": snapshot.get("active_adapter"),
+            "requested_provider": snapshot.get("requested_provider"),
+            "effective_provider": snapshot.get("effective_provider"),
+            "requested_model": snapshot.get("requested_model"),
+            "effective_model": snapshot.get("effective_model"),
+            "provider_overridden": bool(snapshot.get("provider_overridden")),
+            "model_overridden": bool(snapshot.get("model_overridden")),
+            "fallback_used": bool(snapshot.get("fallback_used")),
             "result": run.get("result"),
             "result_data": run.get("result_data") if include_sensitive else _limited_result_data_view(run.get("result_data")),
             "agent_role": metadata.get("agent_role"),
@@ -680,11 +739,15 @@ def register_run_routes(app) -> None:
             "child_runs": child_runs,
             "delegation_summary": delegation_summary,
             "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
+            "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
+            "approval_outcome": snapshot.get("approval_outcome"),
+            "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
             "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
             "tool_policy_precheck": metadata.get("tool_policy_precheck") if include_sensitive else None,
             "tool_policy_audit": run.get("tool_policy_audit") if include_sensitive and isinstance(run.get("tool_policy_audit"), list) else [],
             "memory_trace": _trim_memory_trace(run.get("memory_trace") if include_sensitive and isinstance(run.get("memory_trace"), dict) else {}),
-            "pending_approval": run.get("pending_approval"),
+            "pending_confirmation": _get_pending_confirmation(run) or None,
+            "pending_approval": _get_pending_confirmation(run) or None,
             "dag": run.get("dag") if include_sensitive else None,
             "context": safe_context,
             "execution_target_requested": metadata.get("execution_target_requested"),
@@ -725,6 +788,9 @@ def register_run_routes(app) -> None:
             },
             "archived": archived,
         }
+        if snapshot.get("fallback_reason"):
+            response["fallback_reason"] = snapshot.get("fallback_reason")
+        return response
 
     @app.get("/history/runs", dependencies=[Depends(require_api_key)])
     async def get_runs_history(
@@ -801,19 +867,21 @@ def register_run_routes(app) -> None:
             run = runs[run_id_str]
             snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
             _enforce_run_owner_access(current_user, snapshot)
-            pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+            pending = _get_pending_confirmation(run)
             approval_id = str(pending.get("approval_id") or "").strip() if isinstance(pending, dict) else ""
             correlation_id = str(pending.get("correlation_id") or "").strip() if isinstance(pending, dict) else ""
             context = run.get("context")
             metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-            if approval_id and bool(metadata.get("local_execution_waiting_approval")):
+            if approval_id and (
+                bool(metadata.get("local_execution_waiting_confirmation"))
+                or bool(metadata.get("local_execution_waiting_approval"))
+            ):
                 return _resolve_local_execution_start_approval(
                     run_id_str,
                     run,
                     approval_id,
                     str(payload.decision or "").strip().lower(),
                     str(payload.note or ""),
-                    str(payload.scope or "once"),
                 )
             if approval_id:
                 _append_approval_audit(
@@ -825,10 +893,17 @@ def register_run_routes(app) -> None:
                     run_id=run_id_str,
                     note=str(payload.note or ""),
                     correlation_id=correlation_id or _approval_correlation_id(approval_id, run_id=run_id_str),
-                    metadata={"scope": str(payload.scope or "once").strip().lower() or "once"},
+                    metadata={"scope": "once", "reusable": False},
                 )
-                run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision, "note": payload.note, "scope": payload.scope})
-                return {"status": "ok", "approval_id": approval_id, "correlation_id": correlation_id or None, "scope": payload.scope or "once"}
+                run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision, "note": payload.note})
+                return {
+                    "status": "ok",
+                    "approval_id": approval_id,
+                    "correlation_id": correlation_id or None,
+                    "scope": "once",
+                    "reusable": False,
+                    "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
+                }
             run["input_queue"].put(payload.decision)
             return {"status": "ok", "approval_id": None}
         raise HTTPException(404, "Run ID not found")
@@ -843,16 +918,16 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=404, detail="Run ID not found")
         snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
         _enforce_run_owner_access(current_user, snapshot)
-        pending = run.get("pending_approval")
+        pending = _get_pending_confirmation(run)
         if not isinstance(pending, dict):
-            raise HTTPException(status_code=409, detail="No pending approval for this run.")
+            raise HTTPException(status_code=409, detail="No pending confirmation for this run.")
         expected = str(pending.get("approval_id") or "").strip()
         if expected != approval_id:
-            raise HTTPException(status_code=409, detail="approval_id does not match pending approval.")
+            raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
         decision_text = str(payload.decision or "").strip().lower()
         context = run.get("context")
         metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-        if bool(metadata.get("local_execution_waiting_approval")):
+        if bool(metadata.get("local_execution_waiting_confirmation")) or bool(metadata.get("local_execution_waiting_approval")):
             return _resolve_local_execution_start_approval(
                 run_id_str,
                 run,
@@ -871,8 +946,8 @@ def register_run_routes(app) -> None:
         if expires_at is not None and _utc_now() > expires_at:
             pending["status"] = "expired"
             pending["expired_at"] = _utc_now_iso()
-            run["pending_approval"] = pending
-            raise HTTPException(status_code=409, detail="Approval request has already expired.")
+            _set_pending_confirmation(run, pending)
+            raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
         run["input_queue"].put(
             {
                 "approval_id": approval_id,
@@ -894,6 +969,8 @@ def register_run_routes(app) -> None:
                 "approved": bool(approved),
                 "rejected": bool(rejected),
                 "escalated": bool(escalated),
+                "scope": "once",
+                "reusable": False,
             },
         )
         return {
@@ -902,4 +979,7 @@ def register_run_routes(app) -> None:
             "approval_id": approval_id,
             "correlation_id": correlation_id,
             "decision_kind": ("approved" if approved else "escalated" if escalated else "rejected"),
+            "scope": "once",
+            "reusable": False,
+            "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
         }

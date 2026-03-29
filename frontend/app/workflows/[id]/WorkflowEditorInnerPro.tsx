@@ -4013,15 +4013,30 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 agent_role: operator.agentRole,
                 triggered_by: 'Direct',
                 active_profile_id:
-                    typeof payload?.active_profile_id === 'string' ? payload.active_profile_id : selectedProfileId || null,
+                    typeof payload?.active_profile_id === 'string' ? payload.active_profile_id : null,
                 active_profile_label:
                     typeof payload?.active_profile_label === 'string'
                         ? payload.active_profile_label
-                        : selectedRuntimeProfile?.label || null,
+                        : null,
                 active_profile_provider:
-                    typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : runtimeProvider,
+                    typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : null,
                 active_profile_model:
-                    typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : runtimeModel,
+                    typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : null,
+                requested_provider:
+                    typeof payload?.requested_provider === 'string' ? payload.requested_provider : null,
+                effective_provider:
+                    typeof payload?.effective_provider === 'string'
+                        ? payload.effective_provider
+                        : null,
+                requested_model:
+                    typeof payload?.requested_model === 'string' ? payload.requested_model : null,
+                effective_model:
+                    typeof payload?.effective_model === 'string'
+                        ? payload.effective_model
+                        : null,
+                provider_overridden: typeof payload?.provider_overridden === 'boolean' ? payload.provider_overridden : undefined,
+                model_overridden: typeof payload?.model_overridden === 'boolean' ? payload.model_overridden : undefined,
+                fallback_used: typeof payload?.fallback_used === 'boolean' ? payload.fallback_used : undefined,
                 execution_target_selected:
                     typeof payload?.execution_target_selected === 'string'
                         ? payload.execution_target_selected
@@ -4516,7 +4531,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
 
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                         <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            AI: {formatExecutionTargetLabel(executionTarget)} · {selectedRuntimeProfile
+                            Requested: {formatExecutionTargetLabel(executionTarget)} · {selectedRuntimeProfile
                                 ? `${selectedRuntimeProfile.label} · ${String(selectedRuntimeProfile.model || operator.modelId).trim() || operator.modelId}`
                                 : `${connection.provider.toUpperCase()} · ${formatConnectionModeLabel(connection.mode)} · ${operator.modelId}`} · {AGENT_ROLE_OPTIONS.find((item) => item.id === operator.agentRole)?.label || operator.agentRole}
                         </div>
@@ -4921,7 +4936,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     <div style={{ marginTop: 4, display: 'flex', alignItems: 'flex-start', gap: 8, padding: 10, borderLeft: '2px solid var(--success-border)', background: 'var(--success-bg)' }}>
                         <ShieldCheck size={16} color="var(--success-fg)" style={{ marginTop: 2 }} />
                         <div style={{ fontSize: 12, color: 'var(--success-fg)', lineHeight: 1.45 }}>
-                            Credential values are stored encrypted in local vault files. Your run uses the selected provider and model.
+                            Credential values are stored encrypted in local vault files. Each run requests the configured provider and model, but the effective provider or model can change if runtime override or fallback occurs.
                         </div>
                     </div>
                 </section>

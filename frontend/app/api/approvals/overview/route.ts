@@ -19,6 +19,13 @@ function normalizePendingPayload(status: number, payload: unknown) {
         approval_id: String(record.approval_id || '').trim(),
         prompt: String(record.prompt || '').trim(),
         status: String(record.status || '').trim(),
+        scope: typeof record.scope === 'string' ? record.scope : 'once',
+        reusable: typeof record.reusable === 'boolean' ? record.reusable : false,
+        consequence: typeof record.consequence === 'string' ? record.consequence : null,
+        actions: Array.isArray(record.actions)
+          ? record.actions.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [],
+        target: typeof record.target === 'string' ? record.target : null,
         requested_at: typeof record.requested_at === 'string' ? record.requested_at : null,
         expires_at: typeof record.expires_at === 'string' ? record.expires_at : null,
         correlation_id: typeof record.correlation_id === 'string' ? record.correlation_id : null,

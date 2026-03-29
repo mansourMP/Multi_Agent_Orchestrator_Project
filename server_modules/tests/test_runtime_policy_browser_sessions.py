@@ -21,7 +21,7 @@ class RuntimePolicyBrowserSessionTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(evaluation.get("decision"), "approval_required")
+        self.assertEqual(evaluation.get("execution_decision"), "require_confirmation")
         self.assertEqual(evaluation.get("reason"), "browser_authenticated_requires_approval")
 
     def test_authenticated_interactive_browser_is_blocked_on_local_companion_v1(self):
@@ -41,7 +41,7 @@ class RuntimePolicyBrowserSessionTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(evaluation.get("decision"), "blocked")
+        self.assertEqual(evaluation.get("execution_decision"), "deny")
         self.assertEqual(evaluation.get("reason"), "blocked_browser_authenticated_interactive_local_v1")
 
     def test_authenticated_privileged_browser_is_blocked_on_local_companion_v1(self):
@@ -61,7 +61,7 @@ class RuntimePolicyBrowserSessionTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(evaluation.get("decision"), "blocked")
+        self.assertEqual(evaluation.get("execution_decision"), "deny")
         self.assertEqual(evaluation.get("reason"), "blocked_browser_authenticated_privileged_local_v1")
 
 

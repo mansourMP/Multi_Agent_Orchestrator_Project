@@ -233,7 +233,7 @@ class DecisionPayload(BaseModel):
             raise HTTPException(status_code=400, detail="Decision note too long")
         if self.scope is not None:
             normalized_scope = str(self.scope or "").strip().lower()
-            if normalized_scope not in {"once", "workflow", "agent"}:
+            if normalized_scope != "once":
                 raise HTTPException(status_code=400, detail="Decision scope is invalid")
             self.scope = normalized_scope
 

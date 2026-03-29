@@ -10,7 +10,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama")
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
@@ -72,6 +72,64 @@ def parse_json_object_loose(text: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return None
+
+
+def _normalize_prior_messages(
+    prior_messages: Any,
+    *,
+    assistant_role: str = "assistant",
+) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    if not isinstance(prior_messages, list):
+        return normalized
+    allowed_roles = {"user", assistant_role}
+    for item in prior_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role == "assistant":
+            role = assistant_role
+        if role not in allowed_roles:
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _build_chat_messages(
+    user_prompt: str,
+    *,
+    prior_messages: Any = None,
+    assistant_role: str = "assistant",
+) -> List[Dict[str, str]]:
+    messages = _normalize_prior_messages(prior_messages, assistant_role=assistant_role)
+    content = str(user_prompt or "").strip()
+    if content:
+        messages.append({"role": "user", "content": content})
+    return messages
+
+
+def _build_responses_input(
+    user_prompt: str,
+    *,
+    prior_messages: Any = None,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for message in _build_chat_messages(user_prompt, prior_messages=prior_messages):
+        items.append(
+            {
+                "role": message["role"],
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": message["content"],
+                    }
+                ],
+            }
+        )
+    return items
 
 
 def safe_read_json(path: Path, fallback: Any) -> Any:
@@ -282,6 +340,47 @@ def resolve_requested_provider(context: Dict[str, Any], metadata: Dict[str, Any]
     return raw_provider
 
 
+def resolve_requested_model(context: Dict[str, Any], metadata: Dict[str, Any], provider: str = "") -> str:
+    requested = str(
+        context.get("model")
+        or metadata.get("model")
+        or metadata.get("requested_model")
+        or ""
+    ).strip()
+    if requested:
+        return requested
+    pid = str(provider or resolve_requested_provider(context, metadata) or "").strip().lower()
+    if pid == "codex_cli":
+        return (
+            os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
+            or os.getenv("CODEX_MODEL")
+            or "gpt-5.4"
+        ).strip() or "gpt-5.4"
+    if pid == "openai":
+        return (os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or os.getenv("CODEX_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+    if pid == "claude_code_cli":
+        return (os.getenv("ORION_LOCAL_WORKER_CLAUDE_CODE_MODEL") or "sonnet").strip() or "sonnet"
+    if pid == "anthropic":
+        return (os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+    if pid == "gemini":
+        return (os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    if pid == "ollama":
+        return (os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    return ""
+
+
+def resolve_requested_reasoning_effort(context: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    requested = str(
+        context.get("reasoning_effort")
+        or metadata.get("reasoning_effort")
+        or metadata.get("requested_reasoning_effort")
+        or ""
+    ).strip().lower()
+    if requested in {"low", "medium", "high", "xhigh"}:
+        return requested
+    return ""
+
+
 def format_provider_error(exc: Exception) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         status = getattr(exc, "code", None)
@@ -302,24 +401,30 @@ def format_provider_error(exc: Exception) -> str:
     return str(exc)
 
 
-def openai_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def openai_chat_json(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     api_key = get_openai_api_key()
     if not api_key:
         return None, None, "", "missing_api_key"
 
-    model = (os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
 
+    messages: List[Dict[str, str]] = []
+    if str(system_prompt or "").strip():
+        messages.append({"role": "system", "content": str(system_prompt).strip()})
+    messages.extend(_build_chat_messages(user_prompt, prior_messages=prior_messages))
     payload = {
         "model": model,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
     }
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -388,7 +493,13 @@ def extract_openai_text(payload: Dict[str, Any]) -> str:
     return ""
 
 
-def openai_codex_backend_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+def openai_codex_backend_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    reasoning_effort_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     token = get_openai_bearer_token()
     if not token:
         return "", None, "", "missing_oauth_token"
@@ -398,12 +509,17 @@ def openai_codex_backend_text(system_prompt: str, user_prompt: str) -> Tuple[str
         return "", None, "", "missing_chatgpt_account_id"
 
     model = (
-        os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
+        str(model_override or "").strip()
+        or os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
         or os.getenv("CODEX_MODEL")
         or "gpt-5.4"
     ).strip() or "gpt-5.4"
     timeout_seconds = max(20, to_int(os.getenv("ORION_LOCAL_WORKER_CODEX_TIMEOUT_SECONDS"), 90))
-    reasoning_effort = str(os.getenv("ORION_LOCAL_WORKER_CODEX_REASONING_EFFORT") or "low").strip().lower() or "low"
+    reasoning_effort = (
+        str(reasoning_effort_override or "").strip().lower()
+        or str(os.getenv("ORION_LOCAL_WORKER_CODEX_REASONING_EFFORT") or "low").strip().lower()
+        or "low"
+    )
     api_url = ensure_trailing_slashless(
         os.getenv("ORION_LOCAL_WORKER_CODEX_RESPONSES_URL")
         or "https://chatgpt.com/backend-api/codex/responses"
@@ -413,22 +529,13 @@ def openai_codex_backend_text(system_prompt: str, user_prompt: str) -> Tuple[str
         "model": model,
         "store": False,
         "stream": True,
-        "instructions": system_prompt,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": user_prompt,
-                    }
-                ],
-            }
-        ],
+        "input": _build_responses_input(user_prompt, prior_messages=prior_messages),
         "text": {"verbosity": "low"},
         "tool_choice": "auto",
         "parallel_tool_calls": True,
     }
+    if str(system_prompt or "").strip():
+        payload["instructions"] = str(system_prompt).strip()
     if reasoning_effort:
         payload["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
 
@@ -526,13 +633,19 @@ def openai_codex_backend_text(system_prompt: str, user_prompt: str) -> Tuple[str
         return "", None, model, format_provider_error(exc)
 
 
-def openai_responses_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+def openai_responses_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     token = get_openai_bearer_token()
     if not token:
         return "", None, "", "missing_api_key"
 
     model = (
-        os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL")
+        str(model_override or "").strip()
+        or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL")
         or os.getenv("CODEX_MODEL")
         or "gpt-4.1"
     ).strip() or "gpt-4.1"
@@ -544,9 +657,10 @@ def openai_responses_text(system_prompt: str, user_prompt: str) -> Tuple[str, Op
     )
     payload = {
         "model": model,
-        "instructions": system_prompt,
-        "input": user_prompt,
+        "input": _build_responses_input(user_prompt, prior_messages=prior_messages),
     }
+    if str(system_prompt or "").strip():
+        payload["instructions"] = str(system_prompt).strip()
     req = urllib.request.Request(
         url=api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -571,21 +685,34 @@ def openai_responses_text(system_prompt: str, user_prompt: str) -> Tuple[str, Op
         return "", None, model, format_provider_error(exc)
 
 
-def codex_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    direct_text, direct_usage, direct_model, direct_error = openai_codex_backend_text(system_prompt, user_prompt)
+def codex_exec_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    reasoning_effort_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    direct_text, direct_usage, direct_model, direct_error = openai_codex_backend_text(
+        system_prompt,
+        user_prompt,
+        model_override=model_override,
+        reasoning_effort_override=reasoning_effort_override,
+        prior_messages=prior_messages,
+    )
     if direct_text:
         return direct_text, direct_usage, direct_model, ""
     if not codex_cli_available():
         return "", None, direct_model or "codex", direct_error or "codex_cli_not_found"
 
     timeout_seconds = max(15, to_int(os.getenv("ORION_LOCAL_WORKER_CODEX_TIMEOUT_SECONDS"), 90))
-    model = (os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL") or "").strip()
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL") or "").strip()
 
-    prompt = (
-        f"{system_prompt}\n\n"
-        "Respond directly to the user request with practical, concise output.\n\n"
-        f"User request:\n{user_prompt}"
-    )
+    prompt_parts: List[str] = []
+    if str(system_prompt or "").strip():
+        prompt_parts.append(str(system_prompt).strip())
+    prompt_parts.append("Respond directly to the user request with practical, concise output.")
+    prompt_parts.append(f"User request:\n{user_prompt}")
+    prompt = "\n\n".join(prompt_parts)
 
     with tempfile.NamedTemporaryFile(prefix="orion-codex-", suffix=".txt", delete=False) as tmp:
         out_path = tmp.name
@@ -641,12 +768,12 @@ def codex_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional
             pass
 
 
-def codex_exec_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def codex_exec_json(system_prompt: str, user_prompt: str, model_override: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     prompt = (
         f"{user_prompt}\n\n"
         'Return strictly valid JSON only with keys: "summary", "content_plan", "next_steps".'
     )
-    text, usage, model, err = codex_exec_text(system_prompt, prompt)
+    text, usage, model, err = codex_exec_text(system_prompt, prompt, model_override=model_override)
     if not text:
         return None, usage, model, err or "codex_empty_output"
     parsed = parse_json_object_loose(text)
@@ -655,12 +782,17 @@ def codex_exec_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict
     return parsed, usage, model, ""
 
 
-def claude_code_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+def claude_code_exec_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     if not claude_code_cli_available():
         return "", None, "sonnet", "claude_code_cli_not_found"
 
     timeout_seconds = max(15, to_int(os.getenv("ORION_LOCAL_WORKER_CLAUDE_CODE_TIMEOUT_SECONDS"), 120))
-    model = (os.getenv("ORION_LOCAL_WORKER_CLAUDE_CODE_MODEL") or "sonnet").strip() or "sonnet"
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_CLAUDE_CODE_MODEL") or "sonnet").strip() or "sonnet"
     cmd = [
         "claude",
         "-p",
@@ -668,10 +800,10 @@ def claude_code_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Op
         "text",
         "--model",
         model,
-        "--system-prompt",
-        system_prompt,
-        user_prompt,
     ]
+    if str(system_prompt or "").strip():
+        cmd.extend(["--system-prompt", str(system_prompt).strip()])
+    cmd.append(user_prompt)
 
     try:
         result = subprocess.run(
@@ -698,12 +830,12 @@ def claude_code_exec_text(system_prompt: str, user_prompt: str) -> Tuple[str, Op
         return "", None, model, f"claude_code_exec_error: {exc}"
 
 
-def claude_code_exec_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def claude_code_exec_json(system_prompt: str, user_prompt: str, model_override: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     prompt = (
         f"{user_prompt}\n\n"
         'Return strictly valid JSON only with keys: "summary", "content_plan", "next_steps".'
     )
-    text, usage, model, err = claude_code_exec_text(system_prompt, prompt)
+    text, usage, model, err = claude_code_exec_text(system_prompt, prompt, model_override=model_override)
     if not text:
         return None, usage, model, err or "claude_code_empty_output"
     parsed = parse_json_object_loose(text)
@@ -712,21 +844,27 @@ def claude_code_exec_json(system_prompt: str, user_prompt: str) -> Tuple[Optiona
     return parsed, usage, model, ""
 
 
-def anthropic_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def anthropic_chat_json(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     api_key = get_anthropic_api_key()
     if not api_key:
         return None, None, "", "missing_api_key"
 
-    model = (os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
     payload = {
         "model": model,
         "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": _build_chat_messages(user_prompt, prior_messages=prior_messages),
     }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
     req = urllib.request.Request(
         url=f"{api_url}/v1/messages",
         data=json.dumps(payload).encode("utf-8"),
@@ -762,18 +900,27 @@ def anthropic_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[
         return None, None, model, format_provider_error(exc)
 
 
-def gemini_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def gemini_chat_json(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     api_key = get_gemini_api_key()
     if not api_key:
         return None, None, "", "missing_api_key"
 
-    model = (os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_GEMINI_URL") or "https://generativelanguage.googleapis.com/v1beta")
     payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "contents": [
+            {"role": item["role"], "parts": [{"text": item["content"]}]}
+            for item in _build_chat_messages(user_prompt, prior_messages=prior_messages, assistant_role="model")
+        ],
     }
+    if str(system_prompt or "").strip():
+        payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
     req = urllib.request.Request(
         url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
         data=json.dumps(payload).encode("utf-8"),
@@ -811,11 +958,16 @@ def gemini_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dic
         return None, None, model, format_provider_error(exc)
 
 
-def ollama_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
+def ollama_chat_json(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     if not ollama_enabled():
         return None, None, "", "ollama_disabled"
 
-    model = (os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_TIMEOUT_SECONDS"), base_timeout))
@@ -832,12 +984,13 @@ def ollama_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dic
         "model": model,
         "stream": False,
         "format": "json",
-        "system": system_prompt,
-        "prompt": user_prompt,
+        "messages": _build_chat_messages(user_prompt, prior_messages=prior_messages),
         "options": {"temperature": temperature, "num_predict": num_predict},
     }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
     req = urllib.request.Request(
-        url=f"{api_url}/api/generate",
+        url=f"{api_url}/api/chat",
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json"},
@@ -847,7 +1000,8 @@ def ollama_chat_json(system_prompt: str, user_prompt: str) -> Tuple[Optional[Dic
         with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
             raw = response.read().decode("utf-8")
         parsed = json.loads(raw)
-        content = parsed.get("response") if isinstance(parsed, dict) else None
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, str) or not content.strip():
             return None, None, model, "empty_content"
         result = parse_json_object_loose(content)
@@ -954,6 +1108,11 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     }
     context_provider = resolve_requested_provider(context, metadata)
     run_source = str(metadata.get("source") or context.get("source") or "").strip().lower()
+    disable_fallback = str(
+        metadata.get("disable_provider_fallback")
+        or context.get("disable_provider_fallback")
+        or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     base = list(requested_order)
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and provider_hint not in base:
@@ -975,6 +1134,8 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
                 base.insert(1, "openai")
 
     fallback_enabled = str(os.getenv("ORION_LOCAL_WORKER_PROVIDER_FALLBACK", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    if disable_fallback and context_provider in SUPPORTED_PROVIDERS:
+        return [context_provider] if provider_has_key(context_provider) else []
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and not fallback_enabled:
         return [provider_hint] if provider_has_key(provider_hint) else []
 
@@ -989,20 +1150,21 @@ def generate_pack_with_provider_fallback(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
     attempted: list[str] = []
     last_error = "no provider credentials available"
+    requested_model = resolve_requested_model(context, metadata)
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         if provider == "codex_cli":
-            result, usage, model, provider_error = codex_exec_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = codex_exec_json(system_prompt, user_prompt, model_override=requested_model)
         elif provider == "claude_code_cli":
-            result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt, model_override=requested_model)
         elif provider == "openai":
-            result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=requested_model)
         elif provider == "anthropic":
-            result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt, model_override=requested_model)
         elif provider == "gemini":
-            result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt, model_override=requested_model)
         elif provider == "ollama":
-            result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt)
+            result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=requested_model)
         else:
             continue
         if isinstance(result, dict):
@@ -1019,15 +1181,24 @@ def generate_chat_reply_with_provider_fallback(
     context: Dict[str, Any],
     metadata: Dict[str, Any],
     user_goal: str,
-    system_prompt: str,
+    system_prompt: Optional[str],
+    prior_messages: Any = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
     attempted: list[str] = []
     last_error = "no provider credentials available"
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
+    requested_model = resolve_requested_model(context, metadata)
+    requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         if provider == "codex_cli":
-            text, usage, model, provider_error = codex_exec_text(system_prompt, user_goal)
+            text, usage, model, provider_error = codex_exec_text(
+                system_prompt,
+                user_goal,
+                model_override=requested_model,
+                reasoning_effort_override=requested_reasoning_effort or None,
+                prior_messages=prior_messages,
+            )
             if text:
                 return (
                     text,
@@ -1038,7 +1209,12 @@ def generate_chat_reply_with_provider_fallback(
             last_error = f"codex_cli generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "claude_code_cli":
-            text, usage, model, provider_error = claude_code_exec_text(system_prompt, user_goal)
+            text, usage, model, provider_error = claude_code_exec_text(
+                system_prompt,
+                user_goal,
+                model_override=requested_model,
+                prior_messages=prior_messages,
+            )
             if text:
                 return (
                     text,
@@ -1051,7 +1227,12 @@ def generate_chat_reply_with_provider_fallback(
         if provider == "openai":
             provider_error = ""
             if not prefer_openai_chat:
-                text, usage, model, provider_error = openai_responses_text(system_prompt, user_goal)
+                text, usage, model, provider_error = openai_responses_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=requested_model,
+                    prior_messages=prior_messages,
+                )
                 if text:
                     return (
                         text,
@@ -1064,7 +1245,12 @@ def generate_chat_reply_with_provider_fallback(
                 f"User goal:\n{user_goal}\n\n"
                 "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
             )
-            result, usage_json, model_json, provider_error_json = openai_chat_json(system_prompt, json_prompt)
+            result, usage_json, model_json, provider_error_json = openai_chat_json(
+                system_prompt,
+                json_prompt,
+                model_override=requested_model,
+                prior_messages=prior_messages,
+            )
             if isinstance(result, dict):
                 reply = str(result.get("reply") or result.get("summary") or "").strip()
                 if reply:
@@ -1083,19 +1269,34 @@ def generate_chat_reply_with_provider_fallback(
                 f"User goal:\n{user_goal}\n\n"
                 "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
             )
-            result, usage, model, provider_error = anthropic_chat_json(system_prompt, prompt)
+            result, usage, model, provider_error = anthropic_chat_json(
+                system_prompt,
+                prompt,
+                model_override=requested_model,
+                prior_messages=prior_messages,
+            )
         elif provider == "gemini":
             prompt = (
                 f"User goal:\n{user_goal}\n\n"
                 "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
             )
-            result, usage, model, provider_error = gemini_chat_json(system_prompt, prompt)
+            result, usage, model, provider_error = gemini_chat_json(
+                system_prompt,
+                prompt,
+                model_override=requested_model,
+                prior_messages=prior_messages,
+            )
         elif provider == "ollama":
             prompt = (
                 f"User goal:\n{user_goal}\n\n"
                 "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
             )
-            result, usage, model, provider_error = ollama_chat_json(system_prompt, prompt)
+            result, usage, model, provider_error = ollama_chat_json(
+                system_prompt,
+                prompt,
+                model_override=requested_model,
+                prior_messages=prior_messages,
+            )
         else:
             continue
         if isinstance(result, dict):

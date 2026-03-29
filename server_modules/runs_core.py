@@ -15,6 +15,9 @@ from server_modules.runs_output import (
     _json_safe,
     _compact_event_text,
     _load_run_history,
+    _persist_live_run_state,
+    _remove_live_run_state,
+    _restore_live_run_state,
     _refresh_archived_run_snapshot,
 )
 
@@ -22,7 +25,164 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
-def _begin_run_pending_approval(
+APPROVAL_SCOPE_ONCE = "once"
+APPROVAL_SCOPE_CONSEQUENCE = "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again."
+_PERSISTED_TERMINAL_RUN_STATUSES = {"completed", "failed", "timeout", "stopped", "cancelled"}
+
+
+def _get_pending_confirmation(run: Dict[str, Any]) -> Dict[str, Any]:
+    pending = run.get("pending_confirmation")
+    if isinstance(pending, dict):
+        return pending
+    legacy = run.get("pending_approval")
+    if isinstance(legacy, dict):
+        return legacy
+    return {}
+
+
+def _set_pending_confirmation(run: Dict[str, Any], payload: Optional[Dict[str, Any]]) -> None:
+    run["pending_confirmation"] = payload
+    run["pending_approval"] = payload
+
+
+def _clear_pending_confirmation(run: Dict[str, Any]) -> None:
+    run["pending_confirmation"] = None
+    run["pending_approval"] = None
+
+
+def _sync_local_runtime_state_snapshot() -> None:
+    try:
+        with LOCAL_QUEUE_LOCK:
+            pending_run_ids = list(LOCAL_PENDING_RUN_IDS)
+            claimed_runs = {
+                run_id: dict(info)
+                for run_id, info in LOCAL_CLAIMED_RUNS.items()
+                if isinstance(info, dict)
+            }
+            runtime_registrations = {
+                runtime_id: dict(record)
+                for runtime_id, record in LOCAL_WORKER_REGISTRY.items()
+                if isinstance(record, dict)
+            }
+        replace_local_runtime_state(
+            ORION_RUNTIME_STATE_DB,
+            pending_run_ids=pending_run_ids,
+            claimed_runs=claimed_runs,
+            runtime_registrations=runtime_registrations,
+        )
+    except Exception:
+        pass
+
+
+def _is_local_runtime_run(run: Dict[str, Any]) -> bool:
+    status = str(run.get("status") or "").strip().lower()
+    if status.endswith("_local"):
+        return True
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    selected = str(
+        metadata.get("execution_target_selected")
+        or metadata.get("execution_target_requested")
+        or ""
+    ).strip().lower()
+    return selected in {"local", "local_companion"}
+
+
+def _load_live_runtime_state() -> None:
+    try:
+        persisted_runs = list_live_run_states(ORION_RUNTIME_STATE_DB)
+        local_state = load_local_runtime_state(ORION_RUNTIME_STATE_DB)
+    except Exception:
+        persisted_runs = []
+        local_state = {}
+
+    runs.clear()
+    RUN_QUEUE_INDEX.clear()
+    for item in persisted_runs:
+        restored = _restore_live_run_state(item)
+        if not restored:
+            continue
+        run_id, run = restored
+        runs[run_id] = run
+        RUN_QUEUE_INDEX[id(run["logs"])] = run_id
+
+    with LOCAL_QUEUE_LOCK:
+        LOCAL_PENDING_RUN_IDS.clear()
+        LOCAL_PENDING_RUN_IDS.extend(
+            [
+                run_id
+                for run_id in (local_state.get("pending_run_ids") if isinstance(local_state, dict) else [])
+                if run_id in runs
+            ]
+        )
+        LOCAL_CLAIMED_RUNS.clear()
+        LOCAL_CLAIMED_RUNS.update(
+            {
+                run_id: dict(claim)
+                for run_id, claim in (local_state.get("claimed_runs") if isinstance(local_state, dict) else {}).items()
+                if run_id in runs and isinstance(claim, dict)
+            }
+        )
+        LOCAL_WORKER_REGISTRY.clear()
+        LOCAL_WORKER_REGISTRY.update(
+            {
+                runtime_id: dict(record)
+                for runtime_id, record in (local_state.get("runtime_registrations") if isinstance(local_state, dict) else {}).items()
+                if isinstance(record, dict)
+            }
+        )
+
+    recovered_queue = False
+    for run_id, run in list(runs.items()):
+        status = str(run.get("status") or "").strip().lower()
+        if status in _PERSISTED_TERMINAL_RUN_STATUSES:
+            _remove_live_run_state(run_id)
+            log_queue = run.get("logs")
+            if log_queue is not None:
+                RUN_QUEUE_INDEX.pop(id(log_queue), None)
+            runs.pop(run_id, None)
+            continue
+        if _is_local_runtime_run(run):
+            if status == "running_local" and run_id not in LOCAL_CLAIMED_RUNS:
+                run["status"] = "queued_local"
+                run["local_worker_id"] = None
+                run["local_claimed_at"] = None
+                run["local_last_heartbeat_at"] = None
+                run["updated_at"] = _utc_now_iso()
+                with LOCAL_QUEUE_LOCK:
+                    if run_id not in LOCAL_PENDING_RUN_IDS:
+                        LOCAL_PENDING_RUN_IDS.append(run_id)
+                _persist_live_run_state(run_id, run)
+                recovered_queue = True
+                continue
+            if status in {"starting", "queued_local"}:
+                run["status"] = "queued_local"
+                run["updated_at"] = _utc_now_iso()
+                with LOCAL_QUEUE_LOCK:
+                    if run_id not in LOCAL_PENDING_RUN_IDS and run_id not in LOCAL_CLAIMED_RUNS:
+                        LOCAL_PENDING_RUN_IDS.append(run_id)
+                _persist_live_run_state(run_id, run)
+                recovered_queue = True
+                continue
+            _persist_live_run_state(run_id, run)
+            continue
+        if status in {"starting", "running"}:
+            emit_log(
+                run["logs"],
+                "error",
+                "Run interrupted when the runtime restarted.",
+                event="runtime_restart_interrupted_run",
+                data={"run_id": run_id},
+            )
+            run["result"] = "Run interrupted when the runtime restarted."
+            set_run_status(run_id, "failed")
+            run["logs"].put(None)
+            continue
+        _persist_live_run_state(run_id, run)
+    if recovered_queue:
+        _sync_local_runtime_state_snapshot()
+
+def _begin_run_pending_confirmation(
     run_id: str,
     prompt: str,
     *,
@@ -48,6 +208,13 @@ def _begin_run_pending_approval(
     expires_at = (_utc_now() + timedelta(seconds=ttl_seconds)).isoformat().replace("+00:00", "Z")
     approval_id = str(uuid.uuid4())
     correlation_id = _approval_correlation_id(approval_id, run_id=run_id)
+    safe_metadata = _json_safe(metadata if isinstance(metadata, dict) else {})
+    approval_actions = [
+        str(item).strip()
+        for item in (safe_metadata.get("approval_actions") if isinstance(safe_metadata.get("approval_actions"), list) else [])
+        if str(item).strip()
+    ]
+    approval_target = str(safe_metadata.get("target") or "").strip() or None
     payload = {
         "approval_id": approval_id,
         "correlation_id": correlation_id,
@@ -56,9 +223,14 @@ def _begin_run_pending_approval(
         "expires_at": expires_at,
         "prompt": prompt,
         "ttl_seconds": ttl_seconds,
-        "metadata": _json_safe(metadata if isinstance(metadata, dict) else {}),
+        "scope": APPROVAL_SCOPE_ONCE,
+        "reusable": False,
+        "consequence": APPROVAL_SCOPE_CONSEQUENCE,
+        "actions": approval_actions,
+        "target": approval_target,
+        "metadata": safe_metadata,
     }
-    run["pending_approval"] = payload
+    _set_pending_confirmation(run, payload)
     emit_log(
         run["logs"],
         "warn",
@@ -69,7 +241,9 @@ def _begin_run_pending_approval(
             "correlation_id": correlation_id,
             "ttl_seconds": ttl_seconds,
             "expires_at": expires_at,
-            **(_json_safe(metadata) if isinstance(metadata, dict) else {}),
+            "scope": APPROVAL_SCOPE_ONCE,
+            "reusable": False,
+            **safe_metadata,
         },
     )
     _append_approval_audit(
@@ -80,7 +254,13 @@ def _begin_run_pending_approval(
         run_id=run_id,
         note=prompt,
         correlation_id=correlation_id,
-        metadata={"ttl_seconds": ttl_seconds, "expires_at": expires_at, **(metadata or {})},
+        metadata={
+            "ttl_seconds": ttl_seconds,
+            "expires_at": expires_at,
+            "scope": APPROVAL_SCOPE_ONCE,
+            "reusable": False,
+            **(safe_metadata if isinstance(safe_metadata, dict) else {}),
+        },
     )
     emit_log(
         run["logs"],
@@ -106,6 +286,23 @@ def _begin_run_pending_approval(
     if emit_pause_required:
         run["logs"].put("__PAUSE_REQUIRED__")
     return payload
+
+
+def _begin_run_pending_approval(
+    run_id: str,
+    prompt: str,
+    *,
+    source: str = "runtime",
+    metadata: Optional[Dict[str, Any]] = None,
+    emit_pause_required: bool = False,
+) -> Dict[str, Any]:
+    return _begin_run_pending_confirmation(
+        run_id,
+        prompt,
+        source=source,
+        metadata=metadata,
+        emit_pause_required=emit_pause_required,
+    )
 
 def _persist_weekly_schedules():
     with SCHEDULES_LOCK:
@@ -194,6 +391,10 @@ def set_run_status(run_id: str, status: str):
         log_queue = run.get("logs")
         if log_queue is not None:
             RUN_QUEUE_INDEX.pop(id(log_queue), None)
+        _remove_live_run_state(run_id)
+        _sync_local_runtime_state_snapshot()
+    else:
+        _persist_live_run_state(run_id, run)
     if parent_run_id and status in TERMINAL_RUN_STATUSES:
         _refresh_parent_delegation_state(parent_run_id, triggering_run_id=run_id)
 
@@ -291,6 +492,7 @@ def initialize_runtime_services() -> None:
     if _runtime_services_initialized:
         return
     init_runtime_state_db(ORION_RUNTIME_STATE_DB)
+    _load_live_runtime_state()
     _load_run_history()
     _load_approval_audit()
     _load_channel_events()
@@ -419,24 +621,30 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     }
 
 
-def _local_execution_requires_start_approval(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
+def _local_execution_requires_start_confirmation(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
     target = str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip().lower()
     outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
     if target != EXECUTION_TARGET_LOCAL_COMPANION:
         return False
     if outcome_pack != LOCAL_EXECUTION_PACK_ID:
         return False
-    return bool(precheck.get("approval_required_count"))
+    return bool(precheck.get("require_confirmation_count") or precheck.get("approval_required_count"))
 
 
-def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "approval_required") -> List[str]:
+def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "require_confirmation") -> List[str]:
     items = precheck.get("items") if isinstance(precheck.get("items"), list) else []
     labels: List[str] = []
     seen: Set[str] = set()
+    accepted = {str(decision or "").strip().lower()}
+    if "require_confirmation" in accepted:
+        accepted.add("approval_required")
+    if "deny" in accepted:
+        accepted.add("blocked")
     for item in items:
         if not isinstance(item, dict):
             continue
-        if str(item.get("decision") or "").strip().lower() != decision:
+        item_decision = str(item.get("execution_decision") or item.get("decision") or "").strip().lower()
+        if item_decision not in accepted:
             continue
         capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
         capability_labels = [
@@ -456,15 +664,15 @@ def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "app
     return labels
 
 
-def _local_execution_approval_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="approval_required")
+def _local_execution_confirmation_prompt(precheck: Dict[str, Any]) -> str:
+    labels = _precheck_human_action_labels(precheck, decision="require_confirmation")
     if labels:
-        return f"Approval required before local companion execution: {', '.join(labels)}."
-    return "Approval required before local companion execution."
+        return f"Confirmation required before local companion execution: {', '.join(labels)}."
+    return "Confirmation required before local companion execution."
 
 
 def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="blocked")
+    labels = _precheck_human_action_labels(precheck, decision="deny")
     if labels:
         return f"Run blocked by local execution policy: {', '.join(labels)}."
     return "Run blocked by local execution policy."
@@ -477,7 +685,7 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
 
     approved_tools = [
         str(item).strip().lower()
-        for item in (precheck.get("approval_required") or [])
+        for item in (precheck.get("require_confirmation") or precheck.get("approval_required") or [])
         if str(item).strip()
     ]
     if not approved_tools:
@@ -500,10 +708,13 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
         next_item = dict(item)
         tool_id = str(next_item.get("tool_id") or "").strip().lower()
         if tool_id in approved_tools:
+            next_item["execution_decision"] = "allow"
             next_item["decision"] = "allow"
-            next_item["reason"] = "approved_for_local_execution"
+            next_item["reason"] = "confirmed_for_local_execution"
         rewritten_items.append(next_item)
 
+    precheck["require_confirmation"] = []
+    precheck["require_confirmation_count"] = 0
     precheck["approval_required"] = []
     precheck["approval_required_count"] = 0
     precheck["allowed"] = sorted(allowed_set)
@@ -559,26 +770,33 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             status_code=409,
             detail=_local_execution_block_prompt(metadata["tool_policy_precheck"]),
         )
-    needs_local_approval = _local_execution_requires_start_approval(metadata, metadata["tool_policy_precheck"])
-    if needs_local_approval:
+    runtime_policy = resolve_runtime_policy_mode(
+        metadata,
+        selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
+    )
+    metadata["policy_mode"] = runtime_policy.get("policy_mode")
+    needs_local_confirmation = _local_execution_requires_start_confirmation(metadata, metadata["tool_policy_precheck"])
+    if needs_local_confirmation:
+        metadata["local_execution_waiting_confirmation"] = True
         metadata["local_execution_waiting_approval"] = True
         preview_context["metadata"] = metadata
     run_id = create_run(
         engine=engine,
         context=preview_context,
-        defer_local_enqueue=needs_local_approval,
+        defer_local_enqueue=needs_local_confirmation,
     )
     created_run = runs.get(run_id) if isinstance(runs.get(run_id), dict) else {}
     status = "starting"
-    if needs_local_approval:
-        approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="approval_required")
-        pending = _begin_run_pending_approval(
+    if needs_local_confirmation:
+        approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="require_confirmation")
+        pending = _begin_run_pending_confirmation(
             run_id,
-            _local_execution_approval_prompt(metadata["tool_policy_precheck"]),
+            _local_execution_confirmation_prompt(metadata["tool_policy_precheck"]),
             source="local_execution_start",
             metadata={
                 "target": metadata.get("execution_target_selected"),
-                "approval_actions": list(metadata["tool_policy_precheck"].get("approval_required") or []),
+                "policy_mode": metadata.get("policy_mode"),
+                "approval_actions": list(metadata["tool_policy_precheck"].get("require_confirmation") or []),
                 "approval_labels": approval_labels,
                 "approval_capabilities": list(metadata["tool_policy_precheck"].get("capability_ids") or []),
                 "outcome_pack": metadata.get("outcome_pack"),
@@ -595,6 +813,9 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "active_profile_label": created_run.get("active_profile_label"),
         "active_profile_provider": created_run.get("active_provider"),
         "active_profile_model": created_run.get("active_model"),
+        "requested_provider": str(req.provider or "").strip().lower() or None,
+        "requested_model": str(req.model or "").strip() or None,
+        "policy_mode": metadata.get("policy_mode"),
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
         "parent_run_id": metadata.get("parent_run_id"),

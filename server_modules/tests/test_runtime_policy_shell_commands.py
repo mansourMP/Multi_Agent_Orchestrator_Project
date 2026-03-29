@@ -13,7 +13,7 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
             capability_ids=[],
         )
 
-        self.assertEqual(evaluation.get("decision"), "blocked")
+        self.assertEqual(evaluation.get("execution_decision"), "deny")
         self.assertEqual(evaluation.get("reason"), "blocked_raw_shell_command")
         self.assertTrue(evaluation.get("uses_raw_command_path"))
         self.assertFalse(evaluation.get("uses_capability_path"))
@@ -27,8 +27,8 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
             capability_ids=["stack.status"],
         )
 
-        self.assertEqual(evaluation.get("decision"), "approval_required")
-        self.assertEqual(evaluation.get("reason"), "guarded_requires_approval_critical")
+        self.assertEqual(evaluation.get("execution_decision"), "deny")
+        self.assertEqual(evaluation.get("reason"), "runtime_policy_deny_destructive")
         self.assertTrue(evaluation.get("uses_capability_path"))
         self.assertFalse(evaluation.get("uses_raw_command_path"))
 

@@ -61,6 +61,34 @@ ORION_RUNTIME_TRUST_MODE_DEFAULT = (
 if ORION_RUNTIME_TRUST_MODE_DEFAULT not in VALID_TRUST_MODES:
     ORION_RUNTIME_TRUST_MODE_DEFAULT = TRUST_MODE_GUARDED
 
+POLICY_MODE_LOCAL_DEFAULT = "local_default"
+POLICY_MODE_TRUSTED_FULL_ACCESS = "trusted_full_access"
+VALID_POLICY_MODES = {
+    POLICY_MODE_LOCAL_DEFAULT,
+    POLICY_MODE_TRUSTED_FULL_ACCESS,
+}
+POLICY_MODE_ALIASES = {
+    "local": POLICY_MODE_LOCAL_DEFAULT,
+    "local_default": POLICY_MODE_LOCAL_DEFAULT,
+    "default": POLICY_MODE_LOCAL_DEFAULT,
+    "trusted": POLICY_MODE_TRUSTED_FULL_ACCESS,
+    "trusted_full_access": POLICY_MODE_TRUSTED_FULL_ACCESS,
+    "full_access": POLICY_MODE_TRUSTED_FULL_ACCESS,
+}
+ORION_RUNTIME_POLICY_MODE_DEFAULT = (
+    str(os.getenv("ORION_RUNTIME_POLICY_MODE_DEFAULT") or POLICY_MODE_LOCAL_DEFAULT).strip().lower()
+    or POLICY_MODE_LOCAL_DEFAULT
+)
+if ORION_RUNTIME_POLICY_MODE_DEFAULT not in VALID_POLICY_MODES:
+    ORION_RUNTIME_POLICY_MODE_DEFAULT = POLICY_MODE_LOCAL_DEFAULT
+
+ACTION_TYPE_READ = "read"
+ACTION_TYPE_DRAFT = "draft"
+ACTION_TYPE_REVERSIBLE_WRITE = "reversible_write"
+ACTION_TYPE_EXTERNAL_SEND = "external_send"
+ACTION_TYPE_PUBLIC_PUBLISH = "public_publish"
+ACTION_TYPE_DESTRUCTIVE = "destructive"
+
 EXECUTION_TARGET_AUTO = "auto"
 EXECUTION_TARGET_CLOUD = "cloud"
 EXECUTION_TARGET_LOCAL_COMPANION = "local_companion"
@@ -486,9 +514,18 @@ def merge_action_policies(base: Optional[Dict[str, Any]], enforced: Optional[Dic
     }
 
 
+def _legacy_decision_label(execution_decision: str) -> str:
+    normalized = str(execution_decision or "").strip().lower()
+    if normalized == "deny":
+        return "blocked"
+    if normalized == "require_confirmation":
+        return "approval_required"
+    return "allow"
+
+
 def evaluate_action_policy(
     action_counts: Dict[str, int],
-    trust_mode: str,
+    policy_mode: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     selected_target: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -496,14 +533,15 @@ def evaluate_action_policy(
     metadata = metadata if isinstance(metadata, dict) else {}
     policy = _action_policy_from_metadata(metadata)
     blocked_actions: Set[str] = set(policy.get("blocked_actions", set()))
-    approval_actions: Set[str] = set(policy.get("approval_actions", set()))
     allow_actions: Set[str] = set(policy.get("allow_actions", set()))
     block_cloud_critical = bool(policy.get("block_cloud_critical", True))
 
     target = normalize_execution_target(selected_target or metadata.get("execution_target_selected") or metadata.get("execution_target"))
+    runtime_policy = resolve_runtime_policy_mode(metadata, selected_target=target)
+    effective_policy_mode = normalize_policy_mode(policy_mode or runtime_policy.get("policy_mode"))
     evaluated: List[Dict[str, Any]] = []
-    blocked: List[str] = []
-    requires_approval_actions: List[str] = []
+    denied_actions: List[str] = []
+    confirmation_required_actions: List[str] = []
 
     for action, count in sorted(action_counts.items()):
         if count <= 0:
@@ -511,75 +549,90 @@ def evaluate_action_policy(
         normalized = normalize_action_id(action)
         if not normalized:
             continue
-        risk = ACTION_RISK_LEVELS.get(normalized, "medium")
-        decision = "allow"
+        classification = classify_runtime_action(normalized, count=count, target=target)
+        execution_decision = "allow"
         reasons: List[str] = []
 
         if normalized in blocked_actions and normalized not in allow_actions:
-            decision = "blocked"
+            execution_decision = "deny"
             reasons.append("Blocked by action policy.")
 
         if (
-            decision != "blocked"
+            execution_decision != "deny"
             and block_cloud_critical
             and target == EXECUTION_TARGET_CLOUD
-            and risk == "critical"
+            and bool(classification.get("destructive_risk"))
             and normalized not in allow_actions
         ):
-            decision = "blocked"
+            execution_decision = "deny"
             reasons.append("Critical action is blocked in cloud runtime.")
 
-        if decision != "blocked":
-            requires_approval = False
-            if trust_mode == TRUST_MODE_STRICT:
-                requires_approval = True
-            elif trust_mode == TRUST_MODE_AUTO:
-                requires_approval = False
+        if execution_decision != "deny":
+            action_type = str(classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE)
+            external_visibility = bool(classification.get("external_visibility"))
+            destructive_risk = bool(classification.get("destructive_risk"))
+            if destructive_risk:
+                execution_decision = "deny"
+                reasons.append("Destructive actions stay blocked by runtime policy.")
+            elif effective_policy_mode == POLICY_MODE_TRUSTED_FULL_ACCESS:
+                if action_type == ACTION_TYPE_PUBLIC_PUBLISH:
+                    execution_decision = "require_confirmation"
+                    reasons.append("Public publishing still requires one-time confirmation.")
             else:
-                if normalized in approval_actions or risk in {"high", "critical"}:
-                    requires_approval = True
+                if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
+                    execution_decision = "allow"
+                elif action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
+                    execution_decision = "allow"
+                else:
+                    execution_decision = "require_confirmation"
+                    reasons.append("This action requires one-time confirmation in local default mode.")
 
-            if requires_approval:
-                decision = "approval_required"
-                reasons.append("Requires human approval under trust policy.")
-                requires_approval_actions.append(normalized)
-
-        if decision == "blocked":
-            blocked.append(normalized)
+        if execution_decision == "deny":
+            denied_actions.append(normalized)
+        elif execution_decision == "require_confirmation":
+            confirmation_required_actions.append(normalized)
 
         evaluated.append(
             {
                 "action": normalized,
                 "count": count,
-                "risk": risk,
-                "decision": decision,
+                "risk": ACTION_RISK_LEVELS.get(normalized, "medium"),
+                "policy_mode": effective_policy_mode,
+                "classification": classification,
+                "execution_decision": execution_decision,
+                "decision": _legacy_decision_label(execution_decision),
                 "reason": " ".join(reasons).strip() or None,
             }
         )
 
-    approval_reason = ""
-    if requires_approval_actions:
-        uniq = sorted(set(requires_approval_actions))
-        approval_reason = f"Action policy requires approval for: {', '.join(uniq)}."
+    confirmation_reason = ""
+    if confirmation_required_actions:
+        uniq = sorted(set(confirmation_required_actions))
+        confirmation_reason = f"Runtime policy requires one-time confirmation for: {', '.join(uniq)}."
     return {
         "evaluated": evaluated,
-        "blocked_actions": sorted(set(blocked)),
-        "approval_actions": sorted(set(requires_approval_actions)),
-        "requires_approval": bool(requires_approval_actions),
-        "approval_reason": approval_reason,
+        "policy_mode": effective_policy_mode,
+        "denied_actions": sorted(set(denied_actions)),
+        "confirmation_required_actions": sorted(set(confirmation_required_actions)),
+        "requires_confirmation": bool(confirmation_required_actions),
+        "confirmation_reason": confirmation_reason,
+        "blocked_actions": sorted(set(denied_actions)),
+        "approval_actions": sorted(set(confirmation_required_actions)),
+        "requires_approval": bool(confirmation_required_actions),
+        "approval_reason": confirmation_reason,
         "target": target,
     }
 
 
 def summarize_action_policy_eval(eval_data: Dict[str, Any]) -> str:
     evaluated = eval_data.get("evaluated") if isinstance(eval_data.get("evaluated"), list) else []
-    blocked = eval_data.get("blocked_actions") if isinstance(eval_data.get("blocked_actions"), list) else []
-    approval = eval_data.get("approval_actions") if isinstance(eval_data.get("approval_actions"), list) else []
+    blocked = eval_data.get("denied_actions") if isinstance(eval_data.get("denied_actions"), list) else []
+    approval = eval_data.get("confirmation_required_actions") if isinstance(eval_data.get("confirmation_required_actions"), list) else []
     if not evaluated:
         return "Action policy: no actionable operations detected."
     return (
         f"Action policy: evaluated={len(evaluated)} "
-        f"approval_required={len(approval)} blocked={len(blocked)}."
+        f"confirmation_required={len(approval)} denied={len(blocked)}."
     )
 
 
@@ -978,6 +1031,16 @@ def normalize_trust_mode(raw_value: Any) -> str:
     return ORION_RUNTIME_TRUST_MODE_DEFAULT
 
 
+def normalize_policy_mode(raw_value: Any) -> str:
+    raw = str(raw_value or "").strip().lower()
+    if not raw:
+        return ORION_RUNTIME_POLICY_MODE_DEFAULT
+    normalized = POLICY_MODE_ALIASES.get(raw, raw)
+    if normalized in VALID_POLICY_MODES:
+        return normalized
+    return ORION_RUNTIME_POLICY_MODE_DEFAULT
+
+
 def normalize_execution_target(raw_value: Any) -> str:
     raw = str(raw_value or "").strip().lower()
     if raw in {"local", "local-worker", "local_worker", "companion", "localcompanion", "local_companion"}:
@@ -987,6 +1050,241 @@ def normalize_execution_target(raw_value: Any) -> str:
     if raw in {"auto", "hybrid", ""}:
         return EXECUTION_TARGET_AUTO
     return EXECUTION_TARGET_AUTO
+
+
+def resolve_runtime_policy_mode(
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    selected_target: Optional[str] = None,
+) -> Dict[str, Any]:
+    _init()
+    clean_metadata = metadata if isinstance(metadata, dict) else {}
+    target = normalize_execution_target(
+        selected_target
+        or clean_metadata.get("execution_target_selected")
+        or clean_metadata.get("execution_target")
+    )
+    runtime_ids: List[str] = []
+    seen: Set[str] = set()
+    explicit_runtime_id = str(
+        clean_metadata.get("runtime_id")
+        or clean_metadata.get("execution_runtime_id")
+        or clean_metadata.get("execution_target_runtime_id")
+        or clean_metadata.get("execution_target_preferred_runtime_id")
+        or ""
+    ).strip()
+    if explicit_runtime_id:
+        runtime_ids.append(explicit_runtime_id)
+        seen.add(explicit_runtime_id)
+    for raw in clean_metadata.get("execution_target_matching_runtime_ids") or []:
+        token = str(raw or "").strip()
+        if token and token not in seen:
+            seen.add(token)
+            runtime_ids.append(token)
+    resolved_modes: List[str] = []
+    resolved_runtime_id: Optional[str] = None
+    for runtime_id in runtime_ids:
+        record = LOCAL_WORKER_REGISTRY.get(runtime_id) if isinstance(LOCAL_WORKER_REGISTRY.get(runtime_id), dict) else None
+        if not isinstance(record, dict):
+            continue
+        resolved_mode = normalize_policy_mode(record.get("policy_mode"))
+        if resolved_runtime_id is None:
+            resolved_runtime_id = runtime_id
+        resolved_modes.append(resolved_mode)
+    if resolved_modes:
+        unique_modes = sorted(set(resolved_modes))
+        policy_mode = unique_modes[0] if len(unique_modes) == 1 else POLICY_MODE_LOCAL_DEFAULT
+        source = "runtime_registration" if len(unique_modes) == 1 else "runtime_registration_mixed"
+        return {
+            "policy_mode": policy_mode,
+            "runtime_id": resolved_runtime_id,
+            "candidate_runtime_ids": runtime_ids,
+            "source": source,
+            "target": target,
+        }
+    explicit_policy_mode = clean_metadata.get("policy_mode")
+    if explicit_policy_mode is not None:
+        return {
+            "policy_mode": normalize_policy_mode(explicit_policy_mode),
+            "runtime_id": resolved_runtime_id,
+            "candidate_runtime_ids": runtime_ids,
+            "source": "metadata_fallback",
+            "target": target,
+        }
+    return {
+        "policy_mode": ORION_RUNTIME_POLICY_MODE_DEFAULT,
+        "runtime_id": resolved_runtime_id,
+        "candidate_runtime_ids": runtime_ids,
+        "source": "runtime_default",
+        "target": target,
+    }
+
+
+def classify_runtime_action(
+    action_id: str,
+    *,
+    count: int = 1,
+    target: Optional[str] = None,
+) -> Dict[str, Any]:
+    normalized = normalize_action_id(action_id) or str(action_id or "").strip().lower()
+    classification_map: Dict[str, Dict[str, Any]] = {
+        "external_research": {
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "web",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "spreadsheet_read": {
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "spreadsheet",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "draft_email": {
+            "action_type": ACTION_TYPE_DRAFT,
+            "target_system": "email",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "send_message": {
+            "action_type": ACTION_TYPE_EXTERNAL_SEND,
+            "target_system": "messaging",
+            "reversibility": False,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "create_calendar_event": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "calendar",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "publish_content": {
+            "action_type": ACTION_TYPE_PUBLIC_PUBLISH,
+            "target_system": "social",
+            "reversibility": False,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "spreadsheet_update": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "spreadsheet",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "spreadsheet_append": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "spreadsheet",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "spreadsheet_create": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "spreadsheet",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "document_create": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "document",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "document_update": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "document",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "presentation_create": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "presentation",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "presentation_update": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "presentation",
+            "reversibility": True,
+            "external_visibility": True,
+            "destructive_risk": False,
+        },
+        "read_write_files": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "local_workspace",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "browser_automation": {
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "browser",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "capture_screenshot": {
+            "action_type": ACTION_TYPE_READ,
+            "target_system": "local_device",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "execute_shell_command": {
+            "action_type": ACTION_TYPE_DESTRUCTIVE,
+            "target_system": "local_device",
+            "reversibility": False,
+            "external_visibility": False,
+            "destructive_risk": True,
+        },
+        "delete_files": {
+            "action_type": ACTION_TYPE_DESTRUCTIVE,
+            "target_system": "local_workspace",
+            "reversibility": False,
+            "external_visibility": False,
+            "destructive_risk": True,
+        },
+        "delete_records": {
+            "action_type": ACTION_TYPE_DESTRUCTIVE,
+            "target_system": "external_system",
+            "reversibility": False,
+            "external_visibility": True,
+            "destructive_risk": True,
+        },
+        "transfer_funds": {
+            "action_type": ACTION_TYPE_DESTRUCTIVE,
+            "target_system": "financial_system",
+            "reversibility": False,
+            "external_visibility": True,
+            "destructive_risk": True,
+        },
+    }
+    base = dict(
+        classification_map.get(
+            normalized,
+            {
+                "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+                "target_system": "external_system",
+                "reversibility": True,
+                "external_visibility": True,
+                "destructive_risk": False,
+            },
+        )
+    )
+    base["action_id"] = normalized
+    base["bulk_risk"] = bool(int(count or 0) > 5)
+    base["target"] = normalize_execution_target(target)
+    return base
 
 
 def _normalize_capability_ids(raw_items: Any) -> List[str]:
@@ -1800,7 +2098,7 @@ def estimate_pack_time_saved_minutes(pack_id: str, result_data: Dict[str, Any]) 
 def build_pack_execution_summary(
     pack_id: str,
     result_data: Dict[str, Any],
-    trust_mode: str,
+    policy_mode: str,
     approval_required: bool,
     approval_reason: str,
 ) -> Dict[str, Any]:
@@ -1808,7 +2106,7 @@ def build_pack_execution_summary(
     next_action = str(next_steps[0]).strip() if next_steps else "Review output and proceed."
     return {
         "schema_version": 1,
-        "trust_mode_applied": trust_mode,
+        "policy_mode_applied": normalize_policy_mode(policy_mode),
         "approval_required": bool(approval_required),
         "approval_reason": approval_reason or None,
         "risk_level": derive_pack_risk_level(result_data),
@@ -1927,13 +2225,13 @@ def evaluate_tool_policy_decision(
 ) -> Dict[str, Any]:
     _init()
     clean_tool_id = normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
-    effective_trust_mode = normalize_trust_mode(trust_mode)
     effective_target = normalize_execution_target(target)
     metadata = metadata if isinstance(metadata, dict) else {}
+    runtime_policy = resolve_runtime_policy_mode(metadata, selected_target=effective_target)
+    effective_policy_mode = runtime_policy.get("policy_mode")
     policy = _action_policy_from_metadata(metadata)
 
     blocked_actions = policy.get("blocked_actions", set())
-    approval_actions = policy.get("approval_actions", set())
     block_cloud_critical = bool(policy.get("block_cloud_critical", True))
 
     browser_policy = metadata.get("browser_automation_policy") if isinstance(metadata.get("browser_automation_policy"), dict) else {}
@@ -1964,49 +2262,58 @@ def evaluate_tool_policy_decision(
         None,
     )
 
-    decision = "allow"
+    classification = classify_runtime_action(clean_tool_id, count=1, target=effective_target)
+    execution_decision = "allow"
     reason = "policy_allow_default"
 
     if unsupported_capability:
-        decision = "blocked"
+        execution_decision = "deny"
         reason = "blocked_unsupported_capability"
     elif uses_raw_command_path:
-        decision = "blocked"
+        execution_decision = "deny"
         reason = "blocked_raw_shell_command"
     elif clean_tool_id in blocked_actions and not uses_capability_path:
-        decision = "blocked"
+        execution_decision = "deny"
         reason = "blocked_by_action_policy"
     elif effective_target == EXECUTION_TARGET_CLOUD and TOOL_POLICY.is_critical(clean_tool_id) and block_cloud_critical:
-        decision = "blocked"
+        execution_decision = "deny"
         reason = "blocked_cloud_critical"
-    elif effective_trust_mode == TRUST_MODE_STRICT:
-        if TOOL_POLICY.is_sensitive(clean_tool_id) or TOOL_POLICY.is_critical(clean_tool_id):
-            decision = "approval_required"
-            reason = "strict_requires_approval"
-    elif effective_trust_mode == TRUST_MODE_GUARDED:
-        if TOOL_POLICY.is_critical(clean_tool_id):
-            decision = "approval_required"
-            reason = "guarded_requires_approval_critical"
-        elif clean_tool_id in approval_actions:
-            decision = "approval_required"
-            reason = "guarded_requires_approval_policy"
+    elif bool(classification.get("destructive_risk")):
+        execution_decision = "deny"
+        reason = "runtime_policy_deny_destructive"
+    elif effective_policy_mode == POLICY_MODE_TRUSTED_FULL_ACCESS:
+        if str(classification.get("action_type") or "") == ACTION_TYPE_PUBLIC_PUBLISH:
+            execution_decision = "require_confirmation"
+            reason = "trusted_full_access_public_publish_requires_confirmation"
+    else:
+        action_type = str(classification.get("action_type") or ACTION_TYPE_REVERSIBLE_WRITE)
+        external_visibility = bool(classification.get("external_visibility"))
+        if action_type in {ACTION_TYPE_READ, ACTION_TYPE_DRAFT}:
+            execution_decision = "allow"
+            reason = "local_default_allow_safe"
+        elif action_type == ACTION_TYPE_REVERSIBLE_WRITE and not external_visibility:
+            execution_decision = "allow"
+            reason = "local_default_allow_local_reversible"
+        else:
+            execution_decision = "require_confirmation"
+            reason = "local_default_requires_confirmation"
 
     if (
-        decision != "blocked"
+        execution_decision != "deny"
         and clean_tool_id == "browser_automation"
         and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
         and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
     ):
-        decision = "blocked"
+        execution_decision = "deny"
         reason = (
             "blocked_browser_authenticated_privileged_local_v1"
             if browser_privileged_actions
             else "blocked_browser_authenticated_interactive_local_v1"
         )
 
-    if decision != "blocked" and clean_tool_id == "browser_automation" and browser_requires_approval:
-        if effective_trust_mode in {TRUST_MODE_GUARDED, TRUST_MODE_STRICT}:
-            decision = "approval_required"
+    if execution_decision != "deny" and clean_tool_id == "browser_automation" and browser_requires_approval:
+        if effective_policy_mode == POLICY_MODE_LOCAL_DEFAULT:
+            execution_decision = "require_confirmation"
             reason = (
                 "browser_authenticated_privileged_requires_approval"
                 if browser_privileged_actions
@@ -2017,12 +2324,15 @@ def evaluate_tool_policy_decision(
         "tool_id": clean_tool_id,
         "capability_ids": capability_ids or None,
         "capabilities": capability_details or None,
-        "decision": decision,
+        "execution_decision": execution_decision,
+        "decision": _legacy_decision_label(execution_decision),
         "reason": reason,
-        "trust_mode": effective_trust_mode,
+        "policy_mode": effective_policy_mode,
+        "runtime_policy_source": runtime_policy.get("source"),
         "target": effective_target,
         "is_sensitive": TOOL_POLICY.is_sensitive(clean_tool_id) or browser_requires_approval,
         "is_critical": TOOL_POLICY.is_critical(clean_tool_id),
+        "classification": classification,
         "uses_capability_path": uses_capability_path,
         "uses_raw_command_path": uses_raw_command_path,
         "unsupported_capability": unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None,
@@ -2036,7 +2346,9 @@ def tool_policy_snapshot(metadata: Optional[Dict[str, Any]] = None) -> Dict[str,
     _init()
     metadata = metadata if isinstance(metadata, dict) else {}
     policy = _action_policy_from_metadata(metadata)
+    runtime_policy = resolve_runtime_policy_mode(metadata)
     return {
+        "policy_mode": runtime_policy.get("policy_mode"),
         "blocked_actions": sorted(policy.get("blocked_actions", set())),
         "approval_actions": sorted(policy.get("approval_actions", set())),
         "allow_actions": sorted(policy.get("allow_actions", set())),

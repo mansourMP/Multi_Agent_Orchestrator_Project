@@ -35,6 +35,11 @@ type ApprovalState = {
   approval_id?: string;
   prompt?: string;
   status?: string;
+  scope?: string | null;
+  reusable?: boolean | null;
+  consequence?: string | null;
+  actions?: string[] | null;
+  target?: string | null;
   requested_at?: string | null;
   expires_at?: string | null;
   metadata?: {
@@ -852,6 +857,18 @@ export default function RunDetailPage() {
                     <strong>{toolAccountRows[0]?.value !== 'No connected tool is recorded yet.' ? `${toolAccountRows[0]?.value} · ${toolAccountRows[1]?.value}` : toolAccountRows[1]?.value}</strong>
                   </div>
                   <div className="hekor-run-info-row">
+                    <span>Action</span>
+                    <strong>{Array.isArray(runDetail.pending_approval.actions) && runDetail.pending_approval.actions.length > 0 ? runDetail.pending_approval.actions.join(', ') : 'Not recorded'}</strong>
+                  </div>
+                  <div className="hekor-run-info-row">
+                    <span>Target</span>
+                    <strong>{runDetail.pending_approval.target || 'Not recorded'}</strong>
+                  </div>
+                  <div className="hekor-run-info-row">
+                    <span>Scope</span>
+                    <strong>{String(runDetail.pending_approval.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(runDetail.pending_approval.scope || 'Unknown')}</strong>
+                  </div>
+                  <div className="hekor-run-info-row">
                     <span>Requested</span>
                     <strong>{formatDateTime(runDetail.pending_approval.requested_at)}</strong>
                   </div>
@@ -859,6 +876,9 @@ export default function RunDetailPage() {
                     <span>Expires</span>
                     <strong>{formatDateTime(runDetail.pending_approval.expires_at)}</strong>
                   </div>
+                </div>
+                <div className="orion-panel-copy" style={{ marginTop: 10 }}>
+                  {runDetail.pending_approval.consequence || 'This approval applies only to this pending step in this run. Later runs or later approval points will ask again.'}
                 </div>
                 {Array.isArray(runDetail.pending_approval.metadata?.approval_labels) && runDetail.pending_approval.metadata?.approval_labels.length ? (
                   <div className="hekor-run-capability-block">
@@ -887,7 +907,7 @@ export default function RunDetailPage() {
                         Approving…
                       </>
                     ) : (
-                      'Approve'
+                      'Approve once'
                     )}
                   </button>
                   <button

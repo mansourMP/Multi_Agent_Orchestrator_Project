@@ -36,7 +36,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const now = Date.now();
     const session: ChatSession = {
       id,
-      title: agent.label,
+      title: "New chat",
       agentId: agent.id,
       agentName: agent.label,
       runtimeRole: agent.runtimeRole,
@@ -82,7 +82,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!trimmed) return;
     set((state) => ({
       sessions: state.sessions.map((session) =>
-        session.id === id ? { ...session, title: trimmed, agentName: trimmed, updatedAt: Date.now() } : session
+        session.id === id ? { ...session, title: trimmed, updatedAt: Date.now() } : session
       ),
     }));
   },

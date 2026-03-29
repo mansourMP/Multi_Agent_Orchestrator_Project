@@ -19,9 +19,8 @@ from orion_local_worker_llm import (
 from orion_local_worker_runtime import RateLimitError, RuntimeClient
 from orion_local_worker_spreadsheets import build_spreadsheet_pack_result
 from orion_local_worker_utils import (
-    agent_role_prompt_append_from_metadata,
+    build_operator_system_prompt,
     collapse_duplicate_reply_sections,
-    skill_prompt_append_from_metadata,
     split_items,
 )
 from orion_local_worker_workspace import format_workspace_listing_reply
@@ -84,11 +83,7 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
         attempted_providers = ""
         llm_error = ""
         if use_llm:
-            system_prompt = os.getenv(
-                "ORION_LOCAL_WORKER_SYSTEM_PROMPT",
-                "You are Empyralis Local Worker. Output valid JSON only with keys: summary, content_plan, next_steps. "
-                "content_plan must be an array of objects with: day, channel, format, topic, headline, cta, status.",
-            )
+            system_prompt = build_operator_system_prompt() or None
             user_prompt = (
                 f"Business goal: {goal}\n"
                 f"Topics: {', '.join(topics or ['General update'])}\n"
@@ -298,7 +293,13 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
         summary, data = build_local_execution_pack_result(run, metadata, pack_inputs)
         return summary, data, None
 
-    listing_reply = format_workspace_listing_reply(goal)
+    allow_workspace_listing_reply = str(metadata.get("allow_workspace_listing_reply") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    listing_reply = format_workspace_listing_reply(goal) if allow_workspace_listing_reply else None
     if listing_reply is not None:
         return listing_reply
 
@@ -311,19 +312,7 @@ def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optiona
     attempted_providers = ""
     llm_error = ""
     if use_llm:
-        system_prompt_base = (
-            os.getenv("ORION_LOCAL_WORKER_CHAT_SYSTEM_PROMPT")
-            or "You are Empyralis, a direct and practical AI assistant for business owners. "
-            "Respond naturally, avoid internal metadata, and keep answers concrete."
-        )
-        skill_prompt = skill_prompt_append_from_metadata(metadata)
-        role_prompt = agent_role_prompt_append_from_metadata(metadata)
-        prompt_parts = [system_prompt_base]
-        if role_prompt:
-            prompt_parts.append(role_prompt)
-        if skill_prompt:
-            prompt_parts.append(skill_prompt)
-        system_prompt = "\n\n".join(part.strip() for part in prompt_parts if str(part).strip())
+        system_prompt = build_operator_system_prompt() or None
         reply, usage_masked, attempted_providers, llm_error = generate_chat_reply_with_provider_fallback(
             context=context,
             metadata=metadata,
@@ -448,6 +437,7 @@ def main() -> int:
             runtime_type="local",
             display_name=f"Empyralis Local Worker ({socket.gethostname().split('.')[0]})",
             platform=sys.platform,
+            policy_mode=str(os.getenv("ORION_RUNTIME_POLICY_MODE_DEFAULT") or "local_default").strip() or "local_default",
             capabilities=build_runtime_capabilities(),
             execution_targets=["local"],
             instance_id=runtime_instance_id,

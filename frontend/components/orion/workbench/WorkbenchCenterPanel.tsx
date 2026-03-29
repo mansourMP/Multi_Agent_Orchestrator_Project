@@ -34,6 +34,18 @@ function approvalDisplayText(item: ApprovalQueueItem): string {
   return item.prompt;
 }
 
+function humanizeProviderLabel(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'openai') return 'OpenAI';
+  if (normalized === 'anthropic') return 'Anthropic';
+  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'vertex') return 'Vertex AI';
+  if (normalized === 'codex_cli') return 'Codex/OpenAI';
+  if (normalized === 'claude_code_cli') return 'Claude Code';
+  return normalized.replace(/[_-]+/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 type RecentRunItem = {
   run_id: string;
   status: string;
@@ -44,6 +56,8 @@ type RecentRunItem = {
   result_summary: string | null;
   usage_provider?: string | null;
   usage_model?: string | null;
+  effective_provider?: string | null;
+  effective_model?: string | null;
   execution_target_selected?: string | null;
 };
 
@@ -2317,8 +2331,8 @@ export function WorkbenchCenterPanel({
                 const recentActivityMeta = [
                   item.pack_id ? toTitleCase(item.pack_id) : null,
                   item.execution_target_selected ? formatExecutionTargetLabel(item.execution_target_selected) : null,
-                  item.usage_provider ? item.usage_provider : null,
-                  item.usage_model ? item.usage_model : null,
+                  item.effective_provider ? humanizeProviderLabel(item.effective_provider) : item.usage_provider ? humanizeProviderLabel(item.usage_provider) : null,
+                  item.effective_model ? item.effective_model : item.usage_model ? item.usage_model : null,
                 ].filter(Boolean).join(' · ');
                 return (
                   <div

@@ -2,6 +2,7 @@ from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
+from server_modules.tool_availability_truth import capability_verification_metadata
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -197,6 +198,7 @@ async def create_connector_vault(body: ConnectorCreate):
         **_connector_public_metadata(connector, credentials),
         **(body.metadata or {}),
     }
+    connector_metadata["capability_verification"] = capability_verification_metadata(connector, test)
     if connector == "google_workspace" and isinstance(test, dict):
         profile = test.get("profile") if isinstance(test.get("profile"), dict) else {}
         email_address = str(profile.get("emailAddress") or "").strip() if isinstance(profile, dict) else ""
@@ -336,48 +338,73 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
         raise HTTPException(status_code=404, detail=str(exc))
 
     connector = str(credentials.get("_provider") or "").lower().strip()
+    test_result: Dict[str, Any]
     if connector == "google_workspace":
         try:
-            return validate_google_workspace_connector(credentials)
+            test_result = validate_google_workspace_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "microsoft_365":
+    elif connector == "microsoft_365":
         try:
-            return validate_microsoft_365_connector(credentials)
+            test_result = validate_microsoft_365_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "telegram_bot":
+    elif connector == "telegram_bot":
         try:
-            return validate_telegram_connector(credentials)
+            test_result = validate_telegram_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "wechat_work":
+    elif connector == "wechat_work":
         try:
-            return validate_wechat_work_connector(credentials, send_test=True)
+            test_result = validate_wechat_work_connector(credentials, send_test=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "whatsapp_twilio":
+    elif connector == "whatsapp_twilio":
         try:
-            return validate_whatsapp_twilio_connector(credentials)
+            test_result = validate_whatsapp_twilio_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "discord_bot":
+    elif connector == "discord_bot":
         try:
-            return validate_discord_bot_connector(credentials)
+            test_result = validate_discord_bot_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "instagram_business":
+    elif connector == "instagram_business":
         try:
-            return validate_instagram_business_connector(credentials)
+            test_result = validate_instagram_business_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-    if connector == "irc":
+    elif connector == "irc":
         try:
-            return validate_irc_connector(credentials)
+            test_result = validate_irc_connector(credentials)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported connector '{connector}'")
 
-    raise HTTPException(status_code=400, detail=f"Unsupported connector '{connector}'")
+    vault = load_vault()
+    items = vault.get("credentials", [])
+    if isinstance(items, list):
+        updated = False
+        next_items: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                next_items.append(item)
+                continue
+            if str(item.get("id") or "").strip() != str(credential_id or "").strip():
+                next_items.append(item)
+                continue
+            next_item = dict(item)
+            metadata = dict(next_item.get("metadata") if isinstance(next_item.get("metadata"), dict) else {})
+            metadata["capability_verification"] = capability_verification_metadata(connector, test_result)
+            next_item["metadata"] = _sanitize_connector_metadata(metadata)
+            next_item["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            next_items.append(next_item)
+            updated = True
+        if updated:
+            vault["credentials"] = next_items
+            save_vault(vault)
+    return test_result
 
 async def delete_connector_vault(credential_id: str, workspace_id: Optional[str] = None):
     vault = load_vault()

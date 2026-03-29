@@ -3965,16 +3965,35 @@ input:focus-visible {
 
 .orion-chat-v2 {
   width: 100%;
-  min-height: calc(100vh - var(--topbar-height) - 28px);
+  flex: 1;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.orion-workbench-grid {
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
+  align-content: stretch;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 0%;
 }
 
 .orion-chat-v2-thread-shell {
   width: 100%;
   flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 18px 0 188px;
   position: relative;
+  scrollbar-gutter: stable;
 }
 
 .orion-chat-v2-session-strip {
@@ -4306,7 +4325,7 @@ input:focus-visible {
 .orion-chat-v2-thread {
   width: 100%;
   display: grid;
-  gap: 48px;
+  gap: 14px;
   padding: 0 24px 24px;
 }
 
@@ -4315,9 +4334,14 @@ input:focus-visible {
 }
 
 .orion-chat-v2-turn {
-  width: min(100%, 720px);
+  width: min(100%, 680px);
   margin: 0 auto;
   display: flex;
+  align-items: flex-start;
+}
+
+.orion-chat-v2-turn.is-following-user {
+  margin-top: -4px;
 }
 
 .orion-chat-v2-turn.is-user {
@@ -4332,17 +4356,28 @@ input:focus-visible {
   animation: orionChatAssistantEnter 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
+.orion-chat-v2-user-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  width: fit-content;
+  flex: 0 0 auto;
+  max-width: min(68%, 420px);
+}
+
 .orion-chat-v2-user-bubble {
   width: fit-content;
-  max-width: 62%;
-  display: grid;
-  gap: 6px;
-  padding: 12px 16px;
-  border-radius: 20px;
-  background: #f4f4f4;
+  max-width: 100%;
+  display: inline-flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: #f5f3ef;
   color: #171717;
   text-align: left;
-  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(17, 17, 17, 0.04);
+  align-self: flex-start;
 }
 
 [data-theme='dark'] .orion-chat-v2-user-bubble {
@@ -4352,17 +4387,53 @@ input:focus-visible {
 }
 
 .orion-chat-v2-user-text {
-  font-size: 14.5px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.45;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .orion-chat-v2-assistant {
   width: min(100%, 680px);
   text-align: left;
   display: grid;
-  gap: 10px;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.orion-chat-v2-loading {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+.orion-chat-v2-loading.is-working {
+  color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary) 28%);
+}
+
+.orion-chat-v2-loading-orb {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: none;
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.orion-chat-v2-loading-copy {
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .orion-chat-v2-state {
@@ -4630,6 +4701,12 @@ input:focus-visible {
   color: var(--text-tertiary);
   opacity: 0;
   transition: opacity var(--motion-fast) var(--easing-standard);
+}
+
+.orion-chat-v2-user-stack .orion-chat-v2-meta {
+  margin-top: 0;
+  padding-right: 4px;
+  opacity: 1;
 }
 
 .orion-chat-v2-turn:hover .orion-chat-v2-meta,
@@ -4956,104 +5033,254 @@ input:focus-visible {
 }
 
 .orion-chat-v2-thread-shell {
-  padding: 20px 0 184px;
+  padding: 18px 0 168px;
 }
 
-.orion-chat-v2-topline {
+.orion-chat-v2-session-bar {
   width: min(760px, calc(100vw - var(--sidebar-width) - 96px));
-  margin: 0 auto 18px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.orion-chat-v2-session-pill {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  box-shadow: 0 8px 20px rgba(17, 17, 17, 0.04);
+}
+
+.orion-chat-v2-session-pill:hover {
+  color: var(--text-primary);
+}
+
+.orion-chat-v2.is-empty .orion-chat-v2-thread-shell {
+  min-height: calc(100vh - var(--topbar-height) - 48px);
+  display: block;
+  justify-items: stretch;
+  align-content: start;
+  padding: 18px 0 168px;
+}
+
+.orion-chat-v2-thread {
+  min-height: 100%;
+  gap: 14px;
+  padding: 0 24px 18px;
+}
+
+.orion-chat-v2-assistant {
+  width: min(100%, 680px);
+  gap: 6px;
+}
+
+.orion-chat-v2-markdown {
+  font-size: 15px;
+  line-height: 1.64;
+}
+
+.orion-chat-v2-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.orion-chat-v2-action {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: color-mix(in srgb, var(--bg-element) 78%, transparent 22%);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.orion-chat-v2-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary-base) 34%, var(--border-default) 66%);
+  background: color-mix(in srgb, var(--primary-soft) 66%, var(--bg-element) 34%);
+}
+
+.orion-chat-v2-action.is-primary {
+  border-color: color-mix(in srgb, var(--primary-base) 84%, transparent 16%);
+  background: var(--primary-base);
+  color: var(--primary-text);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--primary-base) 22%, transparent 78%);
+}
+
+.orion-chat-v2-action.is-danger {
+  border-color: color-mix(in srgb, var(--error-fg) 22%, var(--border-default) 78%);
+  color: color-mix(in srgb, var(--error-fg) 78%, var(--text-primary) 22%);
+}
+
+.orion-chat-v2-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.orion-chat-v2-run-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 14px 15px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent 24%);
+  background: color-mix(in srgb, var(--bg-element) 72%, transparent 28%);
+  box-shadow: 0 12px 28px rgba(25, 33, 61, 0.06);
+}
+
+.orion-chat-v2-run-card.is-running,
+.orion-chat-v2-run-card.is-preparing {
+  border-color: color-mix(in srgb, var(--primary-base) 22%, var(--border-default) 78%);
+}
+
+.orion-chat-v2-run-card.is-waiting {
+  border-color: color-mix(in srgb, var(--warning-fg) 32%, var(--border-default) 68%);
+  background: color-mix(in srgb, var(--warning-bg) 42%, var(--bg-element) 58%);
+}
+
+.orion-chat-v2-run-card.is-completed {
+  border-color: color-mix(in srgb, var(--success-fg) 26%, var(--border-default) 74%);
+}
+
+.orion-chat-v2-run-card.is-failed {
+  border-color: color-mix(in srgb, var(--error-fg) 26%, var(--border-default) 74%);
+}
+
+.orion-chat-v2-run-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.orion-chat-v2-target-chip,
-.orion-chat-v2-control-chip {
-  min-height: 28px;
+.orion-chat-v2-run-card-title {
+  font-size: 13.5px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.orion-chat-v2-run-card-status {
   display: inline-flex;
   align-items: center;
+  min-height: 25px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
-  background: color-mix(in srgb, var(--bg-surface) 92%, transparent 8%);
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent 14%);
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.orion-chat-v2-target-chip:hover,
-.orion-chat-v2-topline-link:hover {
-  color: var(--text-primary);
-}
-
-.orion-chat-v2-topline-link {
-  min-height: 28px;
-  padding: 0 4px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-.orion-chat-v2.is-empty .orion-chat-v2-thread-shell {
-  min-height: calc(100vh - var(--topbar-height) - 48px);
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  padding: 20px 0 184px;
-}
-
-.orion-chat-v2-compact-empty {
-  width: min(520px, calc(100vw - var(--sidebar-width) - 96px));
-  margin: 0 auto 8px;
-  gap: 8px;
-}
-
-.orion-chat-v2-compact-title {
-  font-size: clamp(24px, 3.4vw, 40px);
-  line-height: 1.05;
-  letter-spacing: -0.05em;
-  font-weight: 600;
-}
-
-.orion-chat-v2-compact-copy {
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.orion-chat-v2-thread {
-  gap: 36px;
-  padding: 0 24px 20px;
-}
-
-.orion-chat-v2-assistant {
-  width: min(100%, 760px);
-  gap: 8px;
-}
-
-.orion-chat-v2-markdown {
-  font-size: 15px;
-  line-height: 1.72;
-}
-
-.orion-chat-v2-control-strip {
+.orion-chat-v2-run-card-meta {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 6px;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
-.orion-chat-v2-control-chip.is-target {
+.orion-chat-v2-run-card-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-surface) 90%, transparent 10%);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.orion-chat-v2-run-card-meta-label {
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.orion-chat-v2-run-card-meta-value {
   color: var(--text-primary);
 }
 
-.orion-chat-v2-control-chip.is-trust {
-  color: color-mix(in srgb, var(--warning-fg) 76%, var(--text-secondary) 24%);
-  border-color: color-mix(in srgb, var(--warning-border) 58%, var(--border-default) 42%);
-  background: color-mix(in srgb, var(--warning-bg) 46%, #ffffff 54%);
+.orion-chat-v2-run-card-status.is-waiting {
+  color: color-mix(in srgb, var(--warning-fg) 82%, var(--text-primary) 18%);
+}
+
+.orion-chat-v2-run-card-status.is-completed {
+  color: color-mix(in srgb, var(--success-fg) 80%, var(--text-primary) 20%);
+}
+
+.orion-chat-v2-run-card-status.is-failed {
+  color: color-mix(in srgb, var(--error-fg) 82%, var(--text-primary) 18%);
+}
+
+.orion-chat-v2-run-card-summary,
+.orion-chat-v2-run-card-approval-copy {
+  font-size: 13px;
+  line-height: 1.58;
+  color: var(--text-secondary);
+}
+
+.orion-chat-v2-run-card-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.orion-chat-v2-run-card-evidence-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-surface) 84%, transparent 16%);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.orion-chat-v2-run-card-evidence-label {
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.orion-chat-v2-run-card-evidence-value {
+  color: var(--text-primary);
+}
+
+.orion-chat-v2-run-card-approval {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 62%, transparent 38%);
+}
+
+.orion-chat-v2-run-card-approval-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.orion-chat-v2-run-card-approval-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning-bg) 52%, var(--bg-surface) 48%);
+  color: color-mix(in srgb, var(--warning-fg) 78%, var(--text-primary) 22%);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .orion-chat-v2-permission-card {
@@ -5069,20 +5296,19 @@ input:focus-visible {
 }
 
 .orion-chat-v2-composer-frame {
-  width: min(880px, calc(100vw - var(--sidebar-width) - 72px));
-  gap: 8px;
+  width: min(760px, calc(100vw - var(--sidebar-width) - 96px));
+  gap: 10px;
 }
 
 .orion-chat-v2-composer {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 56px;
-  padding: 10px 12px;
-  border-radius: 20px;
-  border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent 28%);
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 18px 42px rgba(17, 17, 17, 0.08);
+  display: grid;
+  gap: 10px;
+  min-height: 96px;
+  padding: 12px 14px 10px;
+  border-radius: 24px;
+  border: 1px solid rgba(17, 17, 17, 0.07);
+  background: rgba(255, 255, 255, 0.985);
+  box-shadow: 0 18px 42px rgba(17, 17, 17, 0.06);
 }
 
 .orion-chat-v2-composer-leading,
@@ -5094,9 +5320,41 @@ input:focus-visible {
   gap: 8px;
 }
 
+.orion-chat-v2-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.orion-chat-v2-composer-toolbar-left,
+.orion-chat-v2-composer-toolbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.orion-chat-v2-composer-toolbar-right {
+  flex-shrink: 0;
+}
+
+.orion-chat-v2-toolbar-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent 22%);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent 8%);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
 .orion-chat-v2-icon-btn {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent 24%);
   background: color-mix(in srgb, var(--bg-surface) 90%, transparent 10%);
@@ -5112,18 +5370,21 @@ input:focus-visible {
 }
 
 .orion-chat-v2-model-pill {
-  min-height: 34px;
-  max-width: 240px;
-  padding: 0 12px;
+  width: 104px;
+  min-width: 104px;
+  min-height: 32px;
+  padding: 0 11px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent 24%);
   background: color-mix(in srgb, var(--bg-surface) 90%, transparent 10%);
   color: var(--text-primary);
   display: inline-flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 .orion-chat-v2-model-pill span {
@@ -5133,9 +5394,10 @@ input:focus-visible {
 }
 
 .orion-chat-v2-input {
-  min-height: 32px;
-  max-height: 160px;
-  padding: 2px 0;
+  min-height: 42px;
+  max-height: 180px;
+  padding: 2px 2px 0 2px;
+  align-self: start;
 }
 
 .orion-chat-v2-menu {
@@ -5194,14 +5456,10 @@ input:focus-visible {
 }
 
 .orion-chat-v2-status-line {
-  min-height: 30px;
-  padding: 6px 10px;
+  min-height: 34px;
+  padding: 7px 12px;
   border-radius: 999px;
   font-size: 12px;
-}
-
-.orion-chat-v2-footer {
-  font-size: 11px;
 }
 
 @media (max-width: 900px) {
@@ -5222,25 +5480,21 @@ input:focus-visible {
   }
 
   .orion-chat-v2-thread {
-    gap: 28px;
+    gap: 14px;
     padding: 0 12px 18px;
   }
 
-  .orion-chat-v2-topline {
+  .orion-chat-v2-session-bar {
     width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
-    margin-bottom: 14px;
-  }
-
-  .orion-chat-v2-compact-empty {
-    width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
-  }
-
-  .orion-chat-v2-compact-title {
-    font-size: clamp(22px, 6vw, 32px);
+    margin-bottom: 10px;
   }
 
   .orion-chat-v2-user-bubble {
-    max-width: 76%;
+    max-width: 100%;
+  }
+
+  .orion-chat-v2-user-stack {
+    max-width: min(76%, 360px);
   }
 
   .orion-chat-v2-composer-shell {
@@ -5268,24 +5522,25 @@ input:focus-visible {
     width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
   }
 
-  .orion-chat-v2-control-strip {
-    padding: 0 2px;
-  }
-
   .orion-chat-v2-composer {
-    grid-template-columns: auto minmax(0, 1fr);
-    row-gap: 10px;
+    gap: 10px;
     border-radius: 18px;
   }
 
-  .orion-chat-v2-composer-actions {
-    grid-column: 1 / -1;
+  .orion-chat-v2-composer-toolbar {
+    flex-wrap: wrap;
     justify-content: space-between;
+  }
+
+  .orion-chat-v2-composer-toolbar-left,
+  .orion-chat-v2-composer-toolbar-right {
     width: 100%;
+    justify-content: space-between;
   }
 
   .orion-chat-v2-model-pill {
-    max-width: calc(100vw - var(--sidebar-width) - 160px);
+    width: 108px;
+    min-width: 108px;
   }
 
   .orion-chat-v2-send {
@@ -8788,6 +9043,9 @@ html[data-sidebar-collapsed='1'] .sidebar-v2 .sidebar-v2-item {
   width: 100%;
   max-width: none;
   margin: 0;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
   padding: 12px 18px 18px;
   animation: none;
   transform: none !important;

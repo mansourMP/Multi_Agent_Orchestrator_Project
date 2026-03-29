@@ -62,10 +62,36 @@ type RuntimeRunMeta = {
     identity_label?: string | null;
     routing_scope?: string | null;
   } | null;
+  tool_capabilities?: Array<{
+    id?: string | null;
+    label?: string | null;
+    connected?: boolean;
+    authenticated?: boolean | null;
+    runtime_usable?: boolean | null;
+    read_actions?: string[];
+    write_actions?: string[];
+    approval_required_actions?: string[];
+  }>;
+  approval_outcome?: {
+    status?: string | null;
+    label?: string | null;
+  } | null;
+  evidence_items?: Array<{
+    id?: string | null;
+    label?: string | null;
+    value?: string | null;
+  }>;
   active_profile_id?: string | null;
   active_profile_label?: string | null;
   active_profile_provider?: string | null;
   active_profile_model?: string | null;
+  requested_provider?: string | null;
+  effective_provider?: string | null;
+  requested_model?: string | null;
+  effective_model?: string | null;
+  provider_overridden?: boolean;
+  model_overridden?: boolean;
+  fallback_used?: boolean;
   graph_kind?: string | null;
   active_node_id?: string | null;
   final_node_id?: string | null;
@@ -87,10 +113,20 @@ function toSeededRunMeta(seed: RuntimeRunSeed): RuntimeRunMeta {
     delegation_ready: false,
     delegation_summary: null,
     connector_binding: null,
+    tool_capabilities: [],
+    approval_outcome: null,
+    evidence_items: [],
     active_profile_id: seed.active_profile_id || null,
     active_profile_label: seed.active_profile_label || null,
     active_profile_provider: seed.active_profile_provider || null,
     active_profile_model: seed.active_profile_model || null,
+    requested_provider: seed.requested_provider || null,
+    effective_provider: seed.effective_provider || null,
+    requested_model: seed.requested_model || null,
+    effective_model: seed.effective_model || null,
+    provider_overridden: typeof seed.provider_overridden === 'boolean' ? seed.provider_overridden : undefined,
+    model_overridden: typeof seed.model_overridden === 'boolean' ? seed.model_overridden : undefined,
+    fallback_used: typeof seed.fallback_used === 'boolean' ? seed.fallback_used : undefined,
   };
 }
 
@@ -105,10 +141,26 @@ function mergeRuntimeMeta(base: RuntimeRunMeta | undefined, incoming: RuntimeRun
     duration_ms: typeof incoming.duration_ms === 'number' ? incoming.duration_ms : base.duration_ms ?? null,
     agent_role: incoming.agent_role || base.agent_role,
     connector_binding: incoming.connector_binding || base.connector_binding || null,
+    tool_capabilities:
+      Array.isArray(incoming.tool_capabilities) && incoming.tool_capabilities.length > 0
+        ? incoming.tool_capabilities
+        : base.tool_capabilities || [],
+    approval_outcome: incoming.approval_outcome || base.approval_outcome || null,
+    evidence_items:
+      Array.isArray(incoming.evidence_items) && incoming.evidence_items.length > 0
+        ? incoming.evidence_items
+        : base.evidence_items || [],
     active_profile_id: incoming.active_profile_id || base.active_profile_id || null,
     active_profile_label: incoming.active_profile_label || base.active_profile_label || null,
     active_profile_provider: incoming.active_profile_provider || base.active_profile_provider || null,
     active_profile_model: incoming.active_profile_model || base.active_profile_model || null,
+    requested_provider: incoming.requested_provider || base.requested_provider || null,
+    effective_provider: incoming.effective_provider || base.effective_provider || null,
+    requested_model: incoming.requested_model || base.requested_model || null,
+    effective_model: incoming.effective_model || base.effective_model || null,
+    provider_overridden: incoming.provider_overridden ?? base.provider_overridden,
+    model_overridden: incoming.model_overridden ?? base.model_overridden,
+    fallback_used: incoming.fallback_used ?? base.fallback_used,
   };
 }
 
@@ -154,10 +206,25 @@ type RuntimeHistoryItem = {
         routing_scope?: unknown;
       }
     | unknown;
+  tool_capabilities?: unknown;
+  approval_outcome?:
+    | {
+        status?: unknown;
+        label?: unknown;
+      }
+    | unknown;
+  evidence_items?: unknown;
   active_profile_id?: unknown;
   active_profile_label?: unknown;
   active_profile_provider?: unknown;
   active_profile_model?: unknown;
+  requested_provider?: unknown;
+  effective_provider?: unknown;
+  requested_model?: unknown;
+  effective_model?: unknown;
+  provider_overridden?: unknown;
+  model_overridden?: unknown;
+  fallback_used?: unknown;
   graph_kind?: unknown;
   active_node_id?: unknown;
   final_node_id?: unknown;
@@ -215,6 +282,18 @@ function titleCaseWords(value?: string | null): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function humanizeProviderLabel(value?: string | null): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return 'Unknown';
+  if (normalized === 'openai') return 'OpenAI';
+  if (normalized === 'anthropic') return 'Anthropic';
+  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'vertex') return 'Vertex AI';
+  if (normalized === 'codex_cli') return 'Codex/OpenAI';
+  if (normalized === 'claude_code_cli') return 'Claude Code';
+  return titleCaseWords(normalized);
 }
 
 function statusMeta(status?: string): StatusMeta {
@@ -287,14 +366,25 @@ function connectorChannelValue(meta?: RuntimeRunMeta | null): string {
 
 function runtimeProfileText(meta?: RuntimeRunMeta | null): string {
   if (!meta) return '';
+  const requestedProvider = humanizeProviderLabel(meta.requested_provider || null);
+  const requestedModel = String(meta.requested_model || '').trim();
+  const effectiveProvider = humanizeProviderLabel(meta.effective_provider || meta.active_profile_provider || null);
+  const effectiveModel = String(meta.effective_model || meta.active_profile_model || '').trim();
+  if (meta.fallback_used && (requestedProvider || requestedModel || effectiveProvider || effectiveModel)) {
+    return `Requested ${requestedProvider || 'Unknown'} · ${requestedModel || 'Unknown'} → Effective ${effectiveProvider || 'Unknown'} · ${effectiveModel || 'Unknown'}`;
+  }
   const label = String(meta.active_profile_label || '').trim();
-  const provider = String(meta.active_profile_provider || '').trim();
-  const model = String(meta.active_profile_model || '').trim();
-  if (label && model) return `${label} · ${model}`;
-  if (label && provider) return `${label} · ${provider}`;
-  if (label) return label;
-  if (provider && model) return `${provider} · ${model}`;
-  return provider || model;
+  if (label && effectiveModel) return `Effective ${label} · ${effectiveModel}`;
+  if (label && effectiveProvider) return `Effective ${label} · ${effectiveProvider}`;
+  if (effectiveProvider || effectiveModel) return `Effective ${effectiveProvider || 'Unknown'} · ${effectiveModel || 'Unknown'}`;
+  if (requestedProvider || requestedModel) return `Requested ${requestedProvider || 'Unknown'} · ${requestedModel || 'Unknown'}`;
+  return '';
+}
+
+function capabilityStateLabel(value: boolean | null | undefined): string {
+  if (value === true) return 'Usable';
+  if (value === false) return 'Unavailable';
+  return 'Not verified';
 }
 
 function executionTimestampValue(execution: ExecutionRecord): number {
@@ -455,10 +545,57 @@ export default function ExecutionsPage() {
           connector_binding: item?.connector_binding && typeof item.connector_binding === 'object'
             ? item.connector_binding
             : null,
+          tool_capabilities: Array.isArray(item?.tool_capabilities)
+            ? item.tool_capabilities.reduce<NonNullable<RuntimeRunMeta['tool_capabilities']>>((acc: NonNullable<RuntimeRunMeta['tool_capabilities']>, entry: unknown) => {
+                if (!entry || typeof entry !== 'object') return acc;
+                const record = entry as Record<string, unknown>;
+                const id = String(record.id || '').trim();
+                if (!id) return acc;
+                acc.push({
+                  id,
+                  label: String(record.label || id).trim() || id,
+                  connected: Boolean(record.connected),
+                  authenticated: typeof record.authenticated === 'boolean' ? record.authenticated : null,
+                  runtime_usable: typeof record.runtime_usable === 'boolean' ? record.runtime_usable : null,
+                  read_actions: Array.isArray(record.read_actions) ? record.read_actions.map((value) => String(value || '').trim()).filter(Boolean) : [],
+                  write_actions: Array.isArray(record.write_actions) ? record.write_actions.map((value) => String(value || '').trim()).filter(Boolean) : [],
+                  approval_required_actions: Array.isArray(record.approval_required_actions)
+                    ? record.approval_required_actions.map((value) => String(value || '').trim()).filter(Boolean)
+                    : [],
+                });
+                return acc;
+              }, [])
+            : [],
+          approval_outcome:
+            item?.approval_outcome && typeof item.approval_outcome === 'object'
+              ? item.approval_outcome as RuntimeRunMeta['approval_outcome']
+              : null,
+          evidence_items: Array.isArray(item?.evidence_items)
+            ? item.evidence_items.reduce<NonNullable<RuntimeRunMeta['evidence_items']>>((acc, entry) => {
+                if (!entry || typeof entry !== 'object') return acc;
+                const record = entry as Record<string, unknown>;
+                const label = String(record.label || '').trim();
+                const value = String(record.value || '').trim();
+                if (!label || !value) return acc;
+                acc.push({
+                  id: String(record.id || '').trim() || null,
+                  label,
+                  value,
+                });
+                return acc;
+              }, [])
+            : [],
           active_profile_id: String(item?.active_profile_id || '').trim() || null,
           active_profile_label: String(item?.active_profile_label || '').trim() || null,
           active_profile_provider: String(item?.active_profile_provider || '').trim() || null,
           active_profile_model: String(item?.active_profile_model || '').trim() || null,
+          requested_provider: String(item?.requested_provider || '').trim() || null,
+          effective_provider: String(item?.effective_provider || '').trim() || null,
+          requested_model: String(item?.requested_model || '').trim() || null,
+          effective_model: String(item?.effective_model || '').trim() || null,
+          provider_overridden: typeof item?.provider_overridden === 'boolean' ? item.provider_overridden : undefined,
+          model_overridden: typeof item?.model_overridden === 'boolean' ? item.model_overridden : undefined,
+          fallback_used: typeof item?.fallback_used === 'boolean' ? item.fallback_used : undefined,
           graph_kind: String(item?.graph_kind || '').trim() || null,
           active_node_id: String(item?.active_node_id || '').trim() || null,
           final_node_id: String(item?.final_node_id || '').trim() || null,
@@ -659,6 +796,13 @@ export default function ExecutionsPage() {
       };
     });
   }, [selectedExecution]);
+  const selectedExecutionEvidence = useMemo(() => {
+    if (!selectedExecution) return [];
+    const meta = runtimeRunMeta[selectedExecution.id];
+    const items = Array.isArray(meta?.evidence_items) ? meta.evidence_items : [];
+    if (items.length > 0) return items;
+    return [{ id: 'evidence:none', label: 'Evidence', value: 'No evidence captured' }];
+  }, [runtimeRunMeta, selectedExecution]);
 
   const exportExecution = () => {
     if (!selectedExecution) return;
@@ -931,7 +1075,7 @@ export default function ExecutionsPage() {
                     <div className="orion-run-meta">
                       <span>Assistant {executionAgentRoleLabel(execution)}</span>
                       {bindingText ? <span>Tool {bindingText}</span> : null}
-                      {runtimeProfile ? <span>AI {runtimeProfile}</span> : null}
+                      {runtimeProfile ? <span>{runtimeProfile}</span> : null}
                       {parentRunId ? <span>Part of {parentRunId.slice(0, 8)}</span> : null}
                       {!parentRunId && childRunCount > 0 ? <span>{childRunCount} linked task{childRunCount === 1 ? '' : 's'}</span> : null}
                     </div>
@@ -1072,6 +1216,52 @@ export default function ExecutionsPage() {
                 )}
 
                 <div className="orion-execution-modal-body">
+                  <div
+                    className="orion-panel"
+                    style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 16 }}
+                  >
+                    <div className="orion-home-overview-kicker">Evidence</div>
+                    {selectedExecutionEvidence.map((item, index) => (
+                      <div
+                        key={`${item.id || item.label || 'evidence'}:${index}`}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '160px minmax(0, 1fr)',
+                          gap: 8,
+                          alignItems: 'start',
+                        }}
+                      >
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{item.label || 'Evidence'}</div>
+                        <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>{item.value || 'No evidence captured'}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div
+                    className="orion-panel"
+                    style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 16 }}
+                  >
+                    <div className="orion-home-overview-kicker">Tool availability</div>
+                    {(runtimeRunMeta[selectedExecution.id]?.tool_capabilities || []).length > 0 ? (
+                      (runtimeRunMeta[selectedExecution.id]?.tool_capabilities || []).map((item, index) => (
+                        <div
+                          key={`${item.id || item.label || 'capability'}:${index}`}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '160px minmax(0, 1fr)',
+                            gap: 8,
+                            alignItems: 'start',
+                          }}
+                        >
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{item.label || item.id || 'Tool'}</div>
+                          <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                            {capabilityStateLabel(item.runtime_usable)} · Read: {(item.read_actions || []).join(', ') || 'Not verified'} · Write: {(item.write_actions || []).join(', ') || 'Not verified'} · Approval: {(item.approval_required_actions || []).join(', ') || 'Not verified'}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>No capability truth captured</div>
+                    )}
+                  </div>
                   {replayRows.length === 0 ? (
                     <div className="orion-empty" style={{ padding: 24 }}>
                       <div className="orion-empty-title">No run steps recorded</div>

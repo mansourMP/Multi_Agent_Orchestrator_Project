@@ -81,3 +81,22 @@ class LocalWorkerRuntimeClientTests(TestCase):
         self.assertEqual(captured[0]["session_token"], "stale-session")
         self.assertEqual(captured[1]["session_token"], "fresh-session")
         self.assertEqual(captured[1]["instance_id"], "fresh-instance")
+
+    def test_register_runtime_sends_policy_mode(self):
+        client = self._client()
+        captured = {}
+
+        def fake_request(method, path, payload=None):
+            captured["payload"] = payload
+            return {"ok": True, "session_token": "fresh", "instance_id": "instance"}
+
+        with patch.object(client, "_request", side_effect=fake_request):
+            client.register_runtime(
+                "worker-1",
+                display_name="Worker",
+                platform="darwin",
+                policy_mode="trusted_full_access",
+                execution_targets=["local"],
+            )
+
+        self.assertEqual(captured["payload"]["policy_mode"], "trusted_full_access")

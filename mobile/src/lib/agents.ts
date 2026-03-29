@@ -10,7 +10,18 @@ export type AgentThread = {
   intro: string;
 };
 
+export const PRIMARY_AGENT: AgentThread = {
+  id: "assistant",
+  label: "Assistant",
+  runtimeRole: "private-assistant",
+  subtitle: "",
+  icon: "sparkles",
+  avatarColor: "#6D28D9",
+  intro: "",
+};
+
 const BUILT_IN_AGENTS: AgentThread[] = [
+  PRIMARY_AGENT,
   {
     id: "personal-assistant",
     label: "Personal Assistant",
@@ -111,6 +122,10 @@ function builtInMatches(agent: Pick<AgentSummary, "id" | "label">, target: Agent
 
 export function getBuiltInAgents() {
   return BUILT_IN_AGENTS;
+}
+
+export function getPrimaryAgent() {
+  return PRIMARY_AGENT;
 }
 
 export function buildAgentDirectory(discovered: AgentSummary[] = []) {

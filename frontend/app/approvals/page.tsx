@@ -17,6 +17,11 @@ type PendingApproval = {
   approvalId: string;
   prompt: string;
   status: string;
+  scope: string;
+  reusable: boolean;
+  consequence?: string | null;
+  actions: string[];
+  target?: string | null;
   requestedAt: string | null;
   expiresAt: string | null;
   correlationId: string | null;
@@ -181,6 +186,13 @@ export default function ApprovalsPage() {
           approvalId,
           prompt: String(record?.prompt || 'Approval requested.').trim() || 'Approval requested.',
           status: String(record?.status || 'waiting'),
+          scope: String(record?.scope || 'once').trim().toLowerCase() || 'once',
+          reusable: Boolean(record?.reusable),
+          consequence: String(record?.consequence || '').trim() || null,
+          actions: Array.isArray(record?.actions)
+            ? record.actions.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            : [],
+          target: String(record?.target || '').trim() || null,
           requestedAt: String(record?.requested_at || '').trim() || null,
           expiresAt: String(record?.expires_at || '').trim() || null,
           correlationId: String(record?.correlation_id || '').trim() || null,
@@ -363,6 +375,18 @@ export default function ApprovalsPage() {
             <strong>{row.connectorText || 'No tool or account is recorded yet.'}</strong>
           </div>
           <div className="hekor-approval-detail">
+            <span>Action</span>
+            <strong>{row.actions.join(', ') || 'Not recorded'}</strong>
+          </div>
+          <div className="hekor-approval-detail">
+            <span>Target</span>
+            <strong>{row.target || 'Not recorded'}</strong>
+          </div>
+          <div className="hekor-approval-detail">
+            <span>Scope</span>
+            <strong>{row.scope === 'once' ? 'One-time for this pending step' : row.scope}</strong>
+          </div>
+          <div className="hekor-approval-detail">
             <span>Requested</span>
             <strong>{fmtTime(row.requestedAt)}</strong>
           </div>
@@ -376,6 +400,11 @@ export default function ApprovalsPage() {
               run {row.runId.slice(0, 8)} · approval {row.approvalId.slice(0, 8)}
             </strong>
           </div>
+        </div>
+
+        <div className="hekor-approval-detail" style={{ marginTop: 12 }}>
+          <span>Consequence</span>
+          <strong>{row.consequence || 'This approval applies only to this pending step in this run.'}</strong>
         </div>
 
         <div className="hekor-approval-card-chip-row">
@@ -408,7 +437,7 @@ export default function ApprovalsPage() {
             onClick={() => void resolveApproval(row, 'Proceed')}
           >
             <Check size={12} />
-            Approve
+            Approve once
           </button>
           <button
             className="btn-secondary"

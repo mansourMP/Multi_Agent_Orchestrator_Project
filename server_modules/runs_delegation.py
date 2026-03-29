@@ -454,24 +454,30 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     }
 
 
-def _local_execution_requires_start_approval(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
+def _local_execution_requires_start_confirmation(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
     target = str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip().lower()
     outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
     if target != EXECUTION_TARGET_LOCAL_COMPANION:
         return False
     if outcome_pack != LOCAL_EXECUTION_PACK_ID:
         return False
-    return bool(precheck.get("approval_required_count"))
+    return bool(precheck.get("require_confirmation_count") or precheck.get("approval_required_count"))
 
 
-def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "approval_required") -> List[str]:
+def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "require_confirmation") -> List[str]:
     items = precheck.get("items") if isinstance(precheck.get("items"), list) else []
     labels: List[str] = []
     seen: Set[str] = set()
+    accepted = {str(decision or "").strip().lower()}
+    if "require_confirmation" in accepted:
+        accepted.add("approval_required")
+    if "deny" in accepted:
+        accepted.add("blocked")
     for item in items:
         if not isinstance(item, dict):
             continue
-        if str(item.get("decision") or "").strip().lower() != decision:
+        item_decision = str(item.get("execution_decision") or item.get("decision") or "").strip().lower()
+        if item_decision not in accepted:
             continue
         capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
         capability_labels = [
@@ -491,15 +497,15 @@ def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "app
     return labels
 
 
-def _local_execution_approval_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="approval_required")
+def _local_execution_confirmation_prompt(precheck: Dict[str, Any]) -> str:
+    labels = _precheck_human_action_labels(precheck, decision="require_confirmation")
     if labels:
-        return f"Approval required before local companion execution: {', '.join(labels)}."
-    return "Approval required before local companion execution."
+        return f"Confirmation required before local companion execution: {', '.join(labels)}."
+    return "Confirmation required before local companion execution."
 
 
 def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="blocked")
+    labels = _precheck_human_action_labels(precheck, decision="deny")
     if labels:
         return f"Run blocked by local execution policy: {', '.join(labels)}."
     return "Run blocked by local execution policy."
@@ -512,7 +518,7 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
 
     approved_tools = [
         str(item).strip().lower()
-        for item in (precheck.get("approval_required") or [])
+        for item in (precheck.get("require_confirmation") or precheck.get("approval_required") or [])
         if str(item).strip()
     ]
     if not approved_tools:
@@ -535,10 +541,13 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
         next_item = dict(item)
         tool_id = str(next_item.get("tool_id") or "").strip().lower()
         if tool_id in approved_tools:
+            next_item["execution_decision"] = "allow"
             next_item["decision"] = "allow"
-            next_item["reason"] = "approved_for_local_execution"
+            next_item["reason"] = "confirmed_for_local_execution"
         rewritten_items.append(next_item)
 
+    precheck["require_confirmation"] = []
+    precheck["require_confirmation_count"] = 0
     precheck["approval_required"] = []
     precheck["approval_required_count"] = 0
     precheck["allowed"] = sorted(allowed_set)
@@ -548,6 +557,16 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
+    precheck_fn = globals().get("_compute_tool_policy_precheck")
+    create_run_fn = globals().get("create_run")
+    begin_confirmation_fn = globals().get("_begin_run_pending_confirmation") or globals().get("_begin_run_pending_approval")
+    if not callable(precheck_fn):
+        from server_modules.runs_execution import _compute_tool_policy_precheck as precheck_fn  # type: ignore[assignment]
+    if not callable(create_run_fn):
+        from server_modules.runs_execution import create_run as create_run_fn  # type: ignore[assignment]
+    if not callable(begin_confirmation_fn):
+        from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
+
     prepared = _prepare_run_start_request(req)
     engine = prepared["engine"]
     metadata = prepared["metadata"]
@@ -586,31 +605,38 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
-    metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
+    metadata["tool_policy_precheck"] = precheck_fn(preview_context)
     if metadata["tool_policy_precheck"].get("blocked_count"):
         raise HTTPException(
             status_code=409,
             detail=_local_execution_block_prompt(metadata["tool_policy_precheck"]),
         )
-    needs_local_approval = _local_execution_requires_start_approval(metadata, metadata["tool_policy_precheck"])
-    if needs_local_approval:
+    runtime_policy = resolve_runtime_policy_mode(
+        metadata,
+        selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
+    )
+    metadata["policy_mode"] = runtime_policy.get("policy_mode")
+    needs_local_confirmation = _local_execution_requires_start_confirmation(metadata, metadata["tool_policy_precheck"])
+    if needs_local_confirmation:
+        metadata["local_execution_waiting_confirmation"] = True
         metadata["local_execution_waiting_approval"] = True
         preview_context["metadata"] = metadata
-    run_id = create_run(
+    run_id = create_run_fn(
         engine=engine,
         context=preview_context,
-        defer_local_enqueue=needs_local_approval,
+        defer_local_enqueue=needs_local_confirmation,
     )
     status = "starting"
-    if needs_local_approval:
-        approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="approval_required")
-        pending = _begin_run_pending_approval(
+    if needs_local_confirmation:
+        approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="require_confirmation")
+        pending = begin_confirmation_fn(
             run_id,
-            _local_execution_approval_prompt(metadata["tool_policy_precheck"]),
+            _local_execution_confirmation_prompt(metadata["tool_policy_precheck"]),
             source="local_execution_start",
             metadata={
                 "target": metadata.get("execution_target_selected"),
-                "approval_actions": list(metadata["tool_policy_precheck"].get("approval_required") or []),
+                "policy_mode": metadata.get("policy_mode"),
+                "approval_actions": list(metadata["tool_policy_precheck"].get("require_confirmation") or []),
                 "approval_labels": approval_labels,
                 "approval_capabilities": list(metadata["tool_policy_precheck"].get("capability_ids") or []),
                 "outcome_pack": metadata.get("outcome_pack"),
@@ -631,6 +657,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "delegated_by_role": metadata.get("delegated_by_role"),
         "route": route,
         "doctor_preflight": doctor_preflight,
+        "pending_confirmation": pending,
         "pending_approval": pending,
     }
 

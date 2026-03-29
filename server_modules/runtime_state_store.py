@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import sqlite3
 
 
@@ -42,6 +42,58 @@ def init_runtime_state_db(db_path: Path) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS live_runs (
+                run_id TEXT PRIMARY KEY,
+                status TEXT,
+                engine TEXT,
+                workspace_id TEXT,
+                execution_target TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                sort_ts REAL NOT NULL,
+                run_json TEXT NOT NULL,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS local_pending_queue (
+                run_id TEXT PRIMARY KEY,
+                queue_order INTEGER NOT NULL,
+                queued_at TEXT,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS local_claims (
+                run_id TEXT PRIMARY KEY,
+                worker_id TEXT,
+                claimed_at TEXT,
+                last_heartbeat_at TEXT,
+                lease_seconds INTEGER,
+                claim_json TEXT NOT NULL,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_registrations (
+                runtime_id TEXT PRIMARY KEY,
+                runtime_type TEXT,
+                status TEXT,
+                current_run_id TEXT,
+                last_seen_at TEXT,
+                runtime_json TEXT NOT NULL,
+                persisted_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS run_history (
                 run_id TEXT PRIMARY KEY,
                 status TEXT,
@@ -76,7 +128,25 @@ def init_runtime_state_db(db_path: Path) -> None:
             """
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_live_runs_sort_ts ON live_runs(sort_ts DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_live_runs_workspace ON live_runs(workspace_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_pending_queue_order ON local_pending_queue(queue_order ASC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_local_claims_worker ON local_claims(worker_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_registrations_status ON runtime_registrations(status)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_history_sort_ts ON run_history(sort_ts DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_registrations_seen ON runtime_registrations(last_seen_at)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_run_history_workspace ON run_history(workspace_id)"
@@ -94,6 +164,229 @@ def init_runtime_state_db(db_path: Path) -> None:
             "CREATE INDEX IF NOT EXISTS idx_channel_events_run ON channel_events(run_id)"
         )
         conn.commit()
+
+
+def upsert_live_run_state(db_path: Path, item: Dict[str, Any]) -> None:
+    run_id = str(item.get("run_id") or "").strip()
+    if not run_id:
+        return
+    context = item.get("context") if isinstance(item.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    created_at = str(item.get("created_at") or "").strip()
+    updated_at = str(item.get("updated_at") or "").strip()
+    sort_ts = _parse_ts(updated_at or created_at)
+    payload = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO live_runs (
+                run_id, status, engine, workspace_id, execution_target,
+                created_at, updated_at, sort_ts, run_json, persisted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                status = excluded.status,
+                engine = excluded.engine,
+                workspace_id = excluded.workspace_id,
+                execution_target = excluded.execution_target,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                sort_ts = excluded.sort_ts,
+                run_json = excluded.run_json,
+                persisted_at = excluded.persisted_at
+            """,
+            (
+                run_id,
+                str(item.get("status") or "").strip(),
+                str(item.get("engine") or "").strip(),
+                str(
+                    item.get("workspace_id")
+                    or context.get("workspace_id")
+                    or ""
+                ).strip(),
+                str(
+                    item.get("execution_target")
+                    or metadata.get("execution_target_selected")
+                    or metadata.get("execution_target_requested")
+                    or ""
+                ).strip(),
+                created_at,
+                updated_at,
+                sort_ts,
+                payload,
+                _utc_now_iso(),
+            ),
+        )
+        conn.commit()
+
+
+def delete_live_run_state(db_path: Path, run_id: str) -> None:
+    token = str(run_id or "").strip()
+    if not token:
+        return
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM live_runs WHERE run_id = ?", (token,))
+        conn.commit()
+
+
+def list_live_run_states(db_path: Path, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    params: List[Any] = []
+    query = """
+        SELECT run_json
+        FROM live_runs
+        ORDER BY sort_ts DESC
+    """
+    if isinstance(limit, int) and limit > 0:
+        query += "\nLIMIT ?"
+        params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        raw = row["run_json"]
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        except Exception:
+            continue
+    return out
+
+
+def replace_local_runtime_state(
+    db_path: Path,
+    *,
+    pending_run_ids: List[str],
+    claimed_runs: Dict[str, Dict[str, Any]],
+    runtime_registrations: Dict[str, Dict[str, Any]],
+) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM local_pending_queue")
+        for idx, raw_run_id in enumerate(pending_run_ids):
+            run_id = str(raw_run_id or "").strip()
+            if not run_id:
+                continue
+            conn.execute(
+                """
+                INSERT INTO local_pending_queue (
+                    run_id, queue_order, queued_at, persisted_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    idx,
+                    _utc_now_iso(),
+                    _utc_now_iso(),
+                ),
+            )
+
+        conn.execute("DELETE FROM local_claims")
+        for raw_run_id, raw_claim in claimed_runs.items():
+            run_id = str(raw_run_id or "").strip()
+            claim = raw_claim if isinstance(raw_claim, dict) else None
+            if not run_id or not isinstance(claim, dict):
+                continue
+            payload = json.dumps(claim, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                """
+                INSERT INTO local_claims (
+                    run_id, worker_id, claimed_at, last_heartbeat_at,
+                    lease_seconds, claim_json, persisted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    str(claim.get("worker_id") or "").strip(),
+                    str(claim.get("claimed_at") or "").strip(),
+                    str(claim.get("last_heartbeat_at") or "").strip(),
+                    int(claim.get("lease_seconds") or 0),
+                    payload,
+                    _utc_now_iso(),
+                ),
+            )
+
+        conn.execute("DELETE FROM runtime_registrations")
+        for raw_runtime_id, raw_record in runtime_registrations.items():
+            runtime_id = str(raw_runtime_id or "").strip()
+            record = raw_record if isinstance(raw_record, dict) else None
+            if not runtime_id or not isinstance(record, dict):
+                continue
+            payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                """
+                INSERT INTO runtime_registrations (
+                    runtime_id, runtime_type, status, current_run_id,
+                    last_seen_at, runtime_json, persisted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    runtime_id,
+                    str(record.get("runtime_type") or "").strip(),
+                    str(record.get("status") or "").strip(),
+                    str(record.get("current_run_id") or "").strip(),
+                    str(record.get("last_seen_at") or "").strip(),
+                    payload,
+                    _utc_now_iso(),
+                ),
+            )
+        conn.commit()
+
+
+def load_local_runtime_state(db_path: Path) -> Dict[str, Any]:
+    with _connect(db_path) as conn:
+        queue_rows = conn.execute(
+            """
+            SELECT run_id
+            FROM local_pending_queue
+            ORDER BY queue_order ASC
+            """
+        ).fetchall()
+        claim_rows = conn.execute(
+            """
+            SELECT run_id, claim_json
+            FROM local_claims
+            """
+        ).fetchall()
+        runtime_rows = conn.execute(
+            """
+            SELECT runtime_id, runtime_json
+            FROM runtime_registrations
+            """
+        ).fetchall()
+
+    pending_run_ids = [str(row["run_id"] or "").strip() for row in queue_rows if str(row["run_id"] or "").strip()]
+    claimed_runs: Dict[str, Dict[str, Any]] = {}
+    for row in claim_rows:
+        run_id = str(row["run_id"] or "").strip()
+        if not run_id:
+            continue
+        try:
+            parsed = json.loads(row["claim_json"])
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            claimed_runs[run_id] = parsed
+
+    runtime_registrations: Dict[str, Dict[str, Any]] = {}
+    for row in runtime_rows:
+        runtime_id = str(row["runtime_id"] or "").strip()
+        if not runtime_id:
+            continue
+        try:
+            parsed = json.loads(row["runtime_json"])
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            runtime_registrations[runtime_id] = parsed
+
+    return {
+        "pending_run_ids": pending_run_ids,
+        "claimed_runs": claimed_runs,
+        "runtime_registrations": runtime_registrations,
+    }
 
 
 def _prune_run_history(conn: sqlite3.Connection, limit: int) -> None:
@@ -343,4 +636,3 @@ def list_channel_events(db_path: Path, limit: int) -> List[Dict[str, Any]]:
         except Exception:
             continue
     return out
-

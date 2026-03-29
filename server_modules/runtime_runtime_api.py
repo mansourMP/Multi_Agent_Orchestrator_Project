@@ -14,6 +14,7 @@ class RuntimeRegisterPayload(BaseModel):
     runtime_type: str = "local"
     display_name: Optional[str] = None
     platform: Optional[str] = None
+    policy_mode: str = "local_default"
     capabilities: List[str] = Field(default_factory=list)
     execution_targets: List[str] = Field(default_factory=list)
     instance_id: Optional[str] = None
@@ -66,6 +67,7 @@ def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "runtime_type": str(item.get("runtime_type") or "local"),
         "display_name": str(item.get("display_name") or item.get("worker_id") or ""),
         "platform": item.get("platform"),
+        "policy_mode": str(item.get("policy_mode") or "local_default"),
         "capabilities": list(item.get("capabilities") or []),
         "execution_targets": list(item.get("execution_targets") or []),
         "status": item.get("status"),
@@ -94,6 +96,7 @@ def _task_summary_from_local_claim(run: Dict[str, Any]) -> Dict[str, Any]:
         "prompt": str(context.get("user_goal") or ""),
         "created_at": run.get("created_at"),
         "required_capabilities": list(precheck.get("capability_ids") or []) if isinstance(precheck, dict) else [],
+        "policy_mode": metadata.get("policy_mode"),
         "context": context,
         "metadata": metadata,
         "run": run,
@@ -149,6 +152,7 @@ def register_runtime_routes(app) -> None:
             runtime_type=body.runtime_type,
             display_name=body.display_name,
             platform=body.platform,
+            policy_mode=body.policy_mode,
             capabilities=body.capabilities,
             execution_targets=body.execution_targets or ["local"],
             instance_id=body.instance_id,

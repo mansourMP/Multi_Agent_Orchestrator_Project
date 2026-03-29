@@ -117,6 +117,38 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(usage, {"total_tokens": 12})
         direct_mock.assert_called_once()
 
+    def test_generate_chat_passes_requested_model_to_selected_provider(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
+            with patch.object(
+                worker_llm,
+                "codex_exec_text",
+                return_value=("Direct answer", None, "gpt-5.3-codex", ""),
+            ) as codex_exec_text_mock:
+                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                    context={"model": "gpt-5.3-codex"},
+                    metadata={"provider": "codex_cli", "disable_provider_fallback": True},
+                    user_goal="hello",
+                    system_prompt="You are concise.",
+                )
+
+        self.assertEqual(text, "Direct answer")
+        self.assertEqual(attempted, "codex_cli")
+        self.assertEqual(error, "")
+        codex_exec_text_mock.assert_called_once_with("You are concise.", "hello", model_override="gpt-5.3-codex")
+
+    def test_disable_provider_fallback_locks_requested_provider(self):
+        with patch.object(
+            worker_llm,
+            "provider_has_key",
+            side_effect=lambda provider: provider in {"openai", "codex_cli"},
+        ):
+            order = worker_llm.provider_order_for_run(
+                {"provider": "openai"},
+                {"disable_provider_fallback": True},
+            )
+
+        self.assertEqual(order, ["openai"])
+
 
 if __name__ == "__main__":
     unittest.main()

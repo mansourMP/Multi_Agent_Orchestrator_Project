@@ -880,11 +880,20 @@ export const BUSINESS_PRESETS: BusinessPreset[] = [
 
 export const DEFAULT_BUSINESS_PRESET_ID = BUSINESS_PRESETS[0].id;
 
+export const DEFAULT_OPENAI_CODEX_MODELS = [
+  'gpt-5.4',
+  'gpt-5.3-codex',
+  'gpt-5.3-codex-spark',
+  'gpt-5.2',
+  'gpt-5.2-codex',
+  'gpt-5.1-codex',
+] as const;
+
 export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'openai',
     label: 'OpenAI',
-    defaultModel: 'gpt-4o-mini',
+    defaultModel: DEFAULT_OPENAI_CODEX_MODELS[0],
     auth: ['api_key', 'access_token', 'oauth_token'],
     defaultAuthMode: 'api_key',
     authModes: [
@@ -927,7 +936,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
 ];
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
-  openai: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1'],
+  openai: [...DEFAULT_OPENAI_CODEX_MODELS],
   anthropic: ['claude-sonnet', 'claude-haiku'],
   claude_code_cli: ['sonnet', 'opus'],
   gemini: ['gemini-flash', 'gemini-pro'],
@@ -935,6 +944,54 @@ export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
 };
 
 export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
+  {
+    alias: 'gpt-5.4',
+    provider: 'openai',
+    model: 'gpt-5.4',
+    resolvedModel: 'gpt-5.4',
+    isGlobalDefault: true,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'gpt-5.3-codex',
+    provider: 'openai',
+    model: 'gpt-5.3-codex',
+    resolvedModel: 'gpt-5.3-codex',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gpt-5.3-codex-spark',
+    provider: 'openai',
+    model: 'gpt-5.3-codex-spark',
+    resolvedModel: 'gpt-5.3-codex-spark',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gpt-5.2',
+    provider: 'openai',
+    model: 'gpt-5.2',
+    resolvedModel: 'gpt-5.2',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gpt-5.2-codex',
+    provider: 'openai',
+    model: 'gpt-5.2-codex',
+    resolvedModel: 'gpt-5.2-codex',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gpt-5.1-codex',
+    provider: 'openai',
+    model: 'gpt-5.1-codex',
+    resolvedModel: 'gpt-5.1-codex',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
   {
     alias: 'gpt-4.1',
     provider: 'openai',
@@ -956,8 +1013,8 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     provider: 'openai',
     model: 'gpt-4o-mini',
     resolvedModel: 'gpt-4o-mini',
-    isGlobalDefault: true,
-    isProviderDefault: true,
+    isGlobalDefault: false,
+    isProviderDefault: false,
   },
   {
     alias: 'gpt-4.1-mini',

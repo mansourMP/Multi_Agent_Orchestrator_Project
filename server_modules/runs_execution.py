@@ -19,7 +19,7 @@ from server_modules.runs_engine import (
     resolve_run_execution_context,
     wait_for_human_decision,
 )
-from server_modules.runs_output import _compact_event_text, _json_safe
+from server_modules.runs_output import _compact_event_text, _json_safe, _persist_live_run_state
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
 from server_modules.runs_core import set_run_status, emit_log
 from server_modules.file_mount_security import assert_file_mount_access
@@ -599,16 +599,17 @@ def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]
 
 def _compute_tool_policy_precheck(context: Dict[str, Any]) -> Dict[str, Any]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
     target = normalize_execution_target(
         metadata.get("execution_target_selected") or metadata.get("execution_target")
     )
+    runtime_policy = resolve_runtime_policy_mode(metadata, selected_target=target)
+    policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
     tool_ids = _predict_tool_ids_for_context(context)
-    skill_contract = _build_skill_contract_from_metadata(metadata, tool_ids, trust_mode, target)
+    skill_contract = _build_skill_contract_from_metadata(metadata, tool_ids, policy_mode, target)
     enforced_undeclared = set(skill_contract.get("undeclared_tools") or []) if skill_contract.get("policy_mode") == "enforce" else set()
     items: List[Dict[str, Any]] = []
-    blocked: List[str] = []
-    approval_required: List[str] = []
+    denied: List[str] = []
+    require_confirmation: List[str] = []
     allowed: List[str] = []
 
     browser_policy = _derive_browser_automation_policy(context)
@@ -636,40 +637,45 @@ def _compute_tool_policy_precheck(context: Dict[str, Any]) -> Dict[str, Any]:
     for tool_id in tool_ids:
         item = evaluate_tool_policy_decision(
             tool_id=tool_id,
-            trust_mode=trust_mode,
+            trust_mode=policy_mode,
             target=target,
             metadata=evaluation_metadata,
             capability_ids=capabilities_by_tool.get(normalize_action_id(tool_id), []),
         )
         if tool_id in enforced_undeclared:
             item = dict(item)
+            item["execution_decision"] = "deny"
             item["decision"] = "blocked"
             item["reason"] = "skill_contract_missing_runtime_tool"
         elif skill_contract.get("declared_runtime_tools"):
             item = dict(item)
             item["skill_declared"] = tool_id in set(skill_contract.get("declared_runtime_tools") or [])
         items.append(item)
-        decision = str(item.get("decision") or "").strip().lower()
+        execution_decision = str(item.get("execution_decision") or "").strip().lower()
         clean_tool = str(item.get("tool_id") or tool_id).strip().lower()
-        if decision == "blocked":
-            blocked.append(clean_tool)
-        elif decision == "approval_required":
-            approval_required.append(clean_tool)
+        if execution_decision == "deny":
+            denied.append(clean_tool)
+        elif execution_decision == "require_confirmation":
+            require_confirmation.append(clean_tool)
         else:
             allowed.append(clean_tool)
 
     return {
-        "trust_mode": trust_mode,
+        "policy_mode": policy_mode,
         "target": target,
         "tool_ids": tool_ids,
         "capability_ids": capability_ids,
         "capabilities": capability_details,
-        "blocked": blocked,
-        "approval_required": approval_required,
+        "denied": denied,
+        "require_confirmation": require_confirmation,
         "allowed": allowed,
-        "blocked_count": len(blocked),
-        "approval_required_count": len(approval_required),
+        "denied_count": len(denied),
+        "require_confirmation_count": len(require_confirmation),
         "allow_count": len(allowed),
+        "blocked": denied,
+        "approval_required": require_confirmation,
+        "blocked_count": len(denied),
+        "approval_required_count": len(require_confirmation),
         "items": items,
         "skill_contract": skill_contract,
         "browser_automation_policy": browser_policy or None,
@@ -692,8 +698,9 @@ def _append_run_tool_policy_audit(
         "source": str(source or "runtime").strip().lower(),
         "tool_id": str(evaluation.get("tool_id") or "").strip().lower(),
         "decision": str(evaluation.get("decision") or "").strip().lower(),
+        "execution_decision": str(evaluation.get("execution_decision") or "").strip().lower(),
         "reason": str(evaluation.get("reason") or "").strip(),
-        "trust_mode": str(evaluation.get("trust_mode") or "").strip().lower(),
+        "policy_mode": str(evaluation.get("policy_mode") or "").strip().lower(),
         "target": str(evaluation.get("target") or "").strip().lower(),
         "is_sensitive": bool(evaluation.get("is_sensitive")),
         "is_critical": bool(evaluation.get("is_critical")),
@@ -726,6 +733,23 @@ def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for 
     with LOCAL_QUEUE_LOCK:
         if run_id not in LOCAL_PENDING_RUN_IDS:
             LOCAL_PENDING_RUN_IDS.append(run_id)
+        try:
+            replace_local_runtime_state(
+                ORION_RUNTIME_STATE_DB,
+                pending_run_ids=list(LOCAL_PENDING_RUN_IDS),
+                claimed_runs={
+                    local_run_id: dict(info)
+                    for local_run_id, info in LOCAL_CLAIMED_RUNS.items()
+                    if isinstance(info, dict)
+                },
+                runtime_registrations={
+                    runtime_id: dict(record)
+                    for runtime_id, record in LOCAL_WORKER_REGISTRY.items()
+                    if isinstance(record, dict)
+                },
+            )
+        except Exception:
+            pass
     emit_log(
         run["logs"],
         "info",
@@ -792,6 +816,7 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
     ).strip()
     selected_target = selected_execution_target_from_context(run_context)
     runs[run_id] = {
+        "run_id": run_id,
         "status": "starting",
         "logs": log_queue,
         "input_queue": queue.Queue(),
@@ -828,6 +853,10 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
     }
     RUN_QUEUE_INDEX[id(log_queue)] = run_id
     metrics_inc("runs_started", 1)
+    try:
+        _persist_live_run_state(run_id, runs[run_id])
+    except Exception:
+        pass
 
     if selected_target == EXECUTION_TARGET_LOCAL_COMPANION:
         try:
@@ -2350,21 +2379,25 @@ def _execute_workflow_graph(
                         source="workflow_tool_node",
                         metadata={"node_id": node_id, "variant": variant},
                     )
-                    decision = str(evaluation.get("decision") or "").strip().lower()
-                    if decision == "blocked":
+                    decision = str(
+                        evaluation.get("execution_decision")
+                        or evaluation.get("decision")
+                        or ""
+                    ).strip().lower()
+                    if decision == "deny" or decision == "blocked":
                         raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
-                    if decision == "approval_required":
+                    if decision == "require_confirmation" or decision == "approval_required":
                         _update_run_node_state(
                             run_id,
                             node_id,
                             status="waiting_human",
-                            summary=f"Approval required before {label}",
+                            summary=f"Confirmation required before {label}",
                             detail={"tool_id": tool_id, "variant": variant, "evaluation": evaluation},
                             waiting_for_approval=True,
                         )
                         approved = wait_for_human_decision(
                             run_id,
-                            f"Tool node '{label}' requires approval before execution. Reply with Proceed to continue or Hold to stop.",
+                            f"Tool node '{label}' requires confirmation before execution. Reply with Proceed to continue or Hold to stop.",
                         )
                         if not approved:
                             raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
@@ -2721,11 +2754,15 @@ def _execute_orion_dag_node(
         raw_result = execute_outcome_pack(outcome_pack, context, run_id=run_id)
         result_data = normalize_pack_result(outcome_pack, raw_result)
         validate_pack_tool_contracts(outcome_pack, result_data, role="orion_operator")
-        trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
+        runtime_policy = resolve_runtime_policy_mode(
+            metadata,
+            selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
+        )
+        policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
         action_counts = infer_actions_from_pack_result(outcome_pack, result_data)
         action_policy = evaluate_action_policy(
             action_counts,
-            trust_mode,
+            policy_mode,
             metadata,
             metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
@@ -2737,38 +2774,35 @@ def _execute_orion_dag_node(
             event="action_policy_evaluated",
             data={
                 "phase": "pack_prepare",
+                "policy_mode": action_policy.get("policy_mode"),
                 "target": action_policy.get("target"),
-                "blocked_actions": action_policy.get("blocked_actions"),
-                "approval_actions": action_policy.get("approval_actions"),
+                "denied_actions": action_policy.get("denied_actions"),
+                "confirmation_required_actions": action_policy.get("confirmation_required_actions"),
             },
         )
-        blocked_actions = action_policy.get("blocked_actions") if isinstance(action_policy.get("blocked_actions"), list) else []
+        blocked_actions = action_policy.get("denied_actions") if isinstance(action_policy.get("denied_actions"), list) else []
         if blocked_actions:
             raise RuntimeError(f"Action policy blocked requested actions: {', '.join(blocked_actions)}.")
-        approval_required, approval_reason = pack_approval_policy(trust_mode, result_data, metadata)
-        if bool(action_policy.get("requires_approval")):
-            approval_required = True
-            policy_reason = str(action_policy.get("approval_reason") or "").strip()
-            if policy_reason:
-                approval_reason = f"{approval_reason} {policy_reason}".strip()
+        confirmation_required = bool(action_policy.get("requires_confirmation"))
+        confirmation_reason = str(action_policy.get("confirmation_reason") or "").strip()
         summary_text = str(result_data.get("summary") or "Outcome pack completed.")
         state["result_data"] = result_data
-        state["trust_mode"] = trust_mode
-        state["approval_required"] = approval_required
-        state["approval_reason"] = approval_reason
+        state["policy_mode"] = policy_mode
+        state["confirmation_required"] = confirmation_required
+        state["confirmation_reason"] = confirmation_reason
         state["summary_text"] = summary_text
-        return {"approval_required": approval_required, "trust_mode": trust_mode}
+        return {"confirmation_required": confirmation_required, "policy_mode": policy_mode}
 
     if kind == "pack_approval":
-        if not bool(state.get("approval_required")):
-            emit_log(log_queue, "info", "Approval skipped by trust policy.", event="approval_skipped")
+        if not bool(state.get("confirmation_required")):
+            emit_log(log_queue, "info", "Confirmation not required by runtime policy.", event="approval_skipped")
             return {"skipped": True}
         result_data = state.get("result_data") if isinstance(state.get("result_data"), dict) else {}
         outputs = result_data.get("outputs") if isinstance(result_data.get("outputs"), dict) else {}
         outbound_actions = parse_positive_int(outputs.get("outbound_actions"), 0)
-        approval_reason = str(state.get("approval_reason") or "Approval required.")
+        confirmation_reason = str(state.get("confirmation_reason") or "Confirmation required.")
         prompt = (
-            f"Approval required. {approval_reason} "
+            f"Confirmation required. {confirmation_reason} "
             f"Planned outbound actions: {outbound_actions}. "
             "Reply with Proceed to continue or Hold to stop."
         )
@@ -2781,13 +2815,13 @@ def _execute_orion_dag_node(
         outcome_pack = str(state.get("outcome_pack") or "").strip().lower()
         result_data = state.get("result_data") if isinstance(state.get("result_data"), dict) else {}
         summary_text = str(state.get("summary_text") or "Outcome pack completed.")
-        trust_mode = str(state.get("trust_mode") or normalize_trust_mode(metadata.get("trust_mode")))
-        approval_required = bool(state.get("approval_required"))
-        approval_reason = str(state.get("approval_reason") or "")
+        policy_mode = str(state.get("policy_mode") or resolve_runtime_policy_mode(metadata).get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
+        approval_required = bool(state.get("confirmation_required"))
+        approval_reason = str(state.get("confirmation_reason") or "")
         execution_summary = build_pack_execution_summary(
             outcome_pack,
             result_data,
-            trust_mode,
+            policy_mode,
             approval_required,
             approval_reason,
         )
@@ -2796,10 +2830,11 @@ def _execute_orion_dag_node(
             "blocked_actions": action_policy.get("blocked_actions", []),
             "approval_actions": action_policy.get("approval_actions", []),
             "target": action_policy.get("target"),
+            "policy_mode": action_policy.get("policy_mode"),
         }
         result_data["execution_summary"] = execution_summary
         result_data["result_schema_version"] = 2
-        result_data["trust_mode"] = trust_mode
+        result_data["policy_mode"] = policy_mode
         emit_log(log_queue, "info", summary_text, event="pack_summary", data=result_data)
         emit_log(
             log_queue,
@@ -2866,12 +2901,15 @@ def _execute_orion_dag_node(
 
     if kind == "plan_approval":
         plan_text = str(state.get("plan_text") or "")
-        needs_approval, reason = requires_human_approval(context, plan_text)
-        trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
+        runtime_policy = resolve_runtime_policy_mode(
+            metadata,
+            selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
+        )
+        policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
         plan_actions = infer_actions_from_text(plan_text)
         action_policy = evaluate_action_policy(
             plan_actions,
-            trust_mode,
+            policy_mode,
             metadata,
             metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
@@ -2883,24 +2921,21 @@ def _execute_orion_dag_node(
             event="action_policy_evaluated",
             data={
                 "phase": "plan_approval",
+                "policy_mode": action_policy.get("policy_mode"),
                 "target": action_policy.get("target"),
-                "blocked_actions": action_policy.get("blocked_actions"),
-                "approval_actions": action_policy.get("approval_actions"),
+                "denied_actions": action_policy.get("denied_actions"),
+                "confirmation_required_actions": action_policy.get("confirmation_required_actions"),
             },
         )
-        blocked_actions = action_policy.get("blocked_actions") if isinstance(action_policy.get("blocked_actions"), list) else []
+        blocked_actions = action_policy.get("denied_actions") if isinstance(action_policy.get("denied_actions"), list) else []
         if blocked_actions:
             raise RuntimeError(f"Action policy blocked requested actions: {', '.join(blocked_actions)}.")
-        if bool(action_policy.get("requires_approval")):
-            needs_approval = True
-            policy_reason = str(action_policy.get("approval_reason") or "").strip()
-            if policy_reason:
-                reason = f"{reason} {policy_reason}".strip()
-        if not needs_approval:
-            emit_log(log_queue, "info", "Approval skipped by trust policy.", event="approval_skipped")
+        if not bool(action_policy.get("requires_confirmation")):
+            emit_log(log_queue, "info", "Confirmation not required by runtime policy.", event="approval_skipped")
             return {"skipped": True}
+        reason = str(action_policy.get("confirmation_reason") or "Confirmation required before execution.").strip()
         prompt = (
-            f"Approval required before execution. {reason} "
+            f"Confirmation required before execution. {reason} "
             "Reply with Proceed to continue or Hold to stop."
         ).strip()
         approved = wait_for_human_decision(run_id, prompt)

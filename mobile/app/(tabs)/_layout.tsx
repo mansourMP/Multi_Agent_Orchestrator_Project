@@ -1,10 +1,12 @@
-import { Tabs } from "expo-router";
+import { Tabs, useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { useAppTheme } from "@/src/theme/useAppTheme";
 
 export default function TabsLayout() {
   const theme = useAppTheme();
+  const segments = useSegments();
+  const isChatThread = segments[0] === "(tabs)" && segments[1] === "chats" && segments[2] === "[id]";
 
   return (
     <Tabs
@@ -13,6 +15,7 @@ export default function TabsLayout() {
         tabBarActiveTintColor: theme.colors.accent,
         tabBarInactiveTintColor: theme.colors.textSecondary,
         tabBarStyle: {
+          display: isChatThread ? "none" : "flex",
           height: 64,
           paddingTop: 8,
           paddingBottom: 8,

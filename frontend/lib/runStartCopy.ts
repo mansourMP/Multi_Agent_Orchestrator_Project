@@ -3,12 +3,12 @@ export function buildRunStartedMessage(profileLabel?: string | null, provider?: 
   const normalizedProvider = String(provider || '').trim();
   const normalizedModel = String(model || '').trim();
   if (normalizedProfile && normalizedProvider && normalizedModel) {
-    return `Run started using ${normalizedProfile} (${normalizedProvider}:${normalizedModel}).`;
+    return `Run requested with ${normalizedProfile} (${normalizedProvider}:${normalizedModel}).`;
   }
   if (normalizedProvider && normalizedModel) {
-    return `Run started using ${normalizedProvider}:${normalizedModel}.`;
+    return `Run requested with ${normalizedProvider}:${normalizedModel}.`;
   }
-  if (normalizedProfile) return `Run started using ${normalizedProfile}.`;
+  if (normalizedProfile) return `Run requested with ${normalizedProfile}.`;
   return 'Run started.';
 }
 

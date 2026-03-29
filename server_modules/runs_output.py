@@ -72,6 +72,63 @@ def _active_profile_snapshot(run: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _serialize_provider_model_truth(
+    *,
+    context: Dict[str, Any],
+    metadata: Dict[str, Any],
+    active_profile: Dict[str, Any],
+    usage_masked: Dict[str, Any],
+    events: List[Dict[str, Any]],
+    result_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    requested_provider = str(context.get("provider") or metadata.get("provider") or "").strip().lower() or None
+    requested_model = str(context.get("model") or metadata.get("model") or "").strip() or None
+    effective_provider = str(
+        usage_masked.get("provider")
+        or active_profile.get("provider")
+        or ""
+    ).strip().lower() or None
+    effective_model = str(
+        usage_masked.get("model")
+        or active_profile.get("model")
+        or ""
+    ).strip() or None
+    provider_overridden = bool(requested_provider and effective_provider and requested_provider != effective_provider)
+    model_overridden = bool(requested_model and effective_model and requested_model != effective_model)
+    event_names = {
+        str(item.get("event") or "").strip().lower()
+        for item in events
+        if isinstance(item, dict)
+    }
+    attempted_tokens = []
+    if isinstance(result_data, dict):
+        attempted_tokens = [
+            str(token or "").strip().lower()
+            for token in str(result_data.get("attempted_providers") or "").split(",")
+            if str(token or "").strip()
+        ]
+    fallback_reason = None
+    fallback_used = False
+    if "profile_failover" in event_names or len(attempted_tokens) > 1:
+        fallback_used = True
+        fallback_reason = "provider_failover"
+    elif "profile_model_fallback" in event_names:
+        fallback_used = True
+        fallback_reason = "model_fallback"
+    payload = {
+        "requested_provider": requested_provider,
+        "effective_provider": effective_provider,
+        "requested_model": requested_model,
+        "effective_model": effective_model,
+        "provider_overridden": provider_overridden,
+        "model_overridden": model_overridden,
+        "fallback_used": fallback_used,
+    }
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    return payload
+
+
 def _serialize_node_states(
     node_states: Any,
     *,
@@ -160,6 +217,22 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     trimmed_memory_trace = _trim_memory_trace(memory_trace)
     result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else None
     active_profile = _active_profile_snapshot(run)
+    connector_binding = _resolve_run_connector_binding(run)
+    approval_outcome = _approval_outcome_snapshot(run, trimmed_events)
+    evidence_items = _evidence_items_snapshot(
+        run,
+        result_data=result_data,
+        events=trimmed_events,
+        connector_binding=connector_binding,
+    )
+    provider_model_truth = _serialize_provider_model_truth(
+        context=context,
+        metadata=metadata,
+        active_profile=active_profile,
+        usage_masked=usage_masked,
+        events=trimmed_events,
+        result_data=result_data,
+    )
     node_states = _serialize_node_states(run.get("node_states"))
     result_summary = run.get("result")
     if isinstance(result_summary, str):
@@ -169,7 +242,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
     else:
         summary_text = ""
 
-    return {
+    payload = {
         "run_id": run_id,
         "engine": run.get("engine", "orion"),
         "status": run.get("status", "unknown"),
@@ -188,6 +261,13 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "active_profile_provider": active_profile.get("provider"),
         "active_profile_model": active_profile.get("model"),
         "active_adapter": active_profile.get("adapter"),
+        "requested_provider": provider_model_truth.get("requested_provider"),
+        "effective_provider": provider_model_truth.get("effective_provider"),
+        "requested_model": provider_model_truth.get("requested_model"),
+        "effective_model": provider_model_truth.get("effective_model"),
+        "provider_overridden": provider_model_truth.get("provider_overridden"),
+        "model_overridden": provider_model_truth.get("model_overridden"),
+        "fallback_used": provider_model_truth.get("fallback_used"),
         "pack_id": _pack_id_from_context(run),
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
@@ -222,6 +302,9 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "execution_target_preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
         "user_goal": context.get("user_goal"),
         "result_summary": summary_text[:5000],
+        "connector_binding": connector_binding,
+        "approval_outcome": approval_outcome,
+        "evidence_items": evidence_items,
         "usage_masked": usage_masked,
         "usage_provider": usage_masked.get("provider"),
         "usage_model": usage_masked.get("model"),
@@ -237,6 +320,9 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "replay_request": _build_replay_request_from_context(context),
         "events": trimmed_events,
     }
+    if provider_model_truth.get("fallback_reason"):
+        payload["fallback_reason"] = provider_model_truth.get("fallback_reason")
+    return payload
 
 
 def _archive_run_if_terminal(run_id: str, run: Dict[str, Any]):
@@ -315,6 +401,80 @@ def _json_safe(value: Any) -> Any:
         return json.loads(json.dumps(value, default=str))
     except Exception:
         return str(value)
+
+
+_LIVE_RUN_EXCLUDED_KEYS = {
+    "logs",
+    "input_queue",
+}
+_LIVE_RUN_MONO_KEYS = {
+    "_started_mono",
+    "_finished_mono",
+    "_first_value_mono",
+    "_hitl_wait_start_mono",
+}
+
+
+def _serialize_live_run_state(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"run_id": str(run_id or "").strip()}
+    for key, value in run.items():
+        if key in _LIVE_RUN_EXCLUDED_KEYS or key in _LIVE_RUN_MONO_KEYS:
+            continue
+        payload[key] = value
+    if "thread_id" not in payload:
+        payload["thread_id"] = None
+    if "_archived" not in payload:
+        payload["_archived"] = False
+    return _json_safe(payload)
+
+
+def _restore_live_run_state(item: Dict[str, Any]) -> Optional[tuple[str, Dict[str, Any]]]:
+    payload = _json_safe(item)
+    if not isinstance(payload, dict):
+        return None
+    run_id = str(payload.pop("run_id", "") or "").strip()
+    if not run_id:
+        return None
+    log_queue: queue.Queue = queue.Queue()
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    event_seq = int(payload.get("_event_seq") or 0)
+    for entry in events:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            event_seq = max(event_seq, int(entry.get("seq") or 0))
+        except Exception:
+            continue
+    run: Dict[str, Any] = dict(payload)
+    run["run_id"] = run_id
+    run["logs"] = log_queue
+    run["input_queue"] = queue.Queue()
+    run["thread_id"] = None
+    run["_archived"] = False
+    run["_event_seq"] = event_seq
+    if not isinstance(run.get("events"), list):
+        run["events"] = []
+    if not isinstance(run.get("tool_policy_audit"), list):
+        run["tool_policy_audit"] = []
+    if not isinstance(run.get("memory_trace"), dict):
+        run["memory_trace"] = {
+            "enabled": ORION_MEMORY_ENABLED,
+            "reads": [],
+            "writes": [],
+            "last_error": None,
+            "updated_at": _utc_now_iso(),
+        }
+    if "_hitl_wait_total_ms" not in run:
+        run["_hitl_wait_total_ms"] = 0.0
+    return run_id, run
+
+
+def _persist_live_run_state(run_id: str, run: Dict[str, Any]) -> None:
+    upsert_live_run_state(ORION_RUNTIME_STATE_DB, _serialize_live_run_state(run_id, run))
+
+
+def _remove_live_run_state(run_id: str) -> None:
+    delete_live_run_state(ORION_RUNTIME_STATE_DB, run_id)
 
 
 def _compact_event_text(value: Any, limit: int = 800) -> str:
@@ -438,16 +598,199 @@ def _resolve_run_connector_binding(item: Dict[str, Any]) -> Optional[Dict[str, A
     }
 
 
+def _run_tool_capabilities(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from server_modules.tool_availability_truth import resolve_workspace_tool_capabilities
+
+    context = item.get("context") if isinstance(item.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    workspace_id = _normalize_workspace_id(
+        item.get("workspace_id")
+        or context.get("workspace_id")
+        or metadata.get("workspace_id")
+    ) or "default"
+    connector_binding = _resolve_run_connector_binding(item)
+    connector_id = str((connector_binding or {}).get("connector") or "").strip().lower()
+    if not connector_id:
+        return []
+    return resolve_workspace_tool_capabilities(workspace_id, connector_filter=[connector_id])
+
+
+def _humanize_evidence_token(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .replace("_", " ")
+        .replace("-", " ")
+        .title()
+    )
+
+
+def _evidence_item(identifier: str, label: str, value: Any) -> Optional[Dict[str, str]]:
+    text = _compact_event_text(value, limit=180)
+    if not text:
+        return None
+    return {
+        "id": identifier,
+        "label": label,
+        "value": text,
+    }
+
+
+def _connector_action_result_hint(result: Any) -> str:
+    if isinstance(result, dict):
+        for key in ("message_id", "id", "name", "path", "url", "htmlLink", "webViewLink", "status"):
+            value = str(result.get(key) or "").strip()
+            if value:
+                return value
+    if isinstance(result, list):
+        return f"{len(result)} item{'s' if len(result) != 1 else ''}"
+    return _compact_event_text(result, limit=180)
+
+
+def _approval_outcome_snapshot(
+    item: Dict[str, Any],
+    events: List[Dict[str, Any]],
+) -> Optional[Dict[str, str]]:
+    pending = (
+        item.get("pending_confirmation")
+        if isinstance(item.get("pending_confirmation"), dict)
+        else item.get("pending_approval")
+        if isinstance(item.get("pending_approval"), dict)
+        else {}
+    )
+    if str(pending.get("approval_id") or "").strip():
+        return {"status": "pending", "label": "Confirmation required"}
+    for entry in reversed(events):
+        if not isinstance(entry, dict):
+            continue
+        event_name = str(entry.get("event") or "").strip().lower()
+        data = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+        decision = str(data.get("decision") or entry.get("decision") or "").strip().lower()
+        if event_name == "approval_resolved":
+            if bool(data.get("approved")) or decision in {"approved", "approve", "proceed", "yes"}:
+                return {"status": "approved", "label": "Approved"}
+            if bool(data.get("escalated")) or decision in {"escalated", "escalate"}:
+                return {"status": "escalated", "label": "Escalated"}
+            return {"status": "rejected", "label": "Blocked"}
+        if event_name == "approval_skipped":
+            return {"status": "skipped", "label": "Confirmation not required"}
+        if event_name == "workflow_human_resolved":
+            if decision == "approved":
+                return {"status": "approved", "label": "Approved"}
+            if decision:
+                return {"status": decision, "label": _humanize_evidence_token(decision)}
+    return None
+
+
+def _evidence_items_snapshot(
+    item: Dict[str, Any],
+    *,
+    result_data: Optional[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+    connector_binding: Optional[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    evidence: List[Dict[str, str]] = []
+    connector_action = result_data.get("connector_action") if isinstance(result_data, dict) and isinstance(result_data.get("connector_action"), dict) else {}
+    approval_outcome = _approval_outcome_snapshot(item, events)
+    if approval_outcome and approval_outcome.get("status") != "pending":
+        approval_item = _evidence_item("approval", "Confirmation", approval_outcome.get("label"))
+        if approval_item:
+            evidence.append(approval_item)
+    if connector_action:
+        action_item = _evidence_item(
+            "connector:action",
+            "Action",
+            _humanize_evidence_token(connector_action.get("action_id") or "connector_action"),
+        )
+        if action_item:
+            evidence.append(action_item)
+        system_item = _evidence_item(
+            "connector:system",
+            "System",
+            connector_binding.get("label") if isinstance(connector_binding, dict) else (
+                _humanize_evidence_token(connector_action.get("connector"))
+            ),
+        )
+        if system_item:
+            evidence.append(system_item)
+        target_value = (
+            connector_action.get("recipient")
+            or connector_action.get("to_number")
+            or connector_action.get("channel_id")
+            or connector_action.get("chat_id")
+            or connector_action.get("recipient_id")
+            or connector_action.get("comment_id")
+            or connector_action.get("path")
+            or connector_action.get("title")
+            or connector_action.get("url")
+            or (connector_binding.get("identity_label") if isinstance(connector_binding, dict) else None)
+        )
+        target_item = _evidence_item("connector:target", "Target", target_value)
+        if target_item:
+            evidence.append(target_item)
+        result_item = _evidence_item(
+            "connector:result",
+            "Evidence",
+            _connector_action_result_hint(connector_action.get("result")),
+        )
+        if result_item:
+            evidence.append(result_item)
+        return evidence[:4]
+
+    outputs = result_data.get("outputs") if isinstance(result_data, dict) and isinstance(result_data.get("outputs"), dict) else {}
+    preferred_keys = (
+        "file_path",
+        "path",
+        "title",
+        "sheet_name",
+        "storage",
+        "format",
+        "operation",
+        "rows_written",
+        "rows_read",
+        "items_written",
+        "operations_executed",
+        "outbound_actions",
+    )
+    seen: Set[str] = set()
+    for key in preferred_keys:
+        if key in seen or key not in outputs:
+            continue
+        seen.add(key)
+        value = outputs.get(key)
+        if isinstance(value, list):
+            value = f"{len(value)} item{'s' if len(value) != 1 else ''}"
+        elif isinstance(value, dict):
+            value = "Structured output ready"
+        item_payload = _evidence_item(f"output:{key}", _humanize_evidence_token(key), value)
+        if item_payload:
+            evidence.append(item_payload)
+        if len(evidence) >= 4:
+            return evidence[:4]
+    return evidence[:4]
+
+
 def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
     policy_audit = item.get("tool_policy_audit") if isinstance(item.get("tool_policy_audit"), list) else []
     memory_trace = item.get("memory_trace") if isinstance(item.get("memory_trace"), dict) else {}
     memory_reads = memory_trace.get("reads") if isinstance(memory_trace.get("reads"), list) else []
     memory_writes = memory_trace.get("writes") if isinstance(memory_trace.get("writes"), list) else []
+    events = item.get("events") if isinstance(item.get("events"), list) else []
+    result_data = item.get("result_data") if isinstance(item.get("result_data"), dict) else None
     blocked_count = 0
     approval_required_count = 0
     allow_count = 0
     node_states = item.get("node_states") if isinstance(item.get("node_states"), dict) else {}
     node_items = node_states.get("items") if isinstance(node_states.get("items"), list) else []
+    connector_binding = _resolve_run_connector_binding(item)
+    tool_capabilities = _run_tool_capabilities(item)
+    approval_outcome = _approval_outcome_snapshot(item, events)
+    evidence_items = _evidence_items_snapshot(
+        item,
+        result_data=result_data,
+        events=events,
+        connector_binding=connector_binding,
+    )
     for entry in policy_audit:
         if not isinstance(entry, dict):
             continue
@@ -458,7 +801,7 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
             approval_required_count += 1
         elif decision == "allow":
             allow_count += 1
-    return {
+    payload = {
         "run_id": item.get("run_id"),
         "engine": item.get("engine"),
         "status": item.get("status"),
@@ -477,6 +820,13 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "active_profile_provider": item.get("active_profile_provider"),
         "active_profile_model": item.get("active_profile_model"),
         "active_adapter": item.get("active_adapter"),
+        "requested_provider": item.get("requested_provider"),
+        "effective_provider": item.get("effective_provider"),
+        "requested_model": item.get("requested_model"),
+        "effective_model": item.get("effective_model"),
+        "provider_overridden": bool(item.get("provider_overridden")),
+        "model_overridden": bool(item.get("model_overridden")),
+        "fallback_used": bool(item.get("fallback_used")),
         "pack_id": item.get("pack_id"),
         "agent_role": item.get("agent_role"),
         "agent_role_source": item.get("agent_role_source"),
@@ -495,7 +845,8 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "execution_target_fallback": item.get("execution_target_fallback"),
         "user_goal": item.get("user_goal"),
         "result_summary": item.get("result_summary"),
-        "connector_binding": _resolve_run_connector_binding(item),
+        "connector_binding": connector_binding,
+        "tool_capabilities": tool_capabilities,
         "usage_provider": item.get("usage_provider"),
         "usage_model": item.get("usage_model"),
         "usage_total_tokens_est": item.get("usage_total_tokens_est"),
@@ -514,7 +865,13 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "memory_read_count": len(memory_reads),
         "memory_write_count": len(memory_writes),
         "memory_last_error": memory_trace.get("last_error"),
+        "evidence_items": evidence_items,
     }
+    if approval_outcome:
+        payload["approval_outcome"] = approval_outcome
+    if item.get("fallback_reason"):
+        payload["fallback_reason"] = item.get("fallback_reason")
+    return payload
 
 
 def _get_archived_run_history_item(run_id: str) -> Optional[Dict[str, Any]]:

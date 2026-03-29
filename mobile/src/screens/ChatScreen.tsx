@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   FlatList,
+  Modal,
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
@@ -18,8 +19,7 @@ import { AgentPayload } from "@/src/components/Renderer";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useSessionState } from "@/src/lib/session-context";
 import { mobileApi, normalizeServerUrl } from "@/src/lib/api";
-import { buildAgentDirectory, getAgentById } from "@/src/lib/agents";
-import { useMobileOverviewData } from "@/src/lib/mobile-data";
+import { getPrimaryAgent } from "@/src/lib/agents";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
 import { extractRunReply } from "@/src/lib/run-response";
@@ -69,64 +69,50 @@ function describeRunPhase(run: any) {
 }
 
 type ChatScreenProps = {
-  agentId: string;
+  sessionId: string;
 };
 
-export default function ChatScreen({ agentId }: ChatScreenProps) {
+function formatTimestamp(timestamp?: number) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  if (sameDay) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useSessionState();
-  const { agents } = useMobileOverviewData();
-  const { sessions, ensureSessionForAgent, addMessage, setActiveSession } = useChatStore();
+  const { sessions, createSession, addMessage, setActiveSession, setSessionTitle } = useChatStore();
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const [runActivity, setRunActivity] = useState<string[]>([]);
+  const [recentsOpen, setRecentsOpen] = useState(false);
   const { banner, showBanner } = useTransientBanner();
-  const initializedSessions = useRef<Set<string>>(new Set());
-  const directory = useMemo(() => buildAgentDirectory(agents), [agents]);
-  const activeAgent = useMemo(
-    () => getAgentById(agentId, agents) || directory[0],
-    [agentId, agents, directory],
-  );
-  const activeSession = sessions.find((item) => item.agentId === agentId);
+  const activeAgent = getPrimaryAgent();
+  const activeSession = sessions.find((item) => item.id === sessionId);
   const messages = activeSession?.messages || [];
-  const runtimeRole = activeAgent?.runtimeRole || agentId;
+  const recentSessions = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt), [sessions]);
+  const runtimeRole = activeAgent.runtimeRole || activeAgent.id;
 
   useEffect(() => {
-    if (!activeAgent) return;
-    const sessionId = ensureSessionForAgent(activeAgent);
-    setActiveSession(sessionId);
-  }, [activeAgent, ensureSessionForAgent, setActiveSession]);
+    if (activeSession?.id) {
+      setActiveSession(activeSession.id);
+      return;
+    }
 
-  useEffect(() => {
-    if (!activeSession?.id || !activeAgent) return;
-    if (initializedSessions.current.has(activeSession.id)) return;
-    if (!activeSession || activeSession.messages.length > 0) return;
-    initializedSessions.current.add(activeSession.id);
-    addMessage(activeSession.id, {
-      intent: "assistant",
-      speech: activeAgent.intro,
-    } as AgentPayload);
-  }, [activeAgent, activeSession, addMessage]);
+    const nextSessionId = createSession(activeAgent);
+    router.replace(`/chats/${nextSessionId}`);
+  }, [activeAgent, activeSession?.id, createSession, router, setActiveSession]);
 
   const handleMediaUpload = () => {
-    if (!activeAgent) return;
-    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
-    addMessage(sessionId, {
-      intent: "assistant",
-      speech: "Media uploads are disabled in V1. Use text input for now.",
-    } as AgentPayload);
-  };
-
-  const handlePlusPress = () => {
-    if (!activeAgent) return;
-    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
-    addMessage(sessionId, {
-      intent: "assistant",
-      speech: "Type what you want to do and I’ll handle it from here.",
-    } as AgentPayload);
+    showBanner("Media uploads are not available yet.", "error");
   };
 
   const appendRunActivity = (label: string) => {
@@ -140,15 +126,17 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
   };
 
   const sendMessage = async (textOverride?: string) => {
-    if (!activeAgent) return;
+    if (!activeSession?.id) return;
     const finalInput = (textOverride || input).trim();
     if (!finalInput) return;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const sessionId = activeSession?.id || ensureSessionForAgent(activeAgent);
     const userMessage: AgentPayload = { intent: "user", speech: finalInput };
     const nextUserMessageIndex = messages.length;
     addMessage(sessionId, userMessage);
+    if (activeSession.title === "New chat") {
+      setSessionTitle(sessionId, finalInput.slice(0, 60));
+    }
     setFailedMessageIndex(null);
     setInput("");
     setIsLoading(true);
@@ -283,16 +271,16 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     }
     try {
       await mobileApi.resolveApproval(session, card.runId, card.approvalId, decision);
-      if (!activeAgent) return;
-      addMessage(activeSession?.id || ensureSessionForAgent(activeAgent), {
+      if (!activeSession?.id) return;
+      addMessage(activeSession.id, {
         intent: "assistant",
         speech: decision === "approved" ? "Approval sent. Executing now." : "Action canceled.",
       } as AgentPayload);
       showBanner(decision === "approved" ? "Approval sent." : "Action canceled.", "success");
     } catch (err) {
       console.warn("Approval resolution failed", err);
-      if (!activeAgent) return;
-      addMessage(activeSession?.id || ensureSessionForAgent(activeAgent), {
+      if (!activeSession?.id) return;
+      addMessage(activeSession.id, {
         intent: "assistant",
         speech: "Approval failed. Check core connection.",
       } as AgentPayload);
@@ -374,33 +362,20 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
         <View
           style={{
             paddingHorizontal: SPACING.md,
-            paddingVertical: 6,
+            paddingVertical: 8,
             maxWidth: "92%",
           }}
         >
-          <View
+          <Text
             style={{
-              alignSelf: "flex-start",
-              backgroundColor: theme.colors.surface,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              borderRadius: 20,
-              borderTopLeftRadius: 10,
-              paddingHorizontal: 16,
-              paddingVertical: 13,
+              fontSize: 16,
+              color: theme.colors.text,
+              fontFamily: "DMSans_400Regular",
+              lineHeight: 26,
             }}
           >
-            <Text
-              style={{
-                fontSize: 16,
-                color: theme.colors.text,
-                fontFamily: "DMSans_400Regular",
-                lineHeight: 24,
-              }}
-            >
-              {item.speech}
-            </Text>
-          </View>
+            {item.speech}
+          </Text>
         </View>
       );
     }
@@ -451,9 +426,106 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
     );
   };
 
+  const handleNewChat = () => {
+    const nextSessionId = createSession(activeAgent);
+    setRecentsOpen(false);
+    router.push(`/chats/${nextSessionId}`);
+  };
+
+  if (!activeSession) {
+    return <View style={{ flex: 1, backgroundColor: theme.colors.background }} />;
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {banner ? <TransientBanner message={banner.message} tone={banner.tone} /> : null}
+      <Modal visible={recentsOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRecentsOpen(false)}>
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: theme.colors.background,
+            paddingTop: insets.top + 12,
+            paddingHorizontal: 20,
+            paddingBottom: 24,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ fontSize: 28, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Recent chats</Text>
+            <TouchableOpacity
+              onPress={() => setRecentsOpen(false)}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="close" size={20} color={theme.colors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={0.88}
+            onPress={handleNewChat}
+            style={{
+              marginTop: 18,
+              height: 48,
+              borderRadius: 16,
+              backgroundColor: theme.colors.accent,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
+            <Ionicons name="add" size={18} color="#FFFFFF" />
+            <Text style={{ fontSize: 14, fontWeight: "700", color: "#FFFFFF" }}>New chat</Text>
+          </TouchableOpacity>
+
+          <FlatList
+            data={recentSessions}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ paddingTop: 16, paddingBottom: 24 }}
+            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            renderItem={({ item }) => {
+              const lastMessage = item.messages[item.messages.length - 1];
+              const selected = item.id === activeSession.id;
+              return (
+                <TouchableOpacity
+                  activeOpacity={0.84}
+                  onPress={() => {
+                    setRecentsOpen(false);
+                    router.push(`/chats/${item.id}`);
+                  }}
+                  style={{
+                    padding: 16,
+                    borderRadius: 20,
+                    borderWidth: 1,
+                    borderColor: selected ? theme.colors.accent : theme.colors.border,
+                    backgroundColor: theme.colors.surface,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <Text style={{ flex: 1, fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
+                      {item.title || "New chat"}
+                    </Text>
+                    <Text style={{ marginLeft: 12, fontSize: 12, color: theme.colors.textSecondary }}>
+                      {formatTimestamp(item.updatedAt)}
+                    </Text>
+                  </View>
+                  <Text style={{ marginTop: 6, fontSize: 14, lineHeight: 20, color: theme.colors.textSecondary }} numberOfLines={2}>
+                    {lastMessage?.speech?.trim() || "New chat"}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+      </Modal>
       <View
         style={{
           paddingTop: insets.top + 8,
@@ -497,14 +569,24 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
-            {activeSession?.agentName || activeAgent?.label || "Chat"}
+            {activeAgent.label}
           </Text>
-          {activeAgent?.subtitle ? (
-            <Text style={{ marginTop: 2, fontSize: 12, color: theme.colors.textSecondary }} numberOfLines={1}>
-              {activeAgent.subtitle}
-            </Text>
-          ) : null}
         </View>
+        <TouchableOpacity
+          onPress={() => setRecentsOpen(true)}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="time-outline" size={18} color={theme.colors.text} />
+        </TouchableOpacity>
       </View>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -605,9 +687,7 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
             ) : null
           }
           ListEmptyComponent={
-            <View style={{ paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm }}>
-              <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>Start a conversation.</Text>
-            </View>
+            <View />
           }
         />
 
@@ -615,10 +695,9 @@ export default function ChatScreen({ agentId }: ChatScreenProps) {
           <InputBar
             onSend={(text) => sendMessage(text)}
             onMediaUpload={handleMediaUpload}
-            onPlusPress={handlePlusPress}
             isLoading={isLoading}
             prefilledPrompt={input}
-            placeholder={`Message ${activeSession?.agentName || activeAgent?.label || "agent"}`}
+            placeholder="Message"
           />
         </View>
       </KeyboardAvoidingView>

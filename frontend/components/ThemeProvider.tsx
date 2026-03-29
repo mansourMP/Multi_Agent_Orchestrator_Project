@@ -12,10 +12,10 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [theme, setThemeState] = useState<Theme>(() => {
-        if (typeof window === 'undefined') return 'light';
+        if (typeof window === 'undefined') return 'dark';
         const saved = localStorage.getItem('theme') as Theme | null;
         if (saved && ['light', 'dark', 'system'].includes(saved)) return saved;
-        return 'light';
+        return 'dark';
     });
 
     useEffect(() => {

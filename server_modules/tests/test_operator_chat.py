@@ -250,7 +250,7 @@ class OperatorChatTests(unittest.TestCase):
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback", return_value=("placeholder", {"provider": "codex_cli", "model": "gpt-5.4"}, "codex_cli", ""))
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_model_identity_question_uses_actual_usage(self, _capabilities, _provider_has_key, _generate_reply):
+    def test_model_identity_question_is_not_overridden(self, _capabilities, _provider_has_key, _generate_reply):
         payload = build_direct_operator_reply(
             message="What model are you using right now?",
             workspace_id="default",
@@ -259,7 +259,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "Codex/OpenAI, gpt-5.4.")
+        self.assertEqual(payload["reply"], "placeholder")
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
@@ -278,7 +278,11 @@ class OperatorChatTests(unittest.TestCase):
 
         self.assertIn("Direct chat is unavailable on the current provider path", payload["reply"])
 
-    @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("I can access Google Workspace here.", {"provider": "openai", "model": "gpt-5.4"}, "openai", ""),
+    )
+    @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
         return_value=[{
@@ -292,7 +296,7 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": [],
         }],
     )
-    def test_capability_question_is_answered_from_workspace_state(self, _capabilities, generate_reply):
+    def test_capability_question_uses_model_reply(self, _capabilities, _provider_has_key, generate_reply):
         payload = build_direct_operator_reply(
             message="What can you do in this environment?",
             workspace_id="default",
@@ -301,10 +305,9 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("Connected here right now: Google Workspace.", payload["reply"])
-        self.assertIn("Not verified: Google Workspace.", payload["reply"])
+        self.assertEqual(payload["reply"], "I can access Google Workspace here.")
         self.assertEqual(payload["mode"], "answer")
-        generate_reply.assert_not_called()
+        generate_reply.assert_called_once()
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(
@@ -427,7 +430,7 @@ class OperatorChatTests(unittest.TestCase):
     )
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_simple_greeting_uses_polished_fallback(self, _capabilities, _provider_has_key, _generate_reply):
+    def test_simple_greeting_uses_honest_transport_fallback(self, _capabilities, _provider_has_key, _generate_reply):
         payload = build_direct_operator_reply(
             message="hello",
             workspace_id="default",
@@ -436,7 +439,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "Hi. How can I help?")
+        self.assertEqual(payload["reply"], "I couldn’t get a clean model reply right now. Retry in a moment.")
 
 
 if __name__ == "__main__":

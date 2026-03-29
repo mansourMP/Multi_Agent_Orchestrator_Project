@@ -81,35 +81,6 @@ DIRECT_RUN_OPENERS = (
     "could you",
     "would you",
 )
-MODEL_IDENTITY_KEYWORDS = (
-    "what model",
-    "which model",
-    "model are you using",
-    "what are you using",
-    "are you gpt",
-    "which gpt",
-)
-CAPABILITY_QUESTION_KEYWORDS = (
-    "what can you do",
-    "what do you do",
-    "what do you have access to",
-    "what access do you have",
-    "what is connected",
-    "what tools do you have",
-    "what can you access",
-    "in this environment",
-    "in this workspace",
-)
-GREETING_MESSAGES = {
-    "hi",
-    "hello",
-    "hey",
-    "yo",
-    "sup",
-    "what's up",
-    "whats up",
-}
-
 MAX_DIRECT_CHAT_PRIOR_MESSAGES = 6
 MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS = 280
 MAX_CONTEXT_TOOL_CAPABILITIES = 6
@@ -345,20 +316,6 @@ def _starts_like_direct_run(compact_message: str) -> bool:
     return compact_message.startswith(tuple(f"{token} " for token in DIRECT_RUN_OPENERS))
 
 
-def _is_model_identity_question(message: str) -> bool:
-    compact = _compact_text(message)
-    return _mentions_any(compact, MODEL_IDENTITY_KEYWORDS)
-
-
-def _is_simple_greeting(message: str) -> bool:
-    return _compact_text(message) in GREETING_MESSAGES
-
-
-def _is_capability_question(message: str) -> bool:
-    compact = _compact_text(message)
-    return _mentions_any(compact, CAPABILITY_QUESTION_KEYWORDS)
-
-
 def _is_obvious_telegram_write_request(compact_message: str) -> bool:
     if not compact_message or _question_like(compact_message):
         return False
@@ -393,45 +350,6 @@ def _is_explicit_workflow_request(message: str) -> bool:
     if not compact:
         return False
     return _mentions_any(compact, WORKFLOW_REQUEST_MARKERS)
-
-
-def _capability_response(availability: Dict[str, Any]) -> Dict[str, Any]:
-    capabilities = _normalize_tool_capabilities(availability)
-    connected_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected")]
-    usable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("runtime_usable") is True]
-    unavailable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is False]
-    unverified_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is None]
-    approval_actions: List[str] = []
-    for item in capabilities:
-        for action_id in item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else []:
-            token = str(action_id or "").strip()
-            if token and token not in approval_actions:
-                approval_actions.append(token)
-    if connected_labels:
-        systems_line = ", ".join(connected_labels)
-        usable_line = ", ".join(usable_labels) if usable_labels else "none verified"
-        unavailable_line = ", ".join(unavailable_labels) if unavailable_labels else "none"
-        unverified_line = ", ".join(unverified_labels) if unverified_labels else "none"
-        approval_line = ", ".join(approval_actions) if approval_actions else "none"
-        reply = (
-            "I can help with planning, writing, analysis, summaries, and execution prep in this chat. "
-            f"Connected here right now: {systems_line}. "
-            f"Usable now: {usable_line}. "
-            f"Unavailable now: {unavailable_line}. "
-            f"Not verified: {unverified_line}. "
-            f"Approval required for: {approval_line}."
-        )
-    else:
-        reply = (
-            "I can help with planning, writing, analysis, summaries, and execution prep in this chat. "
-            "No external systems are connected yet. "
-            "If you connect one, I can use it explicitly."
-        )
-    return {
-        "reply": reply,
-        "actions": [],
-        "mode": "answer",
-    }
 
 
 def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
@@ -559,12 +477,6 @@ def _provider_display_name(provider: str) -> str:
     return normalized or "AI"
 
 
-def _format_model_identity_reply(provider: str, model: str) -> str:
-    provider_label = _provider_display_name(provider)
-    model_label = str(model or "").strip() or "unknown"
-    return f"{provider_label}, {model_label}."
-
-
 def _provider_unavailable_response(provider: str) -> Dict[str, Any]:
     label = _provider_display_name(provider)
     if provider == "codex_cli":
@@ -639,9 +551,6 @@ def build_direct_operator_reply(
 
     if not bool(availability_payload.get("ai_ready")) and not _connector_write_preview_allowed(normalized_message, availability_payload):
         return _with_context_used(_no_ai_chat_response(availability_payload), base_context_used)
-
-    if _is_capability_question(normalized_message):
-        return _with_context_used(_capability_response(availability_payload), base_context_used)
 
     preview = _preview_run_response(normalized_message, availability_payload)
     if preview is not None:
@@ -720,13 +629,9 @@ def build_direct_operator_reply(
             reply = "Direct chat is unavailable on the current provider path. Use a message-native AI account, then retry."
         elif "missing scopes" in _compact_text(llm_error) or "api.responses.write" in _compact_text(llm_error):
             reply = "The current Codex/OpenAI auth cannot answer chat right now. Reconnect the account, then retry."
-        elif _is_simple_greeting(normalized_message):
-            reply = "Hi. How can I help?"
 
     actual_provider = usage_masked.get("provider") if isinstance(usage_masked, dict) else provider
     actual_model = usage_masked.get("model") if isinstance(usage_masked, dict) else (normalized_requested_model or None)
-    if _is_model_identity_question(normalized_message) and actual_provider and actual_model:
-        reply = _format_model_identity_reply(str(actual_provider), str(actual_model))
 
     actions = _suggest_actions(normalized_message, availability_payload)
     return {

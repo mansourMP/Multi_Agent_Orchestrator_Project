@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '@/lib/config';
 import { createWorkflow, deleteWorkflow, fetchWorkflows, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useAsyncPageResource } from '@/hooks/pages/useAsyncPageResource';
@@ -79,7 +79,6 @@ async function loadWorkflowLibrary(): Promise<WorkflowRecord[]> {
 }
 
 export function useWorkflowLibrary() {
-  const initialWorkflows = useMemo(() => readWorkflowLibraryCache(), []);
   const formatLoadError = useCallback(
     (loadError: unknown) => formatApiError(loadError, 'Failed to load workflows'),
     [],
@@ -91,11 +90,17 @@ export function useWorkflowLibrary() {
     error,
     refresh,
   } = useAsyncPageResource<WorkflowRecord[]>({
-    initialData: initialWorkflows,
+    initialData: [],
     load: loadWorkflowLibrary,
     formatError: formatLoadError,
-    hasInitialData: initialWorkflows.length > 0,
+    hasInitialData: false,
   });
+
+  useEffect(() => {
+    const cached = readWorkflowLibraryCache();
+    if (cached.length === 0) return;
+    setWorkflows((current) => (current.length > 0 ? current : cached));
+  }, [setWorkflows]);
 
   const search = usePageSearch<WorkflowRecord>({
     items: workflows,

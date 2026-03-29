@@ -8514,7 +8514,7 @@ body.orion-chat-home .orion-main-stage,
 }
 
 .orion-page-shell:not(.is-chat-home):not(.is-builder-page) {
-  min-height: calc(100dvh - var(--topbar-height) - 26px);
+  min-height: 0;
   padding: 12px 18px 18px;
   border: 1px solid var(--border-subtle);
   border-radius: 0;
@@ -8523,23 +8523,21 @@ body.orion-chat-home .orion-main-stage,
 }
 
 body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
-  height: calc(100dvh - var(--topbar-height));
-  overflow: hidden;
+  height: auto;
+  min-height: calc(100dvh - var(--topbar-height));
+  overflow: visible;
 }
 
 body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-shell {
-  overflow-y: hidden;
+  overflow-y: auto;
 }
 
 body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus)
   .orion-page-shell:not(.is-chat-home):not(.is-builder-page) {
-  height: calc(100dvh - var(--topbar-height) - 26px);
-  min-height: calc(100dvh - var(--topbar-height) - 26px);
+  height: auto;
+  min-height: 0;
   box-sizing: border-box;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-gutter: stable;
+  overflow: visible;
 }
 
 .orion-page-shell.is-chat-home,

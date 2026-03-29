@@ -366,10 +366,19 @@ const secondaryProviderActionButtonStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
+  gap: 6,
   border: '1px solid var(--border-subtle)',
   background: 'var(--bg-surface)',
   color: 'var(--text-primary)',
   borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  textDecoration: 'none',
 };
 
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
@@ -560,8 +569,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const connectMode = mode === 'connect';
 
   useEffect(() => {
-    setProviderDetailsOpen({});
-  }, []);
+    if (!providerLoading) {
+      setProviderDetailsOpen({});
+    }
+  }, [providerLoading]);
 
   const setProviderActionBusy = useCallback((id: string, action: string | null) => {
     setProviderBusy((prev) => {
@@ -1500,8 +1511,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const hasActiveError = Boolean(topCardError);
                 const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
                 const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
-                const showGeminiApiKeyAction = card.provider === 'gemini' && !card.credential;
-                const showVertexCredentialsAction = card.provider === 'vertex' && !card.credential;
+                const showGeminiApiKeyAction = card.provider === 'gemini';
+                const showVertexCredentialsAction = card.provider === 'vertex';
                 const visibleActionBusy = connectMode
                   ? openAiNeedsApiKey
                     ? false

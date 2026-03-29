@@ -359,6 +359,19 @@ function summarizeProviderCardError(message: string | null): string | null {
   return `${normalized.slice(0, 75).trimEnd()}…`;
 }
 
+const secondaryProviderActionButtonStyle: CSSProperties = {
+  minHeight: 30,
+  paddingInline: 10,
+  width: 'fit-content',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '1px solid var(--border-subtle)',
+  background: 'var(--bg-surface)',
+  color: 'var(--text-primary)',
+  borderRadius: 999,
+};
+
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
   const openAiDesktopBridge = getDesktopBridge();
@@ -545,6 +558,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   );
 
   const connectMode = mode === 'connect';
+
+  useEffect(() => {
+    setProviderDetailsOpen({});
+  }, []);
 
   const setProviderActionBusy = useCallback((id: string, action: string | null) => {
     setProviderBusy((prev) => {
@@ -1466,7 +1483,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
                 gap: 12,
-                alignItems: 'start',
+                alignItems: 'stretch',
                 overflow: 'visible',
               }}
             >
@@ -1483,6 +1500,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 const hasActiveError = Boolean(topCardError);
                 const openAiNeedsApiKey = card.provider === 'openai' && !openAiHasApiKeyCredential;
                 const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
+                const showGeminiApiKeyAction = card.provider === 'gemini' && !card.credential;
+                const showVertexCredentialsAction = card.provider === 'vertex' && !card.credential;
                 const visibleActionBusy = connectMode
                   ? openAiNeedsApiKey
                     ? false
@@ -1523,6 +1542,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       display: 'grid',
                       gap: 10,
                       overflow: 'visible',
+                      height: '100%',
                       borderRadius: 0,
                       border: '1px solid var(--border-subtle)',
                       borderLeft: `4px solid ${accent.border}`,
@@ -1620,23 +1640,23 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             Add API key
                           </button>
                         ) : null}
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
-                          disabled={!openAiDesktopSignInAvailable || providerBusy['openai-codex-oauth'] === 'login'}
-                          title={openAiDesktopSignInAvailable ? undefined : 'Desktop app required'}
-                          onClick={() => void handleOpenAiCodexOauthSignIn()}
+                          <button
+                            type="button"
+                            className="orion-btn orion-btn-ghost"
+                            style={secondaryProviderActionButtonStyle}
+                            disabled={!openAiDesktopSignInAvailable || providerBusy['openai-codex-oauth'] === 'login'}
+                            title={openAiDesktopSignInAvailable ? undefined : 'Desktop app required'}
+                            onClick={() => void handleOpenAiCodexOauthSignIn()}
                         >
                           {providerBusy['openai-codex-oauth'] === 'login' ? 'Opening ChatGPT…' : 'Sign in with ChatGPT'}
                         </button>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
-                          disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
-                          onClick={() => void handleImportLocalOpenAiAuth()}
-                        >
+                          <button
+                            type="button"
+                            className="orion-btn orion-btn-ghost"
+                            style={secondaryProviderActionButtonStyle}
+                            disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
+                            onClick={() => void handleImportLocalOpenAiAuth()}
+                          >
                           {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
                         </button>
                       </div>
@@ -1646,7 +1666,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
+                          style={secondaryProviderActionButtonStyle}
                           disabled={providerBusy['claude-auth'] === 'login'}
                           onClick={() => void handleClaudeAuthLogin()}
                         >
@@ -1655,7 +1675,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
+                          style={secondaryProviderActionButtonStyle}
                           disabled={providerBusy['claude-auth'] === 'status'}
                           onClick={() => void refreshClaudeAuthStatus()}
                         >
@@ -1663,24 +1683,24 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         </button>
                       </div>
                     ) : null}
-                    {card.provider === 'gemini' ? (
+                    {showGeminiApiKeyAction ? (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
+                          style={secondaryProviderActionButtonStyle}
                           onClick={openGeminiApiKeyForm}
                         >
                           Add API key
                         </button>
                       </div>
                     ) : null}
-                    {card.provider === 'vertex' ? (
+                    {showVertexCredentialsAction ? (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
+                          style={secondaryProviderActionButtonStyle}
                           onClick={openVertexCredentialsForm}
                         >
                           Add credentials

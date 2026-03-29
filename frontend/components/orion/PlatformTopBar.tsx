@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Edit3, Laptop, PanelRight, Server, TriangleAlert, UserRound, Wrench } from 'lucide-react';
+import { ChevronDown, Edit3, Laptop, PanelRight, Server, TriangleAlert, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
@@ -115,15 +115,6 @@ export default function PlatformTopBar() {
           <span>{runtimeStatus.label}</span>
         </button>
         <PwaInstallControl />
-        <button
-          type="button"
-          className="orion-shellbar-avatar-btn"
-          onClick={() => safeNavigate('/account')}
-          aria-label="Profile"
-          title="Profile"
-        >
-          <UserRound size={15} />
-        </button>
       </div>
     </header>
   );

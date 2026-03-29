@@ -1472,7 +1472,7 @@ export function WorkbenchCenterPanel({
   return (
     <section
       style={{
-        borderRadius: 10,
+        borderRadius: 0,
         border: `1px solid ${UI.borderSoft}`,
         background: UI.surface,
         padding: isMobile ? 14 : 18,

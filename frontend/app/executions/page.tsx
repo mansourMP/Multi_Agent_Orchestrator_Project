@@ -826,7 +826,7 @@ export default function ExecutionsPage() {
   };
 
   return (
-    <div className="orion-page-shell orion-animate-in">
+    <div className="orion-page-shell orion-animate-in" style={{ padding: '12px 18px 18px' }}>
       <OsPageHeader
         icon={<Activity size={18} />}
         title="Runs"

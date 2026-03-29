@@ -1774,6 +1774,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                         display: 'grid',
                         alignContent: 'start',
                         gap: 10,
+                        minHeight: 136,
                         borderRadius: 12,
                         border: '1px solid var(--border-subtle)',
                         background: 'var(--bg-element)',
@@ -1810,9 +1811,13 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       </button>
                       <div
                         style={{
-                          display: detailsOpen ? 'grid' : 'none',
+                          display: 'grid',
                           gap: 8,
                           alignContent: 'start',
+                          visibility: detailsOpen ? 'visible' : 'hidden',
+                          opacity: detailsOpen ? 1 : 0,
+                          pointerEvents: detailsOpen ? 'auto' : 'none',
+                          transition: 'opacity 160ms ease',
                         }}
                       >
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
+  ChevronDown,
   PauseCircle,
   PlayCircle,
   Plus,
@@ -338,6 +339,26 @@ function normalizeClaudeCliError(message: string): string {
   return normalized;
 }
 
+function providerAccentStyles(provider: ProviderId): { border: string; soft: string; tint: string } {
+  if (provider === 'openai') {
+    return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 6%, var(--bg-surface))' };
+  }
+  if (provider === 'anthropic') {
+    return { border: 'var(--tone-warning)', soft: 'color-mix(in srgb, var(--tone-warning) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-warning) 7%, var(--bg-surface))' };
+  }
+  if (provider === 'gemini') {
+    return { border: 'var(--tone-success)', soft: 'color-mix(in srgb, var(--tone-success) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-success) 7%, var(--bg-surface))' };
+  }
+  return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 14%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 5%, var(--bg-surface))' };
+}
+
+function summarizeProviderCardError(message: string | null): string | null {
+  const normalized = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  if (normalized.length <= 76) return normalized;
+  return `${normalized.slice(0, 75).trimEnd()}…`;
+}
+
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
@@ -352,6 +373,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [providerNotice, setProviderNotice] = useState('');
   const [lastConnectedAccountLabel, setLastConnectedAccountLabel] = useState('');
   const [providerBusy, setProviderBusy] = useState<Record<string, string>>({});
+  const [providerDetailsOpen, setProviderDetailsOpen] = useState<Record<string, boolean>>({});
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
   const [claudeAuthStatus, setClaudeAuthStatus] = useState<ClaudeAuthStatus | null>(null);
@@ -1294,12 +1316,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         {providerError ? (
           <div
             style={{
-              borderRadius: 14,
+              borderRadius: 12,
               border: '1px solid var(--error-border)',
               background: 'var(--error-bg)',
               color: 'var(--error-fg)',
-              padding: '10px 12px',
-              fontSize: 12.5,
+              padding: '9px 12px',
+              fontSize: 12,
               lineHeight: 1.5,
             }}
           >
@@ -1310,12 +1332,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         {providerNotice ? (
           <div
             style={{
-              borderRadius: 14,
+              borderRadius: 12,
               border: '1px solid var(--success-border)',
               background: 'var(--success-bg)',
               color: 'var(--success-fg)',
-              padding: '10px 12px',
-              fontSize: 12.5,
+              padding: '9px 12px',
+              fontSize: 12,
               lineHeight: 1.5,
             }}
           >
@@ -1327,19 +1349,19 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           <div
             style={{
               display: 'grid',
-              gap: 10,
-              borderRadius: 14,
+              gap: 8,
+              borderRadius: 12,
               border: '1px solid var(--success-border)',
               background: 'var(--success-bg)',
               color: 'var(--success-fg)',
-              padding: '12px 14px',
+              padding: '11px 13px',
             }}
           >
             <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
                 {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} connected` : 'AI provider connected'}
               </div>
-              <div style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              <div style={{ fontSize: 12, lineHeight: 1.5 }}>
                 Return to chat and continue. You can manage provider order later from Integrations if you need to.
               </div>
             </div>
@@ -1384,36 +1406,53 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       ? providerBusy['openai-local-import'] === 'import'
                       : busyAction === 'enable-runtime')
                   : busyAction === 'test';
+                const accent = providerAccentStyles(card.provider);
+                const detailsOpen = Boolean(providerDetailsOpen[card.provider]);
+                const runtimeModelLabel = String(card.profile?.model || '').trim();
+                const catalogDefaultModel = String(option.defaultModel || '').trim();
+                const topCardError = summarizeProviderCardError(card.errorMessage);
 
                 return (
                   <article
                     key={card.provider}
                     style={{
                       display: 'grid',
-                      gap: 12,
+                      gap: 10,
+                      gridTemplateRows: 'auto auto 1fr',
+                      minHeight: 276,
                       borderRadius: 16,
                       border: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-surface)',
-                      padding: '14px 16px',
+                      borderLeft: `4px solid ${accent.border}`,
+                      background: accent.tint,
+                      padding: '14px',
                     }}
                   >
-                    {card.errorMessage ? (
+                    {topCardError ? (
                       <div
                         style={{
-                          borderRadius: 12,
+                          borderRadius: 10,
                           border: '1px solid var(--error-border)',
                           background: 'var(--error-bg)',
                           color: 'var(--error-fg)',
-                          padding: '10px 12px',
-                          fontSize: 12.5,
-                          lineHeight: 1.5,
+                          padding: '8px 10px',
+                          fontSize: 11.5,
+                          lineHeight: 1.45,
                         }}
                       >
-                        {card.errorMessage}
+                        {topCardError}
                       </div>
                     ) : null}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{card.label}</div>
+                      <div style={{ display: 'grid', gap: 2 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{card.label}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                          {runtimeModelLabel
+                            ? `Runtime model: ${runtimeModelLabel}`
+                            : catalogDefaultModel
+                              ? `Catalog default: ${catalogDefaultModel}`
+                              : 'No runtime model selected'}
+                        </div>
+                      </div>
                       <span
                         className="orion-chip"
                         style={
@@ -1427,7 +1466,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     </div>
                     <button
                       className="orion-btn orion-btn-primary"
-                      style={{ minHeight: 36, paddingInline: 14, width: 'fit-content' }}
+                      style={{ minHeight: 34, paddingInline: 14, width: 'fit-content' }}
                       onClick={() => {
                         if (connectMode) {
                           if (card.enabled) {
@@ -1457,47 +1496,99 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     >
                       {visibleActionBusy ? (connectMode ? 'Working…' : 'Testing…') : visibleActionLabel}
                     </button>
-                    <details
+                    <section
                       style={{
+                        display: 'grid',
+                        alignContent: 'start',
+                        gap: 10,
+                        minHeight: 138,
+                        maxHeight: 138,
+                        overflow: 'hidden',
                         borderRadius: 12,
                         border: '1px solid var(--border-subtle)',
                         background: 'var(--bg-element)',
                         padding: '10px 12px',
                       }}
                     >
-                      <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        Details
-                      </summary>
-                      <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                          Account: {card.credential?.label || 'Not connected'}
+                      <button
+                        type="button"
+                        className="orion-btn orion-btn-ghost"
+                        style={{
+                          minHeight: 28,
+                          justifyContent: 'space-between',
+                          paddingInline: 0,
+                          color: 'var(--text-secondary)',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          background: 'transparent',
+                        }}
+                        onClick={() => {
+                          setProviderDetailsOpen((prev) => ({
+                            ...prev,
+                            [card.provider]: !prev[card.provider],
+                          }));
+                        }}
+                      >
+                        <span>{detailsOpen ? 'Hide details' : 'Details'}</span>
+                        <ChevronDown
+                          size={14}
+                          style={{
+                            transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                            transition: 'transform 160ms ease',
+                          }}
+                        />
+                      </button>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gap: 8,
+                          alignContent: 'start',
+                          minHeight: 0,
+                          overflowY: 'auto',
+                          paddingRight: 2,
+                        }}
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
+                          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                            Account: {card.credential?.label || 'Not connected'}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                            Auth: {card.credential ? providerAuthModeLabel(card.provider, card.credential.authMode, providerOptions) : providerSetupGuidance(card.provider, defaultAuthMode, option)}
+                          </div>
+                          {runtimeModelLabel ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              Runtime model: {runtimeModelLabel}
+                            </div>
+                          ) : null}
+                          {detailsOpen && catalogDefaultModel && catalogDefaultModel !== runtimeModelLabel ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              Catalog default: {catalogDefaultModel}
+                            </div>
+                          ) : null}
+                          {detailsOpen && typeof card.order === 'number' ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              Order: #{card.order}
+                            </div>
+                          ) : null}
+                          {detailsOpen && card.isDefaultProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Default for runtime</div> : null}
+                          {detailsOpen && card.isActiveProfile ? <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>Active now</div> : null}
+                          {detailsOpen && card.availability?.detail ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              {card.availability.detail}
+                            </div>
+                          ) : null}
+                          {detailsOpen && card.errorMessage ? (
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              Raw error: {card.errorMessage}
+                            </div>
+                          ) : null}
                         </div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                          Auth: {card.credential ? providerAuthModeLabel(card.provider, card.credential.authMode, providerOptions) : providerSetupGuidance(card.provider, defaultAuthMode, option)}
-                        </div>
-                        {card.profile?.model ? (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            Model: {card.profile.model}
-                          </div>
-                        ) : null}
-                        {typeof card.order === 'number' ? (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            Order: #{card.order}
-                          </div>
-                        ) : null}
-                        {card.isDefaultProfile ? <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>Default for runtime</div> : null}
-                        {card.isActiveProfile ? <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>Active now</div> : null}
-                        {card.availability?.detail ? (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            {card.availability.detail}
-                          </div>
-                        ) : null}
-                        {card.provider === 'openai' ? (
+                        {detailsOpen && card.provider === 'openai' ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <button
                               type="button"
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 12 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               disabled={providerBusy['openai-codex-oauth'] === 'login'}
                               onClick={() => void handleOpenAiCodexOauthSignIn()}
                             >
@@ -1506,7 +1597,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             <button
                               type="button"
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 12 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
                               onClick={() => void handleImportLocalOpenAiAuth()}
                             >
@@ -1514,12 +1605,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             </button>
                           </div>
                         ) : null}
-                        {card.provider === 'anthropic' && !card.credential ? (
+                        {detailsOpen && card.provider === 'anthropic' && !card.credential ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <button
                               type="button"
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 12 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               disabled={providerBusy['claude-auth'] === 'login'}
                               onClick={() => void handleClaudeAuthLogin()}
                             >
@@ -1528,7 +1619,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             <button
                               type="button"
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 12 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               disabled={providerBusy['claude-auth'] === 'status'}
                               onClick={() => void refreshClaudeAuthStatus()}
                             >
@@ -1536,11 +1627,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             </button>
                           </div>
                         ) : null}
-                        {!connectMode && card.credential ? (
+                        {detailsOpen && !connectMode && card.credential ? (
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             <button
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 32, paddingInline: 10 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               onClick={() => void handleToggleProviderProfile(card.credential!, card.profile)}
                               disabled={Boolean(busyAction)}
                             >
@@ -1558,7 +1649,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             {card.profile && !card.isDefaultProfile ? (
                               <button
                                 className="orion-btn orion-btn-ghost"
-                                style={{ minHeight: 32, paddingInline: 10 }}
+                                style={{ minHeight: 30, paddingInline: 10 }}
                                 onClick={() => void handlePromoteProviderProfile(card.profile!)}
                                 disabled={profileBusyAction === 'make-default'}
                               >
@@ -1568,7 +1659,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             {card.profile ? (
                               <button
                                 className="orion-btn orion-btn-ghost"
-                                style={{ minHeight: 32, paddingInline: 10 }}
+                                style={{ minHeight: 30, paddingInline: 10 }}
                                 onClick={() => void handleDeleteProviderProfile(card.profile!)}
                                 disabled={profileBusyAction === 'remove-profile'}
                               >
@@ -1578,7 +1669,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             ) : null}
                             <button
                               className="orion-btn orion-btn-danger"
-                              style={{ minHeight: 32, paddingInline: 10 }}
+                              style={{ minHeight: 30, paddingInline: 10 }}
                               onClick={() => void handleRemoveProviderCredential(card.credential!)}
                               disabled={busyAction === 'remove'}
                             >
@@ -1588,7 +1679,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                           </div>
                         ) : null}
                       </div>
-                    </details>
+                    </section>
                   </article>
                 );
               })}

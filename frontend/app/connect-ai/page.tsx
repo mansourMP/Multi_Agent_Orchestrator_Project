@@ -17,17 +17,26 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<KeyRound size={18} />}
-        title="Connect AI account"
-        subtitle="Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate."
-        actions={
-          <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
-            <ArrowLeft size={13} />
-            Back to chat
-          </Link>
-        }
-      />
+      <div
+        style={{
+          borderRadius: 16,
+          border: '1px solid color-mix(in srgb, var(--tone-accent) 18%, var(--border-subtle))',
+          background: 'color-mix(in srgb, var(--tone-accent) 6%, var(--bg-surface))',
+          padding: '14px 16px',
+        }}
+      >
+        <OsPageHeader
+          icon={<KeyRound size={18} />}
+          title="Connect AI account"
+          subtitle="Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate."
+          actions={
+            <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
+              <ArrowLeft size={13} />
+              Back to chat
+            </Link>
+          }
+        />
+      </div>
 
       <div style={{ width: '100%' }}>
         <AiAccountsPanel workspaceId={WORKSPACE_ID} mode="connect" returnTo={returnTo} />

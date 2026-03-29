@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
         workspace_id: workspaceId,
         priority: 100,
         enabled: true,
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.4',
       }),
     });
     if (profileCreate.status >= 400) {

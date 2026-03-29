@@ -362,6 +362,29 @@ def resolve_requested_model(context: Dict[str, Any], metadata: Dict[str, Any], p
     return ""
 
 
+def default_codex_model() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
+        or os.getenv("CODEX_MODEL")
+        or "gpt-5.4"
+    ).strip() or "gpt-5.4"
+
+
+def codex_cli_supports_model(model: Any) -> bool:
+    normalized = str(model or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized.startswith("gpt-5") or "codex" in normalized
+
+
+def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> str:
+    model = str(requested_model or "").strip()
+    pid = str(provider or "").strip().lower()
+    if pid == "codex_cli":
+        return model if codex_cli_supports_model(model) else default_codex_model()
+    return model
+
+
 def resolve_requested_reasoning_effort(context: Dict[str, Any], metadata: Dict[str, Any]) -> str:
     requested = str(
         context.get("reasoning_effort")
@@ -1368,18 +1391,19 @@ def generate_pack_with_provider_fallback(
     requested_model = resolve_requested_model(context, metadata)
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
+        provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
-            result, usage, model, provider_error = codex_exec_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = codex_exec_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "claude_code_cli":
-            result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "openai":
-            result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "anthropic":
-            result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "gemini":
-            result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "ollama":
-            result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=requested_model)
+            result, usage, model, provider_error = ollama_chat_json(system_prompt, user_prompt, model_override=provider_model)
         else:
             continue
         if isinstance(result, dict):
@@ -1406,11 +1430,12 @@ def generate_chat_reply_with_provider_fallback(
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
+        provider_model = coerce_requested_model_for_provider(requested_model, provider)
         if provider == "codex_cli":
             text, usage, model, provider_error = openai_codex_backend_text(
                 system_prompt,
                 user_goal,
-                model_override=requested_model,
+                model_override=provider_model,
                 reasoning_effort_override=requested_reasoning_effort or None,
                 prior_messages=prior_messages,
             )
@@ -1437,7 +1462,7 @@ def generate_chat_reply_with_provider_fallback(
                 text, usage, model, provider_error = openai_responses_text(
                     system_prompt,
                     user_goal,
-                    model_override=requested_model,
+                    model_override=provider_model,
                     prior_messages=prior_messages,
                 )
                 if text:
@@ -1452,7 +1477,7 @@ def generate_chat_reply_with_provider_fallback(
             text, usage_chat, model_chat, provider_error_chat = openai_chat_text(
                 system_prompt,
                 user_goal,
-                model_override=requested_model,
+                model_override=provider_model,
                 prior_messages=prior_messages,
             )
             if text:
@@ -1471,21 +1496,21 @@ def generate_chat_reply_with_provider_fallback(
             text, usage, model, provider_error = anthropic_chat_text(
                 system_prompt,
                 user_goal,
-                model_override=requested_model,
+                model_override=provider_model,
                 prior_messages=prior_messages,
             )
         elif provider == "gemini":
             text, usage, model, provider_error = gemini_chat_text(
                 system_prompt,
                 user_goal,
-                model_override=requested_model,
+                model_override=provider_model,
                 prior_messages=prior_messages,
             )
         elif provider == "ollama":
             text, usage, model, provider_error = ollama_chat_text(
                 system_prompt,
                 user_goal,
-                model_override=requested_model,
+                model_override=provider_model,
                 prior_messages=prior_messages,
             )
         else:

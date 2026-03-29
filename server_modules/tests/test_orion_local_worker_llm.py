@@ -151,6 +151,32 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
             prior_messages=None,
         )
 
+    def test_generate_chat_coerces_unsupported_openai_model_for_codex_cli(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
+            with patch.object(
+                worker_llm,
+                "openai_codex_backend_text",
+                return_value=("Direct answer", None, "gpt-5.4", ""),
+            ) as codex_backend_mock:
+                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                    context={"provider": "openai", "model": "gpt-4o-mini"},
+                    metadata={},
+                    user_goal="hello",
+                    system_prompt="You are concise.",
+                )
+
+        self.assertEqual(text, "Direct answer")
+        self.assertIsNotNone(usage)
+        self.assertEqual(attempted, "codex_cli")
+        self.assertEqual(error, "")
+        codex_backend_mock.assert_called_once_with(
+            "You are concise.",
+            "hello",
+            model_override="gpt-5.4",
+            reasoning_effort_override=None,
+            prior_messages=None,
+        )
+
     def test_generate_chat_fails_closed_when_codex_cli_has_only_prompt_transport(self):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
             with patch.object(

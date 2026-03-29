@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,8 @@ OPENAI_API_KEY_MISSING_ERROR = "No OpenAI API key configured. Add one from the A
 OPENAI_CODEX_DIRECT_AUTH_ERROR = (
     "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
 )
+CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
+CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -211,6 +214,70 @@ def claude_code_cli_available() -> bool:
     return bool(shutil.which("claude"))
 
 
+def _coerce_epoch_ms(value: Any) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return 0
+
+
+def _parse_claude_code_session_token(payload: Any) -> str:
+    source = payload.get("claudeAiOauth") if isinstance(payload, dict) else payload
+    if not isinstance(source, dict):
+        return ""
+    token = sanitize_bearer_token(
+        source.get("accessToken")
+        or source.get("access_token")
+        or source.get("token")
+        or ""
+    )
+    if not token:
+        return ""
+    expires_at = _coerce_epoch_ms(
+        source.get("expiresAt")
+        or source.get("expires_at")
+        or source.get("expires")
+        or 0
+    )
+    if expires_at and expires_at <= int(time.time() * 1000):
+        return ""
+    return token
+
+
+def read_claude_code_keychain_token() -> str:
+    if not shutil.which("security"):
+        return ""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", CLAUDE_CODE_KEYCHAIN_SERVICE, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    raw = str(result.stdout or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return ""
+    return _parse_claude_code_session_token(parsed)
+
+
+def read_claude_code_file_token() -> str:
+    parsed = safe_read_json(CLAUDE_CODE_CREDENTIALS_PATH, {})
+    return _parse_claude_code_session_token(parsed)
+
+
+def get_claude_code_session_token() -> str:
+    return read_claude_code_keychain_token() or read_claude_code_file_token()
+
+
 def _openai_api_key_disabled() -> bool:
     return str(os.getenv("ORION_DISABLE_OPENAI_API_KEY", "0")).strip().lower() in {
         "1",
@@ -337,6 +404,9 @@ def should_use_openai_chat_completions(context: Dict[str, Any], metadata: Dict[s
     requested_mode = requested_auth_mode(context, metadata)
     if requested_mode == "oauth_token":
         return True
+    run_source = str(metadata.get("source") or context.get("source") or "").strip().lower()
+    if run_source == "chat_direct":
+        return False
     return _openai_auth_mode() == "codex"
 
 
@@ -401,7 +471,72 @@ def coerce_requested_model_for_provider(requested_model: Any, provider: str) -> 
     pid = str(provider or "").strip().lower()
     if pid == "codex_cli":
         return model if codex_cli_supports_model(model) else default_codex_model()
+    if pid == "claude_code_cli":
+        if not model or model.strip().lower() in {"sonnet", "claude", "default"}:
+            return (
+                os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL")
+                or "claude-3-5-sonnet-20241022"
+            ).strip() or "claude-3-5-sonnet-20241022"
     return model
+
+
+def _inline_credentials(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    payload = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def resolve_anthropic_api_key(credential_override: Optional[Dict[str, Any]] = None) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    auth_mode = str(
+        override.get("auth_mode")
+        or override.get("authMode")
+        or ""
+    ).strip().lower()
+    direct_token = sanitize_bearer_token(
+        override.get("api_key")
+        or override.get("access_token")
+        or override.get("oauth_token")
+        or override.get("token")
+        or ""
+    )
+    if direct_token:
+        return direct_token
+    if auth_mode in LOCAL_CLI_AUTH_MODES:
+        return get_claude_code_session_token()
+    return get_anthropic_api_key()
+
+
+def provider_has_usable_credentials(provider: str, context: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    pid = str(provider or "").strip().lower()
+    inline_credentials = _inline_credentials(metadata)
+    auth_mode = requested_auth_mode(context, metadata)
+    if pid == "codex_cli":
+        inline_token = sanitize_bearer_token(
+            inline_credentials.get("oauth_token")
+            or inline_credentials.get("access_token")
+            or ""
+        )
+        return bool(inline_token) or provider_has_key("codex_cli")
+    if pid == "claude_code_cli":
+        return bool(get_claude_code_session_token()) or claude_code_cli_available()
+    if pid == "openai":
+        inline_key = sanitize_bearer_token(inline_credentials.get("api_key") or "")
+        return bool(inline_key) or provider_has_key("openai")
+    if pid == "anthropic":
+        if auth_mode in LOCAL_CLI_AUTH_MODES:
+            return bool(get_claude_code_session_token()) or claude_code_cli_available()
+        inline_key = sanitize_bearer_token(
+            inline_credentials.get("api_key")
+            or inline_credentials.get("access_token")
+            or inline_credentials.get("oauth_token")
+            or inline_credentials.get("token")
+            or ""
+        )
+        return bool(inline_key) or provider_has_key("anthropic")
+    if pid == "gemini":
+        inline_key = sanitize_bearer_token(inline_credentials.get("api_key") or "")
+        return bool(inline_key) or provider_has_key("gemini")
+    return provider_has_key(pid)
 
 
 def resolve_requested_reasoning_effort(context: Dict[str, Any], metadata: Dict[str, Any]) -> str:
@@ -962,8 +1097,9 @@ def anthropic_chat_text(
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    api_key = get_anthropic_api_key()
+    api_key = resolve_anthropic_api_key(credential_override=credential_override)
     if not api_key:
         return "", None, "", "missing_api_key"
 
@@ -1015,8 +1151,9 @@ def anthropic_chat_json(
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
-    api_key = get_anthropic_api_key()
+    api_key = resolve_anthropic_api_key(credential_override=credential_override)
     if not api_key:
         return None, None, "", "missing_api_key"
 
@@ -1398,11 +1535,17 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
     for pid in SUPPORTED_PROVIDERS:
         if pid not in base:
             base.append(pid)
-    if auth_mode == "codex" and use_codex_cli and "codex_cli" in base and provider_has_key("codex_cli"):
+    if (
+        auth_mode == "codex"
+        and run_source not in {"chat_direct"}
+        and use_codex_cli
+        and "codex_cli" in base
+        and provider_has_usable_credentials("codex_cli", context, metadata)
+    ):
         if run_source in {"telegram_autopilot", "whatsapp_autopilot"}:
             return ["codex_cli"]
         base = ["codex_cli"] + [pid for pid in base if pid != "codex_cli"]
-        if prefer_direct_openai and "openai" in base and provider_has_key("openai"):
+        if prefer_direct_openai and "openai" in base and provider_has_usable_credentials("openai", context, metadata):
             openai_index = base.index("openai")
             if openai_index > 1:
                 base.pop(openai_index)
@@ -1410,11 +1553,11 @@ def provider_order_for_run(context: Dict[str, Any], metadata: Dict[str, Any]) ->
 
     fallback_enabled = str(os.getenv("ORION_LOCAL_WORKER_PROVIDER_FALLBACK", "1")).strip().lower() not in {"0", "false", "no", "off"}
     if disable_fallback and context_provider in SUPPORTED_PROVIDERS:
-        return [context_provider] if provider_has_key(context_provider) else []
+        return [context_provider] if provider_has_usable_credentials(context_provider, context, metadata) else []
     if provider_hint and provider_hint != "auto" and provider_hint in SUPPORTED_PROVIDERS and not fallback_enabled:
-        return [provider_hint] if provider_has_key(provider_hint) else []
+        return [provider_hint] if provider_has_usable_credentials(provider_hint, context, metadata) else []
 
-    return [pid for pid in base if provider_has_key(pid)]
+    return [pid for pid in base if provider_has_usable_credentials(pid, context, metadata)]
 
 
 def generate_pack_with_provider_fallback(
@@ -1426,6 +1569,7 @@ def generate_pack_with_provider_fallback(
     attempted: list[str] = []
     last_error = "no provider credentials available"
     requested_model = resolve_requested_model(context, metadata)
+    credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
@@ -1434,10 +1578,15 @@ def generate_pack_with_provider_fallback(
                 system_prompt,
                 user_prompt,
                 model_override=provider_model,
-                credential_override=metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None,
+                credential_override=credential_override,
             )
         elif provider == "claude_code_cli":
-            result, usage, model, provider_error = claude_code_exec_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = anthropic_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                credential_override=credential_override,
+            )
         elif provider == "openai":
             direct_auth_error = openai_direct_auth_error(context, metadata)
             if direct_auth_error:
@@ -1445,7 +1594,12 @@ def generate_pack_with_provider_fallback(
                 continue
             result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "anthropic":
-            result, usage, model, provider_error = anthropic_chat_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = anthropic_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                credential_override=credential_override,
+            )
         elif provider == "gemini":
             result, usage, model, provider_error = gemini_chat_json(system_prompt, user_prompt, model_override=provider_model)
         elif provider == "ollama":
@@ -1474,6 +1628,7 @@ def generate_chat_reply_with_provider_fallback(
     prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
     requested_model = resolve_requested_model(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
+    credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         provider_model = coerce_requested_model_for_provider(requested_model, provider)
@@ -1484,7 +1639,7 @@ def generate_chat_reply_with_provider_fallback(
                 model_override=provider_model,
                 reasoning_effort_override=requested_reasoning_effort or None,
                 prior_messages=prior_messages,
-                credential_override=metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None,
+                credential_override=credential_override,
             )
             if text:
                 return (
@@ -1499,10 +1654,21 @@ def generate_chat_reply_with_provider_fallback(
             )
             continue
         if provider == "claude_code_cli":
-            last_error = (
-                f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: "
-                "claude_code_cli_requires_prompt_transport"
+            text, usage, model, provider_error = anthropic_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
             )
+            if text:
+                return (
+                    text,
+                    build_usage_masked_from_provider("claude_code_cli", usage, model),
+                    ",".join(attempted),
+                    "",
+                )
+            last_error = f"claude_code_cli generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "openai":
             direct_auth_error = openai_direct_auth_error(context, metadata)
@@ -1549,6 +1715,7 @@ def generate_chat_reply_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+                credential_override=credential_override,
             )
         elif provider == "gemini":
             text, usage, model, provider_error = gemini_chat_text(

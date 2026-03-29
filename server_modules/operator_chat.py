@@ -7,9 +7,14 @@ import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from scripts.orion_local_worker_llm import SUPPORTED_PROVIDERS, generate_chat_reply_with_provider_fallback, provider_has_key
+from scripts.orion_local_worker_llm import (
+    SUPPORTED_PROVIDERS,
+    claude_code_cli_available,
+    generate_chat_reply_with_provider_fallback,
+    provider_has_key,
+)
 from scripts.orion_local_worker_utils import build_operator_system_prompt
-from server_modules.provider_profiles import _build_provider_credential_candidates
+from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 try:
     from server_modules.tool_availability_truth import resolve_workspace_tool_capabilities
 except Exception:
@@ -442,12 +447,42 @@ def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optiona
     return None
 
 
-def _preferred_provider(requested_provider: str = "") -> str:
+def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:
+    payload = credentials if isinstance(credentials, dict) else {}
+    return normalize_auth_mode(provider, credentials=payload)
+
+
+def _supports_direct_message_native_chat(provider: str, credentials: Optional[Dict[str, Any]]) -> bool:
+    payload = credentials if isinstance(credentials, dict) else {}
+    auth_mode = _credential_auth_mode(provider, payload)
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "anthropic":
+        if auth_mode == "local_cli":
+            return claude_code_cli_available()
+        return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("anthropic")
+    if normalized_provider == "openai":
+        return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("openai")
+    if normalized_provider == "gemini":
+        return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("gemini")
+    if normalized_provider == "codex_cli":
+        return bool(payload) or provider_has_key("codex_cli")
+    return provider_has_key(normalized_provider)
+
+
+def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tuple[str, Dict[str, Any]]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    prioritized_message_native = ("anthropic", "openai", "gemini")
+    for provider in prioritized_message_native:
+        credentials = _direct_chat_credentials(normalized_workspace_id, provider)
+        if _supports_direct_message_native_chat(provider, credentials):
+            return provider, credentials
+    codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+    if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+        return "codex_cli", codex_credentials
     requested = str(requested_provider or "").strip().lower()
-    auth_mode = str(os.getenv("ORION_AUTH_MODE", "")).strip().lower()
-    if auth_mode == "codex":
-        return "codex_cli"
-    return requested if requested in SUPPORTED_PROVIDERS else "openai"
+    fallback_provider = requested if requested in SUPPORTED_PROVIDERS else "openai"
+    fallback_credentials = _direct_chat_credentials(normalized_workspace_id, fallback_provider)
+    return fallback_provider, fallback_credentials
 
 
 def _provider_display_name(provider: str) -> str:
@@ -570,16 +605,9 @@ def build_direct_operator_reply(
     if preview is not None:
         return _with_context_used(preview, base_context_used)
 
-    provider = _preferred_provider(normalized_requested_provider)
+    provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
     fallback_reason = None
-    if (
-        normalized_requested_provider
-        and provider
-        and provider != normalized_requested_provider
-        and str(os.getenv("ORION_AUTH_MODE", "")).strip().lower() == "codex"
-    ):
-        fallback_reason = "codex_mode_forced_provider"
-    if provider not in SUPPORTED_PROVIDERS or not provider_has_key(provider):
+    if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
         return _with_context_used(
             _provider_unavailable_response(provider),
             _build_context_used(
@@ -598,27 +626,24 @@ def build_direct_operator_reply(
                 fallback_reason=fallback_reason,
             ),
         )
+    selected_model = normalized_requested_model if provider == normalized_requested_provider else ""
     context = {
         "workspace_id": normalized_workspace_id,
         "provider": provider,
-        "model": normalized_requested_model or None,
+        "model": selected_model or None,
         "source": "chat_direct",
-        "disable_provider_fallback": True,
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
     }
     metadata = {
         "provider": provider,
-        "model": normalized_requested_model or None,
+        "model": selected_model or None,
         "source": "chat_direct",
-        "disable_provider_fallback": True,
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
     }
-    if provider == "codex_cli":
-        direct_chat_credentials = _direct_chat_credentials(normalized_workspace_id, provider)
-        if direct_chat_credentials:
-            metadata["credentials"] = direct_chat_credentials
+    if direct_chat_credentials:
+        metadata["credentials"] = direct_chat_credentials
     system_prompt = build_operator_system_prompt(
         _availability_lines(normalized_workspace_id, availability_payload),
     ) or None

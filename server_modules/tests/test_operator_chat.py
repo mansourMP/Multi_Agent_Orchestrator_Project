@@ -160,26 +160,10 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(payload["context_used"]["history_mode"], "none")
 
     @patch.dict("operator_chat_under_test.os.environ", {"ORION_AUTH_MODE": "codex"}, clear=False)
+    @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
     @patch("operator_chat_under_test.provider_has_key", return_value=False)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_codex_chat_unavailable_fails_closed(self, _capabilities, _provider_has_key):
-        payload = build_direct_operator_reply(
-            message="hello",
-            workspace_id="default",
-            requested_model="gpt-5.4",
-            requested_provider="openai",
-            availability={"ai_ready": True},
-        )
-
-        self.assertEqual(payload["mode"], "connect")
-        self.assertIn("AI account", payload["reply"])
-        self.assertTrue(payload["context_used"]["provider_overridden"])
-        self.assertFalse(payload["context_used"]["fallback_used"])
-        self.assertEqual(payload["context_used"]["fallback_reason"], "codex_mode_forced_provider")
-
-    @patch("operator_chat_under_test.provider_has_key", side_effect=lambda provider: provider == "gemini")
-    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    def test_selected_provider_unavailable_does_not_fallback(self, _capabilities, _provider_has_key):
+    def test_codex_chat_unavailable_fails_closed(self, _capabilities, _provider_has_key, _direct_chat_credentials):
         payload = build_direct_operator_reply(
             message="hello",
             workspace_id="default",
@@ -190,6 +174,30 @@ class OperatorChatTests(unittest.TestCase):
 
         self.assertEqual(payload["mode"], "connect")
         self.assertIn("OpenAI is selected for chat", payload["reply"])
+        self.assertFalse(payload["context_used"]["provider_overridden"])
+        self.assertFalse(payload["context_used"]["fallback_used"])
+        self.assertIsNone(payload["context_used"].get("fallback_reason"))
+
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("Hello from Gemini.", {"provider": "gemini", "model": "gemini-2.0-flash"}, "gemini", ""),
+    )
+    @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
+    @patch("operator_chat_under_test.provider_has_key", side_effect=lambda provider: provider == "gemini")
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_selected_provider_unavailable_uses_next_available_provider(self, _capabilities, _provider_has_key, _direct_chat_credentials, _generate_reply):
+        payload = build_direct_operator_reply(
+            message="hello",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["provider"], "gemini")
+        self.assertEqual(payload["context_used"]["effective_provider"], "gemini")
+        self.assertTrue(payload["context_used"]["provider_overridden"])
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch("operator_chat_under_test.provider_has_key", return_value=True)

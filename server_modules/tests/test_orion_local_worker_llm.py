@@ -45,7 +45,7 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(order[0], "codex_cli")
         self.assertEqual(order[1], "openai")
 
-    def test_generate_chat_uses_chat_completions_for_codex_auth_mode(self):
+    def test_generate_chat_uses_plain_chat_transport_for_codex_auth_mode(self):
         with patch.dict(os.environ, {"ORION_AUTH_MODE": "codex"}, clear=False):
             with patch.object(worker_llm, "provider_order_for_run", return_value=["openai", "codex_cli"]):
                 with patch.object(
@@ -55,10 +55,14 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
                 ):
                     with patch.object(
                         worker_llm,
-                        "openai_chat_json",
-                        return_value=({"reply": "Short reply"}, {"total_tokens": 5}, "gpt-4.1", ""),
-                    ) as openai_chat_json_mock:
-                        with patch.object(worker_llm, "codex_exec_text") as codex_exec_text_mock:
+                        "openai_chat_text",
+                        return_value=("Short reply", {"total_tokens": 5}, "gpt-4.1", ""),
+                    ) as openai_chat_text_mock:
+                        with patch.object(
+                            worker_llm,
+                            "openai_chat_json",
+                            side_effect=AssertionError("json helper should not be used for direct chat"),
+                        ):
                             text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
                                 context={},
                                 metadata={},
@@ -70,10 +74,9 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertIsNotNone(usage)
         self.assertEqual(attempted, "openai")
         self.assertEqual(error, "")
-        openai_chat_json_mock.assert_called_once()
-        codex_exec_text_mock.assert_not_called()
+        openai_chat_text_mock.assert_called_once()
 
-    def test_generate_chat_uses_chat_completions_for_explicit_oauth_token_mode(self):
+    def test_generate_chat_uses_plain_chat_transport_for_explicit_oauth_token_mode(self):
         with patch.dict(os.environ, {"ORION_AUTH_MODE": "api_key"}, clear=False):
             with patch.object(worker_llm, "provider_order_for_run", return_value=["openai"]):
                 with patch.object(
@@ -83,21 +86,26 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
                 ):
                     with patch.object(
                         worker_llm,
-                        "openai_chat_json",
-                        return_value=({"reply": "OAuth reply"}, {"total_tokens": 7}, "gpt-4.1", ""),
-                    ) as openai_chat_json_mock:
-                        text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
-                            context={"auth_mode": "oauth_token"},
-                            metadata={},
-                            user_goal="Answer briefly",
-                            system_prompt="You are concise.",
-                        )
+                        "openai_chat_text",
+                        return_value=("OAuth reply", {"total_tokens": 7}, "gpt-4.1", ""),
+                    ) as openai_chat_text_mock:
+                        with patch.object(
+                            worker_llm,
+                            "openai_chat_json",
+                            side_effect=AssertionError("json helper should not be used for direct chat"),
+                        ):
+                            text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                                context={"auth_mode": "oauth_token"},
+                                metadata={},
+                                user_goal="Answer briefly",
+                                system_prompt="You are concise.",
+                            )
 
         self.assertEqual(text, "OAuth reply")
         self.assertIsNotNone(usage)
         self.assertEqual(attempted, "openai")
         self.assertEqual(error, "")
-        openai_chat_json_mock.assert_called_once()
+        openai_chat_text_mock.assert_called_once()
 
     def test_codex_exec_prefers_direct_backend_before_cli(self):
         with patch.object(
@@ -121,9 +129,9 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
             with patch.object(
                 worker_llm,
-                "codex_exec_text",
+                "openai_codex_backend_text",
                 return_value=("Direct answer", None, "gpt-5.3-codex", ""),
-            ) as codex_exec_text_mock:
+            ) as codex_backend_mock:
                 text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
                     context={"model": "gpt-5.3-codex"},
                     metadata={"provider": "codex_cli", "disable_provider_fallback": True},
@@ -134,7 +142,76 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(text, "Direct answer")
         self.assertEqual(attempted, "codex_cli")
         self.assertEqual(error, "")
-        codex_exec_text_mock.assert_called_once_with("You are concise.", "hello", model_override="gpt-5.3-codex")
+        codex_backend_mock.assert_called_once_with(
+            "You are concise.",
+            "hello",
+            model_override="gpt-5.3-codex",
+            reasoning_effort_override=None,
+            prior_messages=None,
+        )
+
+    def test_generate_chat_fails_closed_when_codex_cli_has_only_prompt_transport(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["codex_cli"]):
+            with patch.object(
+                worker_llm,
+                "openai_codex_backend_text",
+                return_value=("", None, "gpt-5.4", "backend_unavailable"),
+            ):
+                with patch.object(
+                    worker_llm,
+                    "codex_exec_text",
+                    side_effect=AssertionError("cli prompt transport should not be used for direct chat"),
+                ):
+                    text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                        context={},
+                        metadata={},
+                        user_goal="hello",
+                        system_prompt="You are concise.",
+                    )
+
+        self.assertEqual(text, "")
+        self.assertIsNone(usage)
+        self.assertEqual(attempted, "codex_cli")
+        self.assertIn(worker_llm.DIRECT_CHAT_TRANSPORT_UNAVAILABLE, error)
+
+    def test_generate_chat_fails_closed_for_claude_code_cli(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["claude_code_cli"]):
+            with patch.object(
+                worker_llm,
+                "claude_code_exec_text",
+                side_effect=AssertionError("claude cli prompt transport should not be used for direct chat"),
+            ):
+                text, usage, attempted, error = worker_llm.generate_chat_reply_with_provider_fallback(
+                    context={},
+                    metadata={},
+                    user_goal="hello",
+                    system_prompt="You are concise.",
+                )
+
+        self.assertEqual(text, "")
+        self.assertIsNone(usage)
+        self.assertEqual(attempted, "claude_code_cli")
+        self.assertIn(worker_llm.DIRECT_CHAT_TRANSPORT_UNAVAILABLE, error)
+
+    def test_generate_pack_keeps_json_transport(self):
+        with patch.object(worker_llm, "provider_order_for_run", return_value=["openai"]):
+            with patch.object(
+                worker_llm,
+                "openai_chat_json",
+                return_value=({"summary": "Done", "content_plan": [], "next_steps": []}, {"total_tokens": 5}, "gpt-4.1", ""),
+            ) as openai_chat_json_mock:
+                result, usage, attempted, error = worker_llm.generate_pack_with_provider_fallback(
+                    context={},
+                    metadata={},
+                    system_prompt="Structured output only.",
+                    user_prompt="Build a plan.",
+                )
+
+        self.assertEqual(result["summary"], "Done")
+        self.assertIsNotNone(usage)
+        self.assertEqual(attempted, "openai")
+        self.assertEqual(error, "")
+        openai_chat_json_mock.assert_called_once()
 
     def test_disable_provider_fallback_locks_requested_provider(self):
         with patch.object(

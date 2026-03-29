@@ -10,10 +10,14 @@ class RunsExecutionGraphTests(unittest.TestCase):
     def setUp(self) -> None:
         runs_execution.runs.clear()
         runs_execution.RUN_QUEUE_INDEX.clear()
+        with runs_execution.IDEMPOTENCY_LOCK:
+            runs_execution.IDEMPOTENCY_RECORDS.clear()
 
     def tearDown(self) -> None:
         runs_execution.runs.clear()
         runs_execution.RUN_QUEUE_INDEX.clear()
+        with runs_execution.IDEMPOTENCY_LOCK:
+            runs_execution.IDEMPOTENCY_RECORDS.clear()
 
     def _register_live_run(self, run_id: str) -> queue.Queue:
         log_queue = queue.Queue()
@@ -263,6 +267,124 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertEqual(items["approval_1"]["status"], "succeeded")
         self.assertEqual(items["data_1"]["status"], "succeeded")
         self.assertIsNone(node_states["active_node_id"])
+
+    def test_serialize_run_snapshot_uses_connector_evidence_from_last_node_data(self):
+        log_queue = self._register_live_run("run-evidence")
+        runs_execution.runs["run-evidence"].update(
+            {
+                "status": "completed",
+                "result": "Connector action completed: telegram_bot.send_message.",
+                "result_data": {
+                    "summary": "Connector action completed: telegram_bot.send_message.",
+                    "last_node_data": {
+                        "connector_action": {
+                            "connector": "telegram_bot",
+                            "action_id": "send_message",
+                            "chat_id": "1932934047",
+                            "result": {"ok": True, "message_id": "msg-1"},
+                            "executed": True,
+                            "duplicate_protected": False,
+                        }
+                    },
+                },
+                "events": [
+                    {
+                        "event": "approval_resolved",
+                        "data": {"approved": True, "decision": "approved"},
+                    }
+                ],
+                "context": {"metadata": {}},
+            }
+        )
+
+        snapshot = runs_output._serialize_run_snapshot("run-evidence", runs_execution.runs["run-evidence"])
+        evidence_by_label = {item["label"]: item["value"] for item in snapshot["evidence_items"]}
+
+        self.assertEqual(evidence_by_label.get("Execution"), "Executed")
+        self.assertEqual(evidence_by_label.get("Action"), "Send Message")
+        self.assertEqual(evidence_by_label.get("Target"), "1932934047")
+
+    def test_serialize_run_snapshot_builds_run_detail_contract_for_connector_execution(self):
+        log_queue = self._register_live_run("run-contract")
+        runs_execution.runs["run-contract"].update(
+            {
+                "status": "completed",
+                "result": "Connector action completed: telegram_bot.send_message.",
+                "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                "result_data": {
+                    "summary": "Connector action completed: telegram_bot.send_message.",
+                    "last_node_data": {
+                        "connector_action": {
+                            "connector": "telegram_bot",
+                            "action_id": "send_message",
+                            "chat_id": "1932934047",
+                            "result": {"ok": True, "message_id": "msg-1"},
+                            "executed": True,
+                            "duplicate_protected": False,
+                        }
+                    },
+                },
+                "events": [
+                    {
+                        "event": "approval_resolved",
+                        "data": {"approved": True, "decision": "approved"},
+                    }
+                ],
+                "context": {
+                    "provider": "openai",
+                    "model": "gpt-4.1",
+                    "metadata": {},
+                },
+            }
+        )
+
+        snapshot = runs_output._serialize_run_snapshot("run-contract", runs_execution.runs["run-contract"])
+        contract = snapshot["run_detail_contract"]
+
+        self.assertEqual(contract["provider_model"]["requested_provider"], "openai")
+        self.assertEqual(contract["provider_model"]["effective_provider"], "openai")
+        self.assertEqual(contract["provider_model"]["requested_model"], "gpt-4.1")
+        self.assertEqual(contract["provider_model"]["effective_model"], "gpt-5.4")
+        self.assertEqual(contract["approval_outcome"]["label"], "Confirmed")
+        self.assertEqual(contract["connector_mutation"]["execution_label"], "Executed")
+        self.assertEqual(contract["connector_mutation"]["action_label"], "Send Message")
+        self.assertEqual(contract["connector_mutation"]["target_label"], "1932934047")
+        self.assertEqual(contract["evidence_items"][0]["label"], "Execution")
+        self.assertEqual(contract["evidence_items"][0]["value"], "Executed")
+
+    def test_serialize_run_snapshot_marks_duplicate_protected_in_contract_and_evidence(self):
+        log_queue = self._register_live_run("run-duplicate-evidence")
+        runs_execution.runs["run-duplicate-evidence"].update(
+            {
+                "status": "completed",
+                "result": "Connector action completed: telegram_bot.send_message.",
+                "result_data": {
+                    "summary": "Connector action completed: telegram_bot.send_message.",
+                    "last_node_data": {
+                        "connector_action": {
+                            "connector": "telegram_bot",
+                            "action_id": "send_message",
+                            "chat_id": "1932934047",
+                            "result": {"ok": True, "message_id": "msg-1"},
+                            "executed": False,
+                            "duplicate_protected": True,
+                        }
+                    },
+                },
+                "events": [],
+                "context": {"metadata": {}},
+            }
+        )
+
+        snapshot = runs_output._serialize_run_snapshot(
+            "run-duplicate-evidence",
+            runs_execution.runs["run-duplicate-evidence"],
+        )
+        contract = snapshot["run_detail_contract"]
+        evidence_by_label = {item["label"]: item["value"] for item in snapshot["evidence_items"]}
+
+        self.assertEqual(contract["connector_mutation"]["execution_label"], "Duplicate protected")
+        self.assertEqual(evidence_by_label.get("Execution"), "Duplicate protected")
 
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)
     @patch("server_modules.runs_execution._workflow_execute_connector_action", side_effect=RuntimeError("connector offline"))
@@ -574,6 +696,8 @@ class RunsExecutionGraphTests(unittest.TestCase):
     def test_execute_workflow_graph_blocks_custom_api_private_url(self):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_connector_action(
+                "run-private-url",
+                "node-private-url",
                 {"workspace_id": "default", "metadata": {}},
                 {
                     "connector": "custom_api",
@@ -582,6 +706,328 @@ class RunsExecutionGraphTests(unittest.TestCase):
                 },
                 current_text="Call API",
             )
+
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"ok": True, "id": "req-dup-1"}, "text": ""},
+    )
+    def test_workflow_connector_action_duplicate_guard_reuses_prior_write(self, http_mock):
+        first = runs_execution._workflow_execute_connector_action(
+            "run-dup-connector",
+            "tool-dup-1",
+            {"workflow_id": "wf_dup", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-dup-connector",
+            "tool-dup-1",
+            {"workflow_id": "wf_dup", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+
+        self.assertEqual(http_mock.call_count, 1)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["duplicate_protected"])
+        self.assertIn("Skipped duplicate execution", second["summary"])
+
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"ok": True, "id": "req-auth-1"}, "text": ""},
+    )
+    def test_workflow_connector_action_duplicate_guard_separates_custom_api_auth_fingerprint(self, http_mock):
+        first = runs_execution._workflow_execute_connector_action(
+            "run-auth-1",
+            "tool-auth-1",
+            {"workflow_id": "wf_auth", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "headers": {"Authorization": "Bearer token-a"},
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-auth-1",
+            "tool-auth-1",
+            {"workflow_id": "wf_auth", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "headers": {"Authorization": "Bearer token-b"},
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+
+        self.assertEqual(http_mock.call_count, 2)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"ok": True, "id": "req-root-1"}, "text": ""},
+    )
+    def test_workflow_connector_action_duplicate_guard_reuses_retry_root_across_run_ids(self, http_mock):
+        context = {
+            "workflow_id": "wf_retry_root",
+            "workspace_id": "default",
+            "metadata": {"retry_root_run_id": "retry-root-1"},
+        }
+        first = runs_execution._workflow_execute_connector_action(
+            "run-root-1",
+            "tool-root-1",
+            context,
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-root-2",
+            "tool-root-1",
+            context,
+            {
+                "connector": "custom_api",
+                "action_id": "http_request",
+                "method": "POST",
+                "url": "https://example.com/hook",
+                "payload": {"hello": "world"},
+            },
+            current_text="Call API",
+        )
+
+        self.assertEqual(http_mock.call_count, 1)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={"status": 200, "json": {"id": "msg-acct-1", "content": "hello"}, "text": ""},
+    )
+    def test_workflow_connector_action_duplicate_guard_separates_connector_accounts(self, http_mock):
+        with patch(
+            "server_modules.runs_execution._workflow_tool_connector_secret",
+            side_effect=[
+                ("cred-discord-a", "discord_bot", {"bot_token": "discord-token-a", "channel_id": "123456"}),
+                ("cred-discord-b", "discord_bot", {"bot_token": "discord-token-b", "channel_id": "123456"}),
+            ],
+        ):
+            first = runs_execution._workflow_execute_connector_action(
+                "run-account-1",
+                "tool-account-1",
+                {"workflow_id": "wf_account", "workspace_id": "default", "metadata": {}},
+                {
+                    "connector": "discord_bot",
+                    "action_id": "send_message",
+                    "message": "Ship it",
+                },
+                current_text="Ship it",
+            )
+            second = runs_execution._workflow_execute_connector_action(
+                "run-account-1",
+                "tool-account-1",
+                {"workflow_id": "wf_account", "workspace_id": "default", "metadata": {}},
+                {
+                    "connector": "discord_bot",
+                    "action_id": "send_message",
+                    "message": "Ship it",
+                },
+                current_text="Ship it",
+            )
+
+        self.assertEqual(http_mock.call_count, 2)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-gws-doc", "google_workspace", {"access_token": "token-doc"}),
+    )
+    @patch(
+        "server_modules.runs_execution.google_workspace_create_document",
+        return_value={"documentId": "doc-1"},
+    )
+    def test_workflow_connector_action_duplicate_guard_reuses_same_title_create_doc(self, doc_mock, _secret_mock):
+        first = runs_execution._workflow_execute_connector_action(
+            "run-doc-1",
+            "tool-doc-1",
+            {"workflow_id": "wf_doc", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "create_doc",
+                "title": "Quarterly Plan",
+            },
+            current_text="Create doc",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-doc-1",
+            "tool-doc-1",
+            {"workflow_id": "wf_doc", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "create_doc",
+                "title": "Quarterly Plan",
+            },
+            current_text="Create doc",
+        )
+
+        self.assertEqual(doc_mock.call_count, 1)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-gws-mail", "google_workspace", {"auth_mode": "gws_local"}),
+    )
+    @patch(
+        "server_modules.runs_execution.google_workspace_local_create_draft",
+        side_effect=[
+            {"id": "draft-new-1", "message": {"id": "msg-new-1"}},
+            {"id": "draft-new-2", "message": {"id": "msg-new-2"}},
+        ],
+    )
+    @patch("server_modules.runs_execution.google_workspace_uses_local_cli", return_value=True)
+    def test_workflow_connector_action_new_explicit_run_executes_google_draft_again(self, _local_cli_mock, draft_mock, _secret_mock):
+        first = runs_execution._workflow_execute_connector_action(
+            "run-draft-new-1",
+            "tool-draft-new-1",
+            {"workflow_id": "wf_draft_new", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "draft_email",
+                "to_email": "mansurao886@gmail.com",
+                "subject": "Duplicate semantics draft",
+                "text": "Draft this twice on purpose",
+            },
+            current_text="Draft this twice on purpose",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-draft-new-2",
+            "tool-draft-new-1",
+            {"workflow_id": "wf_draft_new", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "draft_email",
+                "to_email": "mansurao886@gmail.com",
+                "subject": "Duplicate semantics draft",
+                "text": "Draft this twice on purpose",
+            },
+            current_text="Draft this twice on purpose",
+        )
+
+        self.assertEqual(draft_mock.call_count, 2)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-gws-cal", "google_workspace", {"auth_mode": "gws_local", "calendar_id": "primary"}),
+    )
+    @patch(
+        "server_modules.runs_execution.google_workspace_local_create_calendar_event",
+        side_effect=[
+            {"id": "event-new-1", "summary": "Duplicate semantics event"},
+            {"id": "event-new-2", "summary": "Duplicate semantics event"},
+        ],
+    )
+    @patch("server_modules.runs_execution.google_workspace_uses_local_cli", return_value=True)
+    def test_workflow_connector_action_new_explicit_run_executes_google_calendar_again(self, _local_cli_mock, calendar_mock, _secret_mock):
+        config = {
+            "connector": "google_workspace",
+            "action_id": "create_calendar_event",
+            "title": "Duplicate semantics event",
+            "start": "2026-03-30T15:00:00+00:00",
+            "end": "2026-03-30T16:00:00+00:00",
+            "timezone": "UTC",
+            "description": "",
+        }
+        first = runs_execution._workflow_execute_connector_action(
+            "run-calendar-new-1",
+            "tool-calendar-new-1",
+            {"workflow_id": "wf_calendar_new", "workspace_id": "default", "metadata": {}},
+            dict(config),
+            current_text="Create event twice on purpose",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-calendar-new-2",
+            "tool-calendar-new-1",
+            {"workflow_id": "wf_calendar_new", "workspace_id": "default", "metadata": {}},
+            dict(config),
+            current_text="Create event twice on purpose",
+        )
+
+        self.assertEqual(calendar_mock.call_count, 2)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["duplicate_protected"])
+
+    @patch(
+        "server_modules.runs_execution._workflow_tool_connector_secret",
+        return_value=("cred-gws-doc", "google_workspace", {"access_token": "token-doc"}),
+    )
+    @patch(
+        "server_modules.runs_execution.google_workspace_create_document",
+        return_value={"documentId": "doc-1"},
+    )
+    def test_workflow_connector_action_duplicate_guard_allows_create_doc_intent_token(self, doc_mock, _secret_mock):
+        first = runs_execution._workflow_execute_connector_action(
+            "run-doc-token",
+            "tool-doc-token",
+            {"workflow_id": "wf_doc_token", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "create_doc",
+                "title": "Quarterly Plan",
+                "intent_token": "intent-a",
+            },
+            current_text="Create doc",
+        )
+        second = runs_execution._workflow_execute_connector_action(
+            "run-doc-token",
+            "tool-doc-token",
+            {"workflow_id": "wf_doc_token", "workspace_id": "default", "metadata": {}},
+            {
+                "connector": "google_workspace",
+                "action_id": "create_doc",
+                "title": "Quarterly Plan",
+                "intent_token": "intent-b",
+            },
+            current_text="Create doc",
+        )
+
+        self.assertEqual(doc_mock.call_count, 2)
+        self.assertTrue(first["result_data"]["connector_action"]["executed"])
+        self.assertTrue(second["result_data"]["connector_action"]["executed"])
+        self.assertFalse(second["result_data"]["connector_action"]["duplicate_protected"])
 
     @patch(
         "server_modules.runs_execution._workflow_tool_connector_secret",

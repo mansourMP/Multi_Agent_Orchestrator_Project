@@ -76,9 +76,10 @@ function compactText(value?: string | null, fallback = '—', maxLength = 180): 
 function formatDecisionLabel(value?: string | null): string {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return 'Decision recorded';
-  if (normalized === 'proceed' || normalized === 'approved') return 'Approved';
-  if (normalized === 'hold') return 'Held';
-  if (normalized === 'waiting' || normalized === 'waiting_for_input') return 'Waiting';
+  if (normalized === 'proceed' || normalized === 'approved') return 'Confirmed';
+  if (normalized === 'hold' || normalized === 'reject' || normalized === 'declined') return 'Declined';
+  if (normalized === 'blocked' || normalized === 'denied' || normalized === 'escalated') return 'Blocked by policy';
+  if (normalized === 'waiting' || normalized === 'waiting_for_input') return 'Confirmation required';
   return normalized.replace(/_/g, ' ');
 }
 
@@ -149,7 +150,7 @@ export default function ApprovalsPage() {
         const detail =
           overviewPayload && typeof overviewPayload.detail === 'string' && overviewPayload.detail.trim()
             ? overviewPayload.detail.trim()
-            : 'Failed to load approvals.';
+            : 'Failed to load confirmations.';
         throw new Error(detail);
       }
 
@@ -184,7 +185,7 @@ export default function ApprovalsPage() {
         acc.push({
           runId,
           approvalId,
-          prompt: String(record?.prompt || 'Approval requested.').trim() || 'Approval requested.',
+          prompt: String(record?.prompt || 'Confirmation required.').trim() || 'Confirmation required.',
           status: String(record?.status || 'waiting'),
           scope: String(record?.scope || 'once').trim().toLowerCase() || 'once',
           reusable: Boolean(record?.reusable),
@@ -242,7 +243,7 @@ export default function ApprovalsPage() {
         .filter((item: ApprovalAudit | null): item is ApprovalAudit => item !== null);
       setAudit(nextAudit);
     } catch (nextError: unknown) {
-      const message = nextError instanceof Error ? nextError.message : 'Failed to load approvals.';
+      const message = nextError instanceof Error ? nextError.message : 'Failed to load confirmations.';
       setError(message);
     } finally {
       setLoading(false);
@@ -264,7 +265,7 @@ export default function ApprovalsPage() {
             runId: row.runId,
             approvalId: row.approvalId,
             decision,
-            note: 'Resolved from approvals inbox',
+            note: 'Resolved from confirmations inbox',
           }),
         });
         if (!res.ok) {
@@ -272,12 +273,12 @@ export default function ApprovalsPage() {
           throw new Error(
             payload && typeof payload.detail === 'string' && payload.detail.trim()
               ? payload.detail.trim()
-              : 'Approval action failed.',
+              : 'Confirmation action failed.',
           );
         }
         await refresh();
       } catch (nextError: unknown) {
-        const message = nextError instanceof Error ? nextError.message : 'Approval action failed.';
+        const message = nextError instanceof Error ? nextError.message : 'Confirmation action failed.';
         setError(message);
       } finally {
         setActionBusy((prev) => {
@@ -348,8 +349,8 @@ export default function ApprovalsPage() {
       >
         <div className="hekor-approval-card-head">
           <div className="hekor-approval-card-copy">
-            <div className="hekor-approval-card-kicker">Approval needed</div>
-            <div className="hekor-approval-card-title">{compactText(row.prompt, 'Approval requested.', featured ? 260 : 220)}</div>
+            <div className="hekor-approval-card-kicker">Confirmation required</div>
+            <div className="hekor-approval-card-title">{compactText(row.prompt, 'Confirmation required.', featured ? 260 : 220)}</div>
             {row.taskSummary ? (
               <div className="hekor-approval-card-summary">Task: {compactText(row.taskSummary, row.taskSummary, 180)}</div>
             ) : null}
@@ -397,14 +398,14 @@ export default function ApprovalsPage() {
           <div className="hekor-approval-detail">
             <span>Audit trail</span>
             <strong>
-              run {row.runId.slice(0, 8)} · approval {row.approvalId.slice(0, 8)}
+              run {row.runId.slice(0, 8)} · confirmation {row.approvalId.slice(0, 8)}
             </strong>
           </div>
         </div>
 
         <div className="hekor-approval-detail" style={{ marginTop: 12 }}>
           <span>Consequence</span>
-          <strong>{row.consequence || 'This approval applies only to this pending step in this run.'}</strong>
+          <strong>{row.consequence || 'This confirmation applies only to this pending step in this run.'}</strong>
         </div>
 
         <div className="hekor-approval-card-chip-row">
@@ -413,7 +414,7 @@ export default function ApprovalsPage() {
           {row.correlationId ? <span className="orion-chip">Trace {row.correlationId}</span> : null}
         </div>
 
-        {/* The current approval payload does not include a structured change preview or
+        {/* The current confirmation payload does not include a structured change preview or
             authoritative risk field, so this card stays within prompt, tool context,
             and conservative review signals derived from labels/capabilities. */}
         {row.labels.length > 0 || row.capabilities.length > 0 ? (
@@ -437,14 +438,14 @@ export default function ApprovalsPage() {
             onClick={() => void resolveApproval(row, 'Proceed')}
           >
             <Check size={12} />
-            Approve once
+            Confirm once
           </button>
           <button
             className="btn-secondary"
             disabled={busy}
             onClick={() => void resolveApproval(row, 'Hold')}
           >
-            Hold
+            Decline
           </button>
           <button
             className="btn-secondary"
@@ -464,7 +465,7 @@ export default function ApprovalsPage() {
       <article key={item.id} className="orion-panel hekor-approval-audit-card">
         <div className="hekor-approval-audit-head">
           <div>
-            <div className="hekor-approval-audit-title">{item.stage || 'Approval stage'}</div>
+            <div className="hekor-approval-audit-title">{item.stage || 'Confirmation stage'}</div>
             <div className="hekor-approval-audit-meta">{fmtTime(item.ts)} · {item.actor || 'system'}</div>
           </div>
           <span
@@ -500,9 +501,9 @@ export default function ApprovalsPage() {
   return (
     <div className="orion-page-shell orion-animate-in">
       <PageHero
-        kicker="Approvals"
-        title="Review actions before Hekor continues."
-        copy="Focus on the next blocking approval first, then clear the rest of the queue with the same decision rules."
+        kicker="Confirmations"
+        title="Review the next blocked step before Hekor continues."
+        copy="Focus on the next blocking confirmation first, then clear the rest of the queue with the same decision rules."
         actions={
           <button className="orion-btn" onClick={() => void refresh()}>
             <RefreshCw size={14} />
@@ -523,14 +524,14 @@ export default function ApprovalsPage() {
                 </div>
               </div>
               <div className="orion-runs-overview-side-note">
-                {leadPending ? 'One approval is currently blocking work.' : 'Nothing is blocking work right now.'}
+                {leadPending ? 'One confirmation is currently blocking work.' : 'Nothing is blocking work right now.'}
               </div>
             </PageHeroCard>
             <PageHeroCard label="Latest decision">
               <div className="orion-home-side-empty">
                 {latestDecision
                   ? `${formatDecisionLabel(latestDecision.decision)} · ${fmtTime(latestDecision.ts)}`
-                  : 'No approval history yet.'}
+                  : 'No confirmation history yet.'}
               </div>
             </PageHeroCard>
           </>
@@ -543,14 +544,14 @@ export default function ApprovalsPage() {
           { label: 'History', value: String(filteredAudit.length) },
           { label: 'Agents', value: agentFilter === 'all' ? 'All' : agentRoleLabel(agentFilter) },
           { label: 'Channels', value: channelFilter === 'all' ? 'All' : channelFilter },
-          { label: 'On hold', value: String(approvalsNeedingAttention) },
+          { label: 'Declined', value: String(approvalsNeedingAttention) },
         ]}
       />
 
       {error ? (
         <PageStatePanel
           variant="error"
-          title="Approvals refresh failed"
+          title="Confirmations refresh failed"
           copy={error}
           actions={
             <button type="button" className="orion-btn" onClick={() => void refresh()}>
@@ -561,7 +562,7 @@ export default function ApprovalsPage() {
       ) : null}
 
       <PageFilterBar
-        title="Filter approvals"
+        title="Filter confirmations"
         description="Narrow the queue by worker or channel, then review the blocking items in order."
         summary={
           <span className="orion-toolbar-summary">
@@ -605,7 +606,7 @@ export default function ApprovalsPage() {
       {leadPending ? (
         <PageSection
           title="Needs review now"
-          description="This is the next approval currently blocking work."
+          description="This is the next confirmation currently blocking work."
           className="hekor-approval-section"
         >
           {renderPendingCard(leadPending, true)}
@@ -613,18 +614,18 @@ export default function ApprovalsPage() {
       ) : (
         <PageStatePanel
           variant={pending.length === 0 ? 'empty' : 'filtered-empty'}
-          title={pending.length === 0 ? 'Nothing needs approval right now' : 'No approvals match these filters'}
+          title={pending.length === 0 ? 'Nothing needs confirmation right now' : 'No confirmations match these filters'}
           copy={
             pending.length === 0
-              ? 'New approval requests will appear here when a run pauses for review.'
-              : 'Change the filters to see the approvals that match this view.'
+              ? 'New confirmation requests will appear here when a run pauses for review.'
+              : 'Change the filters to see the confirmations that match this view.'
           }
         />
       )}
 
       {filteredPending.length > 1 ? (
         <PageSection
-          title="More approvals waiting"
+          title="More confirmations waiting"
           description="Review these after the current top request."
           className="hekor-approval-section"
         >
@@ -642,8 +643,8 @@ export default function ApprovalsPage() {
         {filteredAudit.length === 0 ? (
           <PageStatePanel
             variant={audit.length === 0 ? 'empty' : 'filtered-empty'}
-            title={audit.length === 0 ? 'No approval history yet' : 'No history items match these filters'}
-            copy={audit.length === 0 ? 'Approved and held actions will appear here once Hekor records them.' : 'Change the filters to see the decision history that matches this view.'}
+            title={audit.length === 0 ? 'No confirmation history yet' : 'No history items match these filters'}
+            copy={audit.length === 0 ? 'Confirmed and declined actions will appear here once Hekor records them.' : 'Change the filters to see the decision history that matches this view.'}
           />
         ) : (
           <div className="hekor-approval-audit-list">

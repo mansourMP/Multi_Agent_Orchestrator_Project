@@ -658,6 +658,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "route": route,
         "doctor_preflight": doctor_preflight,
         "pending_confirmation": pending,
+        # Deprecated compatibility alias. Prefer `pending_confirmation`.
         "pending_approval": pending,
     }
 
@@ -763,7 +764,7 @@ def _refresh_parent_delegation_state(parent_run_id: str, *, triggering_run_id: O
                 next_action = str(delegation_summary.get("next_action") or "").strip()
                 message_map = {
                     "waiting_for_children": "Delegated child runs are still in progress.",
-                    "resolve_child_approvals": "Delegated child runs are waiting for approval.",
+                    "resolve_child_approvals": "Delegated child runs are waiting for confirmation.",
                     "retry_failed_children": "Delegated child runs failed and can be retried.",
                     "merge_results": "Delegated child runs finished and results are ready to merge.",
                 }

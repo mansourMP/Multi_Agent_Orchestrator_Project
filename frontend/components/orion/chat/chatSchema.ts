@@ -49,6 +49,7 @@ export type ChatRunCardRecord = {
   sourceGoal?: string | null;
   meta?: ChatRunCardMetaRecord[];
   evidence?: ChatRunCardEvidenceRecord[];
+  // Compatibility key name; this payload is confirmation-first.
   approval?: ChatRunCardApprovalRecord | null;
 };
 

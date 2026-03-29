@@ -61,6 +61,64 @@ class OperatorChatTests(unittest.TestCase):
         self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
         generate_reply.assert_not_called()
 
+    @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
+    @patch("operator_chat_under_test.provider_has_key", return_value=False)
+    @patch(
+        "operator_chat_under_test.resolve_workspace_tool_capabilities",
+        return_value=[{
+            "id": "telegram_bot",
+            "label": "Telegram Bot LIVE",
+            "connected": True,
+            "authenticated": True,
+            "runtime_usable": True,
+            "read_actions": ["chats.read"],
+            "write_actions": ["send_message"],
+            "approval_required_actions": ["send_message"],
+        }],
+    )
+    def test_obvious_telegram_write_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
+        payload = build_direct_operator_reply(
+            message="Send a Telegram message to my test chat saying certification probe one.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
+        generate_reply.assert_not_called()
+
+    @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
+    @patch("operator_chat_under_test.provider_has_key", return_value=False)
+    @patch(
+        "operator_chat_under_test.resolve_workspace_tool_capabilities",
+        return_value=[{
+            "id": "google_workspace",
+            "label": "Google Workspace",
+            "connected": True,
+            "authenticated": True,
+            "runtime_usable": True,
+            "read_actions": ["gmail_threads.read"],
+            "write_actions": ["draft_email", "create_calendar_event"],
+            "approval_required_actions": ["draft_email", "create_calendar_event"],
+        }],
+    )
+    def test_obvious_google_draft_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
+        payload = build_direct_operator_reply(
+            message="Draft an email to myself summarizing today's certification results.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertTrue(any(action["kind"] == "run" for action in payload["actions"]))
+        generate_reply.assert_not_called()
+
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
         return_value=("Hello again.", {"provider": "openai", "model": "gpt-5.4"}, "openai", ""),
@@ -203,6 +261,23 @@ class OperatorChatTests(unittest.TestCase):
 
         self.assertEqual(payload["reply"], "Codex/OpenAI, gpt-5.4.")
 
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
+        return_value=("", None, "codex_cli", "direct_chat_transport_unavailable: codex_cli_backend_unavailable"),
+    )
+    @patch("operator_chat_under_test.provider_has_key", return_value=True)
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_transport_unavailable_reply_is_explicit(self, _capabilities, _provider_has_key, _generate_reply):
+        payload = build_direct_operator_reply(
+            message="Write a short answer about project status.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True},
+        )
+
+        self.assertIn("Direct chat is unavailable on the current provider path", payload["reply"])
+
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
     @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
@@ -229,6 +304,45 @@ class OperatorChatTests(unittest.TestCase):
         self.assertIn("Connected here right now: Google Workspace.", payload["reply"])
         self.assertIn("Not verified: Google Workspace.", payload["reply"])
         self.assertEqual(payload["mode"], "answer")
+        generate_reply.assert_not_called()
+
+    @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
+    @patch(
+        "operator_chat_under_test.resolve_workspace_tool_capabilities",
+        return_value=[{
+            "id": "telegram_bot",
+            "label": "Telegram Bot LIVE",
+            "connected": True,
+            "authenticated": True,
+            "runtime_usable": True,
+            "read_actions": ["chats.read"],
+            "write_actions": ["send_message"],
+            "approval_required_actions": ["send_message"],
+        }],
+    )
+    def test_no_ai_account_plain_chat_and_capability_question_share_one_contract(self, _capabilities, generate_reply):
+        capability_payload = build_direct_operator_reply(
+            message="What can you help me with in this environment right now?",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+        plain_payload = build_direct_operator_reply(
+            message="My favorite color is blue.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(capability_payload["reply"], plain_payload["reply"])
+        self.assertIn("AI chat is not available right now", capability_payload["reply"])
+        self.assertIn("Usable now: Telegram Bot LIVE.", capability_payload["reply"])
+        self.assertEqual(capability_payload["mode"], "connect")
+        self.assertEqual(plain_payload["mode"], "connect")
+        self.assertEqual(capability_payload["actions"][0]["href"], "/connect-ai")
+        self.assertEqual(plain_payload["actions"][0]["href"], "/connect-ai")
         generate_reply.assert_not_called()
 
     @patch(
@@ -281,7 +395,10 @@ class OperatorChatTests(unittest.TestCase):
 
         self.assertIn("not usable", payload["reply"].lower())
         self.assertEqual(payload["mode"], "connect")
-        self.assertEqual(payload["actions"], [])
+        self.assertEqual(len(payload["actions"]), 1)
+        self.assertEqual(payload["actions"][0]["kind"], "connect")
+        self.assertEqual(payload["actions"][0]["label"], "Reconnect Google Workspace")
+        self.assertEqual(payload["actions"][0]["href"], "/credentials?connector=google_workspace")
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",

@@ -332,59 +332,11 @@ async def update_connector_vault(credential_id: str, body: ConnectorPatchRequest
     }
 
 async def test_connector_vault(credential_id: str, workspace_id: Optional[str] = None):
-    try:
-        credentials = resolve_vault_credential(credential_id, workspace_id)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    connector = str(credentials.get("_provider") or "").lower().strip()
-    test_result: Dict[str, Any]
-    if connector == "google_workspace":
-        try:
-            test_result = validate_google_workspace_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "microsoft_365":
-        try:
-            test_result = validate_microsoft_365_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "telegram_bot":
-        try:
-            test_result = validate_telegram_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "wechat_work":
-        try:
-            test_result = validate_wechat_work_connector(credentials, send_test=True)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "whatsapp_twilio":
-        try:
-            test_result = validate_whatsapp_twilio_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "discord_bot":
-        try:
-            test_result = validate_discord_bot_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "instagram_business":
-        try:
-            test_result = validate_instagram_business_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    elif connector == "irc":
-        try:
-            test_result = validate_irc_connector(credentials)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported connector '{connector}'")
-
-    vault = load_vault()
-    items = vault.get("credentials", [])
-    if isinstance(items, list):
+    def _persist_capability_verification(test_result: Any) -> None:
+        vault = load_vault()
+        items = vault.get("credentials", [])
+        if not isinstance(items, list):
+            return
         updated = False
         next_items: List[Dict[str, Any]] = []
         for item in items:
@@ -404,6 +356,66 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
         if updated:
             vault["credentials"] = next_items
             save_vault(vault)
+
+    try:
+        credentials = resolve_vault_credential(credential_id, workspace_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    connector = str(credentials.get("_provider") or "").lower().strip()
+    test_result: Dict[str, Any]
+    if connector == "google_workspace":
+        try:
+            test_result = validate_google_workspace_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "microsoft_365":
+        try:
+            test_result = validate_microsoft_365_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "telegram_bot":
+        try:
+            test_result = validate_telegram_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "wechat_work":
+        try:
+            test_result = validate_wechat_work_connector(credentials, send_test=True)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "whatsapp_twilio":
+        try:
+            test_result = validate_whatsapp_twilio_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "discord_bot":
+        try:
+            test_result = validate_discord_bot_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "instagram_business":
+        try:
+            test_result = validate_instagram_business_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "irc":
+        try:
+            test_result = validate_irc_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported connector '{connector}'")
+
+    _persist_capability_verification(test_result)
     return test_result
 
 async def delete_connector_vault(credential_id: str, workspace_id: Optional[str] = None):

@@ -12,6 +12,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
+from server_modules.connector_metadata import _connector_identity_signature
+from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
+
 _server = None  # populated by _init()
 
 
@@ -65,6 +68,24 @@ def extract_lead_name(lead_line: str, index: int) -> str:
         if first:
             return first
     return f"Lead {index + 1}"
+
+
+def _connector_account_identity(
+    connector_provider: str,
+    connector_credential_id: Any,
+    connector_credentials: Dict[str, Any],
+) -> Optional[str]:
+    credential_token = str(connector_credential_id or "").strip()
+    if credential_token:
+        return f"credential:{credential_token}"
+    signature = _connector_identity_signature(
+        connector_provider,
+        connector_credentials if isinstance(connector_credentials, dict) else {},
+    ) or ""
+    signature = signature.strip()
+    if signature:
+        return f"signature:{stable_value_fingerprint(signature)}"
+    return None
 
 
 def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = None) -> Dict[str, Any]:
@@ -145,6 +166,11 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
         and bool(str(connector_credentials.get("access_token") or "").strip())
     ):
         connector_details["enabled"] = True
+    connector_account_id = _connector_account_identity(
+        connector_provider,
+        connector_credential_id,
+        connector_credentials,
+    )
 
     if not inbox_items and automation_kind == "email_summary_recent" and connector_details["enabled"]:
         try:
@@ -263,74 +289,102 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
         return match.group(0)
 
     def connector_send_message(to_email: str, subject: str, body_text: str) -> Dict[str, Any]:
-        if connector_provider == "google_workspace":
-            if _server.google_workspace_uses_local_cli(connector_credentials):
-                return _server.google_workspace_local_send_message(
-                    connector_credentials, to_email, subject, body_text
+        def _perform_send() -> Dict[str, Any]:
+            if connector_provider == "google_workspace":
+                if _server.google_workspace_uses_local_cli(connector_credentials):
+                    return _server.google_workspace_local_send_message(
+                        connector_credentials, to_email, subject, body_text
+                    )
+                message = (
+                    f"To: {to_email}\r\n"
+                    f"Subject: {subject}\r\n"
+                    "Content-Type: text/plain; charset=UTF-8\r\n"
+                    "\r\n"
+                    f"{body_text}\r\n"
                 )
-            message = (
-                f"To: {to_email}\r\n"
-                f"Subject: {subject}\r\n"
-                "Content-Type: text/plain; charset=UTF-8\r\n"
-                "\r\n"
-                f"{body_text}\r\n"
-            )
-            raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
-            payload = {"raw": raw_encoded}
-            res = _server.http_json_request(
-                "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                method="POST",
-                headers=connector_headers(),
-                payload=payload,
-            )
-            body = res.get("json")
-            if isinstance(body, dict):
-                return body
-            raise RuntimeError("Gmail send response was invalid.")
-        if connector_provider == "microsoft_365":
-            return _server.microsoft_365_send_message(
-                connector_credentials,
-                _server.http_json_request,
-                to_email,
-                subject,
-                body_text,
-            )
-        raise RuntimeError("Connector send action is unavailable.")
+                raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
+                payload = {"raw": raw_encoded}
+                res = _server.http_json_request(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                    method="POST",
+                    headers=connector_headers(),
+                    payload=payload,
+                )
+                body = res.get("json")
+                if isinstance(body, dict):
+                    return body
+                raise RuntimeError("Gmail send response was invalid.")
+            if connector_provider == "microsoft_365":
+                return _server.microsoft_365_send_message(
+                    connector_credentials,
+                    _server.http_json_request,
+                    to_email,
+                    subject,
+                    body_text,
+                )
+            raise RuntimeError("Connector send action is unavailable.")
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"customer_ops:send_message:{to_email.strip().lower()}",
+            category="customer_ops_pack_send_message",
+            operation={"connector": connector_provider, "action_id": "send_message", "recipient": to_email, "subject": subject},
+            target_system=connector_provider,
+            account_identity=connector_account_id,
+            target_identity={"action_id": "send_message", "recipient": to_email, "subject": subject},
+            payload={"recipient": to_email, "subject": subject, "body": body_text, "connector": connector_provider},
+            execute=_perform_send,
+        )
 
     def connector_create_draft(to_email: str, subject: str, body_text: str) -> Dict[str, Any]:
-        if connector_provider == "google_workspace":
-            if _server.google_workspace_uses_local_cli(connector_credentials):
-                return _server.google_workspace_local_create_draft(
-                    connector_credentials, to_email, subject, body_text
+        def _perform_draft() -> Dict[str, Any]:
+            if connector_provider == "google_workspace":
+                if _server.google_workspace_uses_local_cli(connector_credentials):
+                    return _server.google_workspace_local_create_draft(
+                        connector_credentials, to_email, subject, body_text
+                    )
+                message = (
+                    f"To: {to_email}\r\n"
+                    f"Subject: {subject}\r\n"
+                    "Content-Type: text/plain; charset=UTF-8\r\n"
+                    "\r\n"
+                    f"{body_text}\r\n"
                 )
-            message = (
-                f"To: {to_email}\r\n"
-                f"Subject: {subject}\r\n"
-                "Content-Type: text/plain; charset=UTF-8\r\n"
-                "\r\n"
-                f"{body_text}\r\n"
-            )
-            raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
-            payload = {"message": {"raw": raw_encoded}}
-            res = _server.http_json_request(
-                "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                method="POST",
-                headers=connector_headers(),
-                payload=payload,
-            )
-            body = res.get("json")
-            if isinstance(body, dict):
-                return body
-            raise RuntimeError("Gmail draft response was invalid.")
-        if connector_provider == "microsoft_365":
-            return _server.microsoft_365_create_draft(
-                connector_credentials,
-                _server.http_json_request,
-                to_email,
-                subject,
-                body_text,
-            )
-        raise RuntimeError("Connector draft action is unavailable.")
+                raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
+                payload = {"message": {"raw": raw_encoded}}
+                res = _server.http_json_request(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+                    method="POST",
+                    headers=connector_headers(),
+                    payload=payload,
+                )
+                body = res.get("json")
+                if isinstance(body, dict):
+                    return body
+                raise RuntimeError("Gmail draft response was invalid.")
+            if connector_provider == "microsoft_365":
+                return _server.microsoft_365_create_draft(
+                    connector_credentials,
+                    _server.http_json_request,
+                    to_email,
+                    subject,
+                    body_text,
+                )
+            raise RuntimeError("Connector draft action is unavailable.")
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"customer_ops:draft_email:{to_email.strip().lower()}",
+            category="customer_ops_pack_draft_email",
+            operation={"connector": connector_provider, "action_id": "draft_email", "recipient": to_email, "subject": subject},
+            target_system=connector_provider,
+            account_identity=connector_account_id,
+            target_identity={"action_id": "draft_email", "recipient": to_email, "subject": subject},
+            payload={"recipient": to_email, "subject": subject, "body": body_text, "connector": connector_provider},
+            execute=_perform_draft,
+        )
 
     def parse_slot(slot: str) -> Optional[tuple[datetime, datetime]]:
         raw = slot.strip()
@@ -367,33 +421,55 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
                 "start": {"dateTime": start_dt.isoformat(), "timeZone": calendar_timezone},
                 "end": {"dateTime": end_dt.isoformat(), "timeZone": calendar_timezone},
             }
-            return _server.microsoft_365_create_calendar_event(
-                connector_credentials,
-                _server.http_json_request,
-                payload=payload,
+        else:
+            payload = {
+                "summary": f"Empyralis Booking - {lead_name}",
+                "description": "Auto-created by Empyralis Customer Ops Autopilot.",
+                "start": {"dateTime": start_dt.isoformat(), "timeZone": calendar_timezone},
+                "end": {"dateTime": end_dt.isoformat(), "timeZone": calendar_timezone},
+            }
+
+        def _perform_calendar_event() -> Dict[str, Any]:
+            if connector_provider == "microsoft_365":
+                return _server.microsoft_365_create_calendar_event(
+                    connector_credentials,
+                    _server.http_json_request,
+                    payload=payload,
+                )
+            if _server.google_workspace_uses_local_cli(connector_credentials):
+                return _server.google_workspace_local_create_calendar_event(
+                    connector_credentials,
+                    calendar_id=calendar_id,
+                    send_updates="none",
+                    payload=payload,
+                )
+            url = (
+                f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}"
+                f"/events?sendUpdates=none"
             )
-        payload = {
-            "summary": f"Empyralis Booking - {lead_name}",
-            "description": "Auto-created by Empyralis Customer Ops Autopilot.",
-            "start": {"dateTime": start_dt.isoformat(), "timeZone": calendar_timezone},
-            "end": {"dateTime": end_dt.isoformat(), "timeZone": calendar_timezone},
-        }
-        if _server.google_workspace_uses_local_cli(connector_credentials):
-            return _server.google_workspace_local_create_calendar_event(
-                connector_credentials,
-                calendar_id=calendar_id,
-                send_updates="none",
-                payload=payload,
-            )
-        url = (
-            f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}"
-            f"/events?sendUpdates=none"
+            res = _server.http_json_request(url, method="POST", headers=connector_headers(), payload=payload)
+            body = res.get("json")
+            if isinstance(body, dict):
+                return body
+            raise RuntimeError("Calendar create event response was invalid.")
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"customer_ops:create_calendar_event:{lead_name.strip().lower()}:{slot.strip()}",
+            category="customer_ops_pack_calendar_event",
+            operation={"connector": connector_provider, "action_id": "create_calendar_event", "lead_name": lead_name},
+            target_system=connector_provider,
+            account_identity=connector_account_id,
+            target_identity={
+                "action_id": "create_calendar_event",
+                "lead_name": lead_name,
+                "slot": slot,
+                "payload_fingerprint": stable_value_fingerprint(payload),
+            },
+            payload={"connector": connector_provider, "lead_name": lead_name, "slot": slot, "payload": payload},
+            execute=_perform_calendar_event,
         )
-        res = _server.http_json_request(url, method="POST", headers=connector_headers(), payload=payload)
-        body = res.get("json")
-        if isinstance(body, dict):
-            return body
-        raise RuntimeError("Calendar create event response was invalid.")
 
     triage: List[Dict[str, Any]] = []
     for idx, message in enumerate(inbox_items):
@@ -449,10 +525,14 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
                         "Quick follow-up from Empyralis",
                         str(item["draft_message"]),
                     )
+                    duplicate_guard = sent.get("duplicate_guard") if isinstance(sent, dict) else {}
+                    duplicate_protected = isinstance(duplicate_guard, dict) and not bool(duplicate_guard.get("executed", True))
                     item["sent_message_id"] = sent.get("id") or sent.get("messageId")
                     item["sent"] = True
-                    item["delivery"] = "sent"
-                    connector_details["email_sent_count"] += 1
+                    item["duplicate_protected"] = duplicate_protected
+                    item["delivery"] = "duplicate_protected" if duplicate_protected else "sent"
+                    if not duplicate_protected:
+                        connector_details["email_sent_count"] += 1
                 except Exception as exc:
                     item["sent"] = False
                     item["send_error"] = str(exc)
@@ -473,10 +553,14 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
                         "Quick follow-up from Empyralis",
                         str(item["draft_message"]),
                     )
+                    duplicate_guard = draft.get("duplicate_guard") if isinstance(draft, dict) else {}
+                    duplicate_protected = isinstance(duplicate_guard, dict) and not bool(duplicate_guard.get("executed", True))
                     item["draft_id"] = draft.get("id")
                     item["draft_created"] = True
-                    item["delivery"] = "draft"
-                    connector_details["email_drafts_created"] += 1
+                    item["duplicate_protected"] = duplicate_protected
+                    item["delivery"] = "duplicate_protected" if duplicate_protected else "draft"
+                    if not duplicate_protected:
+                        connector_details["email_drafts_created"] += 1
                 except Exception as exc:
                     item["draft_created"] = False
                     item["draft_error"] = str(exc)
@@ -516,9 +600,13 @@ def execute_customer_ops_pack(context: Dict[str, Any], run_id: Optional[str] = N
                     str(booking_item["proposed_slot"]),
                     str(booking_item["lead_name"]),
                 )
+                duplicate_guard = event.get("duplicate_guard") if isinstance(event, dict) else {}
+                duplicate_protected = isinstance(duplicate_guard, dict) and not bool(duplicate_guard.get("executed", True))
                 booking_item["event_id"] = event.get("id")
                 booking_item["event_created"] = True
-                connector_details["calendar_events_created"] += 1
+                booking_item["duplicate_protected"] = duplicate_protected
+                if not duplicate_protected:
+                    connector_details["calendar_events_created"] += 1
             except Exception as exc:
                 booking_item["event_created"] = False
                 booking_item["event_error"] = str(exc)

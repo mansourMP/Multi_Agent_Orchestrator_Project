@@ -144,6 +144,22 @@ type RunDetailPayload = {
     workspace_id?: string;
     metadata?: Record<string, unknown>;
   };
+  pending_confirmation?: {
+    approval_id?: string;
+    prompt?: string;
+    status?: string;
+    expires_at?: string;
+    scope?: string | null;
+    reusable?: boolean | null;
+    consequence?: string | null;
+    actions?: string[] | null;
+    target?: string | null;
+    metadata?: {
+      approval_labels?: string[];
+      approval_capabilities?: string[];
+    } | null;
+  } | null;
+  /** @deprecated compatibility alias; use `pending_confirmation`. */
   pending_approval?: {
     approval_id?: string;
     prompt?: string;
@@ -217,6 +233,42 @@ type RunDetailPayload = {
     label?: string | null;
     identity_label?: string | null;
     routing_scope?: string | null;
+  } | null;
+  run_detail_contract?: {
+    provider_model?: {
+      requested_provider?: string | null;
+      effective_provider?: string | null;
+      requested_model?: string | null;
+      effective_model?: string | null;
+      provider_overridden?: boolean;
+      model_overridden?: boolean;
+      fallback_used?: boolean;
+      fallback_reason?: string | null;
+    } | null;
+    approval_outcome?: {
+      status?: string | null;
+      label?: string | null;
+    } | null;
+    connector_mutation?: {
+      binding?: {
+        channel?: string | null;
+        connector?: string | null;
+        label?: string | null;
+        identity_label?: string | null;
+        routing_scope?: string | null;
+      } | null;
+      action?: Record<string, unknown> | null;
+      execution_label?: string | null;
+      action_label?: string | null;
+      system_label?: string | null;
+      target_label?: string | null;
+      result_label?: string | null;
+    } | null;
+    evidence_items?: Array<{
+      id?: string | null;
+      label?: string | null;
+      value?: string | null;
+    }> | null;
   } | null;
   node_states?: RunNodeStatesPayload | null;
 };
@@ -296,7 +348,7 @@ function approvalDisplayText(
   prompt: string | null | undefined,
   labels: Array<string | null | undefined> | null | undefined,
   capabilities: Array<string | null | undefined> | null | undefined,
-  fallback = 'Approval required to continue.',
+  fallback = 'Confirmation required to continue.',
 ): string {
   const explicitLabels = (labels || []).map((value) => String(value || '').trim()).filter(Boolean);
   if (explicitLabels.length > 0) return explicitLabels.join(', ');
@@ -404,8 +456,9 @@ function formatInspectStatusLabel(value?: string | null): string {
 function formatApprovalDecisionLabel(value?: string | null): string {
   const normalized = String(value || '').trim().toLowerCase();
   if (!normalized) return 'Decision recorded';
-  if (normalized === 'approved' || normalized === 'allow' || normalized === 'proceed') return 'Approved';
-  if (normalized === 'hold' || normalized === 'blocked' || normalized === 'denied' || normalized === 'reject') return 'Held';
+  if (normalized === 'approved' || normalized === 'allow' || normalized === 'proceed') return 'Confirmed';
+  if (normalized === 'hold' || normalized === 'reject' || normalized === 'declined') return 'Declined';
+  if (normalized === 'blocked' || normalized === 'denied' || normalized === 'escalated') return 'Blocked by policy';
   return normalized.replace(/_/g, ' ');
 }
 
@@ -440,7 +493,7 @@ function formatWorkflowNodeKind(type?: string | null, variant?: string | null): 
     return 'Decision';
   }
   if (family === 'human') {
-    if (kind === 'approval') return 'Approval';
+    if (kind === 'approval') return 'Confirmation';
     if (kind === 'review') return 'Review';
     if (kind === 'wait_for_reply') return 'Wait for reply';
     return 'Human step';
@@ -1150,10 +1203,20 @@ export default function RunInspectPage() {
   const parentRun = runDetail?.parent_run || null;
   const childRuns = Array.isArray(runDetail?.child_runs) ? runDetail.child_runs : [];
   const delegationSummary = runDetail?.delegation_summary || null;
+  const detailContract = runDetail?.run_detail_contract ?? null;
+  const contractProviderModel = detailContract?.provider_model ?? null;
+  const contractApprovalOutcome = detailContract?.approval_outcome ?? null;
+  const contractConnectorMutation = detailContract?.connector_mutation ?? null;
+  const contractEvidenceItems = Array.isArray(detailContract?.evidence_items)
+    ? detailContract.evidence_items.filter(
+        (item): item is { id?: string | null; label?: string | null; value?: string | null } =>
+          !!item && typeof item === 'object' && (String(item.label || '').trim().length > 0 || String(item.value || '').trim().length > 0),
+      )
+    : [];
   const effectiveAgentRole = String(historyItem?.agent_role || runDetail?.agent_role || '').trim();
   const canDelegate = !singleAgentMode && effectiveAgentRole === 'orchestrator';
   const specialistAgentOptions = AGENT_ROLE_OPTIONS.filter((item) => item.id !== 'orchestrator');
-  const connectorBinding = historyItem?.connector_binding || runDetail?.connector_binding || null;
+  const connectorBinding = contractConnectorMutation?.binding || null;
   const openArtifactTarget = useCallback(async (targetPath: string) => {
     const normalized = String(targetPath || '').trim();
     if (!normalized) return;
@@ -1214,6 +1277,7 @@ export default function RunInspectPage() {
     () => compactText(String(runDetail?.context?.user_goal || parentRun?.user_goal || '').trim(), '--', 160),
     [parentRun?.user_goal, runDetail?.context?.user_goal],
   );
+  const pendingConfirmation = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
   const primarySummary = useMemo(() => {
     const resultSummary = compactText(String(historyItem?.result_summary || '').trim(), '', 220);
     if (resultSummary) return resultSummary;
@@ -1223,11 +1287,11 @@ export default function RunInspectPage() {
       const summary = compactText(String(record.summary || record.message || record.result_summary || '').trim(), '', 220);
       if (summary) return summary;
     }
-    if (runDetail?.pending_approval?.prompt) {
+    if (pendingConfirmation?.prompt) {
       return approvalDisplayText(
-        runDetail.pending_approval.prompt,
-        runDetail.pending_approval.metadata?.approval_labels,
-        runDetail.pending_approval.metadata?.approval_capabilities,
+        pendingConfirmation.prompt,
+        pendingConfirmation.metadata?.approval_labels,
+        pendingConfirmation.metadata?.approval_capabilities,
         'Waiting for a decision to continue.',
       );
     }
@@ -1235,9 +1299,9 @@ export default function RunInspectPage() {
   }, [
     historyItem?.result_summary,
     replayItem?.result_data,
-    runDetail?.pending_approval?.metadata?.approval_capabilities,
-    runDetail?.pending_approval?.metadata?.approval_labels,
-    runDetail?.pending_approval?.prompt,
+    pendingConfirmation?.metadata?.approval_capabilities,
+    pendingConfirmation?.metadata?.approval_labels,
+    pendingConfirmation?.prompt,
   ]);
   const outcomeToneColor =
     effectiveRunStatus === 'completed' || effectiveRunStatus === 'success'
@@ -1296,7 +1360,7 @@ export default function RunInspectPage() {
     if (runDetail?.tool_policy_precheck?.browser_automation_policy?.requires_approval &&
       runDetail.tool_policy_precheck.browser_automation_policy.reason) {
       notes.push({
-        label: 'Browser approval',
+        label: 'Browser confirmation',
         value: String(runDetail.tool_policy_precheck.browser_automation_policy.reason),
         tone: 'warning',
       });
@@ -1473,7 +1537,7 @@ export default function RunInspectPage() {
             ...(workflowNodeStates.items.length > 0 ? [['workflow', `Workflow ${workflowNodeStates.total}`] as [InspectSectionTarget, string]] : []),
             ['timeline', `Timeline ${timelineEvents.length}`],
             ['logs', `Logs ${logRows.length}`],
-            ['approvals', `Approvals ${approvalAudit.length}`],
+            ['approvals', `Confirmations ${approvalAudit.length}`],
             ['screenshots', `Screenshots ${screenshotArtifacts.length}`],
             ['artifacts', `Artifacts ${artifacts.length}`],
           ] as Array<[InspectSectionTarget, string]>).map(([target, label]) => {
@@ -1544,7 +1608,12 @@ export default function RunInspectPage() {
                 <div>Channel {formatConnectorBindingLabel(connectorBinding)}</div>
                 <div>Duration {fmtMs(historyItem?.duration_ms)}</div>
                 <div>Time-to-first-value {fmtMs(historyItem?.time_to_first_value_ms)}</div>
-                <div>Usage {(historyItem?.usage_provider || '--')} · {(historyItem?.usage_model || '--')}</div>
+                <div>
+                  Requested AI {contractProviderModel?.requested_provider || '--'} · {contractProviderModel?.requested_model || '--'}
+                </div>
+                <div>
+                  Effective AI {contractProviderModel?.effective_provider || '--'} · {contractProviderModel?.effective_model || '--'}
+                </div>
                 <div>Cost {historyItem?.usage_cost_band || '--'}</div>
                 <div>Skills {runSkillSummary.labels.length > 0 ? runSkillSummary.labels.join(', ') : '--'}</div>
                 {historyItem?.agent_role_source || runDetail?.agent_role_source
@@ -1554,28 +1623,30 @@ export default function RunInspectPage() {
             </article>
 
             <article className="orion-panel">
-              <div className="orion-panel-title">Approvals</div>
-              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: runDetail?.pending_approval ? 'var(--warning-fg)' : 'var(--text-primary)' }}>
-                {runDetail?.pending_approval ? 'Waiting for decision' : approvalAudit.length > 0 ? 'Decision history recorded' : 'No approvals needed'}
+              <div className="orion-panel-title">Confirmations</div>
+              <div style={{ marginTop: 6, fontSize: 17, fontWeight: 800, color: pendingConfirmation ? 'var(--warning-fg)' : 'var(--text-primary)' }}>
+                {pendingConfirmation ? 'Confirmation required' : approvalAudit.length > 0 ? 'Decision history recorded' : 'No confirmations needed'}
               </div>
               <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                {runDetail?.pending_approval
+                {pendingConfirmation
                   ? approvalDisplayText(
-                    runDetail.pending_approval.prompt,
-                    runDetail.pending_approval.metadata?.approval_labels,
-                    runDetail.pending_approval.metadata?.approval_capabilities,
-                    'Approval required to continue.',
+                    pendingConfirmation.prompt,
+                    pendingConfirmation.metadata?.approval_labels,
+                    pendingConfirmation.metadata?.approval_capabilities,
+                    'Confirmation required to continue.',
                   )
+                  : contractApprovalOutcome?.label
+                  ? contractApprovalOutcome.label
                   : latestApproval
                   ? `${formatApprovalDecisionLabel(latestApproval.decision)} · ${compactText(approvalDisplayText('', latestApproval.labels, latestApproval.capabilities, latestApproval.note || latestApproval.stage), 'Decision recorded.', 140)}`
-                  : 'This run finished without pausing for approval.'}
+                  : 'This run finished without pausing for confirmation.'}
               </div>
               <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => focusSection('approvals')}>
-                  Open approvals
+                  Open confirmations
                 </button>
                 <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/approvals">
-                  Go to Approval Queue
+                  Go to Confirmation Queue
                 </Link>
               </div>
             </article>
@@ -1617,14 +1688,14 @@ export default function RunInspectPage() {
                 <span className="orion-chip">
                   Tokens {typeof historyItem?.usage_total_tokens_est === 'number' ? historyItem.usage_total_tokens_est.toLocaleString() : '--'}
                 </span>
-                <span className="orion-chip">Provider {historyItem?.usage_provider || '--'}</span>
-                <span className="orion-chip">Model {historyItem?.usage_model || '--'}</span>
+                <span className="orion-chip">Requested {contractProviderModel?.requested_provider || '--'} · {contractProviderModel?.requested_model || '--'}</span>
+                <span className="orion-chip">Effective {contractProviderModel?.effective_provider || '--'} · {contractProviderModel?.effective_model || '--'}</span>
               </div>
             </article>
 
-            {runtimePolicyNotes.length > 0 ? (
-              <article className="orion-panel">
-                <div className="orion-panel-title">Runtime Detail</div>
+              {runtimePolicyNotes.length > 0 ? (
+                <article className="orion-panel">
+                  <div className="orion-panel-title">Runtime Detail</div>
                 <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
                   {runtimePolicyNotes.map((item) => (
                     <div
@@ -1648,7 +1719,51 @@ export default function RunInspectPage() {
                   ))}
                 </div>
               </article>
-            ) : null}
+              ) : null}
+
+              <article className="orion-panel">
+                <div className="orion-panel-title">Execution Truth</div>
+                <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Confirmation {contractApprovalOutcome?.label || 'Not recorded'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Mutation {contractConnectorMutation?.execution_label || 'Not recorded'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Action {contractConnectorMutation?.action_label || 'Not recorded'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    Target {contractConnectorMutation?.target_label || 'Not recorded'}
+                  </div>
+                  <div style={{ display: 'grid', gap: 6, marginTop: 4 }}>
+                    {contractEvidenceItems.length > 0 ? contractEvidenceItems.map((item, index) => (
+                      <div
+                        key={String(item.id || `${item.label || 'evidence'}:${index}`)}
+                        style={{
+                          display: 'grid',
+                          gap: 4,
+                          padding: '10px 12px',
+                          borderRadius: 12,
+                          border: '1px solid var(--border-default)',
+                          background: 'var(--bg-element)',
+                        }}
+                      >
+                        <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          {String(item.label || 'Evidence').trim() || 'Evidence'}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                          {String(item.value || 'Not recorded').trim() || 'Not recorded'}
+                        </div>
+                      </div>
+                    )) : (
+                      <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                        No evidence recorded yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </article>
           </section>
 
           {workflowNodeStates.items.length > 0 ? (
@@ -1874,7 +1989,7 @@ export default function RunInspectPage() {
                         </span>
                         {item.waiting_for_approval ? (
                           <div style={{ marginTop: 6, fontSize: 11, color: 'var(--warning-fg)' }}>
-                            Waiting for approval
+                            Confirmation required
                           </div>
                         ) : null}
                       </div>
@@ -2061,7 +2176,7 @@ export default function RunInspectPage() {
                           {delegationSummary.next_action === 'waiting_for_children'
                             ? 'Waiting for child runs to finish.'
                             : delegationSummary.next_action === 'resolve_child_approvals'
-                            ? 'Resolve child approvals.'
+                            ? 'Resolve child confirmations.'
                             : delegationSummary.next_action === 'retry_failed_children'
                             ? 'Retry failed child runs.'
                             : delegationSummary.next_action === 'merge_results'
@@ -2483,9 +2598,9 @@ export default function RunInspectPage() {
             >
               <div className="orion-panel-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <ClipboardCheck size={14} />
-                Approvals
+                Confirmations
               </div>
-              {runDetail?.pending_approval ? (
+              {pendingConfirmation ? (
                 <div
                   style={{
                     marginTop: 10,
@@ -2498,25 +2613,25 @@ export default function RunInspectPage() {
                   }}
                 >
                   <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--warning-fg)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Waiting for approval
+                    Confirmation required
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.55 }}>
                     {approvalDisplayText(
-                      runDetail.pending_approval.prompt,
-                      runDetail.pending_approval.metadata?.approval_labels,
-                      runDetail.pending_approval.metadata?.approval_capabilities,
-                      'Approval required.',
+                      pendingConfirmation.prompt,
+                      pendingConfirmation.metadata?.approval_labels,
+                      pendingConfirmation.metadata?.approval_capabilities,
+                      'Confirmation required.',
                     )}
                   </div>
                   <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
-                    <div>Action: {Array.isArray(runDetail.pending_approval.actions) && runDetail.pending_approval.actions.length > 0 ? runDetail.pending_approval.actions.join(', ') : 'Not recorded'}</div>
-                    <div>Target: {runDetail.pending_approval.target || 'Not recorded'}</div>
-                    <div>Scope: {String(runDetail.pending_approval.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(runDetail.pending_approval.scope || 'Unknown')}</div>
-                    <div>{runDetail.pending_approval.consequence || 'This approval applies only to this pending step in this run. Later runs or later approval points will ask again.'}</div>
+                    <div>Action: {Array.isArray(pendingConfirmation.actions) && pendingConfirmation.actions.length > 0 ? pendingConfirmation.actions.join(', ') : 'Not recorded'}</div>
+                    <div>Target: {pendingConfirmation.target || 'Not recorded'}</div>
+                    <div>Scope: {String(pendingConfirmation.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(pendingConfirmation.scope || 'Unknown')}</div>
+                    <div>{pendingConfirmation.consequence || 'This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.'}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/approvals">
-                      Open approval queue
+                      Open confirmation queue
                     </Link>
                     <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => focusSection('timeline')}>
                       Review timeline first
@@ -2525,7 +2640,7 @@ export default function RunInspectPage() {
                 </div>
               ) : null}
               {approvalAudit.length === 0 ? (
-                <div className="orion-panel-copy" style={{ marginTop: 10 }}>No approvals for this run.</div>
+                <div className="orion-panel-copy" style={{ marginTop: 10 }}>No confirmation history for this run.</div>
               ) : (
                 <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

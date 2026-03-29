@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
 from server_modules import connectors_actions, provider_profiles
 from server_modules.runtime_models import CredentialUpsertRequest, configure_runtime_model_context
 
@@ -115,6 +117,47 @@ class CredentialVaultFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], 429)
         self.assertEqual(result["models_preview"], [])
         adapter.list_models.assert_not_called()
+
+    @patch("server_modules.connectors_actions.save_vault")
+    @patch(
+        "server_modules.connectors_actions.load_vault",
+        return_value={
+            "credentials": [
+                {
+                    "id": "connector-google",
+                    "label": "Google Workspace",
+                    "provider": "google_workspace",
+                    "workspace_id": "default",
+                    "metadata": {},
+                }
+            ]
+        },
+    )
+    @patch(
+        "server_modules.connectors_actions.resolve_vault_credential",
+        return_value={"_provider": "google_workspace"},
+    )
+    @patch(
+        "server_modules.connectors_actions.validate_google_workspace_connector",
+        side_effect=RuntimeError("Google Workspace CLI token is not valid."),
+    )
+    async def test_test_connector_vault_persists_failed_google_verification_as_unusable(
+        self,
+        _validate_google_workspace_mock,
+        _resolve_vault_credential_mock,
+        _load_vault_mock,
+        save_vault_mock,
+    ):
+        with self.assertRaises(HTTPException) as excinfo:
+            await connectors_actions.test_connector_vault("connector-google", workspace_id="default")
+
+        self.assertEqual(excinfo.exception.status_code, 400)
+        saved_vault = save_vault_mock.call_args.args[0]
+        saved_entry = saved_vault["credentials"][0]
+        verification = saved_entry["metadata"]["capability_verification"]
+        self.assertFalse(verification["authenticated"])
+        self.assertFalse(verification["runtime_usable"])
+        self.assertEqual(verification["write_actions"], [])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from datetime import datetime, timedelta, timezone as dt_timezone
 import sys
+import re
+from typing import Any, Dict, List, Optional, Set
+from zoneinfo import ZoneInfo
 from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
@@ -521,6 +525,425 @@ def initialize_runtime_services() -> None:
         _whatsapp_autopilot_activate()
     _runtime_services_initialized = True
 
+
+def _strip_wrapping_quotes(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1].strip()
+    return text
+
+
+def _credential_verification(row: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    verification = metadata.get("capability_verification") if isinstance(metadata.get("capability_verification"), dict) else {}
+    return verification
+
+
+def _runtime_usable_connector_rows(
+    workspace_id: str,
+    connector_id: str,
+    *,
+    explicit_credential_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    connector_rows = [
+        item
+        for item in list_vault_connectors(workspace_id)
+        if isinstance(item, dict) and str(item.get("connector") or "").strip().lower() == connector_id
+    ]
+    if explicit_credential_id:
+        connector_rows = [
+            item for item in connector_rows if str(item.get("id") or "").strip() == str(explicit_credential_id or "").strip()
+        ]
+    usable_rows: List[Dict[str, Any]] = []
+    for row in connector_rows:
+        verification = _credential_verification(row)
+        if verification.get("runtime_usable") is True:
+            usable_rows.append(row)
+    return usable_rows
+
+
+def _select_runtime_usable_connector_binding(
+    workspace_id: str,
+    connector_id: str,
+    *,
+    explicit_credential_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    usable_rows = _runtime_usable_connector_rows(
+        workspace_id,
+        connector_id,
+        explicit_credential_id=explicit_credential_id,
+    )
+    if explicit_credential_id:
+        return usable_rows[0] if usable_rows else None
+    if len(usable_rows) != 1:
+        return None
+    return usable_rows[0]
+
+
+def _build_connector_action_workflow(
+    *,
+    connector_id: str,
+    action_id: str,
+    config: Dict[str, Any],
+    label: str,
+) -> Dict[str, Any]:
+    return {
+        "version": "empyralist.workflow.v2",
+        "nodes": [
+            {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+            {
+                "id": "tool_1",
+                "type": "tool",
+                "variant": "connector_action",
+                "data": {"label": label},
+                "config": {
+                    "connector": connector_id,
+                    "action_id": action_id,
+                    **config,
+                },
+            },
+        ],
+        "edges": [{"id": "edge_1", "source": "trigger_1", "target": "tool_1"}],
+    }
+
+
+def _binding_metadata(binding: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = binding.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _binding_google_email_address(binding: Dict[str, Any]) -> str:
+    metadata = _binding_metadata(binding)
+    for key in ("emailAddress", "email", "mail"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _binding_timezone(binding: Dict[str, Any]) -> str:
+    metadata = _binding_metadata(binding)
+    value = str(metadata.get("timezone") or "").strip()
+    return value or "UTC"
+
+
+def _strip_trailing_punctuation(value: str) -> str:
+    return str(value or "").strip().rstrip(".,;:!?")
+
+
+def _default_email_subject(body_text: str) -> str:
+    text = _strip_trailing_punctuation(_strip_wrapping_quotes(body_text))
+    lowered = text.lower()
+    if lowered.startswith("summarizing "):
+        text = text[len("summarizing ") :].strip()
+    elif lowered.startswith("about "):
+        text = text[len("about ") :].strip()
+    if not text:
+        return "Empyralis draft"
+    subject = text[:80].strip()
+    return subject or "Empyralis draft"
+
+
+def _natural_calendar_range_for_tomorrow(
+    *,
+    hour_text: str,
+    minute_text: str,
+    meridiem_text: str,
+    timezone_name: str,
+) -> Optional[Dict[str, str]]:
+    try:
+        hour = int(str(hour_text or "").strip())
+    except Exception:
+        return None
+    minute = int(str(minute_text or "0").strip() or "0")
+    meridiem = str(meridiem_text or "").strip().lower()
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return None
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None
+    if minute < 0 or minute > 59:
+        return None
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = dt_timezone.utc
+        timezone_name = "UTC"
+    now_local = datetime.now(zone)
+    start_local = (now_local + timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    end_local = start_local + timedelta(hours=1)
+    return {
+        "start": start_local.isoformat(),
+        "end": end_local.isoformat(),
+        "timezone": timezone_name,
+    }
+
+
+def _recognize_telegram_send_intent(
+    message: str,
+    *,
+    workspace_id: str,
+    explicit_credential_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    compact = re.sub(r"\s+", " ", str(message or "").strip())
+    if not compact:
+        return None
+    match = re.match(
+        r"(?is)^\s*send(?:\s+(?:a|the))?\s+telegram\s+message(?:\s+to\s+(?P<target>.+?))?\s+(?:saying|with\s+text|with\s+message|that\s+says)\s+(?P<text>.+?)\s*$",
+        compact,
+    )
+    if not match:
+        return None
+    body_text = _strip_wrapping_quotes(str(match.group("text") or "").strip())
+    if not body_text:
+        return None
+    binding = _select_runtime_usable_connector_binding(
+        workspace_id,
+        "telegram_bot",
+        explicit_credential_id=explicit_credential_id,
+    )
+    if not isinstance(binding, dict):
+        return None
+    credential_id = str(binding.get("id") or "").strip()
+    if not credential_id:
+        return None
+    try:
+        secret = resolve_vault_credential(credential_id, workspace_id)
+    except Exception:
+        return None
+    chat_id = str(secret.get("chat_id") or "").strip()
+    if not chat_id:
+        return None
+    target_label = _strip_wrapping_quotes(str(match.group("target") or "").strip()) or str(binding.get("label") or "").strip() or chat_id
+    workflow_definition = _build_connector_action_workflow(
+        connector_id="telegram_bot",
+        action_id="send_message",
+        label="Send Telegram message",
+        config={
+            "connector_credential_id": credential_id,
+            "chat_id": chat_id,
+            "text": body_text,
+            "target_label": target_label,
+        },
+    )
+    return {
+        "workflow_definition": workflow_definition,
+        "connector_credential_id": credential_id,
+        "connector_write_intent": {
+            "version": 1,
+            "connector": "telegram_bot",
+            "action_id": "send_message",
+            "target_system": "telegram_bot",
+            "target_identity": {"chat_id": chat_id},
+            "target_label": target_label,
+            "payload": {"text": body_text},
+        },
+    }
+
+
+def _recognize_email_write_intent(
+    message: str,
+    *,
+    workspace_id: str,
+    explicit_credential_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    compact = re.sub(r"\s+", " ", str(message or "").strip())
+    if not compact:
+        return None
+    binding = _select_runtime_usable_connector_binding(
+        workspace_id,
+        "google_workspace",
+        explicit_credential_id=explicit_credential_id,
+    )
+    if not isinstance(binding, dict):
+        return None
+    credential_id = str(binding.get("id") or "").strip()
+    if not credential_id:
+        return None
+    match = re.match(
+        r"(?is)^\s*(?P<mode>send|draft)(?:\s+(?:an?|the))?\s+email\s+to\s+(?P<recipient>[^\s]+@[^\s]+?)(?:\s+subject\s+(?P<subject>.+?))?\s+(?:saying|with\s+message|with\s+body|body)\s+(?P<body>.+?)\s*$",
+        compact,
+    )
+    recipient = ""
+    body_text = ""
+    action_id = "draft_email"
+    subject = ""
+    if match:
+        recipient = _strip_trailing_punctuation(_strip_wrapping_quotes(str(match.group("recipient") or "").strip()))
+        body_text = _strip_wrapping_quotes(str(match.group("body") or "").strip())
+        action_id = "draft_email" if str(match.group("mode") or "").strip().lower() == "draft" else "send_email"
+        subject = _strip_wrapping_quotes(str(match.group("subject") or "").strip())
+    else:
+        natural_self_match = re.match(
+            r"(?is)^\s*(?P<mode>send|draft)(?:\s+(?:an?|the))?\s+email\s+to\s+(?P<recipient>myself|me)\s+(?P<body>.+?)\s*$",
+            compact,
+        )
+        if not natural_self_match:
+            return None
+        recipient = _binding_google_email_address(binding)
+        body_text = _strip_wrapping_quotes(str(natural_self_match.group("body") or "").strip())
+        action_id = "draft_email" if str(natural_self_match.group("mode") or "").strip().lower() == "draft" else "send_email"
+        subject = ""
+    if not recipient or not body_text:
+        return None
+    connector_id = "google_workspace"
+    subject = subject or _default_email_subject(body_text)
+    workflow_definition = _build_connector_action_workflow(
+        connector_id=connector_id,
+        action_id=action_id,
+        label="Send email" if action_id == "send_email" else "Draft email",
+        config={
+            "connector_credential_id": credential_id,
+            "to_email": recipient,
+            "subject": subject,
+            "text": body_text,
+            "target_label": recipient,
+        },
+    )
+    return {
+        "workflow_definition": workflow_definition,
+        "connector_credential_id": credential_id,
+        "connector_write_intent": {
+            "version": 1,
+            "connector": connector_id,
+            "action_id": action_id,
+            "target_system": connector_id,
+            "target_identity": {"recipient": recipient},
+            "target_label": recipient,
+            "payload": {"subject": subject, "body": body_text},
+        },
+    }
+
+
+def _recognize_calendar_write_intent(
+    message: str,
+    *,
+    workspace_id: str,
+    explicit_credential_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    compact = re.sub(r"\s+", " ", str(message or "").strip())
+    if not compact:
+        return None
+    binding = _select_runtime_usable_connector_binding(
+        workspace_id,
+        "google_workspace",
+        explicit_credential_id=explicit_credential_id,
+    )
+    if not isinstance(binding, dict):
+        return None
+    credential_id = str(binding.get("id") or "").strip()
+    if not credential_id:
+        return None
+    match = re.match(
+        r"(?is)^\s*(?:create|schedule)\s+(?:a\s+)?calendar\s+event(?:\s+titled\s+(?P<title>.+?))?\s+from\s+(?P<start>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)\s+to\s+(?P<end>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)(?:\s+description\s+(?P<description>.+?))?\s*$",
+        compact,
+    )
+    title = ""
+    start = ""
+    end = ""
+    description = ""
+    timezone_name = _binding_timezone(binding)
+    if match:
+        title = _strip_trailing_punctuation(_strip_wrapping_quotes(str(match.group("title") or "").strip())) or "Empyralis event"
+        start = str(match.group("start") or "").strip()
+        end = str(match.group("end") or "").strip()
+        description = _strip_wrapping_quotes(str(match.group("description") or "").strip())
+    else:
+        natural_match = re.match(
+            r"(?is)^\s*(?:create|schedule)(?:\s+(?:a|an))?\s+calendar\s+event\s+for\s+tomorrow\s+at\s+(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<meridiem>am|pm)?\s+(?:called|titled)\s+(?P<title>.+?)\s*$",
+            compact,
+        )
+        if not natural_match:
+            return None
+        title = _strip_trailing_punctuation(_strip_wrapping_quotes(str(natural_match.group("title") or "").strip())) or "Empyralis event"
+        computed = _natural_calendar_range_for_tomorrow(
+            hour_text=str(natural_match.group("hour") or "").strip(),
+            minute_text=str(natural_match.group("minute") or "").strip(),
+            meridiem_text=str(natural_match.group("meridiem") or "").strip(),
+            timezone_name=timezone_name,
+        )
+        if not isinstance(computed, dict):
+            return None
+        start = str(computed.get("start") or "").strip()
+        end = str(computed.get("end") or "").strip()
+        timezone_name = str(computed.get("timezone") or timezone_name).strip() or "UTC"
+    if not start or not end:
+        return None
+    workflow_definition = _build_connector_action_workflow(
+        connector_id="google_workspace",
+        action_id="create_calendar_event",
+        label="Create calendar event",
+        config={
+            "connector_credential_id": credential_id,
+            "title": title,
+            "start": start,
+            "end": end,
+            "timezone": timezone_name,
+            "description": description,
+            "target_label": title,
+        },
+    )
+    return {
+        "workflow_definition": workflow_definition,
+        "connector_credential_id": credential_id,
+        "connector_write_intent": {
+            "version": 1,
+            "connector": "google_workspace",
+            "action_id": "create_calendar_event",
+            "target_system": "google_workspace",
+            "target_label": title,
+            "payload": {"start": start, "end": end, "description": description},
+        },
+    }
+
+
+def _bind_obvious_connector_write_intent(
+    req: RunStartRequest,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return metadata
+    if str(req.workflow_id or "").strip():
+        return metadata
+    if isinstance(metadata.get("workflow_definition"), dict):
+        return metadata
+    if str(metadata.get("outcome_pack") or "").strip():
+        return metadata
+    message = str(req.user_goal or "").strip()
+    if not message:
+        return metadata
+    workspace_id = str(req.workspace_id or metadata.get("workspace_id") or "default").strip() or "default"
+    explicit_credential_id = str(metadata.get("connector_credential_id") or "").strip() or None
+    recognized = (
+        _recognize_telegram_send_intent(
+            message,
+            workspace_id=workspace_id,
+            explicit_credential_id=explicit_credential_id,
+        )
+        or _recognize_email_write_intent(
+            message,
+            workspace_id=workspace_id,
+            explicit_credential_id=explicit_credential_id,
+        )
+        or _recognize_calendar_write_intent(
+            message,
+            workspace_id=workspace_id,
+            explicit_credential_id=explicit_credential_id,
+        )
+    )
+    if not isinstance(recognized, dict):
+        return metadata
+    next_metadata = dict(metadata)
+    next_metadata["workflow_definition"] = recognized["workflow_definition"]
+    next_metadata["connector_write_intent"] = recognized["connector_write_intent"]
+    next_metadata["connector_credential_id"] = recognized["connector_credential_id"]
+    next_metadata["execution_target"] = EXECUTION_TARGET_CLOUD
+    return next_metadata
+
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     engine = (req.engine or "orion").lower().strip()
     metadata = dict(req.metadata) if isinstance(req.metadata, dict) else {}
@@ -605,7 +1028,7 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     workflow_snapshot = None
     if str(req.workflow_id or "").strip():
         workflow_snapshot = fetch_workflow_snapshot(req.workflow_id)
-        if isinstance(workflow_snapshot, dict):
+    if isinstance(workflow_snapshot, dict):
             metadata["workflow_schema_version"] = str(
                 workflow_snapshot.get("definition", {}).get("version") or ""
             ).strip() or None
@@ -613,6 +1036,9 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
                 metadata["workflow_name"] = workflow_snapshot.get("name")
             if workflow_snapshot.get("status"):
                 metadata["workflow_status"] = workflow_snapshot.get("status")
+
+    if engine == "orion":
+        metadata = _bind_obvious_connector_write_intent(req, metadata)
 
     return {
         "engine": engine,

@@ -117,6 +117,44 @@ type RunDetailPayload = {
     identity_label?: string | null;
     routing_scope?: string | null;
   } | null;
+  run_detail_contract?: {
+    provider_model?: {
+      requested_provider?: string | null;
+      effective_provider?: string | null;
+      requested_model?: string | null;
+      effective_model?: string | null;
+      provider_overridden?: boolean;
+      model_overridden?: boolean;
+      fallback_used?: boolean;
+      fallback_reason?: string | null;
+    } | null;
+    approval_outcome?: {
+      status?: string | null;
+      label?: string | null;
+    } | null;
+    connector_mutation?: {
+      binding?: {
+        label?: string | null;
+        connector?: string | null;
+        channel?: string | null;
+        identity_label?: string | null;
+        routing_scope?: string | null;
+      } | null;
+      action?: Record<string, unknown> | null;
+      execution_label?: string | null;
+      action_label?: string | null;
+      system_label?: string | null;
+      target_label?: string | null;
+      result_label?: string | null;
+    } | null;
+    evidence_items?: Array<{
+      id?: string | null;
+      label?: string | null;
+      value?: string | null;
+    }> | null;
+  } | null;
+  pending_confirmation?: ApprovalState;
+  /** @deprecated compatibility alias; use `pending_confirmation`. */
   pending_approval?: ApprovalState;
   result_data?: unknown;
   node_states?: RunNodeStatesPayload | null;
@@ -244,7 +282,7 @@ function formatStatusLabel(
   const latestText = [
     String(latestEvent?.message || '').trim(),
     String(latestEvent?.event || '').trim(),
-    String(detail?.connector_binding?.label || '').trim(),
+    String(detail?.run_detail_contract?.connector_mutation?.binding?.label || '').trim(),
     String(detail?.context?.user_goal || '').trim(),
   ]
     .filter(Boolean)
@@ -257,8 +295,8 @@ function formatStatusLabel(
   if (waitingForRuntime) {
     return { label: 'Waiting for a capable machine...', toolLabel: 'Local runtime', icon: Bot };
   }
-  if (detail?.pending_approval?.approval_id) {
-    return { label: 'Waiting for your approval...', toolLabel: null, icon: ShieldCheck };
+  if (detail?.pending_confirmation?.approval_id || detail?.pending_approval?.approval_id) {
+    return { label: 'Confirmation required...', toolLabel: null, icon: ShieldCheck };
   }
   if (/email|gmail|inbox|mail/.test(latestText)) {
     return { label: 'Reading your emails...', toolLabel: 'Gmail', icon: Mail };
@@ -288,6 +326,22 @@ export default function RunDetailPage() {
   const [replayItem, setReplayItem] = useState<ReplayPayload['item']>(null);
   const [liveEvents, setLiveEvents] = useState<ReplayEvent[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<'Proceed' | 'Hold' | null>(null);
+  const pendingConfirmation = runDetail?.pending_confirmation ?? runDetail?.pending_approval ?? null;
+  const detailContract = runDetail?.run_detail_contract ?? null;
+  const contractProviderModel = detailContract?.provider_model ?? null;
+  const contractConnectorMutation = detailContract?.connector_mutation ?? null;
+  const contractConnectorBinding = contractConnectorMutation?.binding ?? null;
+  const contractApprovalOutcome = detailContract?.approval_outcome ?? null;
+  const contractEvidenceItems = useMemo(
+    () =>
+      Array.isArray(detailContract?.evidence_items)
+        ? detailContract.evidence_items.filter(
+            (item): item is { id?: string | null; label?: string | null; value?: string | null } =>
+              !!item && typeof item === 'object' && (String(item.label || '').trim().length > 0 || String(item.value || '').trim().length > 0),
+          )
+        : [],
+    [detailContract?.evidence_items],
+  );
 
   const load = useCallback(async () => {
     if (!runId) return;
@@ -479,7 +533,7 @@ export default function RunDetailPage() {
   );
   const toolAccountRows = useMemo(() => {
     const rows: Array<{ label: string; value: string }> = [];
-    const connectorBinding = runDetail?.connector_binding;
+    const connectorBinding = contractConnectorBinding;
     const toolLabel = [
       String(connectorBinding?.label || '').trim(),
       String(connectorBinding?.channel || '').trim(),
@@ -488,9 +542,13 @@ export default function RunDetailPage() {
       String(connectorBinding?.identity_label || '').trim(),
       String(connectorBinding?.routing_scope || '').trim(),
     ].filter(Boolean).join(' · ');
-    const aiLabel = [
-      formatProviderLabel(runDetail?.active_profile_provider || historyItem?.active_profile_provider || null),
-      String(runDetail?.active_profile_model || historyItem?.active_profile_model || '').trim(),
+    const requestedAiLabel = [
+      contractProviderModel?.requested_provider ? formatProviderLabel(contractProviderModel.requested_provider) : 'Unknown',
+      String(contractProviderModel?.requested_model || '').trim(),
+    ].filter(Boolean).join(' · ');
+    const effectiveAiLabel = [
+      contractProviderModel?.effective_provider ? formatProviderLabel(contractProviderModel.effective_provider) : 'Unknown',
+      String(contractProviderModel?.effective_model || '').trim(),
     ].filter(Boolean).join(' · ');
 
     rows.push({
@@ -502,16 +560,20 @@ export default function RunDetailPage() {
       value: accountLabel || 'No account is recorded yet.',
     });
     rows.push({
-      label: 'AI source',
-      value: aiLabel || 'Hekor AI',
+      label: 'Requested AI',
+      value: requestedAiLabel || 'Unknown',
+    });
+    rows.push({
+      label: 'Effective AI',
+      value: effectiveAiLabel || 'Unknown',
     });
     return rows;
   }, [
-    historyItem?.active_profile_model,
-    historyItem?.active_profile_provider,
-    runDetail?.active_profile_model,
-    runDetail?.active_profile_provider,
-    runDetail?.connector_binding,
+    contractConnectorBinding,
+    contractProviderModel?.effective_model,
+    contractProviderModel?.effective_provider,
+    contractProviderModel?.requested_model,
+    contractProviderModel?.requested_provider,
   ]);
   const workflowNodeStates = useMemo(() => {
     const payload = runDetail?.node_states;
@@ -545,7 +607,7 @@ export default function RunDetailPage() {
         260,
       );
     }
-    if (runDetail?.pending_approval?.approval_id) {
+    if (pendingConfirmation?.approval_id) {
       return 'Hekor paused before the next action so you can review it first.';
     }
     if (isFailureStatus(effectiveStatus)) {
@@ -565,10 +627,10 @@ export default function RunDetailPage() {
     executionTargetWaitingForCapacity,
     executionTargetWaitingForRuntime,
     previewText,
-    runDetail?.pending_approval?.approval_id,
+    pendingConfirmation?.approval_id,
   ]);
   const heroTitle = useMemo(() => {
-    if (runDetail?.pending_approval?.approval_id) return 'Approval needed';
+    if (pendingConfirmation?.approval_id) return 'Confirmation required';
     if (executionTargetWaitingForCapacity) return 'Waiting for machine capacity';
     if (executionTargetWaitingForRuntime) return 'Waiting for the right machine';
     if (isFailureStatus(effectiveStatus)) return 'Run failed';
@@ -580,19 +642,19 @@ export default function RunDetailPage() {
     executionTargetWaitingForCapacity,
     executionTargetWaitingForRuntime,
     previewText,
-    runDetail?.pending_approval?.approval_id,
+    pendingConfirmation?.approval_id,
   ]);
   const noResultState = useMemo(
     () =>
       !previewText
-      && !runDetail?.pending_approval?.approval_id
+      && !pendingConfirmation?.approval_id
       && (isSuccessStatus(effectiveStatus) || isFailureStatus(effectiveStatus)),
-    [effectiveStatus, previewText, runDetail?.pending_approval?.approval_id],
+    [effectiveStatus, pendingConfirmation?.approval_id, previewText],
   );
   const CurrentStatusIcon = currentStatus.icon;
 
   const handleResolveApproval = useCallback(async (decision: 'Proceed' | 'Hold') => {
-    if (!runId || !runDetail?.pending_approval?.approval_id) return;
+    if (!runId || !pendingConfirmation?.approval_id) return;
     setApprovalBusy(decision);
     try {
       await ensureControlPlaneSession();
@@ -601,29 +663,29 @@ export default function RunDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           runId,
-          approvalId: runDetail.pending_approval.approval_id,
+          approvalId: pendingConfirmation.approval_id,
           decision,
           note: 'Resolved from Hekor run view',
         }),
       });
       if (!response.ok) {
         const message = await response.text().catch(() => '');
-        throw new Error(message || 'Failed to resolve this approval.');
+        throw new Error(message || 'Failed to resolve this confirmation.');
       }
       await load();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'Failed to resolve this approval.');
+      setError(nextError instanceof Error ? nextError.message : 'Failed to resolve this confirmation.');
     } finally {
       setApprovalBusy(null);
     }
-  }, [load, runDetail?.pending_approval?.approval_id, runId]);
+  }, [load, pendingConfirmation?.approval_id, runId]);
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
       <div className="orion-page-header">
         <div className="orion-page-title-wrap">
           <div className="orion-page-title">Run</div>
-          <div className="orion-page-subtitle">See the result, approvals, and routing context for this task.</div>
+          <div className="orion-page-subtitle">See the result, confirmation state, and routing context for this task.</div>
         </div>
         <div className="orion-page-actions">
           <Link href="/executions" className="btn-secondary">Back to Runs</Link>
@@ -663,7 +725,7 @@ export default function RunDetailPage() {
               <div className="hekor-run-hero-copy">
                 <div className="hekor-run-hero-title">{heroTitle}</div>
                 <div className="hekor-run-status-note">
-                  {currentStatus.toolLabel || runDetail?.connector_binding?.label || 'Hekor Agent'}
+                  {currentStatus.toolLabel || contractConnectorMutation?.system_label || contractConnectorBinding?.label || 'Hekor Agent'}
                 </div>
                 <div className="hekor-run-hero-summary">{plainLanguageSummary}</div>
               </div>
@@ -734,6 +796,23 @@ export default function RunDetailPage() {
                 {executionTargetFallback ? (
                   <div className="hekor-run-route-note">{compactText(executionTargetFallback, '', 180)}</div>
                 ) : null}
+              </div>
+
+              <div className="orion-panel muted">
+                <div className="orion-panel-title">Evidence</div>
+                <div className="hekor-run-info-list">
+                  {contractEvidenceItems.length > 0 ? contractEvidenceItems.map((item, index) => (
+                    <div key={String(item.id || `${item.label || 'evidence'}:${index}`)} className="hekor-run-info-row">
+                      <span>{String(item.label || 'Evidence').trim() || 'Evidence'}</span>
+                      <strong>{String(item.value || 'Not recorded').trim() || 'Not recorded'}</strong>
+                    </div>
+                  )) : (
+                    <div className="hekor-run-info-row">
+                      <span>Status</span>
+                      <strong>{contractApprovalOutcome?.label || 'No evidence recorded yet.'}</strong>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {workflowNodeStates.items.length > 0 ? (
@@ -845,12 +924,12 @@ export default function RunDetailPage() {
               </div>
             ) : null}
 
-            {runDetail?.pending_approval?.approval_id ? (
+            {pendingConfirmation?.approval_id ? (
               <div className="orion-panel hekor-run-approval">
-                <div className="orion-panel-title">Approval needed</div>
-                <div className="orion-panel-copy">{compactText(runDetail.pending_approval.prompt, 'Review the next action before the run continues.', 220)}</div>
-                {/* There is no structured change preview in the current approval payload, so
-                    this block stays grounded in the approval prompt plus the tool/account context. */}
+                <div className="orion-panel-title">Confirmation required</div>
+                <div className="orion-panel-copy">{compactText(pendingConfirmation.prompt, 'Review the next action before the run continues.', 220)}</div>
+                {/* There is no structured change preview in the current confirmation payload, so
+                    this block stays grounded in the prompt plus the tool/account context. */}
                 <div className="hekor-run-info-list">
                   <div className="hekor-run-info-row">
                     <span>Tool and account</span>
@@ -858,33 +937,33 @@ export default function RunDetailPage() {
                   </div>
                   <div className="hekor-run-info-row">
                     <span>Action</span>
-                    <strong>{Array.isArray(runDetail.pending_approval.actions) && runDetail.pending_approval.actions.length > 0 ? runDetail.pending_approval.actions.join(', ') : 'Not recorded'}</strong>
+                    <strong>{Array.isArray(pendingConfirmation.actions) && pendingConfirmation.actions.length > 0 ? pendingConfirmation.actions.join(', ') : 'Not recorded'}</strong>
                   </div>
                   <div className="hekor-run-info-row">
                     <span>Target</span>
-                    <strong>{runDetail.pending_approval.target || 'Not recorded'}</strong>
+                    <strong>{pendingConfirmation.target || 'Not recorded'}</strong>
                   </div>
                   <div className="hekor-run-info-row">
                     <span>Scope</span>
-                    <strong>{String(runDetail.pending_approval.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(runDetail.pending_approval.scope || 'Unknown')}</strong>
+                    <strong>{String(pendingConfirmation.scope || 'once').trim().toLowerCase() === 'once' ? 'One-time for this pending step' : String(pendingConfirmation.scope || 'Unknown')}</strong>
                   </div>
                   <div className="hekor-run-info-row">
                     <span>Requested</span>
-                    <strong>{formatDateTime(runDetail.pending_approval.requested_at)}</strong>
+                    <strong>{formatDateTime(pendingConfirmation.requested_at)}</strong>
                   </div>
                   <div className="hekor-run-info-row">
                     <span>Expires</span>
-                    <strong>{formatDateTime(runDetail.pending_approval.expires_at)}</strong>
+                    <strong>{formatDateTime(pendingConfirmation.expires_at)}</strong>
                   </div>
                 </div>
                 <div className="orion-panel-copy" style={{ marginTop: 10 }}>
-                  {runDetail.pending_approval.consequence || 'This approval applies only to this pending step in this run. Later runs or later approval points will ask again.'}
+                  {pendingConfirmation.consequence || 'This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.'}
                 </div>
-                {Array.isArray(runDetail.pending_approval.metadata?.approval_labels) && runDetail.pending_approval.metadata?.approval_labels.length ? (
+                {Array.isArray(pendingConfirmation.metadata?.approval_labels) && pendingConfirmation.metadata?.approval_labels.length ? (
                   <div className="hekor-run-capability-block">
                     <div className="hekor-run-capability-title">Review signals</div>
                     <div className="hekor-run-capability-row">
-                      {runDetail.pending_approval.metadata.approval_labels
+                      {pendingConfirmation.metadata?.approval_labels
                         ?.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
                         .map((item) => (
                           <span key={`approval-label:${item}`} className="hekor-run-capability-chip">
@@ -904,10 +983,10 @@ export default function RunDetailPage() {
                     {approvalBusy === 'Proceed' ? (
                       <>
                         <Loader2 size={14} className="hekor-spin" />
-                        Approving…
+                        Confirming…
                       </>
                     ) : (
-                      'Approve once'
+                      'Confirm once'
                     )}
                   </button>
                   <button
@@ -919,10 +998,10 @@ export default function RunDetailPage() {
                     {approvalBusy === 'Hold' ? (
                       <>
                         <Loader2 size={14} className="hekor-spin" />
-                        Dismissing…
+                        Declining…
                       </>
                     ) : (
-                      'Dismiss'
+                      'Decline'
                     )}
                   </button>
                 </div>

@@ -308,6 +308,10 @@ def _connect_action(label: str, href: str) -> Dict[str, Any]:
     }
 
 
+def _google_repair_action() -> Dict[str, Any]:
+    return _connect_action("Reconnect Google Workspace", "/credentials?connector=google_workspace")
+
+
 def _run_action(message: str) -> Dict[str, Any]:
     return {
         "id": "run:this",
@@ -353,6 +357,35 @@ def _is_simple_greeting(message: str) -> bool:
 def _is_capability_question(message: str) -> bool:
     compact = _compact_text(message)
     return _mentions_any(compact, CAPABILITY_QUESTION_KEYWORDS)
+
+
+def _is_obvious_telegram_write_request(compact_message: str) -> bool:
+    if not compact_message or _question_like(compact_message):
+        return False
+    return _mentions_any(compact_message, TELEGRAM_KEYWORDS) and _starts_like_direct_run(compact_message)
+
+
+def _is_obvious_google_write_request(compact_message: str) -> bool:
+    if not compact_message or _question_like(compact_message):
+        return False
+    if "send an email" in compact_message or "draft an email" in compact_message:
+        return True
+    if "send email" in compact_message or "draft email" in compact_message:
+        return True
+    if "calendar event" in compact_message and _starts_like_direct_run(compact_message):
+        return True
+    if "meeting invite" in compact_message and _starts_like_direct_run(compact_message):
+        return True
+    return False
+
+
+def _connector_write_preview_allowed(message: str, availability: Dict[str, Any]) -> bool:
+    compact = _compact_text(message)
+    if _is_obvious_telegram_write_request(compact):
+        return _tool_runtime_usable(availability, "telegram_bot") is True
+    if _is_obvious_google_write_request(compact):
+        return _tool_runtime_usable(availability, "google_workspace") is True
+    return False
 
 
 def _is_explicit_workflow_request(message: str) -> bool:
@@ -401,15 +434,33 @@ def _capability_response(availability: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
+    capabilities = _normalize_tool_capabilities(availability)
+    connected_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected")]
+    usable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("runtime_usable") is True]
+    unavailable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is False]
+    unverified_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is None]
+    connected_line = ", ".join(connected_labels) if connected_labels else "none"
+    usable_line = ", ".join(usable_labels) if usable_labels else "none verified"
+    unavailable_line = ", ".join(unavailable_labels) if unavailable_labels else "none"
+    unverified_line = ", ".join(unverified_labels) if unverified_labels else "none"
+    reply = (
+        "AI chat is not available right now because the workspace AI account is not ready. "
+        f"Connected here right now: {connected_line}. "
+        f"Usable now: {usable_line}. "
+        f"Unavailable now: {unavailable_line}. "
+        f"Not verified: {unverified_line}. "
+        "Connect the workspace AI account to use normal chat and reasoning."
+    )
+    return {
+        "reply": reply,
+        "actions": [_connect_action("Connect", "/connect-ai")],
+        "mode": "connect",
+    }
+
+
 def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     compact = _compact_text(message)
-    ai_ready = bool(availability.get("ai_ready"))
-    if not ai_ready:
-        return {
-            "reply": "The AI account is not ready in this workspace yet.",
-            "actions": [_connect_action("Connect", "/connect-ai")],
-            "mode": "connect",
-        }
     if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _tool_connected(availability, "google_workspace"):
         return {
             "reply": "Google Workspace is not connected in this workspace.",
@@ -419,7 +470,7 @@ def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[
     if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is False:
         return {
             "reply": "Google Workspace is connected here, but is not usable right now.",
-            "actions": [],
+            "actions": [_google_repair_action()],
             "mode": "connect",
         }
     if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is not True:
@@ -582,12 +633,15 @@ def build_direct_operator_reply(
             "mode": "answer",
         }, base_context_used)
 
-    if _is_capability_question(normalized_message):
-        return _with_context_used(_capability_response(availability_payload), base_context_used)
-
     gated = _tool_gate_response(normalized_message, availability_payload)
     if gated is not None:
         return _with_context_used(gated, base_context_used)
+
+    if not bool(availability_payload.get("ai_ready")) and not _connector_write_preview_allowed(normalized_message, availability_payload):
+        return _with_context_used(_no_ai_chat_response(availability_payload), base_context_used)
+
+    if _is_capability_question(normalized_message):
+        return _with_context_used(_capability_response(availability_payload), base_context_used)
 
     preview = _preview_run_response(normalized_message, availability_payload)
     if preview is not None:
@@ -662,6 +716,8 @@ def build_direct_operator_reply(
         reply = "I couldn’t get a clean model reply right now. Retry in a moment."
         if "no provider credentials available" in _compact_text(llm_error):
             reply = "No active AI credential is available right now. Connect the workspace AI account, then retry."
+        elif "direct_chat_transport_unavailable" in _compact_text(llm_error):
+            reply = "Direct chat is unavailable on the current provider path. Use a message-native AI account, then retry."
         elif "missing scopes" in _compact_text(llm_error) or "api.responses.write" in _compact_text(llm_error):
             reply = "The current Codex/OpenAI auth cannot answer chat right now. Reconnect the account, then retry."
         elif _is_simple_greeting(normalized_message):

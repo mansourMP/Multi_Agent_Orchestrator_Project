@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import mimetypes
 import os
@@ -9,7 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.customer_ops_pack import execute_customer_ops_pack
+from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.microsoft_365_graph import (
     microsoft_365_download_drive_file,
     microsoft_365_normalize_drive_path,
@@ -63,6 +66,24 @@ _CHANNEL_ALIASES = {
     "sms": "SMS",
     "text": "SMS",
 }
+
+
+def _connector_account_identity(
+    connector_provider: str,
+    connector_credential_id: Any,
+    connector_credentials: Dict[str, Any],
+) -> Optional[str]:
+    credential_token = str(connector_credential_id or "").strip()
+    if credential_token:
+        return f"credential:{credential_token}"
+    signature = _connector_identity_signature(
+        connector_provider,
+        connector_credentials if isinstance(connector_credentials, dict) else {},
+    ) or ""
+    signature = signature.strip()
+    if signature:
+        return f"signature:{stable_value_fingerprint(signature)}"
+    return None
 
 
 def normalize_channel_name(raw: Any) -> str:
@@ -491,6 +512,11 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
         if payload_provider == "microsoft_365":
             connector_provider = payload_provider
             connector_credentials = dict(connector_payload)
+    connector_account_id = _connector_account_identity(
+        connector_provider,
+        connector_credential_id,
+        connector_credentials,
+    )
 
     source_path = str(parsed.get("file_path") or "").strip()
     remote_storage = source_path.lower().startswith(("onedrive:/", "m365:/", "onedrive://", "m365://"))
@@ -744,13 +770,39 @@ def execute_spreadsheet_ops_pack(context: Dict[str, Any], run_id: Optional[str] 
 
     if remote_storage and operation != "read":
         content_type = mimetypes.guess_type(str(target_path.name))[0] or "application/octet-stream"
-        microsoft_365_upload_drive_file(
-            connector_credentials,
-            remote_drive_path,
-            target_path.read_bytes(),
-            content_type=content_type,
+        content_bytes = target_path.read_bytes()
+        upload_result = execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"spreadsheet_ops:onedrive_sync:{display_file_path}:{operation}",
+            category="spreadsheet_ops_onedrive_sync",
+            operation={"action_id": "upload_drive_file", "path": remote_drive_path},
+            target_system="microsoft_365",
+            account_identity=connector_account_id,
+            target_identity={"action_id": "upload_drive_file", "path": remote_drive_path},
+            payload={"path": remote_drive_path, "content_type": content_type, "content_sha256": hashlib.sha256(content_bytes).hexdigest()},
+            execute=lambda: microsoft_365_upload_drive_file(
+                connector_credentials,
+                remote_drive_path,
+                content_bytes,
+                content_type=content_type,
+            ),
         )
-        result["summary"] = result["summary"].rstrip(".") + " Synced to OneDrive."
+        duplicate_guard = upload_result.get("duplicate_guard") if isinstance(upload_result, dict) else {}
+        duplicate_protected = isinstance(duplicate_guard, dict) and not bool(duplicate_guard.get("executed", True))
+        if isinstance(result.get("outputs"), dict):
+            actions = result["outputs"].get("actions")
+            if isinstance(actions, list):
+                result["outputs"]["actions"] = [
+                    {**item, "executed": not duplicate_protected, "duplicate_protected": duplicate_protected}
+                    if isinstance(item, dict) else item
+                    for item in actions
+                ]
+        result["summary"] = (
+            result["summary"].rstrip(".") + " Duplicate-protected OneDrive sync reused the prior upload."
+            if duplicate_protected
+            else result["summary"].rstrip(".") + " Synced to OneDrive."
+        )
 
     next_steps = [
         "Review preview rows for correctness.",
@@ -842,6 +894,11 @@ def execute_document_studio_pack(context: Dict[str, Any], run_id: Optional[str] 
         if payload_provider == "microsoft_365":
             connector_provider = payload_provider
             connector_credentials = dict(connector_payload)
+    connector_account_id = _connector_account_identity(
+        connector_provider,
+        connector_credential_id,
+        connector_credentials,
+    )
 
     source_path = str(parsed.get("file_path") or "").strip()
     remote_storage = source_path.lower().startswith(("onedrive:/", "m365:/", "onedrive://", "m365://"))
@@ -929,16 +986,39 @@ def execute_document_studio_pack(context: Dict[str, Any], run_id: Optional[str] 
 
     target_path.write_bytes(output_bytes)
     if remote_storage:
-        microsoft_365_upload_drive_file(
-            connector_credentials,
-            remote_drive_path,
-            output_bytes,
-            content_type=DOCX_MIME if ext == ".docx" else PPTX_MIME,
+        content_type = DOCX_MIME if ext == ".docx" else PPTX_MIME
+        upload_result = execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"document_studio:onedrive_sync:{display_path}:{operation}",
+            category="document_studio_onedrive_sync",
+            operation={"action_id": "upload_drive_file", "path": remote_drive_path},
+            target_system="microsoft_365",
+            account_identity=connector_account_id,
+            target_identity={"action_id": "upload_drive_file", "path": remote_drive_path},
+            payload={"path": remote_drive_path, "content_type": content_type, "content_sha256": hashlib.sha256(output_bytes).hexdigest()},
+            execute=lambda: microsoft_365_upload_drive_file(
+                connector_credentials,
+                remote_drive_path,
+                output_bytes,
+                content_type=content_type,
+            ),
         )
+        duplicate_guard = upload_result.get("duplicate_guard") if isinstance(upload_result, dict) else {}
+        duplicate_protected = isinstance(duplicate_guard, dict) and not bool(duplicate_guard.get("executed", True))
+        action_payload["executed"] = not duplicate_protected
+        action_payload["duplicate_protected"] = duplicate_protected
+    else:
+        duplicate_protected = False
 
     storage_label = "OneDrive" if remote_storage else "local"
     kind_label = "Word document" if ext == ".docx" else "PowerPoint deck"
-    summary = f"Document Studio completed: {operation}d {kind_label} at {display_path} via {storage_label}."
+    summary = (
+        f"Document Studio completed: {operation}d {kind_label} at {display_path} via {storage_label}. "
+        "Duplicate-protected OneDrive sync reused the prior upload."
+        if remote_storage and duplicate_protected
+        else f"Document Studio completed: {operation}d {kind_label} at {display_path} via {storage_label}."
+    )
 
     return {
         "pack_id": DOCUMENT_STUDIO_PACK_ID,

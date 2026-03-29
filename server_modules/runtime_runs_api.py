@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from server_modules.doctor_gate import build_doctor_run_gate_live
 
 
@@ -254,6 +256,42 @@ def _resolve_local_execution_start_approval(
         "reusable": False,
         "consequence": consequence,
     }
+
+
+def _run_thread_is_alive(run: dict) -> bool:
+    thread_id = run.get("thread_id")
+    if not isinstance(thread_id, int) or thread_id <= 0:
+        return False
+    for worker in threading.enumerate():
+        try:
+            if worker.ident == thread_id and worker.is_alive():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
+    if not isinstance(run, dict):
+        return False
+    if _run_thread_is_alive(run):
+        return False
+    if str(run.get("status") or "").strip().lower() != "waiting_for_input":
+        return False
+    if bool(run.get("_resume_after_confirmation_scheduled")):
+        return True
+    run["_resume_after_confirmation_scheduled"] = True
+    run["thread_id"] = None
+    run["updated_at"] = _utc_now_iso()
+    _late_server_export("_persist_live_run_state")(run_id_str, run)
+    worker = threading.Thread(
+        target=_late_server_export("run_mission"),
+        args=(run_id_str,),
+        daemon=True,
+        name=f"run-resume-{run_id_str[:8]}",
+    )
+    worker.start()
+    return True
 
 
 def register_run_routes(app) -> None:
@@ -645,11 +683,13 @@ def register_run_routes(app) -> None:
                 "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
                 "approval_outcome": snapshot.get("approval_outcome"),
                 "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
+                "run_detail_contract": snapshot.get("run_detail_contract") if isinstance(snapshot.get("run_detail_contract"), dict) else {},
                 "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
                 "tool_policy_precheck": snapshot.get("tool_policy_precheck") if include_sensitive else None,
                 "tool_policy_audit": snapshot.get("tool_policy_audit") if include_sensitive else [],
                 "memory_trace": snapshot.get("memory_trace") if include_sensitive else {},
                 "pending_confirmation": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
+                # Deprecated compatibility alias. Prefer `pending_confirmation`.
                 "pending_approval": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
                 "dag": snapshot.get("dag") if include_sensitive else None,
                 "context": safe_context,
@@ -742,11 +782,13 @@ def register_run_routes(app) -> None:
             "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
             "approval_outcome": snapshot.get("approval_outcome"),
             "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
+            "run_detail_contract": snapshot.get("run_detail_contract") if isinstance(snapshot.get("run_detail_contract"), dict) else {},
             "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
             "tool_policy_precheck": metadata.get("tool_policy_precheck") if include_sensitive else None,
             "tool_policy_audit": run.get("tool_policy_audit") if include_sensitive and isinstance(run.get("tool_policy_audit"), list) else [],
             "memory_trace": _trim_memory_trace(run.get("memory_trace") if include_sensitive and isinstance(run.get("memory_trace"), dict) else {}),
             "pending_confirmation": _get_pending_confirmation(run) or None,
+            # Deprecated compatibility alias. Prefer `pending_confirmation`.
             "pending_approval": _get_pending_confirmation(run) or None,
             "dag": run.get("dag") if include_sensitive else None,
             "context": safe_context,
@@ -973,6 +1015,26 @@ def register_run_routes(app) -> None:
                 "reusable": False,
             },
         )
+        if not _run_thread_is_alive(run) and str(run.get("status") or "").strip().lower() == "waiting_for_input":
+            pending["status"] = "resolved"
+            pending["resolved_at"] = _utc_now_iso()
+            pending["decision"] = decision_text
+            pending["note"] = str(payload.note or "")
+            _set_pending_confirmation(run, pending)
+            emit_log(
+                run["logs"],
+                "info" if approved else "warn",
+                "Confirmation recorded. Restored run is resuming.",
+                event="approval_resume_scheduled",
+                data={
+                    "approval_id": approval_id,
+                    "correlation_id": correlation_id,
+                    "decision": decision_text,
+                    "scope": "once",
+                    "reusable": False,
+                },
+            )
+            _schedule_restored_run_resume(run_id_str, run)
         return {
             "status": "ok",
             "run_id": run_id_str,

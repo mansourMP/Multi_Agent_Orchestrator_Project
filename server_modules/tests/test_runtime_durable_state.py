@@ -2,9 +2,9 @@ import queue
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from server_modules import runs_core, runs_execution, runs_output
+from server_modules import runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     list_live_run_states,
@@ -25,8 +25,10 @@ class RuntimeDurableStateTests(unittest.TestCase):
         for patcher in self.patchers:
             patcher.start()
         runs_core.runs.clear()
+        runs_engine.runs.clear()
         runs_execution.runs.clear()
         runs_core.RUN_QUEUE_INDEX.clear()
+        runs_engine.RUN_QUEUE_INDEX.clear()
         runs_execution.RUN_QUEUE_INDEX.clear()
         runs_core.LOCAL_PENDING_RUN_IDS.clear()
         runs_execution.LOCAL_PENDING_RUN_IDS.clear()
@@ -37,8 +39,10 @@ class RuntimeDurableStateTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         runs_core.runs.clear()
+        runs_engine.runs.clear()
         runs_execution.runs.clear()
         runs_core.RUN_QUEUE_INDEX.clear()
+        runs_engine.RUN_QUEUE_INDEX.clear()
         runs_execution.RUN_QUEUE_INDEX.clear()
         runs_core.LOCAL_PENDING_RUN_IDS.clear()
         runs_execution.LOCAL_PENDING_RUN_IDS.clear()
@@ -112,6 +116,101 @@ class RuntimeDurableStateTests(unittest.TestCase):
         self.assertIsInstance(restored["logs"], queue.Queue)
         self.assertIsInstance(restored["input_queue"], queue.Queue)
         self.assertEqual(runs_core.LOCAL_PENDING_RUN_IDS, [])
+
+    @patch("server_modules.runs_engine._append_approval_audit")
+    def test_wait_for_human_response_consumes_resolved_confirmation_after_restart(self, audit_mock):
+        run_id = "run-resume-1"
+        log_queue: queue.Queue = queue.Queue()
+        run = {
+            "run_id": run_id,
+            "status": "waiting_for_input",
+            "engine": "orion",
+            "logs": log_queue,
+            "input_queue": queue.Queue(),
+            "thread_id": None,
+            "context": {"workspace_id": "default", "metadata": {}},
+            "created_at": "2026-03-29T00:00:00Z",
+            "updated_at": "2026-03-29T00:01:00Z",
+            "result": None,
+            "result_data": None,
+            "events": [],
+            "tool_policy_audit": [],
+            "memory_trace": {
+                "enabled": False,
+                "reads": [],
+                "writes": [],
+                "last_error": None,
+                "updated_at": "2026-03-29T00:01:00Z",
+            },
+            "pending_confirmation": {
+                "approval_id": "approval-resume-1",
+                "correlation_id": "run:resume:approval-1",
+                "status": "resolved",
+                "scope": "once",
+                "reusable": False,
+                "prompt": "Confirm send",
+                "decision": "proceed",
+                "note": "resume after restart",
+            },
+            "pending_approval": {
+                "approval_id": "approval-resume-1",
+                "correlation_id": "run:resume:approval-1",
+                "status": "resolved",
+                "scope": "once",
+                "reusable": False,
+                "prompt": "Confirm send",
+                "decision": "proceed",
+                "note": "resume after restart",
+            },
+            "_event_seq": 0,
+            "_resume_after_confirmation_scheduled": True,
+        }
+        runs_core.runs[run_id] = run
+        runs_engine.runs[run_id] = run
+        runs_execution.runs[run_id] = run
+        runs_core.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+        runs_engine.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+        runs_execution.RUN_QUEUE_INDEX[id(log_queue)] = run_id
+
+        response = runs_engine.wait_for_human_response(run_id, "Confirm send")
+
+        self.assertTrue(response["approved"])
+        self.assertEqual(run["status"], "running")
+        self.assertIsNone(run["pending_confirmation"])
+        self.assertIsNone(run["pending_approval"])
+        self.assertFalse(run.get("_resume_after_confirmation_scheduled"))
+        self.assertGreaterEqual(audit_mock.call_count, 2)
+
+    @patch("server_modules.runtime_runs_api.threading.Thread")
+    @patch("server_modules.runtime_runs_api._late_server_export")
+    def test_schedule_restored_run_resume_starts_once(self, late_export_mock, thread_cls_mock):
+        persist_mock = Mock()
+        mission_mock = Mock()
+
+        def late_export(name: str):
+            if name == "_persist_live_run_state":
+                return persist_mock
+            if name == "run_mission":
+                return mission_mock
+            raise AssertionError(name)
+
+        late_export_mock.side_effect = late_export
+        worker = Mock()
+        thread_cls_mock.return_value = worker
+        run = {
+            "run_id": "run-resume-2",
+            "status": "waiting_for_input",
+            "thread_id": None,
+        }
+
+        first = runtime_runs_api._schedule_restored_run_resume("run-resume-2", run)
+        second = runtime_runs_api._schedule_restored_run_resume("run-resume-2", run)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertTrue(run["_resume_after_confirmation_scheduled"])
+        persist_mock.assert_called_once()
+        worker.start.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ AUTH_SCOPE_ERROR_MARKERS = (
     "insufficient scope",
     "insufficient permissions",
 )
+DIRECT_CHAT_TRANSPORT_UNAVAILABLE = "direct_chat_transport_unavailable"
 
 
 def ensure_trailing_slashless(url: str) -> str:
@@ -457,6 +458,67 @@ def openai_chat_json(
         return None, None, model, format_provider_error(exc)
 
 
+def openai_chat_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    api_key = get_openai_api_key()
+    if not api_key:
+        return "", None, "", "missing_api_key"
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+    temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
+
+    messages: List[Dict[str, str]] = []
+    if str(system_prompt or "").strip():
+        messages.append({"role": "system", "content": str(system_prompt).strip()})
+    messages.extend(_build_chat_messages(user_prompt, prior_messages=prior_messages))
+    payload = {
+        "model": model,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url=f"{base_url}/chat/completions",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        choices = parsed.get("choices") if isinstance(parsed, dict) else None
+        if not isinstance(choices, list) or not choices:
+            return "", None, model, "empty_choices"
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+            content = "\n".join(parts).strip()
+        if not isinstance(content, str) or not content.strip():
+            return "", None, model, "empty_content"
+        usage_raw = parsed.get("usage") if isinstance(parsed, dict) else None
+        usage = usage_raw if isinstance(usage_raw, dict) else None
+        return content.strip(), usage, model, ""
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
+
+
 def extract_openai_text(payload: Dict[str, Any]) -> str:
     if isinstance(payload.get("output_text"), str) and payload.get("output_text"):
         return payload["output_text"]
@@ -710,8 +772,7 @@ def codex_exec_text(
     prompt_parts: List[str] = []
     if str(system_prompt or "").strip():
         prompt_parts.append(str(system_prompt).strip())
-    prompt_parts.append("Respond directly to the user request with practical, concise output.")
-    prompt_parts.append(f"User request:\n{user_prompt}")
+    prompt_parts.append(str(user_prompt or "").strip())
     prompt = "\n\n".join(prompt_parts)
 
     with tempfile.NamedTemporaryFile(prefix="orion-codex-", suffix=".txt", delete=False) as tmp:
@@ -844,6 +905,59 @@ def claude_code_exec_json(system_prompt: str, user_prompt: str, model_override: 
     return parsed, usage, model, ""
 
 
+def anthropic_chat_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    api_key = get_anthropic_api_key()
+    if not api_key:
+        return "", None, "", "missing_api_key"
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_MODEL") or "claude-3-5-sonnet-20241022").strip() or "claude-3-5-sonnet-20241022"
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    max_tokens = max(256, to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 1200))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_ANTHROPIC_URL") or "https://api.anthropic.com")
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": _build_chat_messages(user_prompt, prior_messages=prior_messages),
+    }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
+    req = urllib.request.Request(
+        url=f"{api_url}/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        content = parsed.get("content") if isinstance(parsed, dict) else None
+        parts: list[str] = []
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+        combined = "\n".join(parts).strip()
+        if not combined:
+            return "", None, model, "empty_content"
+        usage_raw = parsed.get("usage") if isinstance(parsed, dict) else None
+        usage = usage_raw if isinstance(usage_raw, dict) else None
+        return combined, usage, model, ""
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
+
+
 def anthropic_chat_json(
     system_prompt: Optional[str],
     user_prompt: str,
@@ -898,6 +1012,61 @@ def anthropic_chat_json(
         return result, usage, model, ""
     except Exception as exc:
         return None, None, model, format_provider_error(exc)
+
+
+def gemini_chat_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    api_key = get_gemini_api_key()
+    if not api_key:
+        return "", None, "", "missing_api_key"
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_GEMINI_URL") or "https://generativelanguage.googleapis.com/v1beta")
+    payload = {
+        "contents": [
+            {"role": item["role"], "parts": [{"text": item["content"]}]}
+            for item in _build_chat_messages(user_prompt, prior_messages=prior_messages, assistant_role="model")
+        ],
+    }
+    if str(system_prompt or "").strip():
+        payload["system_instruction"] = {"parts": [{"text": str(system_prompt).strip()}]}
+    req = urllib.request.Request(
+        url=f"{api_url}/models/{urllib.parse.quote_plus(model)}:generateContent?key={urllib.parse.quote_plus(api_key)}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        candidates = parsed.get("candidates") if isinstance(parsed, dict) else None
+        texts: list[str] = []
+        if isinstance(candidates, list):
+            for cand in candidates:
+                if not isinstance(cand, dict):
+                    continue
+                content = cand.get("content")
+                if not isinstance(content, dict):
+                    continue
+                for part in content.get("parts", []) if isinstance(content.get("parts"), list) else []:
+                    if isinstance(part, dict):
+                        text = part.get("text")
+                        if isinstance(text, str) and text.strip():
+                            texts.append(text.strip())
+        combined = "\n".join(texts).strip()
+        if not combined:
+            return "", None, model, "empty_content"
+        usage_raw = parsed.get("usageMetadata") if isinstance(parsed, dict) else None
+        usage = usage_raw if isinstance(usage_raw, dict) else None
+        return combined, usage, model, ""
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
 
 
 def gemini_chat_json(
@@ -956,6 +1125,60 @@ def gemini_chat_json(
         return result, usage, model, ""
     except Exception as exc:
         return None, None, model, format_provider_error(exc)
+
+
+def ollama_chat_text(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    prior_messages: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    if not ollama_enabled():
+        return "", None, "", "ollama_disabled"
+
+    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
+    base_timeout = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
+    timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_OLLAMA_TIMEOUT_SECONDS"), base_timeout))
+    api_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OLLAMA_URL") or "http://127.0.0.1:11434")
+    num_predict = max(
+        128,
+        to_int(
+            os.getenv("ORION_LOCAL_WORKER_OLLAMA_NUM_PREDICT"),
+            to_int(os.getenv("ORION_LOCAL_WORKER_MAX_TOKENS"), 700),
+        ),
+    )
+
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": _build_chat_messages(user_prompt, prior_messages=prior_messages),
+        "options": {"temperature": temperature, "num_predict": num_predict},
+    }
+    if str(system_prompt or "").strip():
+        payload["system"] = str(system_prompt).strip()
+    req = urllib.request.Request(
+        url=f"{api_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+        message = parsed.get("message") if isinstance(parsed, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return "", None, model, "empty_content"
+        usage = {
+            "prompt_eval_count": to_int(parsed.get("prompt_eval_count"), 0),
+            "eval_count": to_int(parsed.get("eval_count"), 0),
+        }
+        return content.strip(), usage, model, ""
+    except Exception as exc:
+        return "", None, model, format_provider_error(exc)
 
 
 def ollama_chat_json(
@@ -1192,7 +1415,7 @@ def generate_chat_reply_with_provider_fallback(
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
         if provider == "codex_cli":
-            text, usage, model, provider_error = codex_exec_text(
+            text, usage, model, provider_error = openai_codex_backend_text(
                 system_prompt,
                 user_goal,
                 model_override=requested_model,
@@ -1206,26 +1429,18 @@ def generate_chat_reply_with_provider_fallback(
                     ",".join(attempted),
                     "",
                 )
-            last_error = f"codex_cli generation failed: {provider_error or 'unknown_error'}"
+            last_error = (
+                f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: "
+                f"{provider_error or 'unknown_error'}"
+            )
             continue
         if provider == "claude_code_cli":
-            text, usage, model, provider_error = claude_code_exec_text(
-                system_prompt,
-                user_goal,
-                model_override=requested_model,
-                prior_messages=prior_messages,
+            last_error = (
+                f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: "
+                "claude_code_cli_requires_prompt_transport"
             )
-            if text:
-                return (
-                    text,
-                    build_usage_masked_from_provider("claude_code_cli", usage, model),
-                    ",".join(attempted),
-                    "",
-                )
-            last_error = f"claude_code_cli generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "openai":
-            provider_error = ""
             if not prefer_openai_chat:
                 text, usage, model, provider_error = openai_responses_text(
                     system_prompt,
@@ -1240,69 +1455,51 @@ def generate_chat_reply_with_provider_fallback(
                         ",".join(attempted),
                         "",
                     )
-            # Fallback to chat-completions JSON wrapper if responses fails.
-            json_prompt = (
-                f"User goal:\n{user_goal}\n\n"
-                "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
-            )
-            result, usage_json, model_json, provider_error_json = openai_chat_json(
+            else:
+                provider_error = ""
+            text, usage_chat, model_chat, provider_error_chat = openai_chat_text(
                 system_prompt,
-                json_prompt,
+                user_goal,
                 model_override=requested_model,
                 prior_messages=prior_messages,
             )
-            if isinstance(result, dict):
-                reply = str(result.get("reply") or result.get("summary") or "").strip()
-                if reply:
-                    return (
-                        reply,
-                        build_usage_masked_from_provider("openai", usage_json, model_json),
-                        ",".join(attempted),
-                        "",
-                    )
+            if text:
+                return (
+                    text,
+                    build_usage_masked_from_provider("openai", usage_chat, model_chat),
+                    ",".join(attempted),
+                    "",
+                )
             last_error = (
-                f"openai generation failed: {provider_error or provider_error_json or 'unknown_error'}"
+                f"openai generation failed: "
+                f"{provider_error or provider_error_chat or 'unknown_error'}"
             )
             continue
         if provider == "anthropic":
-            prompt = (
-                f"User goal:\n{user_goal}\n\n"
-                "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
-            )
-            result, usage, model, provider_error = anthropic_chat_json(
+            text, usage, model, provider_error = anthropic_chat_text(
                 system_prompt,
-                prompt,
+                user_goal,
                 model_override=requested_model,
                 prior_messages=prior_messages,
             )
         elif provider == "gemini":
-            prompt = (
-                f"User goal:\n{user_goal}\n\n"
-                "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
-            )
-            result, usage, model, provider_error = gemini_chat_json(
+            text, usage, model, provider_error = gemini_chat_text(
                 system_prompt,
-                prompt,
+                user_goal,
                 model_override=requested_model,
                 prior_messages=prior_messages,
             )
         elif provider == "ollama":
-            prompt = (
-                f"User goal:\n{user_goal}\n\n"
-                "Return JSON only: {\"reply\":\"short helpful assistant reply\"}."
-            )
-            result, usage, model, provider_error = ollama_chat_json(
+            text, usage, model, provider_error = ollama_chat_text(
                 system_prompt,
-                prompt,
+                user_goal,
                 model_override=requested_model,
                 prior_messages=prior_messages,
             )
         else:
             continue
-        if isinstance(result, dict):
-            reply = str(result.get("reply") or result.get("summary") or "").strip()
-            if reply:
-                return reply, build_usage_masked_from_provider(provider, usage, model), ",".join(attempted), ""
+        if text:
+            return text, build_usage_masked_from_provider(provider, usage, model), ",".join(attempted), ""
         if provider_error:
             last_error = f"{provider} generation failed: {provider_error}"
         else:

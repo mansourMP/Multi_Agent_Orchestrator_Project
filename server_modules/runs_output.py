@@ -129,6 +129,87 @@ def _serialize_provider_model_truth(
     return payload
 
 
+def _connector_mutation_snapshot(
+    *,
+    result_data: Optional[Dict[str, Any]],
+    connector_binding: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    connector_action = _result_connector_action(result_data)
+    if not isinstance(connector_action, dict) and not isinstance(connector_binding, dict):
+        return None
+    target_label = None
+    if isinstance(connector_action, dict):
+        target_label = (
+            connector_action.get("recipient")
+            or connector_action.get("to_number")
+            or connector_action.get("channel_id")
+            or connector_action.get("chat_id")
+            or connector_action.get("recipient_id")
+            or connector_action.get("comment_id")
+            or connector_action.get("path")
+            or connector_action.get("title")
+            or connector_action.get("url")
+        )
+    if not target_label and isinstance(connector_binding, dict):
+        target_label = connector_binding.get("identity_label")
+    execution_label = None
+    if isinstance(connector_action, dict):
+        if bool(connector_action.get("duplicate_protected")):
+            execution_label = "Duplicate protected"
+        elif bool(connector_action.get("executed")):
+            execution_label = "Executed"
+    return {
+        "binding": connector_binding if isinstance(connector_binding, dict) else None,
+        "action": connector_action if isinstance(connector_action, dict) else None,
+        "execution_label": execution_label,
+        "action_label": _humanize_evidence_token(
+            connector_action.get("action_id") if isinstance(connector_action, dict) else "connector_action"
+        ),
+        "system_label": (
+            connector_binding.get("label")
+            if isinstance(connector_binding, dict)
+            else _humanize_evidence_token(connector_action.get("connector"))
+            if isinstance(connector_action, dict)
+            else None
+        ),
+        "target_label": target_label,
+        "result_label": _connector_action_result_hint(
+            connector_action.get("result") if isinstance(connector_action, dict) else None
+        ),
+    }
+
+
+def _run_detail_contract_snapshot(
+    *,
+    provider_model_truth: Dict[str, Any],
+    approval_outcome: Optional[Dict[str, Any]],
+    connector_binding: Optional[Dict[str, Any]],
+    result_data: Optional[Dict[str, Any]],
+    evidence_items: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    contract = {
+        "provider_model": {
+            "requested_provider": provider_model_truth.get("requested_provider"),
+            "effective_provider": provider_model_truth.get("effective_provider"),
+            "requested_model": provider_model_truth.get("requested_model"),
+            "effective_model": provider_model_truth.get("effective_model"),
+            "provider_overridden": bool(provider_model_truth.get("provider_overridden")),
+            "model_overridden": bool(provider_model_truth.get("model_overridden")),
+            "fallback_used": bool(provider_model_truth.get("fallback_used")),
+        },
+        "approval_outcome": approval_outcome or None,
+        "connector_mutation": _connector_mutation_snapshot(
+            result_data=result_data,
+            connector_binding=connector_binding,
+        ),
+        "evidence_items": evidence_items[:5],
+    }
+    fallback_reason = provider_model_truth.get("fallback_reason")
+    if fallback_reason:
+        contract["provider_model"]["fallback_reason"] = fallback_reason
+    return contract
+
+
 def _serialize_node_states(
     node_states: Any,
     *,
@@ -233,6 +314,13 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         events=trimmed_events,
         result_data=result_data,
     )
+    run_detail_contract = _run_detail_contract_snapshot(
+        provider_model_truth=provider_model_truth,
+        approval_outcome=approval_outcome,
+        connector_binding=connector_binding,
+        result_data=result_data,
+        evidence_items=evidence_items,
+    )
     node_states = _serialize_node_states(run.get("node_states"))
     result_summary = run.get("result")
     if isinstance(result_summary, str):
@@ -305,6 +393,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "connector_binding": connector_binding,
         "approval_outcome": approval_outcome,
         "evidence_items": evidence_items,
+        "run_detail_contract": run_detail_contract,
         "usage_masked": usage_masked,
         "usage_provider": usage_masked.get("provider"),
         "usage_model": usage_masked.get("model"),
@@ -647,10 +736,26 @@ def _connector_action_result_hint(result: Any) -> str:
     return _compact_event_text(result, limit=180)
 
 
+def _result_connector_action(result_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(result_data, dict):
+        return {}
+    connector_action = result_data.get("connector_action")
+    if isinstance(connector_action, dict):
+        return connector_action
+    last_node_data = result_data.get("last_node_data")
+    if isinstance(last_node_data, dict):
+        nested_connector_action = last_node_data.get("connector_action")
+        if isinstance(nested_connector_action, dict):
+            return nested_connector_action
+    return {}
+
+
 def _approval_outcome_snapshot(
     item: Dict[str, Any],
     events: List[Dict[str, Any]],
 ) -> Optional[Dict[str, str]]:
+    # `pending_confirmation` is primary. `pending_approval` remains as a deprecated
+    # compatibility alias for older callers and archived payloads.
     pending = (
         item.get("pending_confirmation")
         if isinstance(item.get("pending_confirmation"), dict)
@@ -668,17 +773,19 @@ def _approval_outcome_snapshot(
         decision = str(data.get("decision") or entry.get("decision") or "").strip().lower()
         if event_name == "approval_resolved":
             if bool(data.get("approved")) or decision in {"approved", "approve", "proceed", "yes"}:
-                return {"status": "approved", "label": "Approved"}
+                return {"status": "approved", "label": "Confirmed"}
             if bool(data.get("escalated")) or decision in {"escalated", "escalate"}:
-                return {"status": "escalated", "label": "Escalated"}
-            return {"status": "rejected", "label": "Blocked"}
+                return {"status": "escalated", "label": "Blocked by policy"}
+            return {"status": "rejected", "label": "Declined"}
         if event_name == "approval_skipped":
-            return {"status": "skipped", "label": "Confirmation not required"}
+            return None
         if event_name == "workflow_human_resolved":
             if decision == "approved":
-                return {"status": "approved", "label": "Approved"}
-            if decision:
-                return {"status": decision, "label": _humanize_evidence_token(decision)}
+                return {"status": "approved", "label": "Confirmed"}
+            if decision in {"rejected", "reject", "declined", "decline", "hold"}:
+                return {"status": "rejected", "label": "Declined"}
+            if decision in {"blocked", "denied", "deny", "escalated", "escalate"}:
+                return {"status": "blocked", "label": "Blocked by policy"}
     return None
 
 
@@ -690,13 +797,18 @@ def _evidence_items_snapshot(
     connector_binding: Optional[Dict[str, Any]],
 ) -> List[Dict[str, str]]:
     evidence: List[Dict[str, str]] = []
-    connector_action = result_data.get("connector_action") if isinstance(result_data, dict) and isinstance(result_data.get("connector_action"), dict) else {}
+    connector_action = _result_connector_action(result_data)
     approval_outcome = _approval_outcome_snapshot(item, events)
-    if approval_outcome and approval_outcome.get("status") != "pending":
-        approval_item = _evidence_item("approval", "Confirmation", approval_outcome.get("label"))
-        if approval_item:
-            evidence.append(approval_item)
     if connector_action:
+        execution_label = None
+        if bool(connector_action.get("duplicate_protected")):
+            execution_label = "Duplicate protected"
+        elif bool(connector_action.get("executed")):
+            execution_label = "Executed"
+        if execution_label:
+            execution_item = _evidence_item("connector:execution", "Execution", execution_label)
+            if execution_item:
+                evidence.append(execution_item)
         action_item = _evidence_item(
             "connector:action",
             "Action",
@@ -735,9 +847,23 @@ def _evidence_items_snapshot(
         )
         if result_item:
             evidence.append(result_item)
-        return evidence[:4]
+        if approval_outcome and approval_outcome.get("status") != "pending":
+            approval_item = _evidence_item("approval", "Confirmation", approval_outcome.get("label"))
+            if approval_item:
+                evidence.append(approval_item)
+        return evidence[:5]
+
+    if approval_outcome and approval_outcome.get("status") != "pending":
+        approval_item = _evidence_item("approval", "Confirmation", approval_outcome.get("label"))
+        if approval_item:
+            evidence.append(approval_item)
 
     outputs = result_data.get("outputs") if isinstance(result_data, dict) and isinstance(result_data.get("outputs"), dict) else {}
+    actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
+    if any(isinstance(item, dict) and bool(item.get("duplicate_protected")) for item in actions):
+        guard_item = _evidence_item("output:execution", "Execution", "Duplicate protected")
+        if guard_item:
+            evidence.append(guard_item)
     preferred_keys = (
         "file_path",
         "path",
@@ -766,8 +892,8 @@ def _evidence_items_snapshot(
         if item_payload:
             evidence.append(item_payload)
         if len(evidence) >= 4:
-            return evidence[:4]
-    return evidence[:4]
+            return evidence[:5]
+    return evidence[:5]
 
 
 def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:

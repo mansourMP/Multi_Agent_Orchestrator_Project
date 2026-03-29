@@ -446,7 +446,7 @@ function inferHomeLocalActionLabel(item: Pick<HomeWorkspaceRunItem, 'user_goal' 
 }
 
 function buildHomeRouteLabel(routeKind: 'local' | 'cloud' | 'approval', localActionLabel: string | null): string {
-  if (routeKind === 'approval') return 'Approval gate';
+  if (routeKind === 'approval') return 'Confirmation gate';
   if (routeKind === 'local') return localActionLabel ? `${localActionLabel} via local companion` : 'Local companion';
   return 'Cloud route';
 }
@@ -456,7 +456,7 @@ function buildHomeStateLabel(
   routeKind: HomeLiveAgentCard['routeKind'],
   localActionLabel: string | null,
 ): string {
-  if (state === 'waiting') return 'Waiting approval';
+  if (state === 'waiting') return 'Confirmation required';
   if (state === 'planning') return routeKind === 'local' ? 'Planning local step' : 'Planning';
   if (state === 'queued') return localActionLabel ? `Queued for ${localActionLabel}` : 'Queued locally';
   if (state === 'claimed') return localActionLabel ? `${localActionLabel} claimed` : 'Claimed by worker';
@@ -509,7 +509,7 @@ function buildHomeLiveOverview(payload: HomeWorkspaceSnapshotPayload): HomeLiveO
         stateLabel: buildHomeStateLabel('waiting', routeKind, null),
         summary: compactHomeSummary(
           Array.isArray(item.labels) && item.labels.length > 0 ? item.labels.join(' · ') : item.prompt,
-          'Approval required before work can continue.',
+          'Confirmation required before work can continue.',
         ),
         localActionLabel: null,
         routeKind,
@@ -782,9 +782,9 @@ function resolveChatNextRecommendation(args: {
   }
   if (args.pendingApprovals > 0) {
     return {
-      chipText: `${args.pendingApprovals} approval${args.pendingApprovals === 1 ? '' : 's'} waiting — review now`,
+      chipText: `${args.pendingApprovals} confirmation${args.pendingApprovals === 1 ? '' : 's'} waiting — review now`,
       chipTone: 'warning',
-      actionLabel: 'Open Approvals',
+      actionLabel: 'Open Confirmations',
       href: '/approvals',
     };
   }
@@ -811,10 +811,10 @@ function formatSimpleChatTrustLabel(trustMode: string, accessMode: string): stri
 }
 
 function extractWorkbenchReplyText(lastRunPayload: Record<string, unknown> | null, latestRunSummary: string | null, topError: string | null, status: string): string {
-  const pending = lastRunPayload?.pending_approval;
+  const pending = (lastRunPayload?.pending_confirmation || lastRunPayload?.pending_approval) as Record<string, unknown> | null | undefined;
   if (status === 'waiting' && pending && typeof pending === 'object') {
     const prompt = String((pending as { prompt?: unknown }).prompt || '').trim();
-    return prompt ? `Approval required: ${prompt}` : 'This run is waiting for input before continuing.';
+    return prompt ? `Confirmation required: ${prompt}` : 'This run is waiting for confirmation before continuing.';
   }
 
   const candidates: unknown[] = [
@@ -933,8 +933,9 @@ function humanizeProviderLabel(value: string): string {
   return humanizeRunCardLabel(normalized);
 }
 
+// Reads the confirmation-first payload. `pending_approval` is a deprecated compatibility alias.
 function readPendingApprovalRecord(payload: Record<string, unknown> | null): SimpleChatPermissionPrompt | null {
-  const pending = payload?.pending_approval;
+  const pending = payload?.pending_confirmation || payload?.pending_approval;
   if (!pending || typeof pending !== 'object') return null;
   const pendingRecord = pending as Record<string, unknown>;
   const approvalId = String(pendingRecord.approval_id || '').trim();
@@ -1061,7 +1062,7 @@ function buildRunCardSummary(args: {
   const { status, lastRunPayload, latestRunSummary, topError } = args;
   if (status === 'queued_local') return 'Preparing execution on your machine.';
   if (status === 'running') return 'Working on this now.';
-  if (status === 'waiting') return 'Waiting for your approval to continue.';
+  if (status === 'waiting') return 'Waiting for confirmation to continue.';
   if (status === 'error') return topError || 'This run needs attention.';
   return extractWorkbenchReplyText(lastRunPayload, latestRunSummary, topError, status);
 }
@@ -1512,7 +1513,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           return {
             runId,
             approvalId,
-            prompt: String(item?.prompt || 'Approval requested.').trim(),
+            prompt: String(item?.prompt || 'Confirmation required.').trim(),
             labels: Array.isArray(item?.labels) ? item.labels.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
             capabilities: Array.isArray(item?.capabilities) ? item.capabilities.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
             expiresAt: String(item?.expires_at || '').trim() || null,
@@ -1633,12 +1634,12 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         });
         if (!res.ok) {
           const msg = await res.text().catch(() => '');
-          throw new Error(msg || 'Failed to resolve approval.');
+          throw new Error(msg || 'Failed to resolve confirmation.');
         }
-        appendLog(`Approval ${decision.toLowerCase()} for ${runId.slice(0, 8)}.`);
+        appendLog(`${decision === 'Proceed' ? 'Confirmed' : 'Declined'} for ${runId.slice(0, 8)}.`);
         void refreshControlCenter();
       } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Failed to resolve approval.';
+        const message = error instanceof Error ? error.message : 'Failed to resolve confirmation.';
         appendLog(message, 'error');
         setTopError(message);
       } finally {
@@ -1963,7 +1964,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         { label: 'Unavailable systems', value: unavailableSystems },
         { label: 'Read actions', value: readActions },
         { label: 'Write actions', value: writeActions },
-        { label: 'Approval-required', value: approvalActions, tone: approvalActions === 'Not verified' ? 'warning' : undefined },
+        { label: 'Confirmation-required', value: approvalActions, tone: approvalActions === 'Not verified' ? 'warning' : undefined },
         { label: 'Capability state', value: unverifiedSystems },
         {
           label: 'Prior thread messages',
@@ -1989,7 +1990,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       });
 
       if (controlCenter.pendingApprovals.length > 0) {
-        return [createAction('Open Approvals', '/approvals', 'primary')];
+        return [createAction('Open Confirmations', '/approvals', 'primary')];
       }
       if (!setupStatus.accountConnected) {
         return [createAction('Connect AI account', '/connect-ai', 'primary')];
@@ -2116,7 +2117,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
     return {
       runId: activeRunId,
       approvalId: approval.approvalId,
-      prompt: approval.prompt || 'This run needs approval before it can continue.',
+      prompt: approval.prompt || 'This run needs confirmation before it can continue.',
       labels: approval.labels,
       capabilities: approval.capabilities,
       actions: approval.actions,
@@ -2376,7 +2377,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
         status: status === 'waiting' ? 'waiting' : 'running',
         runCard: {
           title: truncateRunCardTitle(pendingSimpleRun.goal),
-          summary: status === 'queued_local' ? 'Preparing execution on your machine.' : status === 'waiting' ? 'Waiting for your approval to continue.' : 'Working on this now.',
+          summary: status === 'queued_local' ? 'Preparing execution on your machine.' : status === 'waiting' ? 'Waiting for confirmation to continue.' : 'Working on this now.',
           status: status === 'queued_local' ? 'preparing' : status === 'waiting' ? 'waiting' : 'running',
           runId,
           sourceGoal: pendingSimpleRun.goal,
@@ -2463,7 +2464,7 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
           status: 'running',
           runCard: {
             title: truncateRunCardTitle(pendingSimpleRun.goal),
-            summary: 'Continuing after your approval.',
+            summary: 'Continuing after your confirmation.',
             status: 'running',
             runId: prompt.runId,
             sourceGoal: pendingSimpleRun.goal,
@@ -2486,8 +2487,8 @@ export function AutopilotWorkspace({ experience }: AutopilotWorkspaceProps) {
       }
       appendLog(
         decision === 'Proceed'
-          ? 'Approval granted for this pending step.'
-          : 'Permission denied. The run will not continue.',
+          ? 'Confirmed for this pending step.'
+          : 'Declined. The run will not continue.',
         decision === 'Proceed' ? 'info' : 'warn',
       );
       if (decision !== 'Proceed' && nextStatus && nextStatus !== 'waiting') {

@@ -19,11 +19,14 @@ from server_modules.runs_engine import (
     resolve_run_execution_context,
     wait_for_human_decision,
 )
+from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.runs_output import _compact_event_text, _json_safe, _persist_live_run_state
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
 from server_modules.runs_core import set_run_status, emit_log
+from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
 from server_modules.url_security import assert_safe_outbound_url
+from scripts.orion_local_worker_utils import build_operator_system_prompt
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -902,60 +905,34 @@ def _workflow_next_node_id(
 
 
 def _build_workflow_agent_system_prompt(config: Dict[str, Any]) -> str:
-    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
     runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
-    skills = config.get("skills") if isinstance(config.get("skills"), dict) else {}
     tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
-    memory = config.get("memory") if isinstance(config.get("memory"), dict) else {}
     connectors = config.get("connectors") if isinstance(config.get("connectors"), dict) else {}
-    permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
-
-    lines = [
-        f"You are workflow node '{str(identity.get('name') or identity.get('role') or 'Agent').strip() or 'Agent'}'.",
-        f"Role: {str(identity.get('role') or 'Agent').strip() or 'Agent'}",
-        f"Goal: {str(identity.get('goal') or 'Complete the assigned workflow step.').strip()}",
-    ]
-    success_condition = str(identity.get("success_condition") or "").strip()
-    if success_condition:
-        lines.append(f"Success condition: {success_condition}")
-    output_contract = str(identity.get("output_contract") or "").strip()
-    if output_contract:
-        lines.append(f"Output contract: {output_contract}")
-    skill_ids = skills.get("skill_bundle_ids") if isinstance(skills.get("skill_bundle_ids"), list) else []
-    if skill_ids:
-        lines.append(f"Skill bundles: {', '.join(str(item).strip() for item in skill_ids if str(item).strip())}")
-    prompt_append = str(skills.get("prompt_append") or "").strip()
-    if prompt_append:
-        lines.append(f"Skill guidance: {prompt_append}")
-    dynamic_allowed = tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []
-    explicit_required = tools.get("explicit_required") if isinstance(tools.get("explicit_required"), list) else []
-    lines.append(
-        "Dynamic tools allowed: "
-        + (", ".join(str(item).strip() for item in dynamic_allowed if str(item).strip()) if dynamic_allowed else "none")
-    )
-    if explicit_required:
-        lines.append(
-            "Operations requiring explicit tool nodes: "
-            + ", ".join(str(item).strip() for item in explicit_required if str(item).strip())
-        )
-    read_scopes = memory.get("read_scopes") if isinstance(memory.get("read_scopes"), list) else []
-    write_scopes = memory.get("write_scopes") if isinstance(memory.get("write_scopes"), list) else []
-    lines.append(
-        "Memory policy: "
-        f"read={','.join(str(item).strip() for item in read_scopes if str(item).strip()) or 'session'}; "
-        f"write={','.join(str(item).strip() for item in write_scopes if str(item).strip()) or 'session'}; "
-        f"retrieval={str(memory.get('retrieval_policy') or 'recent').strip() or 'recent'}"
-    )
+    availability_lines: List[str] = []
+    execution_target = str(runtime.get("execution_target") or "").strip()
+    if execution_target:
+        availability_lines.append(f"Execution target: {execution_target}")
     bindings = connectors.get("bindings") if isinstance(connectors.get("bindings"), list) else []
-    if bindings:
-        lines.append(f"Connector bindings: {json.dumps(_json_safe(bindings), ensure_ascii=True)}")
-    lines.append(
-        "Permission policy: "
-        f"action_policy={str(permissions.get('action_policy') or 'guarded').strip() or 'guarded'}; "
-        f"execution_target={str(runtime.get('execution_target') or 'auto').strip() or 'auto'}"
+    connector_labels: List[str] = []
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        label = str(
+            binding.get("connector_label")
+            or binding.get("label")
+            or binding.get("connector")
+            or binding.get("connector_id")
+            or ""
+        ).strip()
+        if label:
+            connector_labels.append(label)
+    availability_lines.append(
+        "Connected systems: "
+        + (", ".join(connector_labels) if connector_labels else "none")
     )
-    lines.append("Be concise, operational, and produce output for the next workflow node.")
-    return "\n".join(lines)
+    dynamic_allowed = tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []
+    tool_lines = [str(item).strip() for item in dynamic_allowed if str(item).strip()]
+    return build_operator_system_prompt(availability_lines, tool_lines)
 
 
 def _resolve_agent_generation_state(base_context: Dict[str, Any], config: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1154,6 +1131,50 @@ def _workflow_tool_connector_headers(secret: Dict[str, Any]) -> Dict[str, str]:
     return {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
 
+def _workflow_connector_account_identity(
+    connector_id: str,
+    credential_id: str,
+    secret: Dict[str, Any],
+) -> Optional[str]:
+    credential_token = str(credential_id or "").strip()
+    if credential_token:
+        return f"credential:{credential_token}"
+    signature = _connector_identity_signature(connector_id, secret if isinstance(secret, dict) else {}) or ""
+    signature = signature.strip()
+    if signature:
+        return f"signature:{stable_value_fingerprint(signature)}"
+    return None
+
+
+def _workflow_headers_fingerprint(headers: Dict[str, Any]) -> Optional[str]:
+    normalized: Dict[str, str] = {}
+    for raw_key, raw_value in (headers or {}).items():
+        key = str(raw_key or "").strip().lower()
+        value = str(raw_value or "").strip()
+        if key and value:
+            normalized[key] = value
+    if not normalized:
+        return None
+    return f"headers:{stable_value_fingerprint(normalized)}"
+
+
+def _workflow_target_identity(action_id: str, **fields: Any) -> Dict[str, Any]:
+    identity: Dict[str, Any] = {"action_id": normalize_action_id(action_id) or str(action_id or "").strip()}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            identity[key] = trimmed
+            continue
+        if value in ({}, [], ()):
+            continue
+        identity[key] = _json_safe(value)
+    return identity
+
+
 def _workflow_whatsapp_number(raw_value: Any) -> str:
     value = str(raw_value or "").strip()
     if not value:
@@ -1253,6 +1274,8 @@ def _workflow_wait_for_child_run(
 
 
 def _workflow_execute_connector_action(
+    run_id: str,
+    node_id: str,
     context: Dict[str, Any],
     config: Dict[str, Any],
     *,
@@ -1296,59 +1319,97 @@ def _workflow_execute_connector_action(
             ).hexdigest()
             headers.setdefault("X-Empyralist-Signature-SHA256", signature)
             request_payload = body_bytes
-        response = http_json_request(
-            url,
-            method=method,
-            headers=headers,
-            payload=request_payload,
-            timeout=max(5, int(config.get("timeout_seconds") or 30)),
+        def _perform_custom_api() -> Dict[str, Any]:
+            response = http_json_request(
+                url,
+                method=method,
+                headers=headers,
+                payload=request_payload,
+                timeout=max(5, int(config.get("timeout_seconds") or 30)),
+            )
+            status_code = int(response.get("status") or 500)
+            if status_code >= 400:
+                body = response.get("json") if isinstance(response.get("json"), dict) else {}
+                detail = str(body.get("message") or body.get("detail") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"Custom API request failed with status {status_code}.")
+            result = response.get("json") if response.get("json") is not None else response.get("text")
+            return {
+                "summary": f"Connector action completed: custom_api.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": "custom_api",
+                        "credential_id": None,
+                        "action_id": action_id,
+                        "url": url,
+                        "method": method,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if method == "GET":
+            return _perform_custom_api()
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": "custom_api", "action_id": action_id, "method": method, "url": url},
+            target_system="custom_api",
+            account_identity=_workflow_headers_fingerprint(headers),
+            target_identity=_workflow_target_identity(
+                action_id,
+                method=method,
+                url_fingerprint=stable_value_fingerprint(url),
+            ),
+            payload={"connector": "custom_api", "action_id": action_id, "method": method, "url": url, "payload": _json_safe(payload_value)},
+            execute=_perform_custom_api,
         )
-        status_code = int(response.get("status") or 500)
-        if status_code >= 400:
-            body = response.get("json") if isinstance(response.get("json"), dict) else {}
-            detail = str(body.get("message") or body.get("detail") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"Custom API request failed with status {status_code}.")
-        result = response.get("json") if response.get("json") is not None else response.get("text")
-        return {
-            "summary": f"Connector action completed: custom_api.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": "custom_api",
-                    "credential_id": None,
-                    "action_id": action_id,
-                    "url": url,
-                    "method": method,
-                    "result": _json_safe(result),
-                }
-            },
-        }
 
     credential_id, connector_id, secret = _workflow_tool_connector_secret(context, config)
     workspace_id = _workflow_tool_workspace_id(context)
+    connector_account_identity = _workflow_connector_account_identity(connector_id, credential_id, secret)
 
     if connector_id == "telegram_bot" and action_id in {"send_message", "send_media", "update_message"}:
         chat_id = str(config.get("chat_id") or secret.get("chat_id") or "").strip()
         if not chat_id:
             raise RuntimeError("Telegram connector action requires chat_id.")
-        result = asyncio.run(
-            handle_telegram_send_message(
-                text=_workflow_tool_text_input(config, current_text),
-                workspace_id=workspace_id,
-                session_key=str(config.get("session_key") or "").strip() or None,
-                chat_id=chat_id,
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        def _perform_telegram() -> Dict[str, Any]:
+            result = asyncio.run(
+                handle_telegram_send_message(
+                    text=body_text,
+                    workspace_id=workspace_id,
+                    session_key=str(config.get("session_key") or "").strip() or None,
+                    chat_id=chat_id,
+                )
             )
+            return {
+                "summary": f"Connector action completed: telegram_bot.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "chat_id": chat_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "chat_id": chat_id},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, chat_id=chat_id),
+            payload={"connector": connector_id, "action_id": action_id, "chat_id": chat_id, "text": body_text},
+            execute=_perform_telegram,
         )
-        return {
-            "summary": f"Connector action completed: telegram_bot.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "result": _json_safe(result),
-                }
-            },
-        }
 
     if connector_id == "discord_bot" and action_id in {"send_message", "send_embed"}:
         bot_token = str(secret.get("bot_token") or "").strip()
@@ -1378,30 +1439,44 @@ def _workflow_execute_connector_action(
                 }
         else:
             payload = {"content": body_text}
-        response = http_json_request(
-            f"https://discord.com/api/v10/channels/{quote_plus(channel_id)}/messages",
-            method="POST",
-            headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-            payload=payload,
+        def _perform_discord() -> Dict[str, Any]:
+            response = http_json_request(
+                f"https://discord.com/api/v10/channels/{quote_plus(channel_id)}/messages",
+                method="POST",
+                headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
+                payload=payload,
+            )
+            status_code = int(response.get("status") or 500)
+            if status_code not in {200, 201}:
+                body = response.get("json") if isinstance(response.get("json"), dict) else {}
+                detail = str(body.get("message") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"Discord send failed with status {status_code}.")
+            result = response.get("json") if isinstance(response.get("json"), dict) else response
+            return {
+                "summary": f"Connector action completed: discord_bot.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "channel_id": channel_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "channel_id": channel_id},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, channel_id=channel_id),
+            payload={"connector": connector_id, "action_id": action_id, "channel_id": channel_id, "payload": _json_safe(payload)},
+            execute=_perform_discord,
         )
-        status_code = int(response.get("status") or 500)
-        if status_code not in {200, 201}:
-            body = response.get("json") if isinstance(response.get("json"), dict) else {}
-            detail = str(body.get("message") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"Discord send failed with status {status_code}.")
-        result = response.get("json") if isinstance(response.get("json"), dict) else response
-        return {
-            "summary": f"Connector action completed: discord_bot.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "channel_id": channel_id,
-                    "result": _json_safe(result),
-                }
-            },
-        }
 
     if connector_id == "whatsapp_twilio" and action_id == "send_message":
         account_sid = str(secret.get("account_sid") or "").strip()
@@ -1424,33 +1499,47 @@ def _workflow_execute_connector_action(
                 "Body": _workflow_tool_text_input(config, current_text),
             }
         ).encode("utf-8")
-        response = http_json_request(
-            f"https://api.twilio.com/2010-04-01/Accounts/{quote_plus(account_sid)}/Messages.json",
-            method="POST",
-            headers={
-                "Authorization": f"Basic {basic}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            payload=payload,
+        def _perform_whatsapp() -> Dict[str, Any]:
+            response = http_json_request(
+                f"https://api.twilio.com/2010-04-01/Accounts/{quote_plus(account_sid)}/Messages.json",
+                method="POST",
+                headers={
+                    "Authorization": f"Basic {basic}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                payload=payload,
+            )
+            status_code = int(response.get("status") or 500)
+            if status_code not in {200, 201}:
+                body = response.get("json") if isinstance(response.get("json"), dict) else {}
+                detail = str(body.get("message") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"Twilio send failed with status {status_code}.")
+            result = response.get("json") if isinstance(response.get("json"), dict) else response
+            return {
+                "summary": f"Connector action completed: whatsapp_twilio.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "to_number": to_number,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "to_number": to_number},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, to_number=to_number, from_number=from_number),
+            payload={"connector": connector_id, "action_id": action_id, "to_number": to_number, "from_number": from_number, "body": _workflow_tool_text_input(config, current_text)},
+            execute=_perform_whatsapp,
         )
-        status_code = int(response.get("status") or 500)
-        if status_code not in {200, 201}:
-            body = response.get("json") if isinstance(response.get("json"), dict) else {}
-            detail = str(body.get("message") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"Twilio send failed with status {status_code}.")
-        result = response.get("json") if isinstance(response.get("json"), dict) else response
-        return {
-            "summary": f"Connector action completed: whatsapp_twilio.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "to_number": to_number,
-                    "result": _json_safe(result),
-                }
-            },
-        }
 
     if connector_id == "wechat_work" and action_id == "send_message":
         webhook_url = str(config.get("webhook_url") or secret.get("webhook_url") or "").strip()
@@ -1463,31 +1552,48 @@ def _workflow_execute_connector_action(
                 "content": body_text,
             },
         }
-        response = http_json_request(
-            webhook_url,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-            payload=payload,
+        def _perform_wechat() -> Dict[str, Any]:
+            response = http_json_request(
+                webhook_url,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                payload=payload,
+            )
+            status_code = int(response.get("status") or 500)
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            if status_code != 200:
+                detail = str(body.get("errmsg") or body.get("message") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"WeChat Work send failed with status {status_code}.")
+            if int(body.get("errcode") or 0) != 0:
+                detail = str(body.get("errmsg") or "").strip()
+                raise RuntimeError(detail or "WeChat Work webhook was rejected.")
+            return {
+                "summary": f"Connector action completed: wechat_work.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(body or response),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "webhook_url": webhook_url},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(
+                action_id,
+                webhook_fingerprint=stable_value_fingerprint(webhook_url),
+            ),
+            payload={"connector": connector_id, "action_id": action_id, "webhook_url": webhook_url, "payload": _json_safe(payload)},
+            execute=_perform_wechat,
         )
-        status_code = int(response.get("status") or 500)
-        body = response.get("json") if isinstance(response.get("json"), dict) else {}
-        if status_code != 200:
-            detail = str(body.get("errmsg") or body.get("message") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"WeChat Work send failed with status {status_code}.")
-        if int(body.get("errcode") or 0) != 0:
-            detail = str(body.get("errmsg") or "").strip()
-            raise RuntimeError(detail or "WeChat Work webhook was rejected.")
-        return {
-            "summary": f"Connector action completed: wechat_work.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "result": _json_safe(body or response),
-                }
-            },
-        }
 
     if connector_id == "instagram_business" and action_id == "publish_reply":
         comment_id = str(config.get("comment_id") or config.get("media_comment_id") or "").strip()
@@ -1496,34 +1602,48 @@ def _workflow_execute_connector_action(
         payload = config.get("payload") if isinstance(config.get("payload"), dict) else {
             "message": _workflow_tool_text_input(config, current_text),
         }
-        response = http_json_request(
-            f"https://graph.facebook.com/v23.0/{quote_plus(comment_id)}/replies",
-            method="POST",
-            headers=_workflow_tool_connector_headers(secret),
-            payload=payload,
+        def _perform_instagram_reply() -> Dict[str, Any]:
+            response = http_json_request(
+                f"https://graph.facebook.com/v23.0/{quote_plus(comment_id)}/replies",
+                method="POST",
+                headers=_workflow_tool_connector_headers(secret),
+                payload=payload,
+            )
+            status_code = int(response.get("status") or 500)
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            if status_code not in {200, 201}:
+                error_obj = body.get("error") if isinstance(body, dict) else {}
+                detail = (
+                    str(error_obj.get("message") or "").strip()
+                    if isinstance(error_obj, dict)
+                    else ""
+                ) or str(body.get("message") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"Instagram publish_reply failed with status {status_code}.")
+            return {
+                "summary": f"Connector action completed: instagram_business.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "comment_id": comment_id,
+                        "result": _json_safe(body or response),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "comment_id": comment_id},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, comment_id=comment_id),
+            payload={"connector": connector_id, "action_id": action_id, "comment_id": comment_id, "payload": _json_safe(payload)},
+            execute=_perform_instagram_reply,
         )
-        status_code = int(response.get("status") or 500)
-        body = response.get("json") if isinstance(response.get("json"), dict) else {}
-        if status_code not in {200, 201}:
-            error_obj = body.get("error") if isinstance(body, dict) else {}
-            detail = (
-                str(error_obj.get("message") or "").strip()
-                if isinstance(error_obj, dict)
-                else ""
-            ) or str(body.get("message") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"Instagram publish_reply failed with status {status_code}.")
-        return {
-            "summary": f"Connector action completed: instagram_business.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "comment_id": comment_id,
-                    "result": _json_safe(body or response),
-                }
-            },
-        }
 
     if connector_id == "instagram_business" and action_id == "send_dm":
         page_id = str(config.get("page_id") or secret.get("page_id") or "").strip()
@@ -1545,35 +1665,49 @@ def _workflow_execute_connector_action(
         }
         if isinstance(payload, dict):
             payload.setdefault("messaging_product", "instagram")
-        response = http_json_request(
-            f"https://graph.facebook.com/v23.0/{quote_plus(page_id)}/messages",
-            method="POST",
-            headers=_workflow_tool_connector_headers(secret),
-            payload=payload,
+        def _perform_instagram_dm() -> Dict[str, Any]:
+            response = http_json_request(
+                f"https://graph.facebook.com/v23.0/{quote_plus(page_id)}/messages",
+                method="POST",
+                headers=_workflow_tool_connector_headers(secret),
+                payload=payload,
+            )
+            status_code = int(response.get("status") or 500)
+            body = response.get("json") if isinstance(response.get("json"), dict) else {}
+            if status_code not in {200, 201}:
+                error_obj = body.get("error") if isinstance(body, dict) else {}
+                detail = (
+                    str(error_obj.get("message") or "").strip()
+                    if isinstance(error_obj, dict)
+                    else ""
+                ) or str(body.get("message") or response.get("text") or "").strip()
+                raise RuntimeError(detail or f"Instagram send_dm failed with status {status_code}.")
+            return {
+                "summary": f"Connector action completed: instagram_business.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "page_id": page_id,
+                        "recipient_id": recipient_id,
+                        "result": _json_safe(body or response),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "page_id": page_id, "recipient_id": recipient_id},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, page_id=page_id, recipient_id=recipient_id),
+            payload={"connector": connector_id, "action_id": action_id, "page_id": page_id, "recipient_id": recipient_id, "payload": _json_safe(payload)},
+            execute=_perform_instagram_dm,
         )
-        status_code = int(response.get("status") or 500)
-        body = response.get("json") if isinstance(response.get("json"), dict) else {}
-        if status_code not in {200, 201}:
-            error_obj = body.get("error") if isinstance(body, dict) else {}
-            detail = (
-                str(error_obj.get("message") or "").strip()
-                if isinstance(error_obj, dict)
-                else ""
-            ) or str(body.get("message") or response.get("text") or "").strip()
-            raise RuntimeError(detail or f"Instagram send_dm failed with status {status_code}.")
-        return {
-            "summary": f"Connector action completed: instagram_business.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "page_id": page_id,
-                    "recipient_id": recipient_id,
-                    "result": _json_safe(body or response),
-                }
-            },
-        }
 
     if connector_id in {"google_workspace", "microsoft_365"} and action_id in {"send_email", "send_message", "draft_email"}:
         to_email = str(
@@ -1587,58 +1721,72 @@ def _workflow_execute_connector_action(
             raise RuntimeError(f"Connector action '{action_id}' requires a recipient email.")
         subject = str(config.get("subject") or f"Empyralist workflow: {context.get('workflow_name') or context.get('workflow_id') or 'Untitled'}").strip()
         body_text = _workflow_tool_text_input(config, current_text)
-        if connector_id == "google_workspace":
-            if google_workspace_uses_local_cli(secret):
-                result = (
-                    google_workspace_local_create_draft(secret, to_email, subject, body_text)
-                    if action_id == "draft_email"
-                    else google_workspace_local_send_message(secret, to_email, subject, body_text)
-                )
-            else:
-                message = (
-                    f"To: {to_email}\r\n"
-                    f"Subject: {subject}\r\n"
-                    "Content-Type: text/plain; charset=UTF-8\r\n"
-                    "\r\n"
-                    f"{body_text}\r\n"
-                )
-                raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
-                if action_id == "draft_email":
-                    payload = {"message": {"raw": raw_encoded}}
-                    response = http_json_request(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                        method="POST",
-                        headers=_workflow_tool_connector_headers(secret),
-                        payload=payload,
+        def _perform_mail_write() -> Dict[str, Any]:
+            if connector_id == "google_workspace":
+                if google_workspace_uses_local_cli(secret):
+                    result = (
+                        google_workspace_local_create_draft(secret, to_email, subject, body_text)
+                        if action_id == "draft_email"
+                        else google_workspace_local_send_message(secret, to_email, subject, body_text)
                     )
                 else:
-                    payload = {"raw": raw_encoded}
-                    response = http_json_request(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                        method="POST",
-                        headers=_workflow_tool_connector_headers(secret),
-                        payload=payload,
+                    message = (
+                        f"To: {to_email}\r\n"
+                        f"Subject: {subject}\r\n"
+                        "Content-Type: text/plain; charset=UTF-8\r\n"
+                        "\r\n"
+                        f"{body_text}\r\n"
                     )
-                result = response.get("json") if isinstance(response.get("json"), dict) else response
-        else:
-            result = (
-                microsoft_365_create_draft(secret, http_json_request, to_email, subject, body_text)
-                if action_id == "draft_email"
-                else microsoft_365_send_message(secret, http_json_request, to_email, subject, body_text)
-            )
-        return {
-            "summary": f"Connector action completed: {connector_id}.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "recipient": to_email,
-                    "subject": subject,
-                    "result": _json_safe(result),
-                }
-            },
-        }
+                    raw_encoded = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8").rstrip("=")
+                    if action_id == "draft_email":
+                        payload = {"message": {"raw": raw_encoded}}
+                        response = http_json_request(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+                            method="POST",
+                            headers=_workflow_tool_connector_headers(secret),
+                            payload=payload,
+                        )
+                    else:
+                        payload = {"raw": raw_encoded}
+                        response = http_json_request(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                            method="POST",
+                            headers=_workflow_tool_connector_headers(secret),
+                            payload=payload,
+                        )
+                    result = response.get("json") if isinstance(response.get("json"), dict) else response
+            else:
+                result = (
+                    microsoft_365_create_draft(secret, http_json_request, to_email, subject, body_text)
+                    if action_id == "draft_email"
+                    else microsoft_365_send_message(secret, http_json_request, to_email, subject, body_text)
+                )
+            return {
+                "summary": f"Connector action completed: {connector_id}.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "recipient": to_email,
+                        "subject": subject,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "recipient": to_email, "subject": subject},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, recipient=to_email, subject=subject),
+            payload={"connector": connector_id, "action_id": action_id, "recipient": to_email, "subject": subject, "body": body_text},
+            execute=_perform_mail_write,
+        )
 
     if connector_id in {"google_workspace", "microsoft_365"} and action_id == "create_calendar_event":
         payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
@@ -1664,40 +1812,60 @@ def _workflow_execute_connector_action(
                     "start": {"dateTime": start, "timeZone": timezone},
                     "end": {"dateTime": end, "timeZone": timezone},
                 }
-        if connector_id == "microsoft_365":
-            result = microsoft_365_create_calendar_event(secret, http_json_request, payload=payload)
-        else:
-            calendar_id = str(config.get("calendar_id") or "primary").strip() or "primary"
-            if google_workspace_uses_local_cli(secret):
-                result = google_workspace_local_create_calendar_event(
-                    secret,
-                    calendar_id=calendar_id,
-                    send_updates="none",
-                    payload=payload,
-                )
+        calendar_id = str(config.get("calendar_id") or "primary").strip() or "primary"
+
+        def _perform_calendar_write() -> Dict[str, Any]:
+            if connector_id == "microsoft_365":
+                result = microsoft_365_create_calendar_event(secret, http_json_request, payload=payload)
             else:
-                url = (
-                    f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}"
-                    f"/events?sendUpdates=none"
-                )
-                response = http_json_request(
-                    url,
-                    method="POST",
-                    headers=_workflow_tool_connector_headers(secret),
-                    payload=payload,
-                )
-                result = response.get("json") if isinstance(response.get("json"), dict) else response
-        return {
-            "summary": f"Connector action completed: {connector_id}.create_calendar_event.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "result": _json_safe(result),
-                }
-            },
-        }
+                if google_workspace_uses_local_cli(secret):
+                    result = google_workspace_local_create_calendar_event(
+                        secret,
+                        calendar_id=calendar_id,
+                        send_updates="none",
+                        payload=payload,
+                    )
+                else:
+                    url = (
+                        f"https://www.googleapis.com/calendar/v3/calendars/{quote_plus(calendar_id)}"
+                        f"/events?sendUpdates=none"
+                    )
+                    response = http_json_request(
+                        url,
+                        method="POST",
+                        headers=_workflow_tool_connector_headers(secret),
+                        payload=payload,
+                    )
+                    result = response.get("json") if isinstance(response.get("json"), dict) else response
+            return {
+                "summary": f"Connector action completed: {connector_id}.create_calendar_event.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "calendar_id": calendar_id if connector_id == "google_workspace" else None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "calendar_id": calendar_id if connector_id == "google_workspace" else None},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(
+                action_id,
+                calendar_id=calendar_id if connector_id == "google_workspace" else None,
+                payload_fingerprint=stable_value_fingerprint(payload),
+            ),
+            payload={"connector": connector_id, "action_id": action_id, "calendar_id": calendar_id if connector_id == "google_workspace" else None, "payload": _json_safe(payload)},
+            execute=_perform_calendar_write,
+        )
 
     if connector_id == "microsoft_365" and action_id == "upload_drive_file":
         drive_path = str(config.get("path") or config.get("file_path") or "").strip()
@@ -1715,57 +1883,101 @@ def _workflow_execute_connector_action(
         else:
             content_bytes = str(content_value or "").encode("utf-8")
             content_type = str(config.get("content_type") or "text/plain; charset=utf-8").strip() or "text/plain; charset=utf-8"
-        result = microsoft_365_upload_drive_file(
-            secret,
-            drive_path,
-            content_bytes,
-            content_type=content_type,
+        def _perform_upload() -> Dict[str, Any]:
+            result = microsoft_365_upload_drive_file(
+                secret,
+                drive_path,
+                content_bytes,
+                content_type=content_type,
+            )
+            return {
+                "summary": f"Connector action completed: microsoft_365.upload_drive_file.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "path": drive_path,
+                        "content_type": content_type,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "path": drive_path},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, path=drive_path),
+            payload={"connector": connector_id, "action_id": action_id, "path": drive_path, "content_type": content_type, "content_sha256": hashlib.sha256(content_bytes).hexdigest()},
+            execute=_perform_upload,
         )
-        return {
-            "summary": f"Connector action completed: microsoft_365.upload_drive_file.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "path": drive_path,
-                    "content_type": content_type,
-                    "result": _json_safe(result),
-                }
-            },
-        }
 
     if connector_id == "google_workspace" and action_id in {"create_doc", "create_document"}:
         title = str(config.get("title") or "Empyralist Document").strip() or "Empyralist Document"
-        result = google_workspace_create_document(secret, title)
-        return {
-            "summary": f"Connector action completed: google_workspace.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "title": title,
-                    "result": _json_safe(result),
-                }
-            },
-        }
+        intent_token = str(config.get("intent_token") or config.get("client_action_id") or "").strip() or None
+        def _perform_create_doc() -> Dict[str, Any]:
+            result = google_workspace_create_document(secret, title)
+            return {
+                "summary": f"Connector action completed: google_workspace.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "title": title,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "title": title},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, title=title, intent_token=intent_token),
+            payload={"connector": connector_id, "action_id": action_id, "title": title},
+            execute=_perform_create_doc,
+        )
 
     if connector_id == "google_workspace" and action_id in {"create_sheet", "create_spreadsheet"}:
         title = str(config.get("title") or "Empyralist Sheet").strip() or "Empyralist Sheet"
-        result = google_workspace_create_spreadsheet(secret, title)
-        return {
-            "summary": f"Connector action completed: google_workspace.{action_id}.",
-            "result_data": {
-                "connector_action": {
-                    "connector": connector_id,
-                    "credential_id": credential_id,
-                    "action_id": action_id,
-                    "title": title,
-                    "result": _json_safe(result),
-                }
-            },
-        }
+        intent_token = str(config.get("intent_token") or config.get("client_action_id") or "").strip() or None
+        def _perform_create_sheet() -> Dict[str, Any]:
+            result = google_workspace_create_spreadsheet(secret, title)
+            return {
+                "summary": f"Connector action completed: google_workspace.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "title": title,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "title": title},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, title=title, intent_token=intent_token),
+            payload={"connector": connector_id, "action_id": action_id, "title": title},
+            execute=_perform_create_sheet,
+        )
 
     raise RuntimeError(f"Connector action '{connector_id}.{action_id}' is not executable in the Orion graph runtime yet.")
 
@@ -2442,6 +2654,8 @@ def _execute_workflow_graph(
                     )
                 elif variant == "connector_action":
                     tool_result = _workflow_execute_connector_action(
+                        run_id,
+                        node_id,
                         context,
                         config,
                         current_text=current_text,

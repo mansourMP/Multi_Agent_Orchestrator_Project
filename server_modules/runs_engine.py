@@ -234,6 +234,94 @@ def wait_for_human_response(
     )
 
     run = runs[run_id]
+    existing_pending = _get_pending_confirmation(run)
+    if isinstance(existing_pending, dict):
+        existing_status = str(existing_pending.get("status") or "").strip().lower()
+        existing_prompt = str(existing_pending.get("prompt") or "").strip()
+        decision_raw_text = str(existing_pending.get("decision") or "").strip()
+        if (
+            existing_status == "resolved"
+            and decision_raw_text
+            and (not existing_prompt or existing_prompt == str(prompt or "").strip())
+        ):
+            approval_id = str(existing_pending.get("approval_id") or "").strip()
+            correlation_id = str(existing_pending.get("correlation_id") or "").strip() or _approval_correlation_id(approval_id, run_id=run_id)
+            decision_text = decision_raw_text.lower()
+            decision_note = str(existing_pending.get("note") or "").strip()
+            approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
+            reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
+            escalate_tokens = {"escalate", "escalated"}
+            approved = decision_text in approve_tokens
+            rejected = decision_text in reject_tokens
+            escalated = decision_text in escalate_tokens
+            if not approved and not rejected and not escalated:
+                rejected = True
+            run.pop("_resume_after_confirmation_scheduled", None)
+            set_run_status(run_id, "running")
+            emit_log(
+                run["logs"],
+                "info",
+                f"Decision received: {decision_text}",
+                event="approval_received",
+                data={"approval_id": approval_id, "correlation_id": correlation_id, "decision": decision_text, "scope": "once", "reusable": False},
+            )
+            _append_approval_audit(
+                approval_id=approval_id,
+                stage="received",
+                decision=decision_text,
+                actor="user",
+                source="runtime_wait",
+                run_id=run_id,
+                note=decision_note or decision_raw_text,
+                correlation_id=correlation_id,
+                metadata={"scope": "once", "reusable": False, "resumed_after_restart": True},
+            )
+            emit_log(
+                run["logs"],
+                "info" if approved else "warn",
+                "Confirmation resolved.",
+                event="approval_resolved",
+                data={
+                    "approval_id": approval_id,
+                    "correlation_id": correlation_id,
+                    "decision": decision_text,
+                    "approved": approved,
+                    "rejected": bool(rejected),
+                    "escalated": bool(escalated),
+                    "scope": "once",
+                    "reusable": False,
+                    "resumed_after_restart": True,
+                },
+            )
+            _append_approval_audit(
+                approval_id=approval_id,
+                stage="resolved",
+                decision=("approved" if approved else "escalated" if escalated else "rejected"),
+                actor="runtime",
+                source="runtime_wait",
+                run_id=run_id,
+                correlation_id=correlation_id,
+                metadata={
+                    "raw_decision": decision_text,
+                    "approved": bool(approved),
+                    "rejected": bool(rejected),
+                    "escalated": bool(escalated),
+                    "scope": "once",
+                    "reusable": False,
+                    "resumed_after_restart": True,
+                },
+            )
+            _clear_pending_confirmation(run)
+            return {
+                "approval_id": approval_id,
+                "correlation_id": correlation_id,
+                "decision": decision_text,
+                "raw_decision": decision_raw_text,
+                "note": decision_note or None,
+                "approved": bool(approved),
+                "rejected": bool(rejected),
+                "escalated": bool(escalated),
+            }
     pending_payload = _begin_run_pending_confirmation(
         run_id,
         prompt,

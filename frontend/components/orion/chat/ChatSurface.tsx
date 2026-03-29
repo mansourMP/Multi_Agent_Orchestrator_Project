@@ -86,7 +86,7 @@ type ChatSurfaceProps = {
   identityActions: ChatIdentityAction[];
 };
 
-type AssistantLifecycleTone = 'thinking' | 'working' | 'approval' | 'failed' | 'done';
+type AssistantLifecycleTone = 'thinking' | 'working' | 'confirmation' | 'failed' | 'done';
 
 function renderInlineMarkdown(text: string, keyPrefix: string) {
   const nodes: ReactNode[] = [];
@@ -259,7 +259,7 @@ function sanitizeAssistantDisplayText(content: string): string {
 function resolveAssistantLifecycle(status: ChatMessageRecord['status']): { label: string; tone: AssistantLifecycleTone } | null {
   if (status === 'sending') return { label: 'Thinking', tone: 'thinking' };
   if (status === 'running') return { label: 'Working', tone: 'working' };
-  if (status === 'waiting') return { label: 'Needs approval', tone: 'approval' };
+  if (status === 'waiting') return { label: 'Confirmation required', tone: 'confirmation' };
   if (status === 'error') return { label: 'Failed', tone: 'failed' };
   return null;
 }
@@ -273,7 +273,7 @@ function shouldSuppressAssistantBody(content: string, status: ChatMessageRecord[
 function renderRunCardStatusLabel(status: ChatRunCardStatus): string {
   if (status === 'preparing') return 'Preparing';
   if (status === 'running') return 'Running';
-  if (status === 'waiting') return 'Needs approval';
+  if (status === 'waiting') return 'Confirmation required';
   if (status === 'completed') return 'Completed';
   if (status === 'needs_attention') return 'Needs attention';
   return 'Failed';
@@ -509,7 +509,7 @@ export function ChatSurface({
                                 </div>
                                 <div className="orion-chat-v2-run-card-evidence-item">
                                   <span className="orion-chat-v2-run-card-evidence-label">Consequence</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">{message.runCard.approval.consequence || 'This approval applies only to this pending step in this run.'}</span>
+                                  <span className="orion-chat-v2-run-card-evidence-value">{message.runCard.approval.consequence || 'This confirmation applies only to this pending step in this run.'}</span>
                                 </div>
                               </div>
                               <div className="orion-chat-v2-actions">
@@ -519,7 +519,7 @@ export function ChatSurface({
                                   onClick={() => onRunApprovalDecision?.('once')}
                                   disabled={!onRunApprovalDecision}
                                 >
-                                  Approve once
+                                  Confirm once
                                 </button>
                                 <button
                                   type="button"
@@ -527,7 +527,7 @@ export function ChatSurface({
                                   onClick={() => onRunApprovalDecision?.('deny')}
                                   disabled={!onRunApprovalDecision}
                                 >
-                                  Block
+                                  Decline
                                 </button>
                               </div>
                             </div>
@@ -565,7 +565,7 @@ export function ChatSurface({
           {permissionPrompt ? (
             <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
               <div className="orion-chat-v2-permission-header">
-                <div className="orion-chat-v2-permission-title">Approval needed</div>
+                <div className="orion-chat-v2-permission-title">Confirmation required</div>
                 <div className="orion-chat-v2-permission-copy">{permissionPrompt.prompt}</div>
               </div>
               {permissionPrompt.labels.length > 0 ? (
@@ -581,7 +581,7 @@ export function ChatSurface({
               <div className="orion-chat-v2-permission-detail">Action: {permissionPrompt.actions.join(', ') || 'Not recorded'}</div>
               <div className="orion-chat-v2-permission-detail">Target: {permissionPrompt.target || 'Not recorded'}</div>
               <div className="orion-chat-v2-permission-detail">Scope: One-time for this pending step</div>
-              <div className="orion-chat-v2-permission-detail">{permissionPrompt.consequence || 'This approval applies only to this pending step in this run.'}</div>
+              <div className="orion-chat-v2-permission-detail">{permissionPrompt.consequence || 'This confirmation applies only to this pending step in this run.'}</div>
               <div className="orion-chat-v2-permission-actions">
                 <button
                   type="button"
@@ -589,7 +589,7 @@ export function ChatSurface({
                   onClick={permissionPrompt.onAllowOnce}
                   disabled={Boolean(permissionPrompt.busyKey)}
                 >
-                  {permissionPrompt.busyKey === 'Proceed:once' ? 'Allowing…' : 'Allow once'}
+                  {permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once'}
                 </button>
                 <button
                   type="button"
@@ -597,7 +597,7 @@ export function ChatSurface({
                   onClick={permissionPrompt.onDeny}
                   disabled={Boolean(permissionPrompt.busyKey)}
                 >
-                  {permissionPrompt.busyKey === 'Hold:once' ? 'Blocking…' : 'Deny'}
+                  {permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline'}
                 </button>
               </div>
             </div>

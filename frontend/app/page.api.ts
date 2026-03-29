@@ -788,6 +788,19 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     });
   }, [controlPlaneFetch]);
 
+  const hasEnabledRuntimeProviderProfile = useCallback(async (providerId: ProviderId) => {
+    const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
+    if (!res.ok) throw new Error('Unable to load provider profiles.');
+    const payload = await res.json().catch(() => ({ items: [] }));
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    return items.some((item: unknown) => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      const normalizedProvider = normalizeProviderId(typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : '');
+      return normalizedProvider === providerId && record.enabled !== false;
+    });
+  }, [controlPlaneFetch]);
+
   const buildScheduledRunRequest = useCallback(() => {
     const selectedPack = OUTCOME_PACKS.find((pack) => pack.id === selectedPackId) || OUTCOME_PACKS[0];
     const selectedPreset = BUSINESS_PRESETS.find((preset) => preset.id === selectedPresetId) || BUSINESS_PRESETS[0];
@@ -1884,13 +1897,29 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
 
-  const buildOperatorChatAvailability = useCallback(() => ({
-    ai_ready: Boolean(setupStatus?.accountConnected && setupStatus?.connectionTested),
-    runtime_ok: Boolean(setupStatus?.runtimeReady),
-    provider: provider,
-    provider_label: providerOptions.find((item) => item.id === provider)?.label || provider,
-    connection_mode: connectionMode,
-  }), [connectionMode, provider, providerOptions, setupStatus?.accountConnected, setupStatus?.connectionTested, setupStatus?.runtimeReady]);
+  const buildOperatorChatAvailability = useCallback(async () => {
+    const [runtimeAccountReady, enabledRuntimeProfile] = await Promise.all([
+      hasRuntimeProviderAccount(provider).catch(() => false),
+      hasEnabledRuntimeProviderProfile(provider).catch(() => false),
+    ]);
+    const legacyAiReady = Boolean(setupStatus?.accountConnected && setupStatus?.connectionTested);
+    return {
+      ai_ready: Boolean(runtimeAccountReady || enabledRuntimeProfile || legacyAiReady),
+      runtime_ok: Boolean(setupStatus?.runtimeReady),
+      provider: provider,
+      provider_label: providerOptions.find((item) => item.id === provider)?.label || provider,
+      connection_mode: connectionMode,
+    };
+  }, [
+    connectionMode,
+    hasEnabledRuntimeProviderProfile,
+    hasRuntimeProviderAccount,
+    provider,
+    providerOptions,
+    setupStatus?.accountConnected,
+    setupStatus?.connectionTested,
+    setupStatus?.runtimeReady,
+  ]);
 
   const sendOperatorChat = useCallback(async (
     message: string,
@@ -1902,6 +1931,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
     await ensureControlPlaneSession();
+    const availability = await buildOperatorChatAvailability();
     const res = await fetch('/api/chat/respond', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1912,7 +1942,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         provider,
         model,
         reasoning_effort: options?.reasoningEffort || undefined,
-        availability: buildOperatorChatAvailability(),
+        availability,
         prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
       }),
       cache: 'no-store',

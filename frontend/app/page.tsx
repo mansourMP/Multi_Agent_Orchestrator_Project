@@ -1924,7 +1924,7 @@ export function AutopilotWorkspace() {
         { label: 'Effective provider', value: humanizeProviderLabel(latestDirectChatContext.effective_provider || '') },
         { label: 'Requested model', value: latestDirectChatContext.requested_model || 'Unknown' },
         { label: 'Effective model', value: latestDirectChatContext.effective_model || 'Unknown' },
-        { label: 'Reasoning effort', value: latestDirectChatContext.reasoning_effort || 'Standard' },
+        { label: 'Requested reasoning', value: latestDirectChatContext.reasoning_effort || 'Standard' },
         {
           label: 'Fallback',
           value: latestDirectChatContext.fallback_used ? 'Used' : 'Not used',

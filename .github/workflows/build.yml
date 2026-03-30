@@ -34,7 +34,13 @@ jobs:
           python -m pip install pyinstaller
 
       - name: Build Python backend binary
-        run: pyinstaller --onefile --name empyralis-backend server.py
+        run: pyinstaller --onefile --distpath pyinstaller-dist --workpath pyinstaller-build --name empyralis-backend server.py
+
+      - name: Copy backend binary to dist/
+        run: |
+          mkdir -p dist
+          cp pyinstaller-dist/empyralis-backend dist/empyralis-backend
+          chmod +x dist/empyralis-backend
 
       - name: Build Next.js frontend
         run: npm run build --prefix frontend
@@ -82,7 +88,13 @@ jobs:
 
       - name: Build Python backend binary
         shell: bash
-        run: pyinstaller --onefile --name empyralis-backend server.py
+        run: pyinstaller --onefile --distpath pyinstaller-dist --workpath pyinstaller-build --name empyralis-backend server.py
+
+      - name: Copy backend binary to dist/
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp pyinstaller-dist/empyralis-backend.exe dist/empyralis-backend.exe
 
       - name: Build Next.js frontend
         shell: bash
@@ -142,7 +154,13 @@ jobs:
           python -m pip install pyinstaller
 
       - name: Build Python backend binary
-        run: pyinstaller --onefile --name empyralis-backend server.py
+        run: pyinstaller --onefile --distpath pyinstaller-dist --workpath pyinstaller-build --name empyralis-backend server.py
+
+      - name: Copy backend binary to dist/
+        run: |
+          mkdir -p dist
+          cp pyinstaller-dist/empyralis-backend dist/empyralis-backend
+          chmod +x dist/empyralis-backend
 
       - name: Build Next.js frontend
         run: npm run build --prefix frontend

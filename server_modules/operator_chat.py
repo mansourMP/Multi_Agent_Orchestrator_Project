@@ -715,6 +715,56 @@ def _execute_direct_tool_calls(
     return "\n\n".join(part for part in replies if part).strip()
 
 
+def _approval_required_for_direct_tool(
+    connector_id: str,
+    action_id: str,
+    tool_capabilities: List[Dict[str, Any]],
+) -> bool:
+    normalized_connector_id = str(connector_id or "").strip().lower()
+    normalized_action_id = str(action_id or "").strip()
+    for item in tool_capabilities:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip().lower() != normalized_connector_id:
+            continue
+        required_actions = item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else []
+        return normalized_action_id in {str(entry or "").strip() for entry in required_actions}
+    return False
+
+
+def _build_direct_tool_approval_response(
+    *,
+    tool_calls: List[Dict[str, Any]],
+    tool_capabilities: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    approval_actions: List[Dict[str, Any]] = []
+    for index, call in enumerate(tool_calls, start=1):
+        connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
+        if not _approval_required_for_direct_tool(connector_id, action_id, tool_capabilities):
+            continue
+        argument_payload = _tool_arguments_payload(call.get("arguments"))
+        tool_input = str(argument_payload.get("input") or "").strip()
+        approval_actions.append(
+            {
+                "type": "approval_required",
+                "connector": connector_id,
+                "action": action_id,
+                "input": tool_input,
+                "id": f"approval_required:{connector_id}:{action_id}:{index}",
+                "kind": "open",
+                "label": "Approval required",
+                "variant": "primary",
+            }
+        )
+    if not approval_actions:
+        return None
+    return {
+        "reply": "This action requires your approval before I send it. Confirm?",
+        "actions": approval_actions,
+        "mode": "answer_with_action",
+    }
+
+
 def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:
     payload = credentials if isinstance(credentials, dict) else {}
     return normalize_auth_mode(provider, credentials=payload)
@@ -997,6 +1047,38 @@ def build_direct_operator_reply(
             actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
             tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
             if tool_calls:
+                approval_payload = _build_direct_tool_approval_response(
+                    tool_calls=tool_calls,
+                    tool_capabilities=tool_capabilities,
+                )
+                if approval_payload is not None:
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            **approval_payload,
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": "",
+                            "context_used": _build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or provider or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason=fallback_reason,
+                            ),
+                        },
+                    }
+                    return
                 try:
                     tool_reply = _execute_direct_tool_calls(
                         tool_calls=tool_calls,

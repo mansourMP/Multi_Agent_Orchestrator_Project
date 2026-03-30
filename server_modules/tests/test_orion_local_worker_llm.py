@@ -42,6 +42,20 @@ class OrionLocalWorkerLlmTests(unittest.TestCase):
         self.assertEqual(items[2]["role"], "user")
         self.assertEqual(items[2]["content"][0]["type"], "input_text")
 
+    def test_codex_instructions_uses_neutral_fallback_when_prompt_is_empty(self):
+        self.assertEqual(
+            worker_llm.codex_instructions(None),
+            worker_llm.CODEX_MINIMAL_INSTRUCTIONS,
+        )
+        self.assertEqual(
+            worker_llm.codex_instructions("   "),
+            worker_llm.CODEX_MINIMAL_INSTRUCTIONS,
+        )
+        self.assertEqual(
+            worker_llm.codex_instructions("You are concise."),
+            "You are concise.",
+        )
+
     def test_provider_order_prefers_codex_cli_before_openai_in_codex_mode(self):
         with patch.dict(
             os.environ,

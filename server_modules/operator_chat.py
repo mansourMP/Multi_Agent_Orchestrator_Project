@@ -644,9 +644,10 @@ def build_direct_operator_reply(
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials
-    system_prompt = build_operator_system_prompt(
+    raw_system_prompt = build_operator_system_prompt(
         _availability_lines(normalized_workspace_id, availability_payload),
-    ) or None
+    )
+    system_prompt = raw_system_prompt or None
     history_mode = "raw_messages" if normalized_prior_messages else "none"
     prior_messages_used = bool(normalized_prior_messages)
     reply = ""

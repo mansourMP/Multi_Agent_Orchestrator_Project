@@ -35,6 +35,7 @@ OPENAI_API_KEY_MISSING_ERROR = "No OpenAI API key configured. Add one from the A
 OPENAI_CODEX_DIRECT_AUTH_ERROR = (
     "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
 )
+CODEX_MINIMAL_INSTRUCTIONS = "Answer the user's message directly and concisely."
 CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
@@ -573,6 +574,14 @@ def format_provider_error(exc: Exception) -> str:
     return str(exc)
 
 
+def codex_instructions(system_prompt: Optional[str]) -> str:
+    prompt = str(system_prompt or "").strip()
+    if prompt:
+        return prompt
+    # chatgpt.com/backend-api/codex/responses rejects omitted/null instructions
+    return CODEX_MINIMAL_INSTRUCTIONS
+
+
 def openai_chat_json(
     system_prompt: Optional[str],
     user_prompt: str,
@@ -769,12 +778,11 @@ def openai_codex_backend_text(
         "store": False,
         "stream": True,
         "input": _build_responses_input(user_prompt, prior_messages=prior_messages),
+        "instructions": codex_instructions(system_prompt),
         "text": {"verbosity": "low"},
         "tool_choice": "auto",
         "parallel_tool_calls": True,
     }
-    if str(system_prompt or "").strip():
-        payload["instructions"] = str(system_prompt).strip()
     if reasoning_effort:
         payload["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
 

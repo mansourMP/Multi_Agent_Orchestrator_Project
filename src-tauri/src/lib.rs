@@ -14,7 +14,7 @@ use rand::{rngs::OsRng, RngCore};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
 
 const RUNTIME_HOST: &str = "127.0.0.1";
@@ -25,6 +25,8 @@ const NEXT_HOST: &str = "localhost";
 const NEXT_PORT: &str = "3000";
 const WINDOW_LABEL: &str = "main";
 const WINDOW_TITLE: &str = "Empyralis";
+const WINDOW_WIDTH: f64 = 1280.0;
+const WINDOW_HEIGHT: f64 = 800.0;
 const WORKER_ID: &str = "empyralis-tauri-local";
 const SERVER_BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const SERVER_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -402,6 +404,19 @@ struct Sidecars {
 
 struct SidecarState(Mutex<Sidecars>);
 
+pub struct PythonBackendSidecarGuard {
+    child: Option<Child>,
+}
+
+impl Drop for PythonBackendSidecarGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -733,7 +748,38 @@ fn npm_binary() -> &'static str {
     }
 }
 
-fn runtime_launcher() -> Result<(PathBuf, Vec<String>), String> {
+fn bundled_runtime_launcher<Rt: Runtime, M: Manager<Rt>>(
+    app: &M,
+) -> Result<Option<(PathBuf, Vec<String>)>, String> {
+    #[cfg(target_os = "windows")]
+    let bundled_path = {
+        let current_exe = std::env::current_exe()
+            .map_err(|error| format!("Failed to resolve current executable path: {error}"))?;
+        current_exe
+            .parent()
+            .ok_or_else(|| "Current executable has no parent directory.".to_string())?
+            .join("empyralis-backend.exe")
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let bundled_path = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Failed to resolve resource directory: {error}"))?
+        .join("empyralis-backend");
+
+    if bundled_path.exists() {
+        return Ok(Some((bundled_path, Vec::new())));
+    }
+
+    Ok(None)
+}
+
+fn runtime_launcher<Rt: Runtime, M: Manager<Rt>>(app: &M) -> Result<(PathBuf, Vec<String>), String> {
+    if let Some(bundled) = bundled_runtime_launcher(app)? {
+        return Ok(bundled);
+    }
+
     let root = repo_root();
     let candidates = [
         root.join("venv").join("bin").join("uvicorn"),
@@ -754,7 +800,7 @@ fn runtime_launcher() -> Result<(PathBuf, Vec<String>), String> {
         return Ok((path, vec!["-m".into(), "uvicorn".into()]));
     }
 
-    Err("Could not find a uvicorn launcher in venv/ or .venv/.".into())
+    Err("Could not find a bundled empyralis-backend binary or a uvicorn launcher in venv/ or .venv/.".into())
 }
 
 fn backend_mode() -> BackendMode {
@@ -799,16 +845,12 @@ fn wait_for_ready(url: &str, accept_client_errors: bool, label: &str) -> Result<
     }
 }
 
-fn spawn_runtime(runtime_key: &str) -> Result<Child, String> {
-    let (launcher, prefix_args) = runtime_launcher()?;
+fn spawn_runtime<Rt: Runtime, M: Manager<Rt>>(app: &M, runtime_key: &str) -> Result<Child, String> {
+    let (launcher, prefix_args) = runtime_launcher(app)?;
+    let use_uvicorn_module = !prefix_args.is_empty();
     let mut command = Command::new(launcher);
     command
         .args(prefix_args)
-        .arg("server:app")
-        .arg("--host")
-        .arg(RUNTIME_HOST)
-        .arg("--port")
-        .arg(RUNTIME_PORT)
         .current_dir(repo_root())
         .env("ORION_AUTH_REQUIRED", "1")
         .env("ORION_API_KEY", runtime_key)
@@ -816,6 +858,15 @@ fn spawn_runtime(runtime_key: &str) -> Result<Child, String> {
         .env("OPENAI_HEALTHCHECK", "0")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+
+    if use_uvicorn_module {
+        command
+            .arg("server:app")
+            .arg("--host")
+            .arg(RUNTIME_HOST)
+            .arg("--port")
+            .arg(RUNTIME_PORT);
+    }
 
     command
         .spawn()
@@ -1082,6 +1133,7 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![open_external, openai_codex_oauth_login])
         .setup(|app| {
+            let app_handle = app.handle().clone();
             let lock_path =
                 acquire_desktop_shell_lock().map_err(|error| -> Box<dyn std::error::Error> {
                     Box::new(std::io::Error::other(error))
@@ -1113,7 +1165,7 @@ pub fn run() {
                 &runtime_health_url(),
                 false,
                 "runtime",
-                || spawn_runtime(&runtime_key),
+                || spawn_runtime(&app_handle, &runtime_key),
                 |sidecars, child| {
                     let _ = write_service_pid_file("runtime", child.id());
                     sidecars.runtime = Some(child);
@@ -1179,7 +1231,7 @@ pub fn run() {
                 WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
                     .initialization_script(&desktop_bridge_script())
                     .title(WINDOW_TITLE)
-                    .inner_size(1440.0, 960.0)
+                    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
                     .min_inner_size(1100.0, 760.0)
                     .build()
             {

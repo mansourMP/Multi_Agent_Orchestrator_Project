@@ -3,17 +3,27 @@
   "version": "0.1.0",
   "identifier": "com.empyralis.desktop",
   "build": {
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../frontend/.next",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
   },
   "app": {
     "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "Empyralis",
+        "width": 1280,
+        "height": 800
+      }
+    ],
     "security": {
       "csp": null
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["../frontend/app/favicon.ico"]
+    "active": true,
+    "icon": ["../frontend/app/favicon.ico"],
+    "resources": ["../dist/empyralis-backend"]
   }
 }

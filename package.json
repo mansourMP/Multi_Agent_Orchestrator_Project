@@ -2,6 +2,10 @@
   "name": "empyralis-root",
   "private": true,
   "scripts": {
-    "tauri:dev": "cd src-tauri && cargo tauri dev"
+    "tauri:dev": "cd src-tauri && cargo tauri dev",
+    "tauri:build": "npm run build --prefix frontend && cd src-tauri && cargo tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
   }
 }

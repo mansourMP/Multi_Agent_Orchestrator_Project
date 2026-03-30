@@ -2313,7 +2313,6 @@ export function AutopilotWorkspace() {
       if (detail.type === 'focus_command') {
         if (primaryGoalRef.current) {
           primaryGoalRef.current.focus();
-          primaryGoalRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
         return;
       }
@@ -2321,7 +2320,6 @@ export function AutopilotWorkspace() {
       if (detail.type === 'focus_goal') {
         if (primaryGoalRef.current) {
           primaryGoalRef.current.focus();
-          primaryGoalRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
         return;
       }
@@ -2642,12 +2640,7 @@ export function AutopilotWorkspace() {
     <WorkbenchShell
       topError={topError}
     >
-      <div
-        className="orion-workbench-grid"
-        style={{
-          gridTemplateColumns: 'minmax(0, 1fr)',
-        }}
-      >
+      <div className="orion-workbench-grid" suppressHydrationWarning>
         <ChatSurface
           isMobile={isMobile}
           goal={goal}

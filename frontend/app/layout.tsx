@@ -84,8 +84,7 @@ html,
 body {
   height: 100%;
   margin: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--critical-bg-app);
   color: var(--critical-text);
   font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -107,10 +106,7 @@ a {
   max-width: calc(100vw - var(--sidebar-width));
   padding-top: var(--topbar-height);
   min-height: 100vh;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
   box-sizing: border-box;
   position: relative;
   z-index: 1;
@@ -316,6 +312,26 @@ const THEME_BOOTSTRAP_SCRIPT = `
 })();
 `;
 
+const LOCALHOST_CACHE_CLEANUP_SCRIPT = `
+(() => {
+  try {
+    const hostname = window.location.hostname;
+    const isLocalDevHost = hostname === 'localhost' || hostname === '127.0.0.1';
+    if (!isLocalDevHost) return;
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+        .catch(() => undefined);
+    }
+    if ('caches' in window) {
+      caches.keys()
+        .then((keys) => Promise.all(keys.filter((key) => key.startsWith('empyralis-pwa')).map((key) => caches.delete(key))))
+        .catch(() => undefined);
+    }
+  } catch {}
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -325,6 +341,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <style dangerouslySetInnerHTML={{ __html: CRITICAL_SHELL_CSS }} />
+        <script dangerouslySetInnerHTML={{ __html: LOCALHOST_CACHE_CLEANUP_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
       </head>
       <body>

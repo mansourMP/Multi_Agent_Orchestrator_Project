@@ -255,6 +255,7 @@ export function ChatSurface({
   const isLoading = chatBusy;
   const sendDisabled = chatBusy || goal.trim().length === 0;
   const surfaceRef = useRef<HTMLElement | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerFrameRef = useRef<HTMLDivElement | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -326,10 +327,8 @@ export function ChatSurface({
   }, [composerReserve]);
 
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }, 100)
-    return () => clearTimeout(timeout)
+    if (!threadRef.current) return;
+    threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [messages, isLoading]);
 
   useEffect(() => {
@@ -385,7 +384,7 @@ export function ChatSurface({
         </div>
 
         {visibleMessages.length > 0 ? (
-          <div className="orion-chat-v2-thread" aria-live="polite" style={{ paddingBottom: '200px' }}>
+          <div className="orion-chat-v2-thread" ref={threadRef} aria-live="polite">
             {visibleMessages.map((message, index) => {
               const isUser = message.role === 'user';
               const isError = message.status === 'error';

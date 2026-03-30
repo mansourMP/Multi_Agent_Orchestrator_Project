@@ -258,7 +258,6 @@ export function ChatSurface({
   const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerShellRef = useRef<HTMLDivElement | null>(null);
-  const composerFrameRef = useRef<HTMLDivElement | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
@@ -303,17 +302,17 @@ export function ChatSurface({
 
   useEffect(() => {
     const shell = composerShellRef.current;
-    const frame = composerFrameRef.current;
-    if (!shell || !frame) return;
+    if (!shell) return;
     const updateReserve = () => {
-      const overlayHeight = window.innerHeight - shell.getBoundingClientRect().top;
-      const nextReserve = Math.max(188, Math.ceil(overlayHeight) + 16);
+      const shellRect = shell.getBoundingClientRect();
+      const computed = window.getComputedStyle(shell);
+      const bottomOffset = Number.parseFloat(computed.bottom || '0') || 0;
+      const nextReserve = Math.max(188, Math.ceil(shellRect.height + bottomOffset + 20));
       setComposerReserve((current) => (Math.abs(current - nextReserve) > 1 ? nextReserve : current));
     };
     updateReserve();
     const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateReserve) : null;
     resizeObserver?.observe(shell);
-    resizeObserver?.observe(frame);
     window.addEventListener('resize', updateReserve);
     return () => {
       resizeObserver?.disconnect();
@@ -332,11 +331,20 @@ export function ChatSurface({
 
   useEffect(() => {
     if (!threadRef.current) return;
-    const frame = requestAnimationFrame(() => {
-      if (!threadRef.current) return;
-      threadRef.current.scrollTop = threadRef.current.scrollHeight;
+    let cancelled = false;
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        if (cancelled || !threadRef.current) return;
+        threadRef.current.scrollTop = threadRef.current.scrollHeight;
+      });
+      if (cancelled) cancelAnimationFrame(secondFrame);
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
   }, [composerReserve, isLoading, visibleMessages]);
 
   useEffect(() => {
@@ -561,7 +569,7 @@ export function ChatSurface({
         ref={composerShellRef}
         className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}
       >
-        <div className="orion-chat-v2-composer-frame" ref={composerFrameRef}>
+        <div className="orion-chat-v2-composer-frame">
           {permissionPrompt ? (
             <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
               <div className="orion-chat-v2-permission-header">

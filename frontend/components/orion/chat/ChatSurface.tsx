@@ -346,7 +346,7 @@ export function ChatSurface({
       className={`orion-chat-v2${hasMessages ? ' has-history' : ' is-empty'}${isFirstThread ? ' is-first-thread' : ''}`}
       suppressHydrationWarning
     >
-      <div className="orion-chat-v2-thread-shell">
+      <div className="orion-chat-v2-thread-shell" ref={threadRef}>
         <div className="orion-chat-v2-session-bar">
           <button
             type="button"
@@ -360,7 +360,7 @@ export function ChatSurface({
         </div>
 
         {visibleMessages.length > 0 ? (
-          <div className="orion-chat-v2-thread" ref={threadRef} aria-live="polite">
+          <div className="orion-chat-v2-thread" aria-live="polite">
             {visibleMessages.map((message, index) => {
               const isUser = message.role === 'user';
               const isError = message.status === 'error';
@@ -523,208 +523,207 @@ export function ChatSurface({
             <div ref={bottomRef} />
           </div>
         ) : null}
-      </div>
-
-      <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
-        <div className="orion-chat-v2-composer-frame">
-          {permissionPrompt ? (
-            <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
-              <div className="orion-chat-v2-permission-header">
-                <div className="orion-chat-v2-permission-title">Confirmation required</div>
-                <div className="orion-chat-v2-permission-copy">{permissionPrompt.prompt}</div>
-              </div>
-              {permissionPrompt.labels.length > 0 ? (
-                <div className="orion-chat-v2-permission-chips">
-                  {permissionPrompt.labels.map((label) => (
-                    <span key={`label:${label}`} className="orion-chat-v2-permission-chip">{label}</span>
-                  ))}
+        <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
+          <div className="orion-chat-v2-composer-frame">
+            {permissionPrompt ? (
+              <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
+                <div className="orion-chat-v2-permission-header">
+                  <div className="orion-chat-v2-permission-title">Confirmation required</div>
+                  <div className="orion-chat-v2-permission-copy">{permissionPrompt.prompt}</div>
                 </div>
-              ) : null}
-              {permissionPrompt.capabilities.length > 0 ? (
-                <div className="orion-chat-v2-permission-detail">Requested: {permissionPrompt.capabilities.join(', ')}</div>
-              ) : null}
-              <div className="orion-chat-v2-permission-detail">Action: {permissionPrompt.actions.join(', ') || 'Not recorded'}</div>
-              <div className="orion-chat-v2-permission-detail">Target: {permissionPrompt.target || 'Not recorded'}</div>
-              <div className="orion-chat-v2-permission-detail">Scope: One-time for this pending step</div>
-              <div className="orion-chat-v2-permission-detail">{permissionPrompt.consequence || 'This confirmation applies only to this pending step in this run.'}</div>
-              <div className="orion-chat-v2-permission-actions">
-                <button
-                  type="button"
-                  className="orion-chat-v2-permission-action is-primary"
-                  onClick={permissionPrompt.onAllowOnce}
-                  disabled={Boolean(permissionPrompt.busyKey)}
-                >
-                  {permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once'}
-                </button>
-                <button
-                  type="button"
-                  className="orion-chat-v2-permission-action is-danger"
-                  onClick={permissionPrompt.onDeny}
-                  disabled={Boolean(permissionPrompt.busyKey)}
-                >
-                  {permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline'}
-                </button>
+                {permissionPrompt.labels.length > 0 ? (
+                  <div className="orion-chat-v2-permission-chips">
+                    {permissionPrompt.labels.map((label) => (
+                      <span key={`label:${label}`} className="orion-chat-v2-permission-chip">{label}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {permissionPrompt.capabilities.length > 0 ? (
+                  <div className="orion-chat-v2-permission-detail">Requested: {permissionPrompt.capabilities.join(', ')}</div>
+                ) : null}
+                <div className="orion-chat-v2-permission-detail">Action: {permissionPrompt.actions.join(', ') || 'Not recorded'}</div>
+                <div className="orion-chat-v2-permission-detail">Target: {permissionPrompt.target || 'Not recorded'}</div>
+                <div className="orion-chat-v2-permission-detail">Scope: One-time for this pending step</div>
+                <div className="orion-chat-v2-permission-detail">{permissionPrompt.consequence || 'This confirmation applies only to this pending step in this run.'}</div>
+                <div className="orion-chat-v2-permission-actions">
+                  <button
+                    type="button"
+                    className="orion-chat-v2-permission-action is-primary"
+                    onClick={permissionPrompt.onAllowOnce}
+                    disabled={Boolean(permissionPrompt.busyKey)}
+                  >
+                    {permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once'}
+                  </button>
+                  <button
+                    type="button"
+                    className="orion-chat-v2-permission-action is-danger"
+                    onClick={permissionPrompt.onDeny}
+                    disabled={Boolean(permissionPrompt.busyKey)}
+                  >
+                    {permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="orion-chat-v2-composer">
+              <textarea
+                ref={primaryGoalRef}
+                value={goal}
+                onChange={(event) => setGoal(event.target.value)}
+                placeholder="Ask anything or tell it what to do"
+                rows={1}
+                className="orion-chat-v2-input"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    invokeSend();
+                  }
+                }}
+              />
+
+              <div className="orion-chat-v2-composer-toolbar">
+                <div className="orion-chat-v2-composer-toolbar-left">
+                  <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
+                    <button
+                      type="button"
+                      className="orion-chat-v2-icon-btn"
+                      aria-label="Add context"
+                      aria-haspopup="menu"
+                      aria-expanded={attachMenuOpen}
+                      onClick={() => {
+                        setAttachMenuOpen((current) => !current);
+                        setModelMenuOpen(false);
+                        setControlsMenuOpen(false);
+                      }}
+                    >
+                      <Plus size={16} />
+                    </button>
+                    {attachMenuOpen ? (
+                      <div className="orion-chat-v2-menu" role="menu">
+                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/artifacts'); }}>
+                          Open artifacts
+                        </button>
+                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/executions'); }}>
+                          Open runs
+                        </button>
+                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); onToggleIdentityDrawer(); }}>
+                          Open context
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="orion-chat-v2-composer-toolbar-right">
+                  <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
+                    <button
+                      type="button"
+                      className="orion-chat-v2-model-pill"
+                      aria-label="Choose model"
+                      aria-haspopup="menu"
+                      aria-expanded={modelMenuOpen}
+                      title={modelsLoading ? 'Refreshing models' : 'Choose model'}
+                      onClick={() => {
+                        setModelMenuOpen((current) => !current);
+                        setAttachMenuOpen(false);
+                        setControlsMenuOpen(false);
+                      }}
+                    >
+                      <span>Models</span>
+                      <ChevronDown size={14} />
+                    </button>
+                    {modelMenuOpen ? (
+                      <div className="orion-chat-v2-menu is-model" role="menu">
+                        {modelOptions.map((option) => (
+                          <button
+                            key={option}
+                            type="button"
+                            className={`orion-chat-v2-menu-item${option === selectedModel ? ' is-selected' : ''}`}
+                            onClick={() => {
+                              onSelectModel(option);
+                              setModelMenuOpen(false);
+                            }}
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
+                    <button
+                      type="button"
+                      className="orion-chat-v2-icon-btn"
+                      aria-label="More controls"
+                      aria-haspopup="menu"
+                      aria-expanded={controlsMenuOpen}
+                      onClick={() => {
+                        setControlsMenuOpen((current) => !current);
+                        setAttachMenuOpen(false);
+                        setModelMenuOpen(false);
+                      }}
+                    >
+                      <SlidersHorizontal size={16} />
+                    </button>
+                    {controlsMenuOpen ? (
+                      <div className="orion-chat-v2-menu is-controls" role="menu">
+                        <div className="orion-chat-v2-menu-section-label">Current access</div>
+                        <div className="orion-chat-v2-menu-meta">{trustLabel}</div>
+                        <div className="orion-chat-v2-menu-section-label">Response depth</div>
+                        <div className="orion-chat-v2-menu-meta">{depthLabel}</div>
+                        {depthOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={`orion-chat-v2-menu-item${option.value === selectedDepth ? ' is-selected' : ''}`}
+                            onClick={() => {
+                              onSelectDepth(option.value);
+                              setControlsMenuOpen(false);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); onToggleIdentityDrawer(); }}>
+                          Open context
+                        </button>
+                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); router.push('/credentials'); }}>
+                          Open integrations
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={invokeSend}
+                    disabled={sendDisabled}
+                    className="orion-chat-v2-send"
+                    aria-label="Send"
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                </div>
               </div>
             </div>
-          ) : null}
 
-          <div className="orion-chat-v2-composer">
-            <textarea
-              ref={primaryGoalRef}
-              value={goal}
-              onChange={(event) => setGoal(event.target.value)}
-              placeholder="Ask anything or tell it what to do"
-              rows={1}
-              className="orion-chat-v2-input"
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  invokeSend();
-                }
-              }}
-            />
-
-            <div className="orion-chat-v2-composer-toolbar">
-              <div className="orion-chat-v2-composer-toolbar-left">
-                <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
-                  <button
-                    type="button"
-                    className="orion-chat-v2-icon-btn"
-                    aria-label="Add context"
-                    aria-haspopup="menu"
-                    aria-expanded={attachMenuOpen}
-                    onClick={() => {
-                      setAttachMenuOpen((current) => !current);
-                      setModelMenuOpen(false);
-                      setControlsMenuOpen(false);
-                    }}
-                  >
-                    <Plus size={16} />
+            {inlineStatus || emptyAction ? (
+              <div className="orion-chat-v2-status-line">
+                <span>{inlineStatus ? `⚠ ${inlineStatus}` : 'Connect an AI account to start chatting.'}</span>
+                {inlineAction ? (
+                  <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(inlineAction.href)}>
+                    {inlineAction.label}
                   </button>
-                  {attachMenuOpen ? (
-                    <div className="orion-chat-v2-menu" role="menu">
-                      <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/artifacts'); }}>
-                        Open artifacts
-                      </button>
-                      <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); router.push('/executions'); }}>
-                        Open runs
-                      </button>
-                      <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setAttachMenuOpen(false); onToggleIdentityDrawer(); }}>
-                        Open context
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+                ) : emptyAction ? (
+                  <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(emptyAction.href)}>
+                    {emptyAction.label}
+                  </button>
+                ) : null}
               </div>
-
-              <div className="orion-chat-v2-composer-toolbar-right">
-                <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
-                  <button
-                    type="button"
-                    className="orion-chat-v2-model-pill"
-                    aria-label="Choose model"
-                    aria-haspopup="menu"
-                    aria-expanded={modelMenuOpen}
-                    title={modelsLoading ? 'Refreshing models' : 'Choose model'}
-                    onClick={() => {
-                      setModelMenuOpen((current) => !current);
-                      setAttachMenuOpen(false);
-                      setControlsMenuOpen(false);
-                    }}
-                  >
-                    <span>Models</span>
-                    <ChevronDown size={14} />
-                  </button>
-                  {modelMenuOpen ? (
-                    <div className="orion-chat-v2-menu is-model" role="menu">
-                      {modelOptions.map((option) => (
-                        <button
-                          key={option}
-                          type="button"
-                          className={`orion-chat-v2-menu-item${option === selectedModel ? ' is-selected' : ''}`}
-                          onClick={() => {
-                            onSelectModel(option);
-                            setModelMenuOpen(false);
-                          }}
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
-                  <button
-                    type="button"
-                    className="orion-chat-v2-icon-btn"
-                    aria-label="More controls"
-                    aria-haspopup="menu"
-                    aria-expanded={controlsMenuOpen}
-                    onClick={() => {
-                      setControlsMenuOpen((current) => !current);
-                      setAttachMenuOpen(false);
-                      setModelMenuOpen(false);
-                    }}
-                  >
-                    <SlidersHorizontal size={16} />
-                  </button>
-                  {controlsMenuOpen ? (
-                    <div className="orion-chat-v2-menu is-controls" role="menu">
-                      <div className="orion-chat-v2-menu-section-label">Current access</div>
-                      <div className="orion-chat-v2-menu-meta">{trustLabel}</div>
-                      <div className="orion-chat-v2-menu-section-label">Response depth</div>
-                      <div className="orion-chat-v2-menu-meta">{depthLabel}</div>
-                      {depthOptions.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`orion-chat-v2-menu-item${option.value === selectedDepth ? ' is-selected' : ''}`}
-                          onClick={() => {
-                            onSelectDepth(option.value);
-                            setControlsMenuOpen(false);
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                      <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); onToggleIdentityDrawer(); }}>
-                        Open context
-                      </button>
-                      <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); router.push('/credentials'); }}>
-                        Open integrations
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={invokeSend}
-                  disabled={sendDisabled}
-                  className="orion-chat-v2-send"
-                  aria-label="Send"
-                >
-                  <ArrowUp size={16} />
-                </button>
-              </div>
-            </div>
+            ) : null}
           </div>
-
-          {inlineStatus || emptyAction ? (
-            <div className="orion-chat-v2-status-line">
-              <span>{inlineStatus ? `⚠ ${inlineStatus}` : 'Connect an AI account to start chatting.'}</span>
-              {inlineAction ? (
-                <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(inlineAction.href)}>
-                  {inlineAction.label}
-                </button>
-              ) : emptyAction ? (
-                <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(emptyAction.href)}>
-                  {emptyAction.label}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       </div>
 

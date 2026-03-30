@@ -4016,7 +4016,8 @@ input:focus-visible {
   flex: 1 1 0%;
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 18px 0 0;
   position: relative;
   scrollbar-gutter: stable;
@@ -4361,12 +4362,6 @@ input:focus-visible {
   display: grid;
   align-content: start;
   gap: 14px;
-  flex: 1 1 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
   box-sizing: border-box;
   padding: 12px 4px 24px;
 }
@@ -4766,9 +4761,9 @@ input:focus-visible {
   position: sticky;
   bottom: 0;
   flex-shrink: 0;
-  margin-top: auto;
   z-index: 10;
-  padding: 12px 0 0;
+  padding: 12px 0 18px;
+  background: linear-gradient(to top, var(--bg-surface) 60%, transparent);
 }
 
 .orion-chat-v2-drawer-backdrop {

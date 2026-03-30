@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   View,
   Text,
   FlatList,
@@ -102,6 +103,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const { banner, showBanner } = useTransientBanner();
   const activeAgent = getPrimaryAgent();
   const messagesListRef = useRef<FlatList<AgentPayload>>(null);
+  const loadingDotOpacities = useRef([0, 1, 2].map(() => new Animated.Value(0.3))).current;
+  const loadingDotAnimationsRef = useRef<Animated.CompositeAnimation[]>([]);
   const activeSession = sessions.find((item) => item.id === sessionId);
   const messages = activeSession?.messages || [];
   const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
@@ -121,12 +124,50 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     }
 
     const nextSessionId = createSession(activeAgent);
-    router.replace(`/chats/${nextSessionId}`);
+    router.replace(`/kin/${nextSessionId}`);
   }, [activeAgent, activeSession?.id, createSession, router, setActiveSession]);
 
   useEffect(() => {
     scrollToBottom(false);
   }, [isLoading, lastMessageSpeech, messages.length, scrollToBottom]);
+
+  useEffect(() => {
+    loadingDotAnimationsRef.current.forEach((animation) => animation.stop());
+    loadingDotAnimationsRef.current = [];
+
+    if (!isLoading) {
+      loadingDotOpacities.forEach((opacity) => {
+        opacity.stopAnimation();
+        opacity.setValue(0.3);
+      });
+      return;
+    }
+
+    const animations = loadingDotOpacities.map((opacity, index) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(index * 150),
+          Animated.timing(opacity, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 0.3,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
+    );
+
+    loadingDotAnimationsRef.current = animations;
+    animations.forEach((animation) => animation.start());
+
+    return () => {
+      animations.forEach((animation) => animation.stop());
+    };
+  }, [isLoading, loadingDotOpacities]);
 
   const handleMediaUpload = () => {
     showBanner("Media uploads are not available yet.", "error");
@@ -489,7 +530,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const handleNewChat = () => {
     const nextSessionId = createSession(activeAgent);
     setRecentsOpen(false);
-    router.push(`/chats/${nextSessionId}`);
+    router.push(`/kin/${nextSessionId}`);
   };
 
   if (!activeSession) {
@@ -497,7 +538,11 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+    >
       {banner ? <TransientBanner message={banner.message} tone={banner.tone} /> : null}
       <Modal visible={recentsOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRecentsOpen(false)}>
         <View
@@ -510,7 +555,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           }}
         >
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <Text style={{ fontSize: 28, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Recent chats</Text>
+            <Text style={{ fontSize: 28, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Recent threads</Text>
             <TouchableOpacity
               onPress={() => setRecentsOpen(false)}
               style={{
@@ -543,7 +588,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
             }}
           >
             <Ionicons name="add" size={18} color="#FFFFFF" />
-            <Text style={{ fontSize: 14, fontWeight: "700", color: "#FFFFFF" }}>New chat</Text>
+            <Text style={{ fontSize: 14, fontWeight: "700", color: "#FFFFFF" }}>New thread</Text>
           </TouchableOpacity>
 
           <FlatList
@@ -559,7 +604,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
                   activeOpacity={0.84}
                   onPress={() => {
                     setRecentsOpen(false);
-                    router.push(`/chats/${item.id}`);
+                    router.push(`/kin/${item.id}`);
                   }}
                   style={{
                     padding: 16,
@@ -571,14 +616,14 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
                 >
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                     <Text style={{ flex: 1, fontSize: 16, fontFamily: "DMSans_700Bold", color: theme.colors.text }} numberOfLines={1}>
-                      {item.title || "New chat"}
+                      {item.title || "New thread"}
                     </Text>
                     <Text style={{ marginLeft: 12, fontSize: 12, color: theme.colors.textSecondary }}>
                       {formatTimestamp(item.updatedAt)}
                     </Text>
                   </View>
                   <Text style={{ marginTop: 6, fontSize: 14, lineHeight: 20, color: theme.colors.textSecondary }} numberOfLines={2}>
-                    {lastMessage?.speech?.trim() || "New chat"}
+                    {lastMessage?.speech?.trim() || "New thread"}
                   </Text>
                 </TouchableOpacity>
               );
@@ -631,6 +676,9 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
             {activeAgent.label}
           </Text>
+          <Text style={{ marginTop: 2, fontSize: 12, color: theme.colors.textSecondary }}>
+            {activeApp ? `Using ${activeApp.name} app context` : "Main thread"}
+          </Text>
         </View>
         <TouchableOpacity
           onPress={() => setRecentsOpen(true)}
@@ -648,109 +696,56 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
           <Ionicons name="time-outline" size={18} color={theme.colors.text} />
         </TouchableOpacity>
       </View>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1 }}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0}
-      >
+      <View style={{ flex: 1 }}>
         <FlatList
           ref={messagesListRef}
           data={messages}
           keyExtractor={(_, i) => i.toString()}
           renderItem={renderMessage}
           ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-          contentContainerStyle={{ paddingTop: SPACING.sm, paddingBottom: 96, backgroundColor: theme.colors.background }}
-          ListFooterComponent={
-            isLoading ? (
-              <View style={{ paddingHorizontal: SPACING.md, paddingVertical: 8, gap: 10 }}>
-                <View
-                  style={{
-                    alignSelf: "flex-start",
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    backgroundColor: theme.colors.surface,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border,
-                    borderRadius: 20,
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                  }}
-                  >
-                    {[0, 1, 2].map((dot) => (
-                    <View
-                      key={dot}
-                      style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: 3,
-                        backgroundColor: theme.colors.textSecondary,
-                      }}
-                    />
-                  ))}
-                </View>
-
-                <View
-                  style={{
-                    alignSelf: "stretch",
-                    backgroundColor: theme.colors.surface,
-                    borderWidth: 1,
-                    borderColor: theme.colors.border,
-                    borderRadius: 20,
-                    paddingHorizontal: 14,
-                    paddingVertical: 14,
-                    gap: 8,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontSize: 11,
-                      color: theme.colors.textSecondary,
-                      letterSpacing: 0.5,
-                      textTransform: "uppercase",
-                      fontFamily: "DMSans_700Bold",
-                    }}
-                  >
-                    Agent activity
-                  </Text>
-                  {runActivity.map((step, index) => (
-                    <View
-                      key={`${step}-${index}`}
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "flex-start",
-                        gap: 10,
-                      }}
-                    >
-                      <View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          backgroundColor: index === runActivity.length - 1 ? theme.colors.accent : theme.colors.border,
-                          marginTop: 6,
-                        }}
-                      />
-                      <Text
-                        style={{
-                          flex: 1,
-                          fontSize: 14,
-                          lineHeight: 21,
-                          color: index === runActivity.length - 1 ? theme.colors.text : theme.colors.textSecondary,
-                        }}
-                      >
-                        {step}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ) : null
-          }
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => scrollToBottom()}
+          contentContainerStyle={{
+            paddingTop: SPACING.sm,
+            paddingBottom: SPACING.md,
+            backgroundColor: theme.colors.background,
+          }}
           ListEmptyComponent={
             <View />
           }
         />
+
+        {isLoading ? (
+          <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8, gap: 10 }}>
+            <View
+              style={{
+                alignSelf: "flex-start",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: theme.colors.surface,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: 20,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+            >
+              {loadingDotOpacities.map((opacity, dot) => (
+                <Animated.View
+                  key={dot}
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 3,
+                    backgroundColor: theme.colors.textSecondary,
+                    opacity,
+                  }}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
 
         <View style={{ paddingBottom: 0 }}>
           <InputBar
@@ -758,10 +753,10 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
             onMediaUpload={handleMediaUpload}
             isLoading={isLoading}
             prefilledPrompt={input}
-            placeholder="Message"
+            placeholder="Message KIN"
           />
         </View>
-      </KeyboardAvoidingView>
-    </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }

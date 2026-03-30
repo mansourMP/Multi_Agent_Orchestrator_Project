@@ -4360,10 +4360,11 @@ input:focus-visible {
 .orion-chat-v2-thread {
   width: 100%;
   display: grid;
+  justify-items: stretch;
   align-content: start;
   gap: 14px;
   box-sizing: border-box;
-  padding: 12px 4px 24px;
+  padding: 12px 12px 24px;
 }
 
 .orion-chat-v2.is-first-thread .orion-chat-v2-thread {
@@ -4371,7 +4372,8 @@ input:focus-visible {
 }
 
 .orion-chat-v2-turn {
-  width: min(100%, 680px);
+  width: 100%;
+  max-width: 680px;
   margin: 0 auto;
   display: flex;
   align-items: flex-start;
@@ -4398,13 +4400,15 @@ input:focus-visible {
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
-  width: fit-content;
+  width: auto;
+  min-width: fit-content;
   flex: 0 0 auto;
   max-width: min(68%, 420px);
 }
 
 .orion-chat-v2-user-bubble {
-  width: fit-content;
+  width: auto;
+  min-width: min(96px, 100%);
   max-width: 100%;
   display: inline-flex;
   flex-direction: column;
@@ -4432,7 +4436,8 @@ input:focus-visible {
 }
 
 .orion-chat-v2-assistant {
-  width: min(100%, 680px);
+  width: 100%;
+  max-width: 680px;
   text-align: left;
   display: grid;
   gap: 6px;
@@ -4960,7 +4965,10 @@ input:focus-visible {
 }
 
 .orion-chat-v2-composer-frame {
-  width: min(760px, calc(100vw - var(--sidebar-width) - 72px));
+  width: 100%;
+  max-width: 760px;
+  padding: 0 12px;
+  box-sizing: border-box;
   display: grid;
   gap: 6px;
 }
@@ -5109,8 +5117,11 @@ input:focus-visible {
 }
 
 .orion-chat-v2-session-bar {
-  width: min(760px, calc(100vw - var(--sidebar-width) - 96px));
+  width: 100%;
+  max-width: 760px;
   margin: 0 auto 16px;
+  padding: 0 12px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -5122,6 +5133,7 @@ input:focus-visible {
   align-items: center;
   gap: 6px;
   padding: 0 12px;
+  white-space: nowrap;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
   background: color-mix(in srgb, var(--bg-surface) 88%, var(--bg-element) 12%);
@@ -5137,7 +5149,8 @@ input:focus-visible {
 }
 
 .orion-chat-v2-assistant {
-  width: min(100%, 680px);
+  width: 100%;
+  max-width: 680px;
   gap: 6px;
 }
 

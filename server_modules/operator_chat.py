@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 import importlib.util
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
+from uuid import uuid4
 
 from scripts.orion_local_worker_llm import (
     SUPPORTED_PROVIDERS,
     generate_chat_reply_stream_with_provider_fallback,
     generate_chat_reply_with_provider_fallback,
     get_claude_code_session_token,
+    parse_json_object_loose,
     provider_has_key,
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
@@ -448,6 +451,270 @@ def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optiona
     return None
 
 
+def _provider_supports_direct_tool_calls(provider: str) -> bool:
+    return str(provider or "").strip().lower() == "codex_cli"
+
+
+def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    tools: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for cap in tool_capabilities:
+        if not isinstance(cap, dict):
+            continue
+        if cap.get("runtime_usable") is not True:
+            continue
+        connector_id = str(cap.get("id") or "").strip().lower()
+        label = str(cap.get("label") or connector_id).strip() or connector_id
+        if not connector_id:
+            continue
+        for raw_action in cap.get("write_actions", []):
+            action = str(raw_action or "").strip()
+            if not action:
+                continue
+            tool_name = f"{connector_id}__{action}"
+            if tool_name in seen:
+                continue
+            seen.add(tool_name)
+            tools.append(
+                {
+                    "name": tool_name,
+                    "description": f"Execute {action} on {label}",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "input": {
+                                "type": "string",
+                                "description": "The input for this action",
+                            }
+                        },
+                        "required": ["input"],
+                    },
+                }
+            )
+    return tools
+
+
+def _message_can_use_direct_connector_tools(
+    message: str,
+    *,
+    provider: str,
+    tools: List[Dict[str, Any]],
+) -> bool:
+    if not _provider_supports_direct_tool_calls(provider) or not tools:
+        return False
+    compact = _compact_text(message)
+    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("google_workspace__") for item in tools)
+    if _mentions_any(compact, TELEGRAM_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("telegram_bot__") for item in tools)
+    return False
+
+
+def _parse_tool_name(tool_name: str) -> tuple[str, str]:
+    token = str(tool_name or "").strip()
+    if "__" not in token:
+        raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
+    connector_id, action_id = token.split("__", 1)
+    connector_id = connector_id.strip().lower()
+    action_id = action_id.strip()
+    if not connector_id or not action_id:
+        raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
+    return connector_id, action_id
+
+
+def _tool_arguments_payload(arguments: Any) -> Dict[str, Any]:
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    parsed = parse_json_object_loose(str(arguments or ""))
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _extract_first_email(text: str) -> str:
+    match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", str(text or ""), flags=re.IGNORECASE)
+    return match.group(0).strip() if match else ""
+
+
+def _extract_subject_text(text: str) -> str:
+    raw = str(text or "").strip()
+    for pattern in (
+        r"subject\s*[:=]\s*([^\n]+)",
+        r"subject\s+(.+?)(?:\s+body\s*:|\s+message\s*:|$)",
+    ):
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip(" \"'")
+    return ""
+
+
+def _extract_body_text(text: str) -> str:
+    raw = str(text or "").strip()
+    for pattern in (
+        r"(?:body|message|content|saying)\s*[:=]?\s+(.+)$",
+    ):
+        match = re.search(pattern, raw, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            body = str(match.group(1) or "").strip()
+            if body:
+                return body
+    return raw
+
+
+def _first_non_empty_line(text: str) -> str:
+    for line in str(text or "").splitlines():
+        token = line.strip()
+        if token:
+            return token
+    return ""
+
+
+def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str) -> Dict[str, Any]:
+    config: Dict[str, Any] = {
+        "connector": connector_id,
+        "action_id": action_id,
+    }
+    parsed_input = parse_json_object_loose(tool_input) or {}
+
+    if connector_id == "telegram_bot":
+        for key in ("chat_id", "session_key"):
+            value = str(parsed_input.get(key) or "").strip()
+            if value:
+                config[key] = value
+        config["text"] = str(
+            parsed_input.get("body")
+            or parsed_input.get("message")
+            or parsed_input.get("content")
+            or tool_input
+        ).strip()
+        return config
+
+    if connector_id == "google_workspace" and action_id in {"send_email", "send_message", "draft_email"}:
+        to_email = str(
+            parsed_input.get("to_email")
+            or parsed_input.get("to")
+            or parsed_input.get("email")
+            or parsed_input.get("recipient")
+            or _extract_first_email(tool_input)
+            or ""
+        ).strip()
+        subject = str(parsed_input.get("subject") or _extract_subject_text(tool_input) or "").strip()
+        body_text = str(
+            parsed_input.get("body")
+            or parsed_input.get("message")
+            or parsed_input.get("content")
+            or _extract_body_text(tool_input)
+            or ""
+        ).strip()
+        if to_email:
+            config["to_email"] = to_email
+        if subject:
+            config["subject"] = subject
+        if body_text:
+            config["text"] = body_text
+        return config
+
+    if connector_id == "google_workspace" and action_id == "create_calendar_event":
+        payload = parsed_input.get("payload") if isinstance(parsed_input.get("payload"), dict) else None
+        if payload:
+            config["payload"] = payload
+        for key in ("title", "description", "start", "end", "timezone", "calendar_id"):
+            value = parsed_input.get(key)
+            if value is None:
+                continue
+            token = str(value).strip()
+            if token:
+                config[key] = token
+        if "description" not in config and tool_input.strip():
+            config["description"] = tool_input.strip()
+        return config
+
+    if connector_id == "google_workspace" and action_id in {"create_doc", "create_document", "create_sheet", "create_spreadsheet"}:
+        title = str(
+            parsed_input.get("title")
+            or parsed_input.get("name")
+            or _first_non_empty_line(tool_input)
+            or ""
+        ).strip()
+        if title:
+            config["title"] = title[:180]
+        return config
+
+    if tool_input.strip():
+        config["text"] = tool_input.strip()
+    return config
+
+
+def _format_direct_tool_result(result: Dict[str, Any]) -> str:
+    if not isinstance(result, dict):
+        return str(result or "").strip()
+    summary = str(result.get("summary") or "").strip()
+    result_data = result.get("result_data") if isinstance(result.get("result_data"), dict) else {}
+    connector_action = result_data.get("connector_action") if isinstance(result_data.get("connector_action"), dict) else {}
+    highlights: List[str] = []
+    for key, label in (
+        ("recipient", "Recipient"),
+        ("subject", "Subject"),
+        ("chat_id", "Chat"),
+        ("title", "Title"),
+        ("calendar_id", "Calendar"),
+        ("path", "Path"),
+    ):
+        value = str(connector_action.get(key) or "").strip()
+        if value:
+            highlights.append(f"{label}: {value}")
+    if summary and highlights:
+        return "\n".join([summary, *highlights])
+    if summary:
+        return summary
+    if connector_action:
+        try:
+            return json.dumps(connector_action, ensure_ascii=True, indent=2)
+        except Exception:
+            return str(connector_action)
+    try:
+        return json.dumps(result, ensure_ascii=True, indent=2)
+    except Exception:
+        return str(result)
+
+
+def _execute_direct_tool_calls(
+    *,
+    tool_calls: List[Dict[str, Any]],
+    workspace_id: str,
+    thread_id: str,
+) -> str:
+    if not tool_calls:
+        return ""
+    from server_modules.runs_execution import _workflow_execute_connector_action
+
+    run_id = f"direct-chat-{uuid4().hex}"
+    execution_context: Dict[str, Any] = {
+        "workspace_id": workspace_id,
+        "workflow_id": "direct_chat",
+        "workflow_name": "Direct chat",
+        "metadata": {
+            "source": "chat_direct",
+            "thread_id": thread_id or None,
+        },
+    }
+    replies: List[str] = []
+    for index, call in enumerate(tool_calls, start=1):
+        connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
+        argument_payload = _tool_arguments_payload(call.get("arguments"))
+        tool_input = str(argument_payload.get("input") or "").strip()
+        if not tool_input:
+            raise RuntimeError(f"Tool '{connector_id}__{action_id}' requires a non-empty input argument.")
+        config = _build_direct_tool_config(connector_id, action_id, tool_input)
+        result = _workflow_execute_connector_action(
+            run_id,
+            f"direct_chat_tool:{index}",
+            execution_context,
+            config,
+            current_text=tool_input,
+        )
+        replies.append(_format_direct_tool_result(result))
+    return "\n\n".join(part for part in replies if part).strip()
+
+
 def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:
     payload = credentials if isinstance(credentials, dict) else {}
     return normalize_auth_mode(provider, credentials=payload)
@@ -586,6 +853,7 @@ def build_direct_operator_reply(
     }
     connected_systems = _connected_system_labels(availability_payload)
     tool_capabilities = _context_tool_capabilities(availability_payload)
+    tools = _build_direct_chat_tools(tool_capabilities)
     base_context_used = _build_context_used(
         workspace_id=normalized_workspace_id,
         requested_provider=normalized_requested_provider,
@@ -626,15 +894,28 @@ def build_direct_operator_reply(
         }
         return
 
-    preview = _preview_run_response(normalized_message, availability_payload)
-    if preview is not None:
-        yield {
-            "type": "final",
-            "payload": _with_context_used(preview, base_context_used),
-        }
-        return
-
     provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
+    if tools and (
+        _mentions_any(_compact_text(normalized_message), GOOGLE_WORKSPACE_KEYWORDS)
+        or _mentions_any(_compact_text(normalized_message), TELEGRAM_KEYWORDS)
+    ):
+        codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+        if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+            provider = "codex_cli"
+            direct_chat_credentials = codex_credentials
+    allow_direct_connector_tool_calls = _message_can_use_direct_connector_tools(
+        normalized_message,
+        provider=provider,
+        tools=tools,
+    )
+    if not allow_direct_connector_tool_calls:
+        preview = _preview_run_response(normalized_message, availability_payload)
+        if preview is not None:
+            yield {
+                "type": "final",
+                "payload": _with_context_used(preview, base_context_used),
+            }
+            return
     fallback_reason = None
     if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
         yield {
@@ -667,6 +948,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
+        "tools": tools,
     }
     metadata = {
         "provider": provider,
@@ -674,6 +956,7 @@ def build_direct_operator_reply(
         "source": "chat_direct",
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
+        "tools": tools,
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials
@@ -689,6 +972,7 @@ def build_direct_operator_reply(
     llm_error = ""
     actual_provider: Optional[str] = provider
     actual_model: Optional[str] = normalized_requested_model or None
+    tool_calls: List[Dict[str, Any]] = []
 
     for event in generate_chat_reply_stream_with_provider_fallback(
         context=context,
@@ -711,6 +995,74 @@ def build_direct_operator_reply(
             llm_error = str(event.get("error") or "").strip()
             actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
             actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
+            tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+            if tool_calls:
+                try:
+                    tool_reply = _execute_direct_tool_calls(
+                        tool_calls=tool_calls,
+                        workspace_id=normalized_workspace_id,
+                        thread_id=normalized_thread_id,
+                    )
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            "reply": tool_reply or final_reply or "Connector action completed.",
+                            "actions": [],
+                            "mode": "answer",
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": "",
+                            "context_used": _build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or provider or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason=fallback_reason,
+                            ),
+                        },
+                    }
+                    return
+                except Exception as exc:
+                    llm_error = str(exc).strip() or "connector_action_failed"
+                    yield {
+                        "type": "final",
+                        "payload": {
+                            "reply": f"Connector action failed: {llm_error}",
+                            "actions": [],
+                            "mode": "answer",
+                            "usage_masked": usage_masked,
+                            "provider": actual_provider,
+                            "model": actual_model,
+                            "attempted_providers": attempted_providers,
+                            "error": llm_error,
+                            "context_used": _build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=str(actual_provider or provider or "").strip() or None,
+                                requested_model=normalized_requested_model,
+                                effective_model=str(actual_model or "").strip() or None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=prior_messages_used,
+                                history_mode=history_mode,
+                                run_created=False,
+                                fallback_used=False,
+                                fallback_reason=fallback_reason,
+                            ),
+                        },
+                    }
+                    return
             actions = _suggest_actions(normalized_message, availability_payload)
             yield {
                 "type": "final",

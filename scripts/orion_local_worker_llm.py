@@ -553,6 +553,31 @@ def resolve_requested_reasoning_effort(context: Dict[str, Any], metadata: Dict[s
     return ""
 
 
+def resolve_requested_tools(context: Dict[str, Any], metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_tools = metadata.get("tools")
+    if not isinstance(raw_tools, list):
+        raw_tools = context.get("tools")
+    resolved: List[Dict[str, Any]] = []
+    if not isinstance(raw_tools, list):
+        return resolved
+    for item in raw_tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        description = str(item.get("description") or "").strip()
+        parameters = item.get("parameters") if isinstance(item.get("parameters"), dict) else None
+        if not name or not parameters:
+            continue
+        resolved.append(
+            {
+                "name": name,
+                "description": description,
+                "parameters": parameters,
+            }
+        )
+    return resolved
+
+
 def format_provider_error(exc: Exception) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         status = getattr(exc, "code", None)
@@ -783,6 +808,7 @@ def iter_openai_codex_backend_events(
     reasoning_effort_override: Optional[str] = None,
     prior_messages: Any = None,
     credential_override: Optional[Dict[str, Any]] = None,
+    tools: Any = None,
 ) -> Iterator[Dict[str, Any]]:
     override = credential_override if isinstance(credential_override, dict) else {}
     token = sanitize_bearer_token(
@@ -826,6 +852,21 @@ def iter_openai_codex_backend_events(
         "tool_choice": "auto",
         "parallel_tool_calls": True,
     }
+    if isinstance(tools, list) and tools:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "name": str(item.get("name") or "").strip(),
+                "description": str(item.get("description") or "").strip(),
+                "parameters": item.get("parameters"),
+            }
+            for item in tools
+            if isinstance(item, dict)
+            and str(item.get("name") or "").strip()
+            and isinstance(item.get("parameters"), dict)
+        ]
+        if not payload["tools"]:
+            payload.pop("tools", None)
     if reasoning_effort:
         payload["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
 
@@ -850,6 +891,7 @@ def iter_openai_codex_backend_events(
             text_parts: list[str] = []
             usage: Optional[Dict[str, Any]] = None
             completed_message_text = ""
+            tool_calls: list[Dict[str, Any]] = []
 
             while True:
                 chunk = response.read(8192)
@@ -882,6 +924,16 @@ def iter_openai_codex_backend_events(
                         continue
                     if event_type == "response.output_item.done":
                         item = event.get("item")
+                        if isinstance(item, dict) and str(item.get("type") or "").strip() == "function_call":
+                            tool_name = str(item.get("name") or "").strip()
+                            if tool_name:
+                                tool_calls.append(
+                                    {
+                                        "name": tool_name,
+                                        "arguments": item.get("arguments"),
+                                    }
+                                )
+                            continue
                         if isinstance(item, dict) and str(item.get("type") or "").strip() == "message":
                             content = item.get("content")
                             done_parts: list[str] = []
@@ -902,8 +954,14 @@ def iter_openai_codex_backend_events(
                         final_text = completed_message_text or "\n".join(part for part in text_parts if part).strip()
                         if not final_text and isinstance(response_payload, dict):
                             final_text = extract_openai_text(response_payload).strip()
-                        if final_text:
-                            yield {"type": "done", "text": final_text, "usage": usage, "model": model}
+                        if final_text or tool_calls:
+                            yield {
+                                "type": "done",
+                                "text": final_text,
+                                "usage": usage,
+                                "model": model,
+                                "tool_calls": tool_calls,
+                            }
                             return
                         yield {"type": "error", "error": "codex_empty_output", "model": model}
                         return
@@ -920,8 +978,14 @@ def iter_openai_codex_backend_events(
                         return
 
             final_text = "\n".join(part for part in text_parts if part).strip()
-            if final_text:
-                yield {"type": "done", "text": final_text, "usage": usage, "model": model}
+            if final_text or tool_calls:
+                yield {
+                    "type": "done",
+                    "text": final_text,
+                    "usage": usage,
+                    "model": model,
+                    "tool_calls": tool_calls,
+                }
                 return
             yield {"type": "error", "error": "codex_empty_output", "model": model}
             return
@@ -1815,6 +1879,7 @@ def generate_chat_reply_stream_with_provider_fallback(
     requested_model = resolve_requested_model(context, metadata)
     requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
     credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
+    requested_tools = resolve_requested_tools(context, metadata)
 
     for provider in provider_order_for_run(context, metadata):
         attempted.append(provider)
@@ -1832,6 +1897,7 @@ def generate_chat_reply_stream_with_provider_fallback(
                 reasoning_effort_override=requested_reasoning_effort or None,
                 prior_messages=prior_messages,
                 credential_override=credential_override,
+                tools=requested_tools,
             ):
                 event_type = str(event.get("type") or "").strip().lower()
                 if event_type == "delta":
@@ -1843,8 +1909,9 @@ def generate_chat_reply_stream_with_provider_fallback(
                 if event_type == "done":
                     final_usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
                     final_model = str(event.get("model") or final_model or "").strip() or final_model
+                    tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
                     final_text = str(event.get("text") or "").strip() or "".join(streamed_parts).strip()
-                    if final_text:
+                    if final_text or tool_calls:
                         yield {
                             "type": "result",
                             "reply": final_text,
@@ -1853,6 +1920,7 @@ def generate_chat_reply_stream_with_provider_fallback(
                             "model": final_model,
                             "attempted_providers": attempted_str,
                             "error": "",
+                            "tool_calls": tool_calls,
                         }
                         return
                     last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: codex_empty_output"

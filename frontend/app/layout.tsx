@@ -132,46 +132,6 @@ a {
   pointer-events: none;
   transition: opacity 180ms ease;
 }
-.orion-page-shell {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  min-height: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  position: relative;
-  box-sizing: border-box;
-  overflow: visible;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-.orion-page-shell.narrow {
-  width: 100%;
-  max-width: none;
-}
-.orion-page-shell.is-integrations-page {
-  width: 100%;
-  max-width: none;
-}
-.orion-page-shell.is-health-page {
-  width: 100%;
-  max-width: none;
-}
-.orion-page-shell.is-chat-home {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-}
 .orion-shellbar {
   position: fixed;
   top: 0;
@@ -195,84 +155,6 @@ a {
   width: var(--sidebar-width);
   background: var(--critical-bg-shell);
   z-index: 80;
-}
-.btn-primary,
-.btn-secondary,
-.btn-ghost,
-.btn,
-.orion-btn,
-.orion-btn-primary,
-.orion-btn-secondary,
-.orion-btn-ghost,
-.orion-btn-success,
-.orion-btn-danger,
-.orion-btn.primary,
-.orion-btn.secondary,
-.orion-btn.ghost,
-.orion-btn.success,
-.orion-btn.danger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 32px;
-  height: 32px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--critical-text);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-}
-.btn-primary,
-.orion-btn-primary,
-.orion-btn.primary {
-  background: var(--critical-primary);
-  color: #ffffff;
-  border: 1px solid var(--critical-primary);
-}
-.orion-btn-success,
-.orion-btn.success {
-  background: var(--critical-success-soft);
-  color: var(--critical-success-text);
-  border: 1px solid var(--critical-success);
-}
-.orion-btn-danger,
-.orion-btn.danger {
-  background: var(--critical-danger-soft);
-  color: var(--critical-danger-text);
-  border: 1px solid var(--critical-danger);
-}
-.btn-secondary,
-.btn,
-.orion-btn,
-.orion-btn-secondary,
-.orion-btn.secondary {
-  background: var(--critical-secondary-bg);
-  color: var(--critical-text);
-  border: 1px solid var(--critical-border);
-}
-.btn-ghost,
-.orion-btn-ghost,
-.orion-btn.ghost {
-  background: transparent;
-  color: var(--critical-text-secondary);
-  border: none;
-}
-.orion-btn.sm {
-  min-height: 28px;
-  height: 28px;
-  padding: 0 10px;
-  border-radius: 10px;
-  font-size: 12px;
-}
-.orion-btn.lg {
-  min-height: 36px;
-  height: 36px;
-  padding: 0 16px;
 }
 html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
   transform: none;

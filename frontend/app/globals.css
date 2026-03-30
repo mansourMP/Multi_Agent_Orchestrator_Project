@@ -37,7 +37,7 @@
   /* BUTTONS */
   --btn-height: 32px;
   --btn-padding: 0 14px;
-  --btn-radius: 12px;
+  --btn-radius: 6px;
   --btn-font-size: var(--text-sm);
   --btn-height-sm: 28px;
   --btn-height-md: 32px;
@@ -1035,6 +1035,24 @@ body.orion-chat-home .sidebar::before {
   text-align: center;
 }
 
+/* Button radius is capped platform-wide; pill radius is reserved for tags and chips only. */
+button:not(.orion-chip):not(.orion-chip-action),
+input[type='button'],
+input[type='submit'],
+input[type='reset'],
+a.btn-primary,
+a.btn-secondary,
+a.btn-ghost,
+a.btn,
+a.orion-btn,
+a.orion-btn-primary,
+a.orion-btn-secondary,
+a.orion-btn-ghost,
+a.orion-btn-success,
+a.orion-btn-danger {
+  border-radius: 6px !important;
+}
+
 .btn-primary,
 .orion-btn-primary,
 .orion-btn.primary {
@@ -1278,29 +1296,11 @@ input:focus-visible {
   border-color: var(--primary-base);
 }
 
-.orion-btn,
-.orion-btn-primary,
-.orion-btn-secondary,
-.orion-btn-ghost,
-.orion-btn-success,
-.orion-btn-danger,
-.orion-btn.primary,
-.orion-btn.secondary,
-.orion-btn.ghost,
-.orion-btn.success,
-.orion-btn.danger {
-  min-height: var(--btn-height) !important;
-  height: var(--btn-height);
-  padding: var(--btn-padding) !important;
-  border-radius: var(--btn-radius) !important;
-  font-size: var(--btn-font-size);
-}
-
 .orion-btn.sm {
   min-height: var(--btn-height-sm) !important;
   height: var(--btn-height-sm);
   padding: 0 10px !important;
-  border-radius: 10px !important;
+  border-radius: 6px !important;
   font-size: 12px;
 }
 
@@ -1314,22 +1314,22 @@ input:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 24px;
-  border-radius: 999px;
+  min-height: 20px;
+  border-radius: 999px; /* Pill radius is reserved for tag and chip elements only. */
   gap: 6px;
-  padding: 0 9px;
-  font-size: var(--font-label);
-  font-weight: 750;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
   line-height: 1.1;
-  border: 1px solid var(--border-default);
-  background: color-mix(in srgb, var(--bg-element) 88%, var(--bg-surface) 12%);
-  color: var(--text-secondary);
+  border: 1px solid #e5e5e5;
+  background: #f5f5f5;
+  color: #6b6b6b;
 }
 
 .orion-chip[data-status-tone='green'] {
-  border-color: color-mix(in srgb, var(--status-green) 36%, var(--border-default) 64%);
-  background: color-mix(in srgb, var(--status-green) 14%, var(--bg-surface) 86%);
-  color: var(--status-green);
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #16a34a;
 }
 
 .orion-chip[data-status-tone='yellow'] {
@@ -1339,9 +1339,9 @@ input:focus-visible {
 }
 
 .orion-chip[data-status-tone='red'] {
-  border-color: color-mix(in srgb, var(--status-red) 40%, var(--border-default) 60%);
-  background: color-mix(in srgb, var(--status-red) 14%, var(--bg-surface) 86%);
-  color: var(--status-red);
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
   animation: orionStatusPulse 1.6s ease-in-out infinite;
 }
 
@@ -1389,9 +1389,9 @@ input:focus-visible {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 20px 16px;
+  padding: 0;
   gap: 0;
-  background: var(--builder-page-bg);
+  background: #efefec;
 }
 
 .orion-workspace-studio-layout {
@@ -2195,11 +2195,6 @@ input:focus-visible {
 
 .orion-builder-meta-chip.is-danger {
   color: var(--danger-700);
-}
-
-.orion-page-shell.is-builder-page {
-  background: #efefec;
-  padding: 0;
 }
 
 .orion-builder-shell {
@@ -5708,11 +5703,11 @@ input:focus-visible {
 }
 
 .orion-panel {
-  border: 1px solid var(--border-default);
-  border-radius: var(--surface-radius);
-  background: color-mix(in srgb, var(--bg-surface) 94%, var(--bg-element) 6%);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent 28%);
+  border-radius: 18px;
+  background: #ffffff;
   padding: var(--surface-padding);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition:
     border-color var(--motion-fast) var(--easing-standard),
     transform var(--motion-fast) var(--easing-standard),
@@ -5720,28 +5715,30 @@ input:focus-visible {
 }
 
 .orion-panel.muted {
-  background: color-mix(in srgb, var(--bg-element) 92%, var(--bg-surface) 8%);
-  border-color: var(--border-subtle);
+  background: color-mix(in srgb, #ffffff 92%, var(--bg-hover) 8%);
+  border-color: color-mix(in srgb, var(--border-subtle) 72%, transparent 28%);
 }
 
 .orion-panel-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .orion-panel-title {
-  font-size: var(--font-title-card);
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
   color: var(--text-primary);
 }
 
 .orion-panel-copy {
-  font-size: var(--font-meta);
+  font-size: 13px;
   color: var(--text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
+  font-weight: 400;
 }
 
 .orion-control-card {
@@ -10663,37 +10660,6 @@ body.orion-setup-focus .orion-main-stage {
   font-weight: 550;
 }
 
-.orion-panel,
-.orion-panel.muted {
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent 28%);
-  border-radius: 18px;
-  background: #ffffff;
-  box-shadow: none;
-}
-
-.orion-panel.muted {
-  background: color-mix(in srgb, #ffffff 92%, var(--bg-hover) 8%);
-}
-
-.orion-panel-header {
-  margin-bottom: 14px;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.orion-panel-title {
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.orion-panel-copy {
-  font-size: 13px;
-  line-height: 1.5;
-  font-weight: 400;
-  color: var(--text-secondary);
-}
-
 .orion-builder-hub-hero {
   min-height: 280px;
   display: grid;
@@ -12423,29 +12389,6 @@ select:focus-visible {
   line-height: 1.55;
   color: var(--text-secondary);
   max-width: 440px;
-}
-
-.orion-chip {
-  min-height: 20px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f5f5f5;
-  border: 1px solid #e5e5e5;
-  color: #6b6b6b;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.orion-chip[data-status-tone='green'] {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-  color: #16a34a;
-}
-
-.orion-chip[data-status-tone='red'] {
-  background: #fef2f2;
-  border-color: #fecaca;
-  color: #dc2626;
 }
 
 .orion-segmented {

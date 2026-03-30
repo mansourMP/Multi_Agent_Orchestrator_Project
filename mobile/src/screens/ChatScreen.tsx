@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  Easing,
   View,
   Text,
   FlatList,
@@ -76,6 +77,104 @@ function describeRunPhase(run: any) {
 type ChatScreenProps = {
   sessionId: string;
 };
+
+type KinThinkingIndicatorProps = {
+  theme: ReturnType<typeof useTheme>;
+  loadingDotOpacities: Animated.Value[];
+};
+
+function KinThinkingIndicator({ theme, loadingDotOpacities }: KinThinkingIndicatorProps) {
+  const orbPulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(orbPulse, {
+          toValue: 1,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+        Animated.timing(orbPulse, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: false,
+        }),
+      ]),
+    );
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+      orbPulse.stopAnimation();
+      orbPulse.setValue(0);
+    };
+  }, [orbPulse]);
+
+  const orbOpacity = orbPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.4, 1],
+  });
+  const orbShadowRadius = orbPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 6],
+  });
+  const orbShadowOpacity = orbPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.2, 0.6],
+  });
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        alignSelf: "flex-start",
+      }}
+    >
+      <Animated.View
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: theme.colors.textSecondary,
+          opacity: orbOpacity,
+          shadowColor: theme.colors.textSecondary,
+          shadowRadius: Platform.OS === "ios" ? orbShadowRadius : 0,
+          shadowOpacity: Platform.OS === "ios" ? orbShadowOpacity : 0,
+          shadowOffset: { width: 0, height: 0 },
+        }}
+      />
+      <Text
+        style={{
+          fontSize: 12.5,
+          fontWeight: "700",
+          color: theme.colors.textSecondary,
+          letterSpacing: -0.2,
+        }}
+      >
+        Thinking
+      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        {loadingDotOpacities.map((opacity, dot) => (
+          <Animated.View
+            key={dot}
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 2.5,
+              backgroundColor: theme.colors.textSecondary,
+              opacity,
+            }}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
 
 function formatTimestamp(timestamp?: number) {
   if (!timestamp) return "";
@@ -716,34 +815,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         />
 
         {isLoading ? (
-          <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8, gap: 10 }}>
-            <View
-              style={{
-                alignSelf: "flex-start",
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                backgroundColor: theme.colors.surface,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                borderRadius: 20,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-              }}
-            >
-              {loadingDotOpacities.map((opacity, dot) => (
-                <Animated.View
-                  key={dot}
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 3,
-                    backgroundColor: theme.colors.textSecondary,
-                    opacity,
-                  }}
-                />
-              ))}
-            </View>
+          <View style={{ paddingHorizontal: SPACING.md, paddingTop: 8 }}>
+            <KinThinkingIndicator theme={theme} loadingDotOpacities={loadingDotOpacities} />
           </View>
         ) : null}
 

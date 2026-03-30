@@ -254,14 +254,11 @@ export function ChatSurface({
   const router = useRouter();
   const isLoading = chatBusy;
   const sendDisabled = chatBusy || goal.trim().length === 0;
-  const surfaceRef = useRef<HTMLElement | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const composerShellRef = useRef<HTMLDivElement | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
-  const [composerReserve, setComposerReserve] = useState(220);
   const visibleMessages = useMemo(() => {
     const lastMessage = messages[messages.length - 1];
     const lastLifecycle = lastMessage?.role === 'assistant'
@@ -301,51 +298,15 @@ export function ChatSurface({
   }, [goal, primaryGoalRef]);
 
   useEffect(() => {
-    const shell = composerShellRef.current;
-    if (!shell) return;
-    const updateReserve = () => {
-      const shellRect = shell.getBoundingClientRect();
-      const computed = window.getComputedStyle(shell);
-      const bottomOffset = Number.parseFloat(computed.bottom || '0') || 0;
-      const nextReserve = Math.max(188, Math.ceil(shellRect.height + bottomOffset + 20));
-      setComposerReserve((current) => (Math.abs(current - nextReserve) > 1 ? nextReserve : current));
-    };
-    updateReserve();
-    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateReserve) : null;
-    resizeObserver?.observe(shell);
-    window.addEventListener('resize', updateReserve);
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener('resize', updateReserve);
-    };
-  }, [emptyAction, hasMessages, inlineAction, inlineStatus, permissionPrompt]);
-
-  useEffect(() => {
-    const surface = surfaceRef.current;
-    if (!surface) return;
-    surface.style.setProperty('--orion-chat-composer-reserve', `${composerReserve}px`);
-    return () => {
-      surface.style.removeProperty('--orion-chat-composer-reserve');
-    };
-  }, [composerReserve]);
-
-  useEffect(() => {
     if (!threadRef.current) return;
-    let cancelled = false;
-    let secondFrame = 0;
-    const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        if (cancelled || !threadRef.current) return;
-        threadRef.current.scrollTop = threadRef.current.scrollHeight;
-      });
-      if (cancelled) cancelAnimationFrame(secondFrame);
+    const frame = requestAnimationFrame(() => {
+      if (!threadRef.current) return;
+      threadRef.current.scrollTop = threadRef.current.scrollHeight;
     });
     return () => {
-      cancelled = true;
-      cancelAnimationFrame(firstFrame);
-      if (secondFrame) cancelAnimationFrame(secondFrame);
+      cancelAnimationFrame(frame);
     };
-  }, [composerReserve, isLoading, visibleMessages]);
+  }, [messages, isLoading]);
 
   useEffect(() => {
     if (!attachMenuOpen && !modelMenuOpen && !controlsMenuOpen) return;
@@ -382,7 +343,6 @@ export function ChatSurface({
 
   return (
     <section
-      ref={surfaceRef}
       className={`orion-chat-v2${hasMessages ? ' has-history' : ' is-empty'}${isFirstThread ? ' is-first-thread' : ''}`}
       suppressHydrationWarning
     >
@@ -565,10 +525,7 @@ export function ChatSurface({
         ) : null}
       </div>
 
-      <div
-        ref={composerShellRef}
-        className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}
-      >
+      <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
         <div className="orion-chat-v2-composer-frame">
           {permissionPrompt ? (
             <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">

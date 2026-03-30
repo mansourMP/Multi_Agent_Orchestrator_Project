@@ -1163,7 +1163,7 @@ export function AutopilotWorkspace() {
   const streamRef = useRef<AuthenticatedEventStreamConnection | null>(null);
   const primaryGoalRef = useRef<HTMLTextAreaElement | null>(null);
   const router = useRouter();
-  const { accessMode, setInspectState } = usePlatformShell();
+  const { accessMode, setInspectState, status: shellStatus } = usePlatformShell();
   const singleAgentMode = SINGLE_AGENT_MODE;
 
   const pageState = usePageState();
@@ -1241,6 +1241,7 @@ export function AutopilotWorkspace() {
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
   const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
+  const [hasAttemptedSimpleChatOrTask, setHasAttemptedSimpleChatOrTask] = useState(false);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
   const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
@@ -2022,6 +2023,8 @@ export function AutopilotWorkspace() {
       .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
     if (providerError) return null;
     if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
+    if (!hasAttemptedSimpleChatOrTask) return null;
+    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
     const providerLabel = providerOptions.find((item) => item.id === provider)?.label || provider;
     if (!setupStatus.accountConnected) {
       return connectionMode === 'managed'
@@ -2035,8 +2038,21 @@ export function AutopilotWorkspace() {
     }
     if (!derivedSetupReady) return 'Finish setup before starting live work.';
     return null;
-  }, [connectionMode, derivedSetupReady, provider, providerOptions, selectedChatMessages, setupStatus.accountConnected, setupStatus.connectionTested, topError]);
+  }, [
+    connectionMode,
+    derivedSetupReady,
+    hasAttemptedSimpleChatOrTask,
+    provider,
+    providerOptions,
+    selectedChatMessages,
+    setupStatus.accountConnected,
+    setupStatus.connectionTested,
+    shellStatus.localRuntimeOnline,
+    topError,
+  ]);
   const inlineSimpleChatAction = useMemo(() => {
+    if (!hasAttemptedSimpleChatOrTask) return null;
+    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
     if (!setupStatus.accountConnected) {
       return {
         label: 'Connect AI account →',
@@ -2054,8 +2070,16 @@ export function AutopilotWorkspace() {
       label: 'Open setup →',
       href: '/setup',
     };
-  }, [connectionMode, derivedSetupReady, setupStatus.accountConnected, setupStatus.connectionTested]);
+  }, [
+    derivedSetupReady,
+    hasAttemptedSimpleChatOrTask,
+    setupStatus.accountConnected,
+    setupStatus.connectionTested,
+    shellStatus.localRuntimeOnline,
+  ]);
   const emptySimpleChatAction = useMemo(() => {
+    if (!hasAttemptedSimpleChatOrTask) return null;
+    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
     if (!setupStatus.accountConnected) {
       return {
         label: 'Connect AI account',
@@ -2069,7 +2093,12 @@ export function AutopilotWorkspace() {
       };
     }
     return null;
-  }, [connectionMode, setupStatus.accountConnected, setupStatus.connectionTested]);
+  }, [
+    hasAttemptedSimpleChatOrTask,
+    setupStatus.accountConnected,
+    setupStatus.connectionTested,
+    shellStatus.localRuntimeOnline,
+  ]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
     return 'Connect Telegram to activate alerts.';
@@ -2238,6 +2267,7 @@ export function AutopilotWorkspace() {
     const raw = String(input ?? goal).trim();
     if (!raw) return;
     const command = raw.toLowerCase();
+    setHasAttemptedSimpleChatOrTask(true);
     setGoal('');
 
     if (!raw.startsWith('/')) {
@@ -2325,6 +2355,7 @@ export function AutopilotWorkspace() {
       }
 
       if (detail.type === 'run_autopilot') {
+        setHasAttemptedSimpleChatOrTask(true);
         if (!derivedSetupReady) {
           setTopError(null);
           return;
@@ -2536,6 +2567,7 @@ export function AutopilotWorkspace() {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
+    setHasAttemptedSimpleChatOrTask(true);
     const priorMessages = selectedChatMessages
       .filter((message) => {
         const content = normalizeChatContent(message.content);
@@ -2610,6 +2642,7 @@ export function AutopilotWorkspace() {
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
     if (!text) return;
+    setHasAttemptedSimpleChatOrTask(true);
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),

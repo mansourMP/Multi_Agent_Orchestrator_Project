@@ -114,10 +114,13 @@ a {
 }
 .orion-main-stage {
   min-height: calc(100vh - var(--topbar-height));
-  overflow: visible;
+  height: calc(100vh - var(--topbar-height));
+  overflow: hidden;
   padding: 0;
   background: var(--critical-bg-app);
   position: relative;
+  display: flex;
+  flex-direction: column;
   transition: transform 180ms ease, filter 180ms ease;
 }
 .orion-main-stage::after {
@@ -161,8 +164,11 @@ a {
   width: 100%;
   max-width: none;
   margin: 0;
+  flex: 1 1 auto;
   height: 100%;
-  min-height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   padding: 0;
 }

@@ -2573,13 +2573,22 @@ export function AutopilotWorkspace() {
     setPendingSimpleChat({ sessionId, messageId: placeholderId, goal: text });
     setGoal('');
     try {
+      let streamedReply = '';
       const payload = await sendOperatorChat(text, {
         reasoningEffort: simpleChatDepth,
         threadId: sessionId,
         priorMessages,
+        onChunk: (delta) => {
+          streamedReply += delta;
+          patchSimpleChatMessage(sessionId, placeholderId, {
+            content: streamedReply,
+            status: 'sending',
+            ts: new Date().toISOString(),
+          });
+        },
       });
       patchSimpleChatMessage(sessionId, placeholderId, {
-        content: payload.reply || 'I couldn’t form a clean reply just now.',
+        content: payload.reply || streamedReply || 'I couldn’t form a clean reply just now.',
         status: 'completed',
         actions: Array.isArray(payload.actions) ? payload.actions : [],
         contextUsed: payload.context_used || null,

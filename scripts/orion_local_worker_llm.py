@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama")
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
@@ -35,7 +35,6 @@ OPENAI_API_KEY_MISSING_ERROR = "No OpenAI API key configured. Add one from the A
 OPENAI_CODEX_DIRECT_AUTH_ERROR = (
     "This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key."
 )
-CODEX_MINIMAL_INSTRUCTIONS = "Answer the user's message directly and concisely."
 CLAUDE_CODE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 CLAUDE_CODE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 
@@ -575,11 +574,7 @@ def format_provider_error(exc: Exception) -> str:
 
 
 def codex_instructions(system_prompt: Optional[str]) -> str:
-    prompt = str(system_prompt or "").strip()
-    if prompt:
-        return prompt
-    # chatgpt.com/backend-api/codex/responses rejects omitted/null instructions
-    return CODEX_MINIMAL_INSTRUCTIONS
+    return str(system_prompt or "")
 
 
 def openai_chat_json(
@@ -743,6 +738,52 @@ def openai_codex_backend_text(
     prior_messages: Any = None,
     credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
+    text_parts: list[str] = []
+    usage: Optional[Dict[str, Any]] = None
+    model = (
+        str(model_override or "").strip()
+        or os.getenv("ORION_LOCAL_WORKER_CODEX_MODEL")
+        or os.getenv("CODEX_MODEL")
+        or "gpt-5.4"
+    ).strip() or "gpt-5.4"
+    for event in iter_openai_codex_backend_events(
+        system_prompt,
+        user_prompt,
+        model_override=model_override,
+        reasoning_effort_override=reasoning_effort_override,
+        prior_messages=prior_messages,
+        credential_override=credential_override,
+    ):
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "delta":
+            delta = str(event.get("delta") or "")
+            if delta:
+                text_parts.append(delta)
+            continue
+        if event_type == "done":
+            usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+            resolved_model = str(event.get("model") or model or "").strip() or model
+            text = str(event.get("text") or "").strip() or "".join(text_parts).strip()
+            if text:
+                return text, usage, resolved_model, ""
+            return "", usage, resolved_model, "codex_empty_output"
+        if event_type == "error":
+            resolved_model = str(event.get("model") or model or "").strip() or model
+            return "", None, resolved_model, str(event.get("error") or "codex_response_failed").strip() or "codex_response_failed"
+    final_text = "".join(text_parts).strip()
+    if final_text:
+        return final_text, usage, model, ""
+    return "", usage, model, "codex_empty_output"
+
+
+def iter_openai_codex_backend_events(
+    system_prompt: Optional[str],
+    user_prompt: str,
+    model_override: Optional[str] = None,
+    reasoning_effort_override: Optional[str] = None,
+    prior_messages: Any = None,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> Iterator[Dict[str, Any]]:
     override = credential_override if isinstance(credential_override, dict) else {}
     token = sanitize_bearer_token(
         override.get("oauth_token")
@@ -750,11 +791,13 @@ def openai_codex_backend_text(
         or ""
     ) or get_codex_oauth_token()
     if not token:
-        return "", None, "", "missing_oauth_token"
+        yield {"type": "error", "error": "missing_oauth_token", "model": ""}
+        return
 
     account_id = str(override.get("account_id") or "").strip() or codex_account_id_from_token(token)
     if not account_id:
-        return "", None, "", "missing_chatgpt_account_id"
+        yield {"type": "error", "error": "missing_chatgpt_account_id", "model": ""}
+        return
 
     model = (
         str(model_override or "").strip()
@@ -835,6 +878,7 @@ def openai_codex_backend_text(
                         delta = str(event.get("delta") or "")
                         if delta:
                             text_parts.append(delta)
+                            yield {"type": "delta", "delta": delta, "model": model}
                         continue
                     if event_type == "response.output_item.done":
                         item = event.get("item")
@@ -859,8 +903,10 @@ def openai_codex_backend_text(
                         if not final_text and isinstance(response_payload, dict):
                             final_text = extract_openai_text(response_payload).strip()
                         if final_text:
-                            return final_text, usage, model, ""
-                        return "", usage, model, "codex_empty_output"
+                            yield {"type": "done", "text": final_text, "usage": usage, "model": model}
+                            return
+                        yield {"type": "error", "error": "codex_empty_output", "model": model}
+                        return
                     if event_type in {"response.failed", "error"}:
                         message = ""
                         response_payload = event.get("response")
@@ -870,14 +916,18 @@ def openai_codex_backend_text(
                                 message = str(response_error.get("message") or response_error.get("code") or "").strip()
                         if not message:
                             message = str(event.get("message") or event.get("code") or "codex_response_failed").strip()
-                        return "", None, model, message or "codex_response_failed"
+                        yield {"type": "error", "error": message or "codex_response_failed", "model": model}
+                        return
 
             final_text = "\n".join(part for part in text_parts if part).strip()
             if final_text:
-                return final_text, usage, model, ""
-            return "", usage, model, "codex_empty_output"
+                yield {"type": "done", "text": final_text, "usage": usage, "model": model}
+                return
+            yield {"type": "error", "error": "codex_empty_output", "model": model}
+            return
     except Exception as exc:
-        return "", None, model, format_provider_error(exc)
+        yield {"type": "error", "error": format_provider_error(exc), "model": model}
+        return
 
 
 def openai_responses_text(
@@ -1750,3 +1800,184 @@ def generate_chat_reply_with_provider_fallback(
         else:
             last_error = f"{provider} generation failed"
     return "", None, ",".join(attempted), last_error
+
+
+def generate_chat_reply_stream_with_provider_fallback(
+    context: Dict[str, Any],
+    metadata: Dict[str, Any],
+    user_goal: str,
+    system_prompt: Optional[str],
+    prior_messages: Any = None,
+) -> Iterator[Dict[str, Any]]:
+    attempted: list[str] = []
+    last_error = "no provider credentials available"
+    prefer_openai_chat = should_use_openai_chat_completions(context, metadata)
+    requested_model = resolve_requested_model(context, metadata)
+    requested_reasoning_effort = resolve_requested_reasoning_effort(context, metadata)
+    credential_override = metadata.get("credentials") if isinstance(metadata.get("credentials"), dict) else None
+
+    for provider in provider_order_for_run(context, metadata):
+        attempted.append(provider)
+        attempted_str = ",".join(attempted)
+        provider_model = coerce_requested_model_for_provider(requested_model, provider)
+
+        if provider == "codex_cli":
+            streamed_parts: list[str] = []
+            final_usage: Optional[Dict[str, Any]] = None
+            final_model = provider_model
+            for event in iter_openai_codex_backend_events(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                reasoning_effort_override=requested_reasoning_effort or None,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
+            ):
+                event_type = str(event.get("type") or "").strip().lower()
+                if event_type == "delta":
+                    delta = str(event.get("delta") or "")
+                    if delta:
+                        streamed_parts.append(delta)
+                        yield {"type": "chunk", "delta": delta}
+                    continue
+                if event_type == "done":
+                    final_usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+                    final_model = str(event.get("model") or final_model or "").strip() or final_model
+                    final_text = str(event.get("text") or "").strip() or "".join(streamed_parts).strip()
+                    if final_text:
+                        yield {
+                            "type": "result",
+                            "reply": final_text,
+                            "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
+                            "provider": "codex_cli",
+                            "model": final_model,
+                            "attempted_providers": attempted_str,
+                            "error": "",
+                        }
+                        return
+                    last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: codex_empty_output"
+                    break
+                if event_type == "error":
+                    final_model = str(event.get("model") or final_model or "").strip() or final_model
+                    error_text = str(event.get("error") or "unknown_error").strip() or "unknown_error"
+                    if streamed_parts:
+                        yield {
+                            "type": "result",
+                            "reply": "".join(streamed_parts).strip(),
+                            "usage_masked": build_usage_masked_from_provider("codex_cli", final_usage, final_model),
+                            "provider": "codex_cli",
+                            "model": final_model,
+                            "attempted_providers": attempted_str,
+                            "error": error_text,
+                        }
+                        return
+                    last_error = f"{DIRECT_CHAT_TRANSPORT_UNAVAILABLE}: codex_cli_backend_unavailable: {error_text}"
+                    break
+            continue
+
+        if provider == "claude_code_cli":
+            text, usage, model, provider_error = anthropic_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
+            )
+            if text:
+                yield {"type": "chunk", "delta": text}
+                yield {
+                    "type": "result",
+                    "reply": text,
+                    "usage_masked": build_usage_masked_from_provider("claude_code_cli", usage, model),
+                    "provider": "claude_code_cli",
+                    "model": model,
+                    "attempted_providers": attempted_str,
+                    "error": "",
+                }
+                return
+            last_error = f"claude_code_cli generation failed: {provider_error or 'unknown_error'}"
+            continue
+
+        if provider == "openai":
+            direct_auth_error = openai_direct_auth_error(context, metadata)
+            if direct_auth_error:
+                last_error = f"openai generation failed: {direct_auth_error}"
+                continue
+            text = ""
+            usage: Optional[Dict[str, Any]] = None
+            model = provider_model
+            provider_error = ""
+            if not prefer_openai_chat:
+                text, usage, model, provider_error = openai_responses_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                )
+            if not text:
+                text, usage, model, provider_error = openai_chat_text(
+                    system_prompt,
+                    user_goal,
+                    model_override=provider_model,
+                    prior_messages=prior_messages,
+                )
+            if text:
+                yield {"type": "chunk", "delta": text}
+                yield {
+                    "type": "result",
+                    "reply": text,
+                    "usage_masked": build_usage_masked_from_provider("openai", usage, model),
+                    "provider": "openai",
+                    "model": model,
+                    "attempted_providers": attempted_str,
+                    "error": "",
+                }
+                return
+            last_error = f"openai generation failed: {provider_error or 'unknown_error'}"
+            continue
+
+        if provider == "anthropic":
+            text, usage, model, provider_error = anthropic_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                credential_override=credential_override,
+            )
+        elif provider == "gemini":
+            text, usage, model, provider_error = gemini_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+            )
+        elif provider == "ollama":
+            text, usage, model, provider_error = ollama_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+            )
+        else:
+            continue
+        if text:
+            yield {"type": "chunk", "delta": text}
+            yield {
+                "type": "result",
+                "reply": text,
+                "usage_masked": build_usage_masked_from_provider(provider, usage, model),
+                "provider": provider,
+                "model": model,
+                "attempted_providers": attempted_str,
+                "error": "",
+            }
+            return
+        if provider_error:
+            last_error = f"{provider} generation failed: {provider_error}"
+        else:
+            last_error = f"{provider} generation failed"
+    yield {
+        "type": "failure",
+        "attempted_providers": ",".join(attempted),
+        "error": last_error,
+    }

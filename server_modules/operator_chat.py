@@ -5,10 +5,11 @@ import re
 import sys
 import importlib.util
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from scripts.orion_local_worker_llm import (
     SUPPORTED_PROVIDERS,
+    generate_chat_reply_stream_with_provider_fallback,
     generate_chat_reply_with_provider_fallback,
     get_claude_code_session_token,
     provider_has_key,
@@ -548,6 +549,18 @@ def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
     return None
 
 
+def _direct_chat_error_reply(llm_error: str) -> str:
+    reply = "I couldn’t get a clean model reply right now. Retry in a moment."
+    compact_error = _compact_text(llm_error)
+    if "no provider credentials available" in compact_error:
+        return "No active AI credential is available right now. Connect the workspace AI account, then retry."
+    if "direct_chat_transport_unavailable" in compact_error:
+        return "Direct chat is unavailable on the current provider path. Use a message-native AI account, then retry."
+    if "missing scopes" in compact_error or "api.responses.write" in compact_error:
+        return "The current Codex/OpenAI auth cannot answer chat right now. Reconnect the account, then retry."
+    return reply
+
+
 def build_direct_operator_reply(
     *,
     message: str,
@@ -558,7 +571,7 @@ def build_direct_operator_reply(
     prior_messages: Optional[List[Dict[str, Any]]] = None,
     reasoning_effort: str = "",
     availability: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> Iterator[Dict[str, Any]]:
     normalized_message = str(message or "").strip()
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     normalized_thread_id = str(thread_id or "").strip()
@@ -588,29 +601,47 @@ def build_direct_operator_reply(
     )
 
     if not normalized_message:
-        return _with_context_used({
+        yield {
+            "type": "final",
+            "payload": _with_context_used({
             "reply": "Tell me the outcome you want and I’ll help you move it forward.",
             "actions": [],
             "mode": "answer",
-        }, base_context_used)
+            }, base_context_used),
+        }
+        return
 
     gated = _tool_gate_response(normalized_message, availability_payload)
     if gated is not None:
-        return _with_context_used(gated, base_context_used)
+        yield {
+            "type": "final",
+            "payload": _with_context_used(gated, base_context_used),
+        }
+        return
 
     if not bool(availability_payload.get("ai_ready")) and not _connector_write_preview_allowed(normalized_message, availability_payload):
-        return _with_context_used(_no_ai_chat_response(availability_payload), base_context_used)
+        yield {
+            "type": "final",
+            "payload": _with_context_used(_no_ai_chat_response(availability_payload), base_context_used),
+        }
+        return
 
     preview = _preview_run_response(normalized_message, availability_payload)
     if preview is not None:
-        return _with_context_used(preview, base_context_used)
+        yield {
+            "type": "final",
+            "payload": _with_context_used(preview, base_context_used),
+        }
+        return
 
     provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
     fallback_reason = None
     if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
-        return _with_context_used(
-            _provider_unavailable_response(provider),
-            _build_context_used(
+        yield {
+            "type": "final",
+            "payload": _with_context_used(
+                _provider_unavailable_response(provider),
+                _build_context_used(
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,
                 effective_provider=provider,
@@ -625,7 +656,9 @@ def build_direct_operator_reply(
                 fallback_used=False,
                 fallback_reason=fallback_reason,
             ),
-        )
+            ),
+        }
+        return
     selected_model = normalized_requested_model if provider == normalized_requested_provider else ""
     context = {
         "workspace_id": normalized_workspace_id,
@@ -654,39 +687,78 @@ def build_direct_operator_reply(
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
     llm_error = ""
-    for _ in range(2):
-        reply, usage_masked, attempted_providers, llm_error = generate_chat_reply_with_provider_fallback(
-            context=context,
-            metadata=metadata,
-            user_goal=normalized_message,
-            system_prompt=system_prompt,
-            prior_messages=normalized_prior_messages or None,
-        )
-        if reply:
-            break
-    if not reply:
-        reply = "I couldn’t get a clean model reply right now. Retry in a moment."
-        if "no provider credentials available" in _compact_text(llm_error):
-            reply = "No active AI credential is available right now. Connect the workspace AI account, then retry."
-        elif "direct_chat_transport_unavailable" in _compact_text(llm_error):
-            reply = "Direct chat is unavailable on the current provider path. Use a message-native AI account, then retry."
-        elif "missing scopes" in _compact_text(llm_error) or "api.responses.write" in _compact_text(llm_error):
-            reply = "The current Codex/OpenAI auth cannot answer chat right now. Reconnect the account, then retry."
+    actual_provider: Optional[str] = provider
+    actual_model: Optional[str] = normalized_requested_model or None
 
-    actual_provider = usage_masked.get("provider") if isinstance(usage_masked, dict) else provider
-    actual_model = usage_masked.get("model") if isinstance(usage_masked, dict) else (normalized_requested_model or None)
+    for event in generate_chat_reply_stream_with_provider_fallback(
+        context=context,
+        metadata=metadata,
+        user_goal=normalized_message,
+        system_prompt=system_prompt,
+        prior_messages=normalized_prior_messages or None,
+    ):
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "chunk":
+            delta = str(event.get("delta") or "")
+            if delta:
+                reply += delta
+                yield {"type": "chunk", "delta": delta}
+            continue
+        if event_type == "result":
+            final_reply = str(event.get("reply") or "").strip() or reply
+            usage_masked = event.get("usage_masked") if isinstance(event.get("usage_masked"), dict) else {}
+            attempted_providers = str(event.get("attempted_providers") or "").strip()
+            llm_error = str(event.get("error") or "").strip()
+            actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
+            actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
+            actions = _suggest_actions(normalized_message, availability_payload)
+            yield {
+                "type": "final",
+                "payload": {
+                    "reply": final_reply,
+                    "actions": actions,
+                    "mode": "answer_with_action" if actions else "answer",
+                    "usage_masked": usage_masked,
+                    "provider": actual_provider,
+                    "model": actual_model,
+                    "attempted_providers": attempted_providers,
+                    "error": llm_error,
+                    "context_used": _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=str(actual_provider or provider or "").strip() or None,
+                        requested_model=normalized_requested_model,
+                        effective_model=str(actual_model or "").strip() or None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=prior_messages_used,
+                        history_mode=history_mode,
+                        run_created=False,
+                        fallback_used=False,
+                        fallback_reason=fallback_reason,
+                    ),
+                },
+            }
+            return
+        if event_type == "failure":
+            attempted_providers = str(event.get("attempted_providers") or "").strip()
+            llm_error = str(event.get("error") or "").strip()
+            break
 
     actions = _suggest_actions(normalized_message, availability_payload)
-    return {
-        "reply": reply,
-        "actions": actions,
-        "mode": "answer_with_action" if actions else "answer",
-        "usage_masked": usage_masked,
-        "provider": actual_provider,
-        "model": actual_model,
-        "attempted_providers": attempted_providers,
-        "error": llm_error,
-        "context_used": _build_context_used(
+    yield {
+        "type": "final",
+        "payload": {
+            "reply": _direct_chat_error_reply(llm_error),
+            "actions": actions,
+            "mode": "answer_with_action" if actions else "answer",
+            "usage_masked": usage_masked,
+            "provider": actual_provider,
+            "model": actual_model,
+            "attempted_providers": attempted_providers,
+            "error": llm_error,
+            "context_used": _build_context_used(
             workspace_id=normalized_workspace_id,
             requested_provider=normalized_requested_provider,
             effective_provider=str(actual_provider or provider or "").strip() or None,
@@ -700,5 +772,24 @@ def build_direct_operator_reply(
             run_created=False,
             fallback_used=False,
             fallback_reason=fallback_reason,
-        ),
+            ),
+        },
     }
+
+
+def collect_direct_operator_reply(
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    final_payload: Dict[str, Any] = {}
+    accumulated_reply = ""
+    for event in build_direct_operator_reply(**kwargs):
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "chunk":
+            accumulated_reply += str(event.get("delta") or "")
+            continue
+        if event_type == "final" and isinstance(event.get("payload"), dict):
+            final_payload = dict(event.get("payload") or {})
+            if not str(final_payload.get("reply") or "").strip() and accumulated_reply:
+                final_payload["reply"] = accumulated_reply
+            return final_payload
+    return final_payload or {"reply": accumulated_reply}

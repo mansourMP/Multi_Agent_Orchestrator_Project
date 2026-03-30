@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import threading
+
+from fastapi.responses import StreamingResponse
 
 from server_modules.doctor_gate import build_doctor_run_gate_live
 
@@ -340,17 +343,34 @@ def register_run_routes(app) -> None:
         if not message:
             raise HTTPException(status_code=400, detail="Chat message is required.")
 
-        payload = build_direct_operator_reply(
-            message=message,
-            workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
-            requested_model=str(body.get("model") or "").strip(),
-            requested_provider=str(body.get("provider") or "").strip(),
-            thread_id=str(body.get("thread_id") or "").strip(),
-            prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-            reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
-            availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
+        def iter_chat_events():
+            for event in build_direct_operator_reply(
+                message=message,
+                workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
+                requested_model=str(body.get("model") or "").strip(),
+                requested_provider=str(body.get("provider") or "").strip(),
+                thread_id=str(body.get("thread_id") or "").strip(),
+                prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+                reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
+                availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
+            ):
+                event_type = str(event.get("type") or "message").strip() or "message"
+                if event_type == "final":
+                    data = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                else:
+                    data = {key: value for key, value in event.items() if key != "type"}
+                yield f"event: {event_type}\n".encode("utf-8")
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+        return StreamingResponse(
+            iter_chat_events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
-        return payload
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):

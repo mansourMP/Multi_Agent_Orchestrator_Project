@@ -228,6 +228,25 @@ export type OperatorChatResponsePayload = {
   context_used?: OperatorChatContextUsedPayload | null;
 };
 
+function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatResponsePayload {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  return {
+    reply: typeof record.reply === 'string' ? record.reply : '',
+    actions: Array.isArray(record.actions) ? record.actions as OperatorChatActionPayload[] : [],
+    mode: typeof record.mode === 'string' ? record.mode : undefined,
+    usage_masked: record.usage_masked && typeof record.usage_masked === 'object'
+      ? record.usage_masked as Record<string, unknown>
+      : null,
+    provider: typeof record.provider === 'string' ? record.provider : null,
+    model: typeof record.model === 'string' ? record.model : null,
+    attempted_providers: typeof record.attempted_providers === 'string' ? record.attempted_providers : undefined,
+    error: typeof record.error === 'string' ? record.error : undefined,
+    context_used: record.context_used && typeof record.context_used === 'object'
+      ? record.context_used as OperatorChatContextUsedPayload
+      : null,
+  };
+}
+
 export function humanizeError(message: string): string {
   const lower = message.toLowerCase();
   if (lower.includes('invalid api key')) {
@@ -1927,6 +1946,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       reasoningEffort?: string | null;
       threadId?: string | null;
       priorMessages?: OperatorChatPriorMessagePayload[];
+      onChunk?: (delta: string) => void;
     },
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
@@ -1950,22 +1970,88 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     if (!res.ok) {
       throw new Error(await readResponseMessage(res, 'Failed to get assistant reply.'));
     }
-    const payload = await res.json();
-    return {
-      reply: typeof payload?.reply === 'string' ? payload.reply : '',
-      actions: Array.isArray(payload?.actions) ? payload.actions as OperatorChatActionPayload[] : [],
-      mode: typeof payload?.mode === 'string' ? payload.mode : undefined,
-      usage_masked: payload?.usage_masked && typeof payload.usage_masked === 'object'
-        ? payload.usage_masked as Record<string, unknown>
-        : null,
-      provider: typeof payload?.provider === 'string' ? payload.provider : null,
-      model: typeof payload?.model === 'string' ? payload.model : null,
-      attempted_providers: typeof payload?.attempted_providers === 'string' ? payload.attempted_providers : undefined,
-      error: typeof payload?.error === 'string' ? payload.error : undefined,
-      context_used: payload?.context_used && typeof payload.context_used === 'object'
-        ? payload.context_used as OperatorChatContextUsedPayload
-        : null,
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream') || !res.body) {
+      return normalizeOperatorChatResponsePayload(await res.json());
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalPayload: OperatorChatResponsePayload | null = null;
+    let streamedReply = '';
+    let currentEvent: { event: string; data: string[]; id?: string } = { event: 'message', data: [] };
+
+    const dispatchEvent = () => {
+      if (currentEvent.data.length === 0) return;
+      const eventName = currentEvent.event || 'message';
+      const raw = currentEvent.data.join('\n');
+      const parsed = parseJson(raw);
+      if (eventName === 'chunk') {
+        const delta = parsed && typeof parsed === 'object' && typeof (parsed as { delta?: unknown }).delta === 'string'
+          ? String((parsed as { delta?: unknown }).delta || '')
+          : raw;
+        if (delta) {
+          streamedReply += delta;
+          options?.onChunk?.(delta);
+        }
+      } else if (eventName === 'final') {
+        finalPayload = normalizeOperatorChatResponsePayload(parsed ?? raw);
+      }
     };
+
+    const processBuffer = (flush = false) => {
+      while (true) {
+        const newlineIndex = buffer.indexOf('\n');
+        if (newlineIndex === -1) break;
+        const rawLine = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        if (!line) {
+          dispatchEvent();
+          currentEvent = { event: 'message', data: [] };
+          continue;
+        }
+        if (line.startsWith(':')) continue;
+        const separatorIndex = line.indexOf(':');
+        const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
+        const value = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1).replace(/^\s/, '');
+        if (field === 'event') currentEvent.event = value || 'message';
+        else if (field === 'data') currentEvent.data.push(value);
+        else if (field === 'id') currentEvent.id = value;
+      }
+      if (flush && buffer.trim()) {
+        const tail = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer;
+        if (tail) {
+          const separatorIndex = tail.indexOf(':');
+          const field = separatorIndex === -1 ? tail : tail.slice(0, separatorIndex);
+          const value = separatorIndex === -1 ? '' : tail.slice(separatorIndex + 1).replace(/^\s/, '');
+          if (field === 'event') currentEvent.event = value || 'message';
+          else if (field === 'data') currentEvent.data.push(value);
+          else if (field === 'id') currentEvent.id = value;
+        }
+        buffer = '';
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      processBuffer(false);
+    }
+    buffer += decoder.decode();
+    processBuffer(true);
+    dispatchEvent();
+
+    const resolvedFinalPayload = finalPayload as OperatorChatResponsePayload | null;
+    if (resolvedFinalPayload) {
+      if (!resolvedFinalPayload.reply && streamedReply) {
+        resolvedFinalPayload.reply = streamedReply;
+      }
+      return resolvedFinalPayload;
+    }
+    return normalizeOperatorChatResponsePayload({ reply: streamedReply });
   }, [buildOperatorChatAvailability, model, provider]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {

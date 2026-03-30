@@ -4,7 +4,6 @@ import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useSt
 import { useRouter } from 'next/navigation';
 import { ArrowUp, ChevronDown, Plus, SlidersHorizontal, X } from 'lucide-react';
 import { fmtTime } from '@/app/page.catalog';
-import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 
@@ -85,8 +84,6 @@ type ChatSurfaceProps = {
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
 };
-
-type AssistantLifecycleTone = 'thinking' | 'working' | 'confirmation' | 'failed' | 'done';
 
 function renderInlineMarkdown(text: string, keyPrefix: string) {
   const nodes: ReactNode[] = [];
@@ -198,7 +195,10 @@ function renderChatMarkdown(content: string, keyPrefix: string) {
   return parts;
 }
 
-function resolveAssistantLifecycle(status: ChatMessageRecord['status']): { label: string; tone: AssistantLifecycleTone } | null {
+function resolveAssistantLifecycle(status: ChatMessageRecord['status']): {
+  label: string;
+  tone: 'thinking' | 'working' | 'confirmation' | 'failed' | 'done';
+} | null {
   if (status === 'sending') return { label: 'Thinking', tone: 'thinking' };
   if (status === 'running') return { label: 'Working', tone: 'working' };
   if (status === 'waiting') return { label: 'Confirmation required', tone: 'confirmation' };
@@ -252,14 +252,36 @@ export function ChatSurface({
   identityActions,
 }: ChatSurfaceProps) {
   const router = useRouter();
-  const hasMessages = messages.length > 0;
+  const isLoading = chatBusy;
   const sendDisabled = chatBusy || goal.trim().length === 0;
-  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const surfaceRef = useRef<HTMLElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const composerFrameRef = useRef<HTMLDivElement | null>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
-  const renderedMessages = useMemo(() => messages, [messages]);
-  const isFirstThread = renderedMessages.length > 0 && renderedMessages.length <= 2;
+  const [composerReserve, setComposerReserve] = useState(220);
+  const visibleMessages = useMemo(() => {
+    const lastMessage = messages[messages.length - 1];
+    const lastLifecycle = lastMessage?.role === 'assistant'
+      ? resolveAssistantLifecycle(lastMessage.status)
+      : null;
+    if (lastLifecycle && (lastLifecycle.tone === 'thinking' || lastLifecycle.tone === 'working')) {
+      return messages;
+    }
+    if (!chatBusy) return messages;
+    const syntheticThinkingMessage: ChatMessageRecord = {
+      id: 'synthetic:thinking',
+      role: 'assistant',
+      content: '',
+      ts: lastMessage?.ts || '',
+      status: 'sending',
+      run_id: null,
+    };
+    return [...messages, syntheticThinkingMessage];
+  }, [chatBusy, messages]);
+  const hasMessages = visibleMessages.length > 0;
+  const isFirstThread = visibleMessages.length > 0 && visibleMessages.length <= 2;
 
   const invokeSend = useCallback(() => {
     if (sendDisabled) return;
@@ -278,9 +300,37 @@ export function ChatSurface({
   }, [goal, primaryGoalRef]);
 
   useEffect(() => {
-    if (!hasMessages) return;
-    anchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [hasMessages, renderedMessages.length]);
+    const frame = composerFrameRef.current;
+    if (!frame) return;
+    const updateReserve = () => {
+      const nextReserve = Math.max(188, Math.ceil(frame.getBoundingClientRect().height) + 44);
+      setComposerReserve((current) => (Math.abs(current - nextReserve) > 1 ? nextReserve : current));
+    };
+    updateReserve();
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateReserve) : null;
+    resizeObserver?.observe(frame);
+    window.addEventListener('resize', updateReserve);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateReserve);
+    };
+  }, [permissionPrompt]);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    surface.style.setProperty('--orion-chat-composer-reserve', `${composerReserve}px`);
+    return () => {
+      surface.style.removeProperty('--orion-chat-composer-reserve');
+    };
+  }, [composerReserve]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 100)
+    return () => clearTimeout(timeout)
+  }, [messages, isLoading]);
 
   useEffect(() => {
     if (!attachMenuOpen && !modelMenuOpen && !controlsMenuOpen) return;
@@ -317,8 +367,9 @@ export function ChatSurface({
 
   return (
     <section
+      ref={surfaceRef}
       className={`orion-chat-v2${hasMessages ? ' has-history' : ' is-empty'}${isFirstThread ? ' is-first-thread' : ''}`}
-      onWheel={forwardWheelToMainScroll}
+      suppressHydrationWarning
     >
       <div className="orion-chat-v2-thread-shell">
         <div className="orion-chat-v2-session-bar">
@@ -333,12 +384,12 @@ export function ChatSurface({
           </button>
         </div>
 
-        {renderedMessages.length > 0 ? (
-          <div className="orion-chat-v2-thread" aria-live="polite">
-            {renderedMessages.map((message, index) => {
+        {visibleMessages.length > 0 ? (
+          <div className="orion-chat-v2-thread" aria-live="polite" style={{ paddingBottom: '200px' }}>
+            {visibleMessages.map((message, index) => {
               const isUser = message.role === 'user';
               const isError = message.status === 'error';
-              const previousMessage = index > 0 ? renderedMessages[index - 1] : null;
+              const previousMessage = index > 0 ? visibleMessages[index - 1] : null;
               const followsUser = !isUser && previousMessage?.role === 'user';
               const lifecycle = !isUser ? resolveAssistantLifecycle(message.status) : null;
               const showLoadingIndicator = Boolean(lifecycle && (lifecycle.tone === 'thinking' || lifecycle.tone === 'working'));
@@ -494,13 +545,13 @@ export function ChatSurface({
                 </article>
               );
             })}
-            <div ref={anchorRef} />
+            <div ref={bottomRef} />
           </div>
         ) : null}
       </div>
 
       <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
-        <div className="orion-chat-v2-composer-frame">
+        <div className="orion-chat-v2-composer-frame" ref={composerFrameRef}>
           {permissionPrompt ? (
             <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
               <div className="orion-chat-v2-permission-header">

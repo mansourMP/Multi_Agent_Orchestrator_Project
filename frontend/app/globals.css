@@ -3998,26 +3998,37 @@ input:focus-visible {
 
 .orion-workbench-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   align-items: stretch;
   align-content: stretch;
   min-height: 0;
   height: 100%;
   flex: 1 1 0%;
+  overflow: hidden;
   border-radius: 0;
 }
 
 .orion-chat-v2-thread-shell {
   width: 100%;
-  flex: 1;
-  height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  height: auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 18px 0 188px;
+  padding: 18px 0 calc(var(--orion-chat-composer-reserve, 188px) + 24px);
   position: relative;
   scrollbar-gutter: stable;
+}
+
+.orion-chat-v2-anchor {
+  width: 100%;
+  height: 1px;
+  scroll-margin-bottom: calc(var(--orion-chat-composer-reserve, 188px) + 32px);
 }
 
 .orion-chat-v2-session-strip {
@@ -4200,7 +4211,7 @@ input:focus-visible {
   display: grid;
   align-content: center;
   justify-items: center;
-  padding: 24px 0 208px;
+  padding: 24px 0 calc(var(--orion-chat-composer-reserve, 188px) + 20px);
 }
 
 .orion-chat-v2-compact-empty {
@@ -4350,7 +4361,8 @@ input:focus-visible {
   width: 100%;
   display: grid;
   gap: 14px;
-  padding: 0 24px 24px;
+  min-height: 100%;
+  padding: 0 24px 0;
 }
 
 .orion-chat-v2.is-first-thread .orion-chat-v2-thread {
@@ -4448,9 +4460,10 @@ input:focus-visible {
   height: 6px;
   border-radius: 999px;
   background: currentColor;
-  box-shadow: none;
+  box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 34%, transparent 66%);
   flex: 0 0 auto;
-  opacity: 0.72;
+  opacity: 0.4;
+  animation: orionChatLoadingOrbPulse 1.2s ease-in-out infinite;
 }
 
 .orion-chat-v2-loading-copy {
@@ -4741,6 +4754,8 @@ input:focus-visible {
 .orion-chat-v2-composer-shell {
   width: 100%;
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   position: fixed;
   left: calc(var(--sidebar-width) + 24px);
@@ -4918,6 +4933,31 @@ input:focus-visible {
   bottom: 32px;
 }
 
+.orion-chat-v2-live-overlay {
+  width: min(760px, calc(100vw - var(--sidebar-width) - 72px));
+  display: flex;
+  justify-content: flex-start;
+  padding: 0 6px;
+  pointer-events: none;
+}
+
+.orion-chat-v2-live-pill {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent 28%);
+  background: color-mix(in srgb, var(--bg-surface) 96%, var(--bg-element) 4%);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-card, var(--shadow-md));
+}
+
+.orion-chat-v2-live-pill.is-working {
+  color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary) 28%);
+}
+
 .orion-chat-v2-composer-frame {
   width: min(760px, calc(100vw - var(--sidebar-width) - 72px));
   display: grid;
@@ -5015,6 +5055,18 @@ input:focus-visible {
   }
 }
 
+@keyframes orionChatLoadingOrbPulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 20%, transparent 80%);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 10px 1px color-mix(in srgb, currentColor 36%, transparent 64%);
+  }
+}
+
 @keyframes orionChatThreadEnter {
   from {
     opacity: 0;
@@ -5056,10 +5108,6 @@ input:focus-visible {
   text-align: center;
 }
 
-.orion-chat-v2-thread-shell {
-  padding: 18px 0 168px;
-}
-
 .orion-chat-v2-session-bar {
   width: min(760px, calc(100vw - var(--sidebar-width) - 96px));
   margin: 0 auto 16px;
@@ -5093,7 +5141,6 @@ input:focus-visible {
   display: block;
   justify-items: stretch;
   align-content: start;
-  padding: 18px 0 168px;
 }
 
 .orion-chat-v2-thread {
@@ -5322,6 +5369,7 @@ input:focus-visible {
 .orion-chat-v2-composer-frame {
   width: min(760px, calc(100vw - var(--sidebar-width) - 96px));
   gap: 10px;
+  pointer-events: auto;
 }
 
 .orion-chat-v2-composer {
@@ -5500,12 +5548,12 @@ input:focus-visible {
   }
 
   .orion-chat-v2-thread-shell {
-    padding: 12px 0 152px;
+    padding: 12px 0 calc(var(--orion-chat-composer-reserve, 152px) + 18px);
   }
 
   .orion-chat-v2-thread {
     gap: 14px;
-    padding: 0 12px 18px;
+    padding: 0 12px 0;
   }
 
   .orion-chat-v2-session-bar {
@@ -5543,6 +5591,10 @@ input:focus-visible {
   }
 
   .orion-chat-v2-composer-frame {
+    width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
+  }
+
+  .orion-chat-v2-live-overlay {
     width: min(100%, calc(100vw - var(--sidebar-width) - 24px));
   }
 

@@ -751,25 +751,38 @@ fn npm_binary() -> &'static str {
 fn bundled_runtime_launcher<Rt: Runtime, M: Manager<Rt>>(
     app: &M,
 ) -> Result<Option<(PathBuf, Vec<String>)>, String> {
-    #[cfg(target_os = "windows")]
-    let bundled_path = {
-        let current_exe = std::env::current_exe()
-            .map_err(|error| format!("Failed to resolve current executable path: {error}"))?;
-        current_exe
-            .parent()
-            .ok_or_else(|| "Current executable has no parent directory.".to_string())?
-            .join("empyralis-backend.exe")
-    };
-
-    #[cfg(not(target_os = "windows"))]
-    let bundled_path = app
+    let resource_dir = app
         .path()
         .resource_dir()
-        .map_err(|error| format!("Failed to resolve resource directory: {error}"))?
-        .join("empyralis-backend");
+        .map_err(|error| format!("Failed to resolve resource directory: {error}"))?;
+    let mut candidates = Vec::new();
 
-    if bundled_path.exists() {
-        return Ok(Some((bundled_path, Vec::new())));
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(resource_dir.join("empyralis-backend.exe"));
+        candidates.push(resource_dir.join("empyralis-backend-x86_64-pc-windows-msvc.exe"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(target_arch = "aarch64")]
+        candidates.push(resource_dir.join("empyralis-backend-aarch64-apple-darwin"));
+        #[cfg(target_arch = "x86_64")]
+        candidates.push(resource_dir.join("empyralis-backend-x86_64-apple-darwin"));
+        candidates.push(resource_dir.join("empyralis-backend"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        candidates.push(resource_dir.join("empyralis-backend-x86_64-unknown-linux-gnu"));
+        #[cfg(target_arch = "aarch64")]
+        candidates.push(resource_dir.join("empyralis-backend-aarch64-unknown-linux-gnu"));
+        candidates.push(resource_dir.join("empyralis-backend"));
+    }
+
+    if let Some(path) = candidates.into_iter().find(|candidate| candidate.exists()) {
+        return Ok(Some((path, Vec::new())));
     }
 
     Ok(None)

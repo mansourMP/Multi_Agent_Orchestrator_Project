@@ -39,8 +39,11 @@ jobs:
       - name: Copy backend binary to dist/
         run: |
           mkdir -p dist
+          TARGET_TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
           cp pyinstaller-dist/empyralis-backend dist/empyralis-backend
+          cp pyinstaller-dist/empyralis-backend "dist/empyralis-backend-$TARGET_TRIPLE"
           chmod +x dist/empyralis-backend
+          chmod +x "dist/empyralis-backend-$TARGET_TRIPLE"
 
       - name: Build Next.js frontend
         run: npm run build --prefix frontend
@@ -97,7 +100,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          TARGET_TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
           cp pyinstaller-dist/empyralis-backend.exe dist/empyralis-backend.exe
+          cp pyinstaller-dist/empyralis-backend.exe "dist/empyralis-backend-$TARGET_TRIPLE.exe"
 
       - name: Build Next.js frontend
         shell: bash
@@ -171,8 +176,11 @@ jobs:
       - name: Copy backend binary to dist/
         run: |
           mkdir -p dist
+          TARGET_TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
           cp pyinstaller-dist/empyralis-backend dist/empyralis-backend
+          cp pyinstaller-dist/empyralis-backend "dist/empyralis-backend-$TARGET_TRIPLE"
           chmod +x dist/empyralis-backend
+          chmod +x "dist/empyralis-backend-$TARGET_TRIPLE"
 
       - name: Build Next.js frontend
         run: npm run build --prefix frontend

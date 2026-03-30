@@ -20,11 +20,15 @@ export interface AgentPayload {
   intent: string;
   messageType?: "text" | "approval";
   approval?: {
+    kind?: "run" | "direct";
     action: string;
     target?: string;
     reason?: string;
     approvalId?: string;
     runId?: string;
+    connector?: string;
+    actionId?: string;
+    input?: string;
   };
   understood?: string; // explicit understanding of the request
   plan?: string[]; // Step-by-step execution plan

@@ -23,6 +23,7 @@ type ChatState = {
   ensureSessionForAgent: (agent: AgentThread) => string;
   setActiveSession: (id: string) => void;
   addMessage: (id: string, message: AgentPayload) => void;
+  updateMessage: (id: string, index: number, patch: Partial<AgentPayload>) => void;
   setSessionTitle: (id: string, title: string) => void;
   clearAllSessions: () => void;
 };
@@ -36,7 +37,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const now = Date.now();
     const session: ChatSession = {
       id,
-      title: "New chat",
+      title: "New thread",
       agentId: agent.id,
       agentName: agent.label,
       runtimeRole: agent.runtimeRole,
@@ -69,6 +70,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updatedSession = {
           ...session,
           messages: [...session.messages, message],
+          updatedAt: Date.now(),
+        };
+        return false;
+      });
+      if (!updatedSession) return { sessions: state.sessions };
+      return { sessions: [updatedSession, ...others] };
+    });
+  },
+  updateMessage: (id, index, patch) => {
+    set((state) => {
+      let updatedSession: ChatSession | null = null;
+      const others = state.sessions.filter((session) => {
+        if (session.id !== id) return true;
+        if (index < 0 || index >= session.messages.length) {
+          updatedSession = session;
+          return false;
+        }
+        updatedSession = {
+          ...session,
+          messages: session.messages.map((message, messageIndex) =>
+            messageIndex === index ? { ...message, ...patch } : message
+          ),
           updatedAt: Date.now(),
         };
         return false;

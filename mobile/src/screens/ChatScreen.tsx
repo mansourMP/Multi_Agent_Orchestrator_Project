@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -18,18 +18,22 @@ import { InputBar } from "@/src/components/InputBar";
 import { AgentPayload } from "@/src/components/Renderer";
 import { useChatStore } from "@/src/stores/chatStore";
 import { useSessionState } from "@/src/lib/session-context";
-import { mobileApi, normalizeServerUrl } from "@/src/lib/api";
+import { mobileApi } from "@/src/lib/api";
 import { getPrimaryAgent } from "@/src/lib/agents";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useTransientBanner } from "@/src/lib/useTransientBanner";
-import { extractRunReply } from "@/src/lib/run-response";
+import { useAppContextStore } from "@/src/stores/appContextStore";
 
 type ApprovalCard = {
+  kind?: "run" | "direct";
   action: string;
   target?: string;
   reason?: string;
   approvalId?: string;
   runId?: string;
+  connector?: string;
+  actionId?: string;
+  input?: string;
 };
 
 const SPACING = { sm: 8, md: 16, lg: 24 };
@@ -88,7 +92,8 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { session } = useSessionState();
-  const { sessions, createSession, addMessage, setActiveSession, setSessionTitle } = useChatStore();
+  const { sessions, createSession, addMessage, updateMessage, setActiveSession, setSessionTitle } = useChatStore();
+  const activeApp = useAppContextStore((state) => state.activeApp);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
@@ -96,10 +101,18 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   const [recentsOpen, setRecentsOpen] = useState(false);
   const { banner, showBanner } = useTransientBanner();
   const activeAgent = getPrimaryAgent();
+  const messagesListRef = useRef<FlatList<AgentPayload>>(null);
   const activeSession = sessions.find((item) => item.id === sessionId);
   const messages = activeSession?.messages || [];
+  const lastMessageSpeech = messages[messages.length - 1]?.speech || "";
   const recentSessions = useMemo(() => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt), [sessions]);
   const runtimeRole = activeAgent.runtimeRole || activeAgent.id;
+
+  const scrollToBottom = React.useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      messagesListRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
 
   useEffect(() => {
     if (activeSession?.id) {
@@ -110,6 +123,10 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     const nextSessionId = createSession(activeAgent);
     router.replace(`/chats/${nextSessionId}`);
   }, [activeAgent, activeSession?.id, createSession, router, setActiveSession]);
+
+  useEffect(() => {
+    scrollToBottom(false);
+  }, [isLoading, lastMessageSpeech, messages.length, scrollToBottom]);
 
   const handleMediaUpload = () => {
     showBanner("Media uploads are not available yet.", "error");
@@ -133,131 +150,102 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const userMessage: AgentPayload = { intent: "user", speech: finalInput };
     const nextUserMessageIndex = messages.length;
+    const placeholderIndex = nextUserMessageIndex + 1;
+    const priorMessages = messages
+      .filter((message) => message.messageType !== "approval" && message.speech?.trim())
+      .slice(-6)
+      .map((message) => ({
+        role: message.intent === "user" ? "user" : "assistant",
+        content: message.speech.trim(),
+      })) as Array<{ role: "user" | "assistant"; content: string }>;
+
     addMessage(sessionId, userMessage);
-    if (activeSession.title === "New chat") {
+    addMessage(sessionId, { intent: "assistant", speech: "" });
+    if (activeSession.title === "New thread") {
       setSessionTitle(sessionId, finalInput.slice(0, 60));
     }
     setFailedMessageIndex(null);
     setInput("");
     setIsLoading(true);
-    setRunActivity(["Understanding your request"]);
+    setRunActivity(["Connecting to Empyralist", "Waiting for response"]);
 
-    if (!session?.runtimeUrl || !session?.runtimeKey) {
+    if (!session?.runtimeKey) {
       setFailedMessageIndex(nextUserMessageIndex);
+      updateMessage(sessionId, placeholderIndex, {
+        speech: "Add your server API key in Profile first.",
+      });
       setIsLoading(false);
       setRunActivity([]);
-      showBanner("Add your server URL and API key in Settings first.", "error");
+      showBanner("Add your server API key in Profile first.", "error");
       return;
     }
 
     try {
-      appendRunActivity("Starting secure run");
-      const runtimeUrl = normalizeServerUrl(session.runtimeUrl);
-      const response = await fetch(`${runtimeUrl}/runs/start`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": session.runtimeKey || "",
+      let streamedReply = "";
+      const payload = await mobileApi.respondChat(
+        {
+          runtimeUrl: session.runtimeUrl || "",
+          runtimeKey: session.runtimeKey,
+          workspaceId: session.workspaceId || "default",
+          platformUrl: session.platformUrl,
+          platformKey: session.platformKey,
         },
-        body: JSON.stringify({
-          input: finalInput,
-          user_goal: finalInput,
-          agent_role: runtimeRole,
-          workspace_id: session.workspaceId || "default",
-          session_id: sessionId,
-          metadata: {
-            execution_target: "cloud",
-            agent_role: runtimeRole,
-            agent_label: activeAgent.label,
+        {
+          message: finalInput,
+          threadId: sessionId,
+          provider: "",
+          model: "",
+          priorMessages,
+        },
+        {
+          onChunk: (delta) => {
+            streamedReply += delta;
+            appendRunActivity("Streaming response");
+            updateMessage(sessionId, placeholderIndex, {
+              speech: streamedReply,
+            });
           },
-        }),
+        },
+      );
+
+      updateMessage(sessionId, placeholderIndex, {
+        speech: payload.reply || streamedReply || "I couldn't form a clean reply just now.",
       });
 
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
+      const approvalAction = payload.actions.find(
+        (action) =>
+          action.kind === "approval_required" &&
+          action.connector &&
+          action.action &&
+          action.input,
+      );
+
+      if (approvalAction) {
+        const approvalCard: ApprovalCard = {
+          kind: "direct",
+          action: approvalAction.action || approvalAction.label || "Approval required",
+          target: approvalAction.connector || undefined,
+          reason: payload.reply || "This action requires your approval before I send it. Confirm?",
+          connector: approvalAction.connector || undefined,
+          actionId: approvalAction.action || undefined,
+          input: approvalAction.input || undefined,
+        };
+        addMessage(sessionId, {
+          intent: "assistant",
+          speech: "Approval required",
+          messageType: "approval",
+          approval: approvalCard,
+        } as AgentPayload);
       }
 
-      const payload = await response.json();
-      const runId = String(payload?.run_id || "").trim();
-
-      if (!runId) {
-        throw new Error("Run start did not return run_id");
-      }
-
-      appendRunActivity("Connected to your core");
-      const runStatusUrl = `${runtimeUrl}/runs/${encodeURIComponent(runId)}`;
-
-      let finalRun: any = null;
-
-      for (let i = 0; i < 30; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-
-        const poll = await fetch(runStatusUrl, {
-          headers: {
-            "X-API-Key": session.runtimeKey || "",
-          },
-        });
-
-        if (!poll.ok) {
-          throw new Error(`API request failed: ${poll.status}`);
-        }
-
-        const run = await poll.json();
-        const status = String(run?.status ?? "").toLowerCase();
-        appendRunActivity(describeRunPhase(run));
-
-        if (status === "waiting_approval") {
-          const pending = run?.pending_approval || {};
-          const operation = run?.context?.metadata?.pack_inputs?.operations?.[0] || {};
-          const actionLabel =
-            operation?.mode === "delete"
-              ? "Delete File"
-              : operation?.mode === "write"
-              ? "Write File"
-              : operation?.tool === "execute_shell_command"
-              ? "Device Action"
-              : "Approval Required";
-          const target = operation?.path || operation?.file_path;
-          const approvalCard: ApprovalCard = {
-            action: actionLabel,
-            target: target ? String(target) : undefined,
-            reason: pending?.prompt ? String(pending.prompt) : "Approval required.",
-            approvalId: pending?.approval_id ? String(pending.approval_id) : undefined,
-            runId,
-          };
-          addMessage(sessionId, {
-            intent: "assistant",
-            speech: "Approval required",
-            messageType: "approval",
-            approval: approvalCard,
-          } as AgentPayload);
-          return;
-        }
-
-        if (status === "completed") {
-          finalRun = run;
-          break;
-        }
-
-        if (status === "failed") {
-          finalRun = run;
-          break;
-        }
-      }
-
-      if (!finalRun) {
-        throw new Error("Run polling timed out");
-      }
-
-      addMessage(sessionId, {
-        intent: "assistant",
-        speech: extractRunReply(finalRun),
-      } as AgentPayload);
       setRunActivity([]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not reach the agent. Check the server connection.";
+      const message = err instanceof Error ? err.message : "Could not reach KIN. Check the server connection.";
       console.warn("Chat request failed:", message);
       setFailedMessageIndex(nextUserMessageIndex);
+      updateMessage(sessionId, placeholderIndex, {
+        speech: message,
+      });
       setRunActivity([]);
       showBanner(message, "error");
     } finally {
@@ -266,11 +254,78 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
   };
 
   const handleApprovalDecision = async (card: ApprovalCard, decision: "approved" | "rejected") => {
-    if (!session?.runtimeUrl || !session?.runtimeKey || !card.approvalId || !card.runId) {
-      return;
-    }
+    if (!session?.runtimeKey) return;
     try {
-      await mobileApi.resolveApproval(session, card.runId, card.approvalId, decision);
+      if (card.kind === "direct") {
+        if (!activeSession?.id || !card.connector || !card.actionId || !card.input) return;
+        if (decision !== "approved") {
+          addMessage(activeSession.id, {
+            intent: "assistant",
+            speech: "Action canceled.",
+          } as AgentPayload);
+          showBanner("Action canceled.", "success");
+          return;
+        }
+        const placeholderIndex = messages.length;
+        addMessage(activeSession.id, {
+          intent: "assistant",
+          speech: "",
+        } as AgentPayload);
+        setIsLoading(true);
+        setRunActivity(["Confirming approval", "Executing action"]);
+        let streamedReply = "";
+        const payload = await mobileApi.respondChat(
+          {
+            runtimeUrl: session.runtimeUrl || "",
+            runtimeKey: session.runtimeKey,
+            workspaceId: session.workspaceId || "default",
+            platformUrl: session.platformUrl,
+            platformKey: session.platformKey,
+          },
+          {
+            message: "__approval_confirmed__",
+            threadId: activeSession.id,
+            provider: "",
+            model: "",
+            approvedAction: {
+              connector: card.connector,
+              action: card.actionId,
+              input: card.input,
+            },
+          },
+          {
+            onChunk: (delta) => {
+              streamedReply += delta;
+              updateMessage(activeSession.id, placeholderIndex, {
+                speech: streamedReply,
+              });
+            },
+          },
+        );
+        updateMessage(activeSession.id, placeholderIndex, {
+          speech: payload.reply || streamedReply || "Action completed.",
+        });
+        setRunActivity([]);
+        setIsLoading(false);
+        showBanner("Approval sent.", "success");
+        return;
+      }
+
+      if (!card.approvalId || !card.runId) {
+        return;
+      }
+      await mobileApi.resolveApproval(
+        {
+          runtimeUrl: session.runtimeUrl || "",
+          runtimeKey: session.runtimeKey,
+          workspaceId: session.workspaceId || "default",
+          platformUrl: session.platformUrl,
+          platformKey: session.platformKey,
+        },
+        card.runId,
+        card.approvalId,
+        decision,
+      );
       if (!activeSession?.id) return;
       addMessage(activeSession.id, {
         intent: "assistant",
@@ -284,8 +339,13 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         intent: "assistant",
         speech: "Approval failed. Check core connection.",
       } as AgentPayload);
+      setRunActivity([]);
+      setIsLoading(false);
       showBanner("Approval failed.", "error");
+      return;
     }
+    setRunActivity([]);
+    setIsLoading(false);
   };
 
   const renderMessage = ({ item, index }: { item: AgentPayload; index: number }) => {
@@ -419,7 +479,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
               textAlign: "right",
             }}
           >
-            Could not reach agent
+            Could not reach KIN
           </Text>
         ) : null}
       </View>
@@ -594,6 +654,7 @@ export default function ChatScreen({ sessionId }: ChatScreenProps) {
         keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0}
       >
         <FlatList
+          ref={messagesListRef}
           data={messages}
           keyExtractor={(_, i) => i.toString()}
           renderItem={renderMessage}

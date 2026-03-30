@@ -1096,7 +1096,7 @@ def _workflow_tool_connector_secret(
     ]
     if not candidates:
         raise RuntimeError(f"No connector binding is available for '{requested_connector}'.")
-    candidates.sort(key=lambda item: parse_iso_datetime(item.get("updated_at")), reverse=True)
+    candidates.sort(key=lambda item: _parse_iso_datetime(item.get("updated_at")), reverse=True)
     selected = candidates[0]
     credential_id = str(selected.get("id") or "").strip()
     if not credential_id:

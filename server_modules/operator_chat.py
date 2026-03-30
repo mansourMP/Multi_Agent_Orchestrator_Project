@@ -643,6 +643,47 @@ def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str
     return config
 
 
+def _tool_write_action_available(
+    connector_id: str,
+    action_id: str,
+    tool_capabilities: List[Dict[str, Any]],
+) -> bool:
+    normalized_connector_id = str(connector_id or "").strip().lower()
+    normalized_action_id = str(action_id or "").strip()
+    for item in tool_capabilities:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip().lower() != normalized_connector_id:
+            continue
+        if not bool(item.get("connected")):
+            return False
+        write_actions = item.get("write_actions") if isinstance(item.get("write_actions"), list) else []
+        return normalized_action_id in {str(entry or "").strip() for entry in write_actions}
+    return False
+
+
+def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(value, dict):
+        return None
+    connector_id = str(value.get("connector") or "").strip().lower()
+    action_id = str(value.get("action") or "").strip()
+    tool_input = str(value.get("input") or "").strip()
+    if not connector_id or not action_id or not tool_input:
+        return None
+    return {
+        "connector": connector_id,
+        "action": action_id,
+        "input": tool_input,
+    }
+
+
+def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
+    return {
+        "name": f"{approved_action['connector']}__{approved_action['action']}",
+        "arguments": json.dumps({"input": approved_action["input"]}, ensure_ascii=False),
+    }
+
+
 def _format_direct_tool_result(result: Dict[str, Any]) -> str:
     if not isinstance(result, dict):
         return str(result or "").strip()
@@ -751,8 +792,8 @@ def _build_direct_tool_approval_response(
                 "action": action_id,
                 "input": tool_input,
                 "id": f"approval_required:{connector_id}:{action_id}:{index}",
-                "kind": "open",
-                "label": "Approval required",
+                "kind": "approval_required",
+                "label": "Confirm",
                 "variant": "primary",
             }
         )
@@ -888,6 +929,7 @@ def build_direct_operator_reply(
     prior_messages: Optional[List[Dict[str, Any]]] = None,
     reasoning_effort: str = "",
     availability: Optional[Dict[str, Any]] = None,
+    approved_action: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Dict[str, Any]]:
     normalized_message = str(message or "").strip()
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
@@ -904,6 +946,7 @@ def build_direct_operator_reply(
     connected_systems = _connected_system_labels(availability_payload)
     tool_capabilities = _context_tool_capabilities(availability_payload)
     tools = _build_direct_chat_tools(tool_capabilities)
+    approved_action_payload = _normalize_direct_approved_action(approved_action)
     base_context_used = _build_context_used(
         workspace_id=normalized_workspace_id,
         requested_provider=normalized_requested_provider,
@@ -928,6 +971,100 @@ def build_direct_operator_reply(
             }, base_context_used),
         }
         return
+
+    if normalized_message == "__approval_confirmed__":
+        if approved_action_payload is None:
+            yield {
+                "type": "final",
+                "payload": _with_context_used({
+                    "reply": "Approval confirmation is missing the connector action payload.",
+                    "actions": [],
+                    "mode": "answer",
+                    "error": "missing_approved_action",
+                }, base_context_used),
+            }
+            return
+        if not _tool_write_action_available(
+            approved_action_payload["connector"],
+            approved_action_payload["action"],
+            tool_capabilities,
+        ):
+            yield {
+                "type": "final",
+                "payload": _with_context_used({
+                    "reply": "That connector action is not available in this workspace right now.",
+                    "actions": [],
+                    "mode": "answer",
+                    "error": "unavailable_approved_action",
+                }, base_context_used),
+            }
+            return
+        try:
+            tool_reply = _execute_direct_tool_calls(
+                tool_calls=[_approved_action_to_tool_call(approved_action_payload)],
+                workspace_id=normalized_workspace_id,
+                thread_id=normalized_thread_id,
+            )
+            yield {
+                "type": "final",
+                "payload": {
+                    "reply": tool_reply or "Connector action completed.",
+                    "actions": [],
+                    "mode": "answer",
+                    "usage_masked": {},
+                    "provider": None,
+                    "model": None,
+                    "attempted_providers": "",
+                    "error": "",
+                    "context_used": _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=None,
+                        requested_model=normalized_requested_model,
+                        effective_model=None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=False,
+                        history_mode="none",
+                        run_created=False,
+                        fallback_used=False,
+                        fallback_reason=None,
+                    ),
+                },
+            }
+            return
+        except Exception as exc:
+            error_text = str(exc).strip() or "connector_action_failed"
+            yield {
+                "type": "final",
+                "payload": {
+                    "reply": f"Connector action failed: {error_text}",
+                    "actions": [],
+                    "mode": "answer",
+                    "usage_masked": {},
+                    "provider": None,
+                    "model": None,
+                    "attempted_providers": "",
+                    "error": error_text,
+                    "context_used": _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=None,
+                        requested_model=normalized_requested_model,
+                        effective_model=None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=False,
+                        history_mode="none",
+                        run_created=False,
+                        fallback_used=False,
+                        fallback_reason=None,
+                    ),
+                },
+            }
+            return
 
     gated = _tool_gate_response(normalized_message, availability_payload)
     if gated is not None:

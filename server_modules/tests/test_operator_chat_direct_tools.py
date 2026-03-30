@@ -202,10 +202,60 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "answer_with_action")
         self.assertEqual(payload["reply"], "This action requires your approval before I send it. Confirm?")
         self.assertEqual(payload["actions"][0]["type"], "approval_required")
+        self.assertEqual(payload["actions"][0]["kind"], "approval_required")
         self.assertEqual(payload["actions"][0]["connector"], "telegram_bot")
         self.assertEqual(payload["actions"][0]["action"], "send_message")
         self.assertEqual(payload["actions"][0]["input"], "hello from direct chat")
         execute_tool_mock.assert_not_called()
+
+    @patch(
+        "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",
+        return_value=[
+            {
+                "id": "telegram_bot",
+                "label": "Telegram Bot LIVE",
+                "connected": True,
+                "authenticated": True,
+                "runtime_usable": True,
+                "read_actions": ["chats.read"],
+                "write_actions": ["send_message"],
+                "approval_required_actions": ["send_message"],
+            }
+        ],
+    )
+    @patch("server_modules.runs_execution._workflow_execute_connector_action")
+    def test_direct_chat_executes_approved_action_confirmation(
+        self,
+        execute_tool_mock,
+        _resolve_workspace_tool_capabilities,
+    ):
+        execute_tool_mock.return_value = {
+            "summary": "Connector action completed: telegram_bot.send_message.",
+            "result_data": {
+                "connector_action": {
+                    "connector": "telegram_bot",
+                    "action_id": "send_message",
+                    "chat_id": "default",
+                }
+            },
+        }
+
+        payload = operator_chat.collect_direct_operator_reply(
+            message="__approval_confirmed__",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True},
+            approved_action={
+                "connector": "telegram_bot",
+                "action": "send_message",
+                "input": "hello from direct chat",
+            },
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("telegram_bot.send_message", payload["reply"])
+        execute_tool_mock.assert_called_once()
 
 
 if __name__ == "__main__":

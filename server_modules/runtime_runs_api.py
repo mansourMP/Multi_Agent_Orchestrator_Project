@@ -353,6 +353,7 @@ def register_run_routes(app) -> None:
                 prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
                 reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
                 availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
+                approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
             ):
                 event_type = str(event.get("type") or "message").strip() or "message"
                 if event_type == "final":

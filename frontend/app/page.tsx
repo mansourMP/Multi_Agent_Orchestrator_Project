@@ -2194,6 +2194,58 @@ export function AutopilotWorkspace() {
   const handleSimpleChatMessageAction = useCallback(async (messageId: string, action: ChatMessageActionRecord) => {
     const sessionId = selectedChatSession?.id;
     if (!sessionId) return;
+    if (action.kind === 'approval_required') {
+      const connector = String(action.connector || '').trim();
+      const actionId = String(action.action || '').trim();
+      const input = String(action.input || '').trim();
+      if (!connector || !actionId || !input) return;
+      const now = new Date().toISOString();
+      patchSimpleChatMessage(sessionId, messageId, {
+        status: 'running',
+        actions: [],
+        content: 'Working on it...',
+        ts: now,
+      });
+      setPendingSimpleChat({ sessionId, messageId, goal: '__approval_confirmed__' });
+      try {
+        let streamedReply = '';
+        const payload = await sendOperatorChat('__approval_confirmed__', {
+          reasoningEffort: simpleChatDepth,
+          threadId: sessionId,
+          approvedAction: {
+            connector,
+            action: actionId,
+            input,
+          },
+          onChunk: (delta) => {
+            streamedReply += delta;
+            patchSimpleChatMessage(sessionId, messageId, {
+              content: streamedReply,
+              status: 'running',
+              ts: new Date().toISOString(),
+            });
+          },
+        });
+        patchSimpleChatMessage(sessionId, messageId, {
+          content: payload.reply || streamedReply || 'Action completed.',
+          status: 'completed',
+          actions: Array.isArray(payload.actions) ? payload.actions : [],
+          contextUsed: payload.context_used || null,
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        patchSimpleChatMessage(sessionId, messageId, {
+          content: error instanceof Error ? error.message : 'Failed to confirm and execute action.',
+          status: 'error',
+          actions: [],
+          contextUsed: null,
+          ts: new Date().toISOString(),
+        });
+      } finally {
+        setPendingSimpleChat(null);
+      }
+      return;
+    }
     if (action.kind === 'connect' || action.kind === 'open') {
       if (action.href) router.push(action.href);
       return;
@@ -2257,7 +2309,10 @@ export function AutopilotWorkspace() {
     defaultAssistantProfile.subtitle,
     patchSimpleChatMessage,
     router,
+    sendOperatorChat,
     selectedChatSession?.id,
+    setPendingSimpleChat,
+    simpleChatDepth,
     simpleChatRuntimeRole,
     startOperatorRun,
     topError,

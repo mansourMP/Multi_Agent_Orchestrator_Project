@@ -177,11 +177,21 @@ type RuntimeAccountAvailabilityItem = {
 
 export type OperatorChatActionPayload = {
   id: string;
-  kind: 'run' | 'workflow' | 'connect' | 'open';
+  kind: 'run' | 'workflow' | 'connect' | 'open' | 'approval_required';
   label: string;
   variant?: 'primary' | 'secondary';
+  type?: string | null;
   href?: string | null;
   goal?: string | null;
+  connector?: string | null;
+  action?: string | null;
+  input?: string | null;
+};
+
+export type OperatorChatApprovedActionPayload = {
+  connector: string;
+  action: string;
+  input: string;
 };
 
 export type OperatorChatPriorMessagePayload = {
@@ -1947,6 +1957,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       threadId?: string | null;
       priorMessages?: OperatorChatPriorMessagePayload[];
       onChunk?: (delta: string) => void;
+      approvedAction?: OperatorChatApprovedActionPayload | null;
     },
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
@@ -1964,6 +1975,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         reasoning_effort: options?.reasoningEffort || undefined,
         availability,
         prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
+        approved_action: options?.approvedAction || undefined,
       }),
       cache: 'no-store',
     });

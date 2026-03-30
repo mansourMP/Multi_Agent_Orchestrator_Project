@@ -3,7 +3,7 @@
 export type ChatMessageRole = 'user' | 'assistant';
 export type ChatMessageStatus = 'sending' | 'running' | 'completed' | 'waiting' | 'error';
 
-export type ChatMessageActionKind = 'run' | 'workflow' | 'connect' | 'open';
+export type ChatMessageActionKind = 'run' | 'workflow' | 'connect' | 'open' | 'approval_required';
 export type ChatMessageActionVariant = 'primary' | 'secondary';
 export type ChatRunCardStatus = 'preparing' | 'running' | 'waiting' | 'completed' | 'needs_attention' | 'failed';
 
@@ -12,8 +12,12 @@ export type ChatMessageActionRecord = {
   kind: ChatMessageActionKind;
   label: string;
   variant?: ChatMessageActionVariant;
+  type?: string | null;
   href?: string | null;
   goal?: string | null;
+  connector?: string | null;
+  action?: string | null;
+  input?: string | null;
 };
 
 export type ChatRunCardEvidenceRecord = {
@@ -238,8 +242,12 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                           variant: record.variant === 'primary' || record.variant === 'secondary'
                             ? record.variant
                             : undefined,
+                          type: typeof record.type === 'string' ? record.type : null,
                           href: typeof record.href === 'string' ? record.href : null,
                           goal: typeof record.goal === 'string' ? record.goal : null,
+                          connector: typeof record.connector === 'string' ? record.connector : null,
+                          action: typeof record.action === 'string' ? record.action : null,
+                          input: typeof record.input === 'string' ? record.input : null,
                         };
                       })
                       .filter((action): action is ChatMessageActionRecord => Boolean(action))

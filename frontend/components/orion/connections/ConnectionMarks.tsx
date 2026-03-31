@@ -127,8 +127,10 @@ export function ProviderLogoMark({
     return (
       <LogoTile size={size} bg="#6B40F0">
         <SvgMark size={size}>
-          <circle cx="12" cy="12" r="7" stroke="#FFFFFF" strokeWidth="2.2" />
-          <path d="M15.8 15.8L19 19" stroke="#FFFFFF" strokeWidth="2.2" strokeLinecap="round" />
+          <circle cx="12" cy="12" r="9" fill="#6B40F0" />
+          <text x="12" y="15.3" textAnchor="middle" fill="#FFFFFF" fontSize="9" fontWeight="700" fontFamily="Arial, sans-serif">
+            Q
+          </text>
         </SvgMark>
       </LogoTile>
     );
@@ -138,8 +140,10 @@ export function ProviderLogoMark({
     return (
       <LogoTile size={size} bg="#4D6BFE">
         <SvgMark size={size}>
-          <path d="M6 7H12.5C15.6 7 18 9.2 18 12C18 14.8 15.6 17 12.5 17H6V7Z" fill="#FFFFFF" opacity="0.95" />
-          <path d="M9 10.2H13C14.2 10.2 15 11 15 12C15 13 14.2 13.8 13 13.8H9" stroke="#4D6BFE" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="12" cy="12" r="9" fill="#4D6BFE" />
+          <text x="12" y="15.1" textAnchor="middle" fill="#FFFFFF" fontSize="6.6" fontWeight="700" fontFamily="Arial, sans-serif">
+            DS
+          </text>
         </SvgMark>
       </LogoTile>
     );
@@ -157,12 +161,12 @@ export function ProviderLogoMark({
 
   if (provider === 'ollama') {
     return (
-      <LogoTile size={size} bg="#111111">
+      <LogoTile size={size} bg="#333333">
         <SvgMark size={size}>
-          <circle cx="12" cy="12" r="9" fill="#111111" />
-          <path d="M8 15.2V10.5C8 8.6 9.4 7.2 11.2 7.2H12.8C14.6 7.2 16 8.6 16 10.5V15.2" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" />
-          <circle cx="10.1" cy="11" r="0.9" fill="#FFFFFF" />
-          <circle cx="13.9" cy="11" r="0.9" fill="#FFFFFF" />
+          <circle cx="12" cy="12" r="9" fill="#333333" />
+          <text x="12" y="15.1" textAnchor="middle" fill="#FFFFFF" fontSize="6.8" fontWeight="700" fontFamily="Arial, sans-serif">
+            OL
+          </text>
         </SvgMark>
       </LogoTile>
     );

@@ -1149,15 +1149,8 @@ def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
 
 
 def _direct_chat_error_reply(llm_error: str) -> str:
-    reply = "I couldn’t get a clean model reply right now. Retry in a moment."
-    compact_error = _compact_text(llm_error)
-    if "no provider credentials available" in compact_error:
-        return "No active AI credential is available right now. Connect the workspace AI account, then retry."
-    if "direct_chat_transport_unavailable" in compact_error:
-        return "Direct chat is unavailable on the current provider path. Use a message-native AI account, then retry."
-    if "missing scopes" in compact_error or "api.responses.write" in compact_error:
-        return "The current Codex/OpenAI auth cannot answer chat right now. Reconnect the account, then retry."
-    return reply
+    detail = str(llm_error or "").strip() or "unknown_error"
+    return f"Chat failed: {detail}"
 
 
 def build_direct_operator_reply(

@@ -70,6 +70,34 @@ EXECUTION_MARKERS = (
 QUESTION_OPENERS = ("what", "why", "how", "should", "can", "could", "would", "is", "are", "do", "does")
 GOOGLE_WORKSPACE_KEYWORDS = ("email", "emails", "gmail", "inbox", "calendar", "drive", "meeting", "meetings")
 TELEGRAM_KEYWORDS = ("telegram", "bot", "chat reply", "message on telegram")
+LOCAL_FILE_KEYWORDS = (
+    "read file",
+    "open file",
+    "write file",
+    "save file",
+    "save to",
+    "append to",
+    "delete file",
+    "file at",
+    "path",
+)
+LOCAL_SHELL_KEYWORDS = (
+    "shell command",
+    "terminal command",
+    "run command",
+    "execute command",
+    "in the shell",
+    "in terminal",
+    "bash",
+    "zsh",
+)
+LOCAL_SCREENSHOT_KEYWORDS = (
+    "screenshot",
+    "screen shot",
+    "capture screen",
+    "capture the screen",
+    "take a screenshot",
+)
 DIRECT_RUN_OPENERS = (
     "summarize",
     "check",
@@ -157,6 +185,12 @@ def _tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional
     if not isinstance(item, dict):
         return None
     return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
+
+
+def _local_worker_available(availability: Dict[str, Any]) -> bool:
+    if not isinstance(availability, dict):
+        return False
+    return bool(availability.get("runtime_ok"))
 
 
 def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
@@ -455,6 +489,55 @@ def _provider_supports_direct_tool_calls(provider: str) -> bool:
     return str(provider or "").strip().lower() == "codex_cli"
 
 
+def _build_local_direct_chat_tools(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not _local_worker_available(availability):
+        return []
+    return [
+        {
+            "name": "file__read",
+            "description": "Read a file from the local machine",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"}
+                },
+                "required": ["path"],
+            },
+        },
+        {
+            "name": "file__write",
+            "description": "Write content to a file on the local machine",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path"},
+                    "content": {"type": "string", "description": "Content to write"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+        {
+            "name": "shell__exec",
+            "description": "Execute a shell command on the local machine",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to run"}
+                },
+                "required": ["command"],
+            },
+        },
+        {
+            "name": "screenshot__capture",
+            "description": "Take a screenshot of the current screen",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    ]
+
+
 def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     tools: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -507,6 +590,65 @@ def _message_can_use_direct_connector_tools(
         return any(str(item.get("name") or "").startswith("google_workspace__") for item in tools)
     if _mentions_any(compact, TELEGRAM_KEYWORDS):
         return any(str(item.get("name") or "").startswith("telegram_bot__") for item in tools)
+    return False
+
+
+def _looks_like_local_path_request(compact_message: str) -> bool:
+    if not compact_message:
+        return False
+    return bool(
+        re.search(
+            r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])",
+            compact_message,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _message_requests_local_file_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    if _mentions_any(compact, LOCAL_FILE_KEYWORDS):
+        return True
+    return _looks_like_local_path_request(compact) and any(
+        token in compact for token in ("read", "open", "write", "save", "append", "delete")
+    )
+
+
+def _message_requests_local_shell_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    if _mentions_any(compact, LOCAL_SHELL_KEYWORDS):
+        return True
+    return bool(re.search(r"`[^`]+`", str(message or ""))) and any(
+        token in compact for token in ("run", "exec", "execute", "shell", "terminal", "command")
+    )
+
+
+def _message_requests_local_screenshot_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    return _mentions_any(compact, LOCAL_SCREENSHOT_KEYWORDS)
+
+
+def _message_can_use_direct_local_tools(
+    message: str,
+    *,
+    provider: str,
+    tools: List[Dict[str, Any]],
+) -> bool:
+    if not _provider_supports_direct_tool_calls(provider) or not tools:
+        return False
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    if _message_requests_local_file_tool(message) and {"file__read", "file__write"} & tool_names:
+        return True
+    if _message_requests_local_shell_tool(message) and "shell__exec" in tool_names:
+        return True
+    if _message_requests_local_screenshot_tool(message) and "screenshot__capture" in tool_names:
+        return True
     return False
 
 
@@ -643,6 +785,46 @@ def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str
     return config
 
 
+def _build_direct_local_tool_config(
+    connector_id: str,
+    action_id: str,
+    arguments: Dict[str, Any],
+) -> tuple[str, Dict[str, Any]]:
+    if connector_id == "file" and action_id == "read":
+        path = str(arguments.get("path") or arguments.get("file_path") or "").strip()
+        if not path:
+            raise RuntimeError("Tool 'file__read' requires a file path.")
+        return "file", {
+            "path": path,
+            "mode": "read",
+            "summary": f"Read local file: {path}",
+        }
+    if connector_id == "file" and action_id == "write":
+        path = str(arguments.get("path") or arguments.get("file_path") or "").strip()
+        content = str(arguments.get("content") or "").strip()
+        if not path or not content:
+            raise RuntimeError("Tool 'file__write' requires path and content.")
+        return "file", {
+            "path": path,
+            "content": content,
+            "mode": "write",
+            "summary": f"Write local file: {path}",
+        }
+    if connector_id == "shell" and action_id == "exec":
+        command = str(arguments.get("command") or "").strip()
+        if not command:
+            raise RuntimeError("Tool 'shell__exec' requires a command.")
+        return "shell", {
+            "command": command,
+            "summary": f"Execute shell command: {command}",
+        }
+    if connector_id == "screenshot" and action_id == "capture":
+        return "screenshot", {
+            "summary": "Capture screenshot of the current screen.",
+        }
+    raise RuntimeError(f"Unsupported direct local tool '{connector_id}__{action_id}'.")
+
+
 def _tool_write_action_available(
     connector_id: str,
     action_id: str,
@@ -717,6 +899,53 @@ def _format_direct_tool_result(result: Dict[str, Any]) -> str:
         return str(result)
 
 
+def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
+    if not isinstance(result, dict):
+        return str(result or "").strip()
+    summary = str(result.get("summary") or "").strip()
+    result_data = result.get("result_data") if isinstance(result.get("result_data"), dict) else {}
+    child_result = result_data.get("child_result") if isinstance(result_data.get("child_result"), dict) else {}
+    outputs = child_result.get("outputs") if isinstance(child_result.get("outputs"), dict) else {}
+    actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
+    artifacts = outputs.get("artifacts") if isinstance(outputs.get("artifacts"), list) else []
+    first_action = actions[0] if actions and isinstance(actions[0], dict) else {}
+    first_artifact = artifacts[0] if artifacts and isinstance(artifacts[0], dict) else {}
+    tool_name = str(first_action.get("tool") or result_data.get("tool_variant") or "").strip().lower()
+
+    if tool_name == "read_write_files":
+        mode = str(first_action.get("mode") or "").strip().lower()
+        path = str(first_action.get("path") or first_action.get("file_path") or "").strip()
+        if mode == "read":
+            preview = str(first_action.get("content_preview") or "").strip()
+            return "\n".join(part for part in [f"Read file: {path}" if path else summary, preview] if part).strip()
+        if mode == "write":
+            return f"Wrote file: {path}" if path else (summary or "File write completed.")
+        if mode == "append":
+            return f"Appended file: {path}" if path else (summary or "File append completed.")
+        if mode == "delete":
+            return f"Deleted file: {path}" if path else (summary or "File delete completed.")
+
+    if tool_name == "execute_shell_command":
+        command = str(first_action.get("command") or "").strip()
+        stdout_preview = str(first_action.get("stdout_preview") or "").strip()
+        stderr_preview = str(first_action.get("stderr_preview") or "").strip()
+        log_path = str(first_action.get("file_path") or "").strip()
+        lines = [f"Command completed: {command}" if command else (summary or "Shell command completed.")]
+        if stdout_preview:
+            lines.append(stdout_preview)
+        if stderr_preview:
+            lines.append(f"stderr: {stderr_preview}")
+        if log_path:
+            lines.append(f"Log: {log_path}")
+        return "\n".join(part for part in lines if part).strip()
+
+    if tool_name == "capture_screenshot":
+        path = str(first_action.get("path") or first_action.get("file_path") or first_artifact.get("file_path") or "").strip()
+        return f"Captured screenshot: {path}" if path else (summary or "Screenshot captured.")
+
+    return summary or json.dumps(result, ensure_ascii=True, indent=2)
+
+
 def _execute_direct_tool_calls(
     *,
     tool_calls: List[Dict[str, Any]],
@@ -725,7 +954,7 @@ def _execute_direct_tool_calls(
 ) -> str:
     if not tool_calls:
         return ""
-    from server_modules.runs_execution import _workflow_execute_connector_action
+    from server_modules.runs_execution import _workflow_execute_connector_action, _workflow_execute_local_tool
 
     run_id = f"direct-chat-{uuid4().hex}"
     execution_context: Dict[str, Any] = {
@@ -741,6 +970,18 @@ def _execute_direct_tool_calls(
     for index, call in enumerate(tool_calls, start=1):
         connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
         argument_payload = _tool_arguments_payload(call.get("arguments"))
+        if connector_id in {"file", "shell", "screenshot"}:
+            variant, config = _build_direct_local_tool_config(connector_id, action_id, argument_payload)
+            result = _workflow_execute_local_tool(
+                run_id,
+                execution_context,
+                config,
+                label=f"{connector_id}__{action_id}",
+                variant=variant,
+                current_text=str(argument_payload.get("content") or argument_payload.get("command") or "").strip(),
+            )
+            replies.append(_format_direct_local_tool_result(result))
+            continue
         tool_input = str(argument_payload.get("input") or "").strip()
         if not tool_input:
             raise RuntimeError(f"Tool '{connector_id}__{action_id}' requires a non-empty input argument.")
@@ -946,6 +1187,7 @@ def build_direct_operator_reply(
     connected_systems = _connected_system_labels(availability_payload)
     tool_capabilities = _context_tool_capabilities(availability_payload)
     tools = _build_direct_chat_tools(tool_capabilities)
+    tools.extend(_build_local_direct_chat_tools(availability_payload))
     approved_action_payload = _normalize_direct_approved_action(approved_action)
     base_context_used = _build_context_used(
         workspace_id=normalized_workspace_id,
@@ -1090,12 +1332,21 @@ def build_direct_operator_reply(
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
             provider = "codex_cli"
             direct_chat_credentials = codex_credentials
-    allow_direct_connector_tool_calls = _message_can_use_direct_connector_tools(
+    if _message_requests_local_file_tool(normalized_message) or _message_requests_local_shell_tool(normalized_message) or _message_requests_local_screenshot_tool(normalized_message):
+        codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+        if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+            provider = "codex_cli"
+            direct_chat_credentials = codex_credentials
+    allow_direct_tool_calls = _message_can_use_direct_connector_tools(
+        normalized_message,
+        provider=provider,
+        tools=tools,
+    ) or _message_can_use_direct_local_tools(
         normalized_message,
         provider=provider,
         tools=tools,
     )
-    if not allow_direct_connector_tool_calls:
+    if not allow_direct_tool_calls:
         preview = _preview_run_response(normalized_message, availability_payload)
         if preview is not None:
             yield {

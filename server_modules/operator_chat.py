@@ -824,6 +824,93 @@ def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[
     return None, None
 
 
+def _direct_chat_run_snapshot_to_step(run_id: str, snapshot: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    status = str(snapshot.get("status") or "").strip().lower()
+    if not status:
+        return None, None
+
+    selected_target = str(snapshot.get("execution_target_selected") or "").strip().lower()
+    waiting_for_runtime = bool(snapshot.get("execution_target_waiting_for_runtime"))
+    waiting_for_capacity = bool(snapshot.get("execution_target_waiting_for_capacity"))
+    preferred_runtime_label = str(snapshot.get("execution_target_preferred_runtime_label") or "").strip()
+    estimated_wait_band = str(snapshot.get("execution_target_estimated_wait_band") or "").strip()
+    pending = (
+        snapshot.get("pending_confirmation")
+        if isinstance(snapshot.get("pending_confirmation"), dict)
+        else snapshot.get("pending_approval")
+        if isinstance(snapshot.get("pending_approval"), dict)
+        else {}
+    )
+    prompt = str(pending.get("prompt") or "").strip()
+
+    def _detail(*values: str) -> Optional[str]:
+        for value in values:
+            token = str(value or "").strip()
+            if token:
+                return token
+        return None
+
+    if status == "waiting_for_input":
+        return f"waiting_for_input:{run_id}", {
+            "type": "step",
+            "id": f"run-handoff:approval:{run_id}",
+            "label": "Waiting for confirmation",
+            "detail": _detail(prompt, preferred_runtime_label),
+            "status": "done",
+            "kind": "thinking",
+        }
+
+    if status in {"queued_local", "queued", "starting"}:
+        if waiting_for_runtime:
+            return f"waiting_for_runtime:{run_id}", {
+                "type": "step",
+                "id": f"run-handoff:waiting-runtime:{run_id}",
+                "label": "Waiting for your laptop",
+                "detail": _detail(preferred_runtime_label, estimated_wait_band, "Local machine not ready yet"),
+                "status": "active",
+                "kind": "thinking",
+            }
+        if waiting_for_capacity:
+            return f"waiting_for_capacity:{run_id}", {
+                "type": "step",
+                "id": f"run-handoff:waiting-capacity:{run_id}",
+                "label": "Waiting for laptop capacity",
+                "detail": _detail(preferred_runtime_label, estimated_wait_band, "Another task is using the local machine"),
+                "status": "active",
+                "kind": "thinking",
+            }
+        if selected_target == "local_companion" or status == "queued_local":
+            return f"queued_local:{run_id}", {
+                "type": "step",
+                "id": f"run-handoff:queue:{run_id}",
+                "label": "Queued on your laptop",
+                "detail": _detail(preferred_runtime_label, estimated_wait_band),
+                "status": "active",
+                "kind": "thinking",
+            }
+        return f"queued:{run_id}", {
+            "type": "step",
+            "id": f"run-handoff:queue:{run_id}",
+            "label": "Run queued",
+            "detail": _detail(estimated_wait_band),
+            "status": "active",
+            "kind": "thinking",
+        }
+
+    if status in {"running", "running_local"}:
+        label = "Working on your laptop" if selected_target == "local_companion" or status == "running_local" else "Working on the run"
+        return f"running:{run_id}", {
+            "type": "step",
+            "id": f"run-handoff:working:{run_id}",
+            "label": label,
+            "detail": _detail(preferred_runtime_label),
+            "status": "active",
+            "kind": "thinking",
+        }
+
+    return None, None
+
+
 def _direct_chat_run_final_payload(
     *,
     run_id: str,
@@ -870,7 +957,13 @@ def _direct_chat_run_final_payload(
         actions = _direct_chat_run_actions(run_id, waiting_for_confirmation=True)
         error = ""
     elif continuing:
-        if selected_target == "local_companion":
+        if bool(snapshot.get("execution_target_waiting_for_runtime")):
+            reply = "The durable run is waiting for your laptop to become available. You can keep monitoring it live in Runs."
+        elif bool(snapshot.get("execution_target_waiting_for_capacity")):
+            reply = "The durable run is waiting for local machine capacity. You can keep monitoring it live in Runs."
+        elif selected_target == "local_companion" and status in {"queued_local", "queued", "starting"}:
+            reply = "The durable run is queued for your laptop. You can keep monitoring it live in Runs."
+        elif selected_target == "local_companion":
             reply = "The durable run is still working on your laptop. You can keep monitoring it live in Runs."
         else:
             reply = "The durable run is still working. You can keep monitoring it live in Runs."
@@ -950,6 +1043,7 @@ def _stream_direct_chat_run_handoff(
     deadline = time.monotonic() + DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS
     last_seq = 0
     reply_override: Optional[str] = None
+    emitted_snapshot_step_keys: set[str] = set()
 
     while True:
         run, snapshot = _direct_chat_run_snapshot(run_id)
@@ -969,6 +1063,11 @@ def _stream_direct_chat_run_handoff(
                 reply_override = candidate_reply
             if step_payload is not None:
                 yield step_payload
+
+        snapshot_step_key, snapshot_step_payload = _direct_chat_run_snapshot_to_step(run_id, snapshot)
+        if snapshot_step_key and snapshot_step_payload is not None and snapshot_step_key not in emitted_snapshot_step_keys:
+            emitted_snapshot_step_keys.add(snapshot_step_key)
+            yield snapshot_step_payload
 
         status = str(snapshot.get("status") or "").strip().lower() or "unknown"
         if status in {"completed", "failed", "timeout", "waiting_for_input", "stopped", "cancelled"}:

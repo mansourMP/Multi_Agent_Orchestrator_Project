@@ -619,6 +619,86 @@ class OperatorChatTests(unittest.TestCase):
         self.assertTrue(events[-1]["payload"]["context_used"]["run_created"])
         start_run_mock.assert_called_once()
 
+    @patch("operator_chat_under_test.time.monotonic", side_effect=[0.0, 13.0])
+    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    def test_handoff_stream_emits_snapshot_waiting_for_runtime_step(
+        self,
+        snapshot_mock,
+        _monotonic,
+    ):
+        snapshot_mock.return_value = (
+            None,
+            {
+                "run_id": "run-handoff-wait-1",
+                "status": "queued_local",
+                "execution_target_selected": "local_companion",
+                "execution_target_waiting_for_runtime": True,
+                "execution_target_preferred_runtime_label": "Mansur's MacBook Air",
+                "execution_target_estimated_wait_band": "soon",
+                "usage_masked": {},
+                "fallback_used": False,
+            },
+        )
+
+        events = list(
+            operator_chat._stream_direct_chat_run_handoff(
+                started_run={"run_id": "run-handoff-wait-1"},
+                requested_workspace_id="default",
+                requested_provider="openai",
+                requested_model="gpt-5.4",
+                reasoning_effort=None,
+                connected_systems=[],
+                tool_capabilities=[],
+                fallback_reason=None,
+            )
+        )
+
+        self.assertEqual(events[0]["type"], "step")
+        self.assertEqual(events[0]["label"], "Waiting for your laptop")
+        self.assertEqual(events[0]["detail"], "Mansur's MacBook Air")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertIn("waiting for your laptop to become available", events[-1]["payload"]["reply"])
+
+    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    def test_handoff_stream_emits_snapshot_waiting_for_confirmation_step(
+        self,
+        snapshot_mock,
+    ):
+        snapshot_mock.return_value = (
+            None,
+            {
+                "run_id": "run-handoff-approval-1",
+                "status": "waiting_for_input",
+                "execution_target_selected": "local_companion",
+                "pending_confirmation": {
+                    "approval_id": "approval-1",
+                    "prompt": "Confirm local execution before continuing.",
+                },
+                "usage_masked": {},
+                "fallback_used": False,
+            },
+        )
+
+        events = list(
+            operator_chat._stream_direct_chat_run_handoff(
+                started_run={"run_id": "run-handoff-approval-1"},
+                requested_workspace_id="default",
+                requested_provider="openai",
+                requested_model="gpt-5.4",
+                reasoning_effort=None,
+                connected_systems=[],
+                tool_capabilities=[],
+                fallback_reason=None,
+            )
+        )
+
+        self.assertEqual(events[0]["type"], "step")
+        self.assertEqual(events[0]["label"], "Waiting for confirmation")
+        self.assertEqual(events[0]["detail"], "Confirm local execution before continuing.")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertIn("waiting for confirmation", events[-1]["payload"]["reply"])
+        self.assertIn("Confirm local execution before continuing.", events[-1]["payload"]["reply"])
+
 
 if __name__ == "__main__":
     unittest.main()

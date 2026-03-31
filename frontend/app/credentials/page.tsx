@@ -174,6 +174,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   wechat_work: {
+    assetSrc: '/connector-logos/wechat-work.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },

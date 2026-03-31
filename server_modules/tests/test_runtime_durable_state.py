@@ -212,6 +212,42 @@ class RuntimeDurableStateTests(unittest.TestCase):
         persist_mock.assert_called_once()
         worker.start.assert_called_once()
 
+    def test_serialize_run_snapshot_preserves_pending_confirmation_alias(self):
+        run = {
+            "status": "waiting_for_input",
+            "engine": "orion",
+            "context": {
+                "workspace_id": "default",
+                "metadata": {},
+            },
+            "created_at": "2026-03-29T00:00:00Z",
+            "updated_at": "2026-03-29T00:01:00Z",
+            "completed_at": None,
+            "duration_ms": None,
+            "result": None,
+            "result_data": None,
+            "events": [],
+            "tool_policy_audit": [],
+            "usage_masked": {},
+            "memory_trace": {
+                "enabled": False,
+                "reads": [],
+                "writes": [],
+                "last_error": None,
+                "updated_at": "2026-03-29T00:01:00Z",
+            },
+            "pending_confirmation": {
+                "approval_id": "approval-serialize-1",
+                "prompt": "Confirm local execution",
+                "status": "waiting",
+            },
+        }
+
+        snapshot = runs_output._serialize_run_snapshot("run-serialize-1", run)
+
+        self.assertEqual(snapshot["pending_confirmation"]["approval_id"], "approval-serialize-1")
+        self.assertEqual(snapshot["pending_approval"]["approval_id"], "approval-serialize-1")
+
 
 if __name__ == "__main__":
     unittest.main()

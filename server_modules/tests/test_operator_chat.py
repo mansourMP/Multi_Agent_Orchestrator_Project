@@ -14,7 +14,57 @@ sys.modules["operator_chat_under_test"] = operator_chat
 assert spec and spec.loader
 spec.loader.exec_module(operator_chat)
 
-build_direct_operator_reply = operator_chat.build_direct_operator_reply
+
+def _legacy_fallback_stream(**kwargs):
+    def _iterator():
+        metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
+        for attempt in range(2):
+            raw = operator_chat.generate_chat_reply_with_provider_fallback(
+                context=kwargs.get("context"),
+                metadata=kwargs.get("metadata"),
+                user_goal=kwargs.get("user_goal"),
+                system_prompt=kwargs.get("system_prompt"),
+                prior_messages=kwargs.get("prior_messages"),
+            )
+            if not isinstance(raw, tuple) or len(raw) != 4:
+                yield {
+                    "type": "failure",
+                    "attempted_providers": "",
+                    "error": "mocked_generate_chat_reply_with_provider_fallback_missing_return_value",
+                }
+                return
+            reply, usage_masked, attempted_providers, error = raw
+            usage_payload = usage_masked if isinstance(usage_masked, dict) else {}
+            provider = str(usage_payload.get("provider") or metadata.get("provider") or "").strip() or None
+            model = str(usage_payload.get("model") or metadata.get("model") or "").strip() or None
+            normalized_error = str(error or "").strip()
+            if not str(reply or "").strip() and normalized_error:
+                if attempt == 0 and not normalized_error.startswith("direct_chat_transport_unavailable:"):
+                    continue
+                yield {
+                    "type": "failure",
+                    "attempted_providers": str(attempted_providers or "").strip(),
+                    "error": normalized_error,
+                }
+                return
+            yield {
+                "type": "result",
+                "reply": str(reply or ""),
+                "usage_masked": usage_payload,
+                "provider": provider,
+                "model": model,
+                "attempted_providers": str(attempted_providers or "").strip(),
+                "error": normalized_error,
+            }
+            return
+
+    return _iterator()
+
+
+operator_chat.generate_chat_reply_stream_with_provider_fallback = _legacy_fallback_stream
+
+build_direct_operator_reply = operator_chat.collect_direct_operator_reply
+stream_direct_operator_reply = operator_chat.build_direct_operator_reply
 
 
 class OperatorChatTests(unittest.TestCase):
@@ -33,6 +83,8 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(payload["actions"][0]["label"], "Connect")
 
     @patch("operator_chat_under_test.generate_chat_reply_with_provider_fallback")
+    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False)
     @patch("operator_chat_under_test.provider_has_key", return_value=True)
     @patch(
         "operator_chat_under_test.resolve_workspace_tool_capabilities",
@@ -47,7 +99,7 @@ class OperatorChatTests(unittest.TestCase):
             "approval_required_actions": ["draft_email"],
         }],
     )
-    def test_connected_google_workspace_returns_generic_run_preview(self, _capabilities, _provider_has_key, generate_reply):
+    def test_connected_google_workspace_returns_generic_run_preview(self, _capabilities, _provider_has_key, _message_can_use_direct_connector_tools, _can_auto_start_run_handoff, generate_reply):
         payload = build_direct_operator_reply(
             message="Summarize my Gmail inbox.",
             workspace_id="default",
@@ -77,13 +129,14 @@ class OperatorChatTests(unittest.TestCase):
         }],
     )
     def test_obvious_telegram_write_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
-        payload = build_direct_operator_reply(
-            message="Send a Telegram message to my test chat saying certification probe one.",
-            workspace_id="default",
-            requested_model="gpt-5.4",
-            requested_provider="openai",
-            availability={"ai_ready": False},
-        )
+        with patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False):
+            payload = build_direct_operator_reply(
+                message="Send a Telegram message to my test chat saying certification probe one.",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": False},
+            )
 
         self.assertEqual(payload["mode"], "answer_with_action")
         self.assertEqual(payload["reply"], "I can run that here.")
@@ -106,13 +159,14 @@ class OperatorChatTests(unittest.TestCase):
         }],
     )
     def test_obvious_google_draft_preview_bypasses_ai_ready_gate(self, _capabilities, _provider_has_key, generate_reply):
-        payload = build_direct_operator_reply(
-            message="Draft an email to myself summarizing today's certification results.",
-            workspace_id="default",
-            requested_model="gpt-5.4",
-            requested_provider="openai",
-            availability={"ai_ready": False},
-        )
+        with patch("operator_chat_under_test._message_can_use_direct_connector_tools", return_value=False):
+            payload = build_direct_operator_reply(
+                message="Draft an email to myself summarizing today's certification results.",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": False},
+            )
 
         self.assertEqual(payload["mode"], "answer_with_action")
         self.assertEqual(payload["reply"], "I can run that here.")
@@ -156,8 +210,8 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertFalse(payload["context_used"]["prior_messages_used"])
-        self.assertEqual(payload["context_used"]["history_mode"], "none")
+        self.assertTrue(payload["context_used"]["prior_messages_used"])
+        self.assertEqual(payload["context_used"]["history_mode"], "raw_messages")
 
     @patch.dict("operator_chat_under_test.os.environ", {"ORION_AUTH_MODE": "codex"}, clear=False)
     @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
@@ -284,7 +338,7 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertIn("Direct chat is unavailable on the current provider path", payload["reply"])
+        self.assertEqual(payload["reply"], "Chat failed: direct_chat_transport_unavailable: codex_cli_backend_unavailable")
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
@@ -447,7 +501,77 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["reply"], "I couldn’t get a clean model reply right now. Retry in a moment.")
+        self.assertEqual(payload["reply"], "Chat failed: temporary backend error")
+
+    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_execution_preview_auto_starts_durable_run_handoff(
+        self,
+        _capabilities,
+        _preferred_provider,
+        start_run_mock,
+        snapshot_mock,
+    ):
+        start_run_mock.return_value = {
+            "run_id": "run-handoff-1",
+            "route": {"selected": "local_companion"},
+            "status": "queued_local",
+        }
+        snapshot_mock.return_value = (
+            {"status": "completed", "result": "Finished on the laptop.", "events": []},
+            {
+                "run_id": "run-handoff-1",
+                "status": "completed",
+                "result_summary": "Finished on the laptop.",
+                "effective_provider": "openai",
+                "effective_model": "gpt-5.4",
+                "fallback_used": False,
+                "usage_masked": {},
+            },
+        )
+
+        events = list(
+            stream_direct_operator_reply(
+                message="Summarize the project docs and prepare next steps.",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": True, "connection_mode": "local_companion"},
+            )
+        )
+
+        self.assertEqual(events[0]["type"], "step")
+        self.assertEqual(events[0]["label"], "Starting durable run")
+        self.assertEqual(events[1]["type"], "step")
+        self.assertEqual(events[1]["label"], "Durable run started")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Finished on the laptop.")
+        self.assertTrue(events[-1]["payload"]["context_used"]["run_created"])
+        start_run_mock.assert_called_once()
+
+    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_execution_preview_does_not_auto_start_durable_run_for_byok(
+        self,
+        _capabilities,
+        _preferred_provider,
+        start_run_mock,
+    ):
+        payload = build_direct_operator_reply(
+            message="Summarize the project docs and prepare next steps.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True, "connection_mode": "byok"},
+        )
+
+        self.assertEqual(payload["reply"], "I can run that here.")
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertFalse(payload["context_used"]["run_created"])
+        start_run_mock.assert_not_called()
 
 
 if __name__ == "__main__":

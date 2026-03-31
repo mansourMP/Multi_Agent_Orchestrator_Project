@@ -45,24 +45,42 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         _resolve_workspace_tool_capabilities,
     ):
         stream_mock.return_value = iter(
-            [
-                {
-                    "type": "result",
-                    "reply": "",
-                    "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
-                    "provider": "codex_cli",
-                    "model": "gpt-5.4",
-                    "attempted_providers": "codex_cli",
-                    "error": "",
-                    "tool_calls": [
-                        {
-                            "name": "telegram_bot__send_message",
-                            "arguments": "{\"input\":\"hello from direct chat\"}",
-                        }
-                    ],
-                }
-            ]
+            []
         )
+        stream_mock.side_effect = [
+            iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "",
+                        "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                        "provider": "codex_cli",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "codex_cli",
+                        "error": "",
+                        "tool_calls": [
+                            {
+                                "name": "telegram_bot__send_message",
+                                "arguments": "{\"input\":\"hello from direct chat\"}",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "The Telegram message was sent.",
+                        "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                        "provider": "codex_cli",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "codex_cli",
+                        "error": "",
+                    }
+                ]
+            ),
+        ]
         execute_tool_mock.return_value = {
             "summary": "Connector action completed: telegram_bot.send_message.",
             "result_data": {
@@ -84,7 +102,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
 
         self.assertEqual(payload["mode"], "answer")
         self.assertEqual(payload["actions"], [])
-        self.assertIn("telegram_bot.send_message", payload["reply"])
+        self.assertEqual(payload["reply"], "The Telegram message was sent.")
         execute_tool_mock.assert_called_once()
 
     @patch(

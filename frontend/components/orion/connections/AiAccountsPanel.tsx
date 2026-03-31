@@ -523,18 +523,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           authMode: 'oauth_token',
           action: 'openai_browser_oauth',
         },
-        {
-          id: 'openai_local_import',
-          provider: 'openai',
-          label: 'Import local session',
-          description: localOpenAiAuth?.importable
-            ? 'Use the OpenAI / Codex session already signed in on this Mac.'
-            : 'Requires a saved local OpenAI / Codex session on this Mac.',
-          authMode: 'oauth_token',
-          action: 'openai_local_import',
-          disabled: !localOpenAiAuth?.importable,
-          disabledReason: !localOpenAiAuth?.importable ? 'No local OpenAI / Codex session is available to import on this Mac.' : undefined,
-        },
       ];
     }
     if (providerForm.provider === 'anthropic') {
@@ -573,18 +561,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           authMode: 'api_key',
           action: 'manual',
         },
-        {
-          id: 'gemini_cli_oauth',
-          provider: 'gemini',
-          label: 'Sign in with Google',
-          description: geminiCliStatus?.available === true
-            ? 'Use the Gemini CLI OAuth session available on this machine.'
-            : 'Gemini CLI OAuth is not available on this machine right now.',
-          authMode: 'gemini_cli_oauth',
-          action: 'gemini_cli_oauth',
-          disabled: geminiCliStatus?.available !== true,
-          disabledReason: geminiCliStatus?.message || 'Gemini CLI OAuth is unavailable.',
-        },
       ];
     }
     return [
@@ -597,7 +573,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         action: 'manual',
       },
     ];
-  }, [claudeAuthStatus, geminiCliStatus, localOpenAiAuth, providerForm.provider]);
+  }, [claudeAuthStatus, providerForm.provider]);
   const selectedConnectMethod = useMemo(
     () => providerConnectMethods.find((item) => item.id === providerConnectMethod) || providerConnectMethods[0] || null,
     [providerConnectMethod, providerConnectMethods],
@@ -1572,6 +1548,13 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   );
 
   const selectedConnectDisabledReason = selectedConnectMethod?.disabledReason || '';
+  const selectedConnectPrimaryLabel = selectedConnectMethod?.action === 'openai_browser_oauth'
+    ? (selectedConnectBusy ? 'Opening browser…' : 'Open browser to sign in')
+    : selectedConnectMethod?.action === 'anthropic_local_import'
+      ? (selectedConnectBusy ? 'Connecting…' : 'Use local Claude session')
+      : selectedConnectBusy
+        ? 'Connecting…'
+        : 'Connect';
 
   const handleConnectSelectedMethod = useCallback(async () => {
     if (!selectedConnectMethod || selectedConnectMethod.disabled) return;
@@ -1918,12 +1901,48 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 }}
               >
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Connection method</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {simpleProviderAuthLabel(providerForm.provider)}
-                </div>
+                {providerConnectMethods.length > 1 ? (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {providerConnectMethods.map((method) => {
+                      const checked = selectedConnectMethod?.id === method.id;
+                      return (
+                        <label
+                          key={method.id}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'auto minmax(0, 1fr)',
+                            gap: 10,
+                            alignItems: 'start',
+                            cursor: method.disabled ? 'not-allowed' : 'pointer',
+                            opacity: method.disabled ? 0.65 : 1,
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="provider-connect-method"
+                            checked={checked}
+                            onChange={() => applyProviderConnectMethod(method)}
+                            disabled={method.disabled}
+                            style={{ marginTop: 2 }}
+                          />
+                          <span style={{ display: 'grid', gap: 3 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{method.label}</span>
+                            <span style={{ fontSize: 12.5, color: method.disabled ? 'var(--warning-fg)' : 'var(--text-secondary)', lineHeight: 1.5 }}>
+                              {method.disabled && method.disabledReason ? method.disabledReason : method.description}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {simpleProviderAuthLabel(providerForm.provider)}
+                  </div>
+                )}
               </div>
 
-              {providerForm.provider === 'vertex' ? (
+              {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) && providerForm.provider === 'vertex' ? (
                 <label style={{ display: 'grid', gap: 6 }}>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
                   <input
@@ -1935,18 +1954,40 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 </label>
               ) : null}
 
-              <label style={{ display: 'grid', gap: 6 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
-                </span>
-                <input
-                  className="input"
-                  type="password"
-                  value={providerForm.secret}
-                  onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
-                  placeholder={simpleProviderSecretPlaceholder(providerForm.provider)}
-                />
-              </label>
+              {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) ? (
+                <label style={{ display: 'grid', gap: 6 }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
+                  </span>
+                  <input
+                    className="input"
+                    type="password"
+                    value={providerForm.secret}
+                    onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
+                    placeholder={simpleProviderSecretPlaceholder(providerForm.provider)}
+                  />
+                </label>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    borderRadius: 8,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-surface)',
+                    padding: '12px 14px',
+                  }}
+                >
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                    {selectedConnectMethod?.description || 'Use the selected connection method to continue.'}
+                  </div>
+                  {selectedConnectDisabledReason ? (
+                    <div style={{ fontSize: 12.5, color: 'var(--warning-fg)', lineHeight: 1.55 }}>
+                      {selectedConnectDisabledReason}
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
 
             {providerError ? (
@@ -1987,11 +2028,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 <button
                   className="orion-btn orion-btn-primary"
                   style={{ minHeight: 40, paddingInline: 16 }}
-                  onClick={() => void handleSaveProviderCredential()}
-                  disabled={providerBusy['provider-create'] === 'save'}
+                  onClick={() => void handleConnectSelectedMethod()}
+                  disabled={selectedConnectDisabled}
+                  title={selectedConnectDisabledReason || undefined}
                 >
                   <Plus size={14} />
-                  {providerBusy['provider-create'] === 'save' ? 'Connecting…' : 'Connect'}
+                  {selectedConnectPrimaryLabel}
                 </button>
               </div>
             </div>

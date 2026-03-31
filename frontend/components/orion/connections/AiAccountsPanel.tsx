@@ -26,6 +26,7 @@ import {
   type ProviderId,
   type ProviderOption,
 } from '@/app/page.catalog';
+import { ProviderLogoMark } from '@/components/orion/connections/ConnectionMarks';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type ProviderCredentialRow = {
@@ -423,36 +424,6 @@ function normalizeClaudeCliError(message: string): string {
     return 'Claude is not signed in on this machine yet. Use Sign in to Claude in the add-account dialog, then refresh status.';
   }
   return normalized;
-}
-
-function providerAccentStyles(provider: ProviderId): { border: string; soft: string; tint: string } {
-  if (provider === 'openai') {
-    return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 6%, var(--bg-surface))' };
-  }
-  if (provider === 'anthropic') {
-    return { border: 'var(--tone-warning)', soft: 'color-mix(in srgb, var(--tone-warning) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-warning) 7%, var(--bg-surface))' };
-  }
-  if (provider === 'gemini') {
-    return { border: 'var(--tone-success)', soft: 'color-mix(in srgb, var(--tone-success) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-success) 7%, var(--bg-surface))' };
-  }
-  if (provider === 'deepseek') {
-    return { border: 'var(--tone-success)', soft: 'color-mix(in srgb, var(--tone-success) 12%, transparent)', tint: 'color-mix(in srgb, var(--tone-success) 5%, var(--bg-surface))' };
-  }
-  if (provider === 'mistral') {
-    return { border: 'var(--tone-warning)', soft: 'color-mix(in srgb, var(--tone-warning) 12%, transparent)', tint: 'color-mix(in srgb, var(--tone-warning) 5%, var(--bg-surface))' };
-  }
-  return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 14%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 5%, var(--bg-surface))' };
-}
-
-function providerMonogram(provider: ProviderId): string {
-  if (provider === 'openai') return 'OA';
-  if (provider === 'anthropic') return 'AN';
-  if (provider === 'gemini') return 'GM';
-  if (provider === 'qwen') return 'QW';
-  if (provider === 'deepseek') return 'DS';
-  if (provider === 'mistral') return 'MS';
-  if (provider === 'ollama') return 'OL';
-  return 'VX';
 }
 
 function simpleProviderAuthLabel(provider: ProviderId): string {
@@ -1825,7 +1796,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {connectedAccounts.map(({ credential, primaryProfile, enabled }) => {
-              const accent = providerAccentStyles(credential.provider);
               const busyAction = providerBusy[credential.id] || '';
               const statusTone = enabled
                 ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
@@ -1847,25 +1817,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 >
                   <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                      <div
-                        aria-hidden
-                        style={{
-                          width: 30,
-                          height: 30,
-                          borderRadius: 6,
-                          border: `1px solid ${accent.border}`,
-                          background: accent.soft,
-                          color: 'var(--text-primary)',
-                          display: 'grid',
-                          placeItems: 'center',
-                          fontSize: 11,
-                          fontWeight: 800,
-                          letterSpacing: '0.04em',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {providerMonogram(credential.provider)}
-                      </div>
+                      <ProviderLogoMark provider={credential.provider} size={30} />
                       <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
                           {providerLabel(credential.provider, providerOptions)}

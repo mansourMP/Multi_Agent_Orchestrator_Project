@@ -1,7 +1,6 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -29,6 +28,7 @@ import {
 } from '../page.catalog';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import AiAccountsPanel from '@/components/orion/connections/AiAccountsPanel';
+import { ConnectorLogoMark } from '@/components/orion/connections/ConnectionMarks';
 import { PageFilterBar } from '@/components/orion/page/PageFilterBar';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
@@ -130,13 +130,6 @@ type DesktopBridge = {
   openExternal?: (target: string) => Promise<boolean>;
 };
 
-type ConnectorVisual = {
-  assetSrc?: string;
-  accent: string;
-  bg: string;
-  border: string;
-};
-
 const EMPTY_FORM: ConnectModalState = {
   label: '',
   connector: 'google_workspace',
@@ -157,84 +150,6 @@ const EMPTY_FORM: ConnectModalState = {
   instagramPageId: '',
   calendarId: 'primary',
   timezone: 'UTC',
-};
-
-const ASSET_TILE_BG = 'var(--bg-element)';
-const ASSET_TILE_BORDER = 'var(--border-subtle)';
-
-const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
-  google_workspace: {
-    assetSrc: '/connector-logos/google-workspace.svg',
-    accent: 'var(--tone-success)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  telegram_bot: {
-    assetSrc: '/connector-logos/telegram.png',
-    accent: 'var(--tone-accent)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  wechat_work: {
-    assetSrc: '/connector-logos/webhook.png',
-    accent: 'var(--tone-success)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  whatsapp_twilio: {
-    assetSrc: '/connector-logos/whatsapp-business.png',
-    accent: 'var(--tone-success)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  discord_bot: {
-    assetSrc: '/connector-logos/discord.png',
-    accent: 'var(--tone-accent)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  instagram_business: {
-    assetSrc: '/connector-logos/meta-business.png',
-    accent: 'var(--tone-danger)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  microsoft_365: {
-    assetSrc: '/connector-logos/microsoft-365.png',
-    accent: 'var(--tone-warning)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  x_twitter: {
-    assetSrc: '/connector-logos/x.png',
-    accent: 'var(--text-secondary)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  youtube: {
-    assetSrc: '/connector-logos/youtube.png',
-    accent: 'var(--tone-danger)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  tiktok_business: {
-    assetSrc: '/connector-logos/tiktok.png',
-    accent: 'var(--text-secondary)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  custom_api: {
-    assetSrc: '/connector-logos/webhook.png',
-    accent: 'var(--text-secondary)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
-  discord: {
-    assetSrc: '/connector-logos/discord.png',
-    accent: 'var(--tone-accent)',
-    bg: ASSET_TILE_BG,
-    border: ASSET_TILE_BORDER,
-  },
 };
 
 function formatDate(value?: string | null): string {
@@ -260,51 +175,6 @@ function resolveCatalogConnectorId(item: Pick<ConnectorCatalogEntry, 'id' | 'con
   if (isConnectorId(item.id)) return item.id;
   if (item.id === 'discord') return 'discord_bot';
   return null;
-}
-
-function connectorVisual(id: string): ConnectorVisual {
-  return CONNECTOR_VISUALS[id] || {
-    assetSrc: '/connector-logos/webhook.png',
-    accent: 'var(--text-secondary)',
-    bg: 'var(--bg-element)',
-    border: 'var(--border-default)',
-  };
-}
-
-function ConnectorMark({ visual, size }: { visual: ConnectorVisual; size: number }) {
-  const innerSize = Math.round(size * (visual.assetSrc ? 0.88 : 0.52));
-  const radius = Math.round(size * 0.32);
-
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: radius,
-        background: visual.bg,
-        border: `1px solid ${visual.border}`,
-        color: visual.accent,
-        display: 'grid',
-        placeItems: 'center',
-        flexShrink: 0,
-        overflow: 'hidden',
-      }}
-    >
-      <Image
-        src={visual.assetSrc || '/connector-logos/webhook.png'}
-        alt=""
-        aria-hidden="true"
-        unoptimized
-        width={innerSize}
-        height={innerSize}
-        style={{
-          width: innerSize,
-          height: innerSize,
-          objectFit: 'contain',
-        }}
-      />
-    </div>
-  );
 }
 
 function agentRoleLabel(value?: unknown): string {
@@ -1358,7 +1228,6 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               const canCreateFromCard = Boolean(cardConnectorId);
               const isFocused = focusedCatalogEntry?.id === item.id;
               const isConnected = cardConnectorId ? connectedConnectorIds.has(cardConnectorId) : false;
-              const visual = connectorVisual(item.id);
               const cardMetaCopy = isConnected ? 'Connected in this workspace' : statusMeta.note;
               return (
                 <article
@@ -1376,7 +1245,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 >
                   <div className="orion-integration-card-head">
                     <div className="orion-integration-card-main">
-                      <ConnectorMark visual={visual} size={52} />
+                      <ConnectorLogoMark id={item.id} size={52} />
                       <div className="orion-integration-card-copy">
                         <div className="orion-integration-card-kicker">{connectorTierLabel(tier)}</div>
                         <div className="orion-integration-card-title">{item.label}</div>
@@ -1437,7 +1306,6 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
 
         {focusedCatalogEntry ? (
           (() => {
-            const visual = connectorVisual(focusedCatalogEntry.id);
             const focusedConnectorId = resolveCatalogConnectorId(focusedCatalogEntry);
             const canAddFocused = Boolean(focusedConnectorId);
             return (
@@ -1447,7 +1315,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               >
                 <div className="orion-focus-panel-head">
                   <div className="orion-focus-panel-main">
-                    <ConnectorMark visual={visual} size={44} />
+                    <ConnectorLogoMark id={focusedCatalogEntry.id} size={44} />
                     <div className="orion-focus-panel-copy">
                       <div className="orion-focus-panel-title">{focusedCatalogEntry.label}</div>
                       <div className="orion-focus-panel-note">{focusedCatalogEntry.note}</div>
@@ -1699,7 +1567,6 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           const test = testResults[row.id];
           const googleDriveBrowser = googleDriveBrowsers[row.id];
           const driveBrowser = driveBrowsers[row.id];
-          const visual = connectorVisual(row.connector);
           const busyCopy = busyActionLabel(busyAction);
           const isSuite = row.connector === 'google_workspace' || row.connector === 'microsoft_365';
           const isConfiguredOpen = configuredRowId === row.id;
@@ -1716,7 +1583,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           return (
             <div id={`connector-row-${row.id}`} className="orion-connector-detail-card">
               <div className="orion-connector-detail-header">
-                <ConnectorMark visual={visual} size={58} />
+                <ConnectorLogoMark id={row.connector} size={58} />
                 <div className="orion-connector-detail-copy">
                   <div className="orion-connector-detail-title-row">
                     <div className="orion-list-row-title">{row.label}</div>
@@ -1798,15 +1665,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 <details className="orion-connector-inline-details">
                   <summary>Details</summary>
                   <div className="orion-connector-inline-meta">
-                    <span
-                      className="orion-chip"
-                      style={{
-                        color: visual.accent,
-                        border: `1px solid ${visual.border}`,
-                        background: visual.bg,
-                        minHeight: 24,
-                      }}
-                    >
+                    <span className="orion-chip" style={{ minHeight: 24 }}>
                       {connectorLabel(row.connector)}
                     </span>
                     {isSuite ? (
@@ -2078,7 +1937,6 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           >
             {(() => {
               const modalEntry = catalogEntryForConnector(form.connector);
-              const visual = connectorVisual(form.connector);
               const title = modalLockedConnector ? `Connect ${connectorLabel(form.connector)}` : 'Add connection';
               const isTelegramOnboarding = form.connector === 'telegram_bot' && onboardingMode;
               const copy = modalLockedConnector
@@ -2089,7 +1947,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               return (
             <div className="orion-panel-header orion-modal-header orion-credentials-modal-header">
               <div className="orion-credentials-modal-title-group">
-                <ConnectorMark visual={visual} size={52} />
+                <ConnectorLogoMark id={form.connector} size={52} />
                 <div>
                   <h2 className="orion-modal-title">{title}</h2>
                   <p className="orion-modal-copy">{copy}</p>

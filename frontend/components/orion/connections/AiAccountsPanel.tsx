@@ -212,6 +212,11 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },
+  qwen: {
+    assetSrc: '/provider-logos/qwen.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
   deepseek: {
     assetSrc: '/provider-logos/deepseek.svg',
     bg: PROVIDER_ASSET_TILE_BG,
@@ -223,7 +228,7 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     border: PROVIDER_ASSET_TILE_BORDER,
   },
   mistral: {
-    assetSrc: '/provider-logos/mistral-icon.ico',
+    assetSrc: '/provider-logos/mistral.svg',
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },
@@ -1913,7 +1918,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 >
                   <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                      <ProviderMark provider={credential.provider} size={30} />
+                      <ProviderMark provider={credential.provider} size={32} />
                       <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
                           {providerLabel(credential.provider, providerOptions)}
@@ -2016,21 +2021,47 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 padding: 18,
               }}
             >
-              <label style={{ display: 'grid', gap: 6 }}>
+              <div style={{ display: 'grid', gap: 8 }}>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Provider</span>
-                <select
-                  className="input"
-                  value={providerForm.provider}
-                  onChange={(event) => {
-                    const nextProvider = knownProviderId(event.target.value) || 'anthropic';
-                    openProviderFormForMethod(nextProvider);
+                <div
+                  role="listbox"
+                  aria-label="Provider"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: 8,
                   }}
                 >
-                  {providerOptions.map((option) => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
+                  {providerOptions.map((option) => {
+                    const selected = providerForm.provider === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() => openProviderFormForMethod(option.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          minHeight: 44,
+                          padding: '10px 12px',
+                          borderRadius: 6,
+                          border: selected ? '1px solid var(--primary-base)' : '1px solid var(--border-subtle)',
+                          background: selected ? 'var(--primary-soft)' : 'var(--bg-surface)',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <ProviderMark provider={option.id} size={24} />
+                        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.3 }}>{option.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
               <div
                 style={{

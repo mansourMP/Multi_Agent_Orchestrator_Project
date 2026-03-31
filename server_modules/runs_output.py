@@ -407,6 +407,11 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "dag": run.get("dag"),
         "context": redact_sensitive(context),
         "replay_request": _build_replay_request_from_context(context),
+        "pending_confirmation": run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict) else None,
+        # Deprecated compatibility alias. Prefer `pending_confirmation`.
+        "pending_approval": run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict)
+        else run.get("pending_approval") if isinstance(run.get("pending_approval"), dict)
+        else None,
         "events": trimmed_events,
     }
     if provider_model_truth.get("fallback_reason"):

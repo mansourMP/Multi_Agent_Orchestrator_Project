@@ -757,7 +757,15 @@ def _direct_chat_run_final_payload(
     continuing: bool = False,
 ) -> Dict[str, Any]:
     status = str(snapshot.get("status") or (run.get("status") if isinstance(run, dict) else "") or "").strip().lower() or "unknown"
-    pending = run.get("pending_confirmation") if isinstance(run, dict) and isinstance(run.get("pending_confirmation"), dict) else {}
+    pending = (
+        run.get("pending_confirmation")
+        if isinstance(run, dict) and isinstance(run.get("pending_confirmation"), dict)
+        else snapshot.get("pending_confirmation")
+        if isinstance(snapshot.get("pending_confirmation"), dict)
+        else snapshot.get("pending_approval")
+        if isinstance(snapshot.get("pending_approval"), dict)
+        else {}
+    )
     result_data = snapshot.get("result_data") if isinstance(snapshot.get("result_data"), dict) else {}
     selected_target = str(snapshot.get("execution_target_selected") or "").strip().lower()
     attempted_providers = str(result_data.get("attempted_providers") or "").strip()

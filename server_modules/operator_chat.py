@@ -312,6 +312,16 @@ def _connect_action(label: str, href: str) -> Dict[str, Any]:
     }
 
 
+def _open_action(label: str, href: str, *, variant: str = "primary") -> Dict[str, Any]:
+    return {
+        "id": f"open:{href}",
+        "kind": "open",
+        "label": label,
+        "href": href,
+        "variant": variant,
+    }
+
+
 def _google_repair_action() -> Dict[str, Any]:
     return _connect_action("Reconnect Google Workspace", "/credentials?connector=google_workspace")
 
@@ -483,6 +493,107 @@ def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optiona
             "mode": "answer_with_action",
         }
     return None
+
+
+def _run_handoff_execution_target(availability: Dict[str, Any]) -> str:
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
+    if connection_mode == "local_companion":
+        return "local_companion"
+    return "auto"
+
+
+def _can_auto_start_run_handoff(availability: Dict[str, Any]) -> bool:
+    if not isinstance(availability, dict):
+        return False
+    if not bool(availability.get("ai_ready")):
+        return False
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
+    if connection_mode == "byok":
+        return False
+    return True
+
+
+def _direct_chat_run_handoff_failure_payload(message: str, error_detail: str) -> Dict[str, Any]:
+    detail = str(error_detail or "").strip() or "unknown_error"
+    return {
+        "reply": f"I couldn't start a durable run automatically: {detail}",
+        "actions": [_run_action(message)],
+        "mode": "answer_with_action",
+        "error": detail,
+    }
+
+
+def _start_direct_chat_run_handoff(
+    *,
+    message: str,
+    workspace_id: str,
+    requested_provider: str,
+    requested_model: str,
+    thread_id: str,
+    availability: Dict[str, Any],
+) -> Dict[str, Any]:
+    from server_modules.runs_delegation import _create_run_from_request
+    from server_modules.runtime_models import RunStartRequest
+
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower() or None
+    execution_target = _run_handoff_execution_target(availability)
+    req = RunStartRequest(
+        engine="orion",
+        workspace_id=workspace_id or "default",
+        user_goal=str(message or "").strip(),
+        provider=str(requested_provider or "").strip() or None,
+        model=str(requested_model or "").strip() or None,
+        metadata={
+            "source": "operator_chat",
+            "direct_chat": True,
+            "chat_handoff": True,
+            "thread_id": str(thread_id or "").strip() or None,
+            "execution_target": execution_target,
+            "connection_mode": connection_mode,
+        },
+    )
+    return _create_run_from_request(req)
+
+
+def _direct_chat_run_handoff_reply(started: Dict[str, Any]) -> Dict[str, Any]:
+    run_id = str(started.get("run_id") or "").strip()
+    route = started.get("route") if isinstance(started.get("route"), dict) else {}
+    selected_target = str(route.get("selected") or "").strip().lower()
+    pending = started.get("pending_confirmation") if isinstance(started.get("pending_confirmation"), dict) else {}
+    waiting_for_confirmation = bool(pending) or str(started.get("status") or "").strip().lower() == "waiting_for_input"
+
+    if waiting_for_confirmation:
+        reply = "I started a durable run for this task, but it needs confirmation before local execution begins."
+        actions = [
+            _open_action("Open approvals", "/approvals", variant="primary"),
+            _open_action("Open run", f"/runs/{run_id}", variant="secondary") if run_id else _open_action("Open runs", "/executions", variant="secondary"),
+        ]
+        detail = "Waiting for confirmation"
+    elif selected_target == "local_companion":
+        reply = "I started a durable run for this task on your local machine."
+        actions = [
+            _open_action("Open run", f"/runs/{run_id}", variant="primary") if run_id else _open_action("Open runs", "/executions", variant="primary"),
+            _open_action("Open runs", "/executions", variant="secondary"),
+        ]
+        detail = "Queued for Local Companion"
+    else:
+        reply = "I started a durable run for this task."
+        actions = [
+            _open_action("Open run", f"/runs/{run_id}", variant="primary") if run_id else _open_action("Open runs", "/executions", variant="primary"),
+            _open_action("Open runs", "/executions", variant="secondary"),
+        ]
+        detail = "Run started"
+
+    return {
+        "reply": reply,
+        "actions": actions,
+        "mode": "answer_with_action",
+        "run_id": run_id or None,
+        "detail": detail,
+        "route": route if route else None,
+        "pending_confirmation": pending if pending else None,
+        "status": str(started.get("status") or "").strip() or None,
+    }
 
 
 def _provider_supports_direct_tool_calls(provider: str) -> bool:
@@ -1516,15 +1627,88 @@ def build_direct_operator_reply(
         provider=provider,
         tools=tools,
     )
+    fallback_reason = None
     if not allow_direct_tool_calls:
         preview = _preview_run_response(normalized_message, availability_payload)
         if preview is not None:
+            preview_actions = preview.get("actions") if isinstance(preview.get("actions"), list) else []
+            should_auto_start_run = any(
+                isinstance(action, dict) and str(action.get("kind") or "").strip().lower() == "run"
+                for action in preview_actions
+            )
+            if should_auto_start_run and _can_auto_start_run_handoff(availability_payload):
+                yield {
+                    "type": "step",
+                    "label": "Starting durable run",
+                    "detail": normalized_message[:120] if normalized_message else "Preparing execution",
+                    "status": "active",
+                    "kind": "thinking",
+                    "id": "run-handoff:start",
+                }
+                try:
+                    started_run = _start_direct_chat_run_handoff(
+                        message=normalized_message,
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        requested_model=normalized_requested_model,
+                        thread_id=normalized_thread_id,
+                        availability=availability_payload,
+                    )
+                    handoff_payload = _direct_chat_run_handoff_reply(started_run)
+                    yield {
+                        "type": "step",
+                        "label": "Durable run started",
+                        "detail": str(handoff_payload.get("detail") or "Run started"),
+                        "status": "done",
+                        "kind": "thinking",
+                        "id": "run-handoff:start",
+                    }
+                    yield {
+                        "type": "final",
+                        "payload": _with_context_used(
+                            {
+                                "reply": handoff_payload.get("reply") or "I started a durable run for this task.",
+                                "actions": handoff_payload.get("actions") if isinstance(handoff_payload.get("actions"), list) else [],
+                                "mode": str(handoff_payload.get("mode") or "answer_with_action"),
+                                "provider": None,
+                                "model": None,
+                                "attempted_providers": "",
+                                "error": "",
+                            },
+                            _build_context_used(
+                                workspace_id=normalized_workspace_id,
+                                requested_provider=normalized_requested_provider,
+                                effective_provider=None,
+                                requested_model=normalized_requested_model,
+                                effective_model=None,
+                                reasoning_effort=normalized_reasoning_effort,
+                                connected_systems=connected_systems,
+                                tool_capabilities=tool_capabilities,
+                                prior_messages_used=False,
+                                history_mode="none",
+                                run_created=True,
+                                fallback_used=False,
+                                fallback_reason=fallback_reason,
+                            ),
+                        ),
+                    }
+                    return
+                except Exception as exc:
+                    detail = str(getattr(exc, "detail", "") or str(exc)).strip() or "run_start_failed"
+                    yield {
+                        "type": "step",
+                        "label": "Durable run failed to start",
+                        "detail": detail,
+                        "status": "error",
+                        "kind": "thinking",
+                        "id": "run-handoff:start",
+                    }
+                    preview = _direct_chat_run_handoff_failure_payload(normalized_message, detail)
             yield {
                 "type": "final",
                 "payload": _with_context_used(preview, base_context_used),
             }
             return
-    fallback_reason = None
     if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
         yield {
             "type": "final",

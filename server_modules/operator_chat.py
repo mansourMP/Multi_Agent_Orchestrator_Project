@@ -1025,7 +1025,7 @@ def _direct_tool_result_progress_text(connector_id: str, action_id: str, result_
     if not cleaned:
         return ""
     if normalized_connector == "file" and normalized_action == "read":
-        return f"File contents:\n{cleaned}\n"
+        return ""
     if normalized_connector == "shell" and normalized_action == "exec":
         return f"Command output:\n{cleaned}\n"
     if normalized_connector == "screenshot" and normalized_action == "capture":

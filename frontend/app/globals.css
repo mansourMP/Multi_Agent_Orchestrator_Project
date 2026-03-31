@@ -4539,8 +4539,8 @@ input:focus-visible {
 
 .orion-chat-v2-markdown {
   color: var(--text-primary);
-  font-size: 15.5px;
-  line-height: 1.78;
+  font-size: 15px;
+  line-height: 1.6;
   letter-spacing: -0.01em;
 }
 
@@ -5085,7 +5085,7 @@ input:focus-visible {
 
 .orion-chat-v2-markdown {
   font-size: 15px;
-  line-height: 1.64;
+  line-height: 1.6;
 }
 
 .orion-chat-v2-actions {

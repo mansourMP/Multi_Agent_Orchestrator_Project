@@ -1,8 +1,9 @@
 'use client';
 
-import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowUp, ChevronDown, Plus, SlidersHorizontal, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { fmtTime } from '@/app/page.catalog';
 import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
@@ -91,116 +92,6 @@ type ChatSurfaceProps = {
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
 };
-
-function renderInlineMarkdown(text: string, keyPrefix: string) {
-  const nodes: ReactNode[] = [];
-  const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-    if (match[2] !== undefined) {
-      nodes.push(<strong key={`${keyPrefix}:bold:${match.index}`}>{match[2]}</strong>);
-    } else if (match[3] !== undefined) {
-      nodes.push(<code key={`${keyPrefix}:code:${match.index}`}>{match[3]}</code>);
-    }
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes;
-}
-
-function renderParagraphWithBreaks(text: string, keyPrefix: string) {
-  const lines = text.split('\n');
-  return (
-    <p key={keyPrefix}>
-      {lines.map((line, index) => (
-        <Fragment key={`${keyPrefix}:line:${index}`}>
-          {index > 0 ? <br /> : null}
-          {renderInlineMarkdown(line, `${keyPrefix}:${index}`)}
-        </Fragment>
-      ))}
-    </p>
-  );
-}
-
-function renderMarkdownBlocks(segment: string, keyPrefix: string) {
-  return segment
-    .split(/\n{2,}/)
-    .map((block, blockIndex) => {
-      const trimmed = block.trim();
-      if (!trimmed) return null;
-      const lines = trimmed.split('\n');
-      const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-      if (headingMatch) {
-        const level = Math.min(headingMatch[1].length, 6);
-        const headingText = headingMatch[2].trim();
-        const headingTag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
-        return createElement(
-          headingTag,
-          { key: `${keyPrefix}:heading:${blockIndex}` },
-          renderInlineMarkdown(headingText, `${keyPrefix}:heading:${blockIndex}`),
-        );
-      }
-
-      const orderedList = lines.every((line) => /^\s*\d+\.\s+/.test(line));
-      const unorderedList = lines.every((line) => /^\s*[-*+]\s+/.test(line));
-      if (orderedList || unorderedList) {
-        const ListTag = orderedList ? 'ol' : 'ul';
-        return (
-          <ListTag key={`${keyPrefix}:list:${blockIndex}`}>
-            {lines.map((line, lineIndex) => (
-              <li key={`${keyPrefix}:list:${blockIndex}:${lineIndex}`}>
-                {renderInlineMarkdown(line.replace(/^\s*(?:\d+\.|[-*+])\s+/, ''), `${keyPrefix}:list:${blockIndex}:${lineIndex}`)}
-              </li>
-            ))}
-          </ListTag>
-        );
-      }
-
-      return renderParagraphWithBreaks(trimmed, `${keyPrefix}:paragraph:${blockIndex}`);
-    })
-    .filter(Boolean);
-}
-
-function renderChatMarkdown(content: string, keyPrefix: string) {
-  const normalized = content.replace(/\r\n/g, '\n').trim();
-  if (!normalized) return null;
-  const parts: ReactNode[] = [];
-  const fencePattern = /```([\w-]+)?\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let segmentIndex = 0;
-
-  while ((match = fencePattern.exec(normalized)) !== null) {
-    const before = normalized.slice(lastIndex, match.index).trim();
-    if (before) {
-      parts.push(...(renderMarkdownBlocks(before, `${keyPrefix}:segment:${segmentIndex}`) as ReactNode[]));
-      segmentIndex += 1;
-    }
-    parts.push(
-      <pre key={`${keyPrefix}:fence:${segmentIndex}`}>
-        <code>{match[2].trimEnd()}</code>
-      </pre>,
-    );
-    segmentIndex += 1;
-    lastIndex = match.index + match[0].length;
-  }
-
-  const trailing = normalized.slice(lastIndex).trim();
-  if (trailing) {
-    parts.push(...(renderMarkdownBlocks(trailing, `${keyPrefix}:segment:${segmentIndex}`) as ReactNode[]));
-  }
-
-  return parts;
-}
 
 function resolveAssistantLifecycle(status: ChatMessageRecord['status']): {
   label: string;
@@ -440,7 +331,9 @@ export function ChatSurface({
                       {isError && inlineError ? (
                         <div className="orion-chat-v2-inline-error">⚠ {inlineError}</div>
                       ) : !suppressBody ? (
-                        <div className="orion-chat-v2-markdown">{renderChatMarkdown(displayContent, message.id)}</div>
+                        <div className="orion-chat-v2-markdown">
+                          <ReactMarkdown>{displayContent}</ReactMarkdown>
+                        </div>
                       ) : null}
                       {message.runCard ? (
                         <div className={`orion-chat-v2-run-card is-${message.runCard.status}`}>

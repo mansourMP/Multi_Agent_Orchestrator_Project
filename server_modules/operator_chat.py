@@ -832,6 +832,8 @@ def _tool_write_action_available(
 ) -> bool:
     normalized_connector_id = str(connector_id or "").strip().lower()
     normalized_action_id = str(action_id or "").strip()
+    if normalized_connector_id in {"file", "shell", "screenshot"}:
+        return normalized_action_id in {"read", "write", "exec", "capture"}
     for item in tool_capabilities:
         if not isinstance(item, dict):
             continue
@@ -860,9 +862,16 @@ def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
 
 
 def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
+    connector_id = str(approved_action.get("connector") or "").strip().lower()
+    raw_input = str(approved_action.get("input") or "").strip()
+    if connector_id in {"file", "shell", "screenshot"}:
+        parsed_input = parse_json_object_loose(raw_input)
+        arguments = parsed_input if isinstance(parsed_input, dict) else ({} if connector_id == "screenshot" else {"input": raw_input})
+    else:
+        arguments = {"input": raw_input}
     return {
         "name": f"{approved_action['connector']}__{approved_action['action']}",
-        "arguments": json.dumps({"input": approved_action["input"]}, ensure_ascii=False),
+        "arguments": json.dumps(arguments, ensure_ascii=False),
     }
 
 
@@ -946,15 +955,108 @@ def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
     return summary or json.dumps(result, ensure_ascii=True, indent=2)
 
 
-def _execute_direct_tool_calls(
+def _shell_command_requires_approval(command: str) -> bool:
+    compact = _compact_text(command)
+    if not compact:
+        return False
+    destructive_markers = (
+        "rm -rf",
+        "rm -r ",
+        "rm -f ",
+        "sudo rm",
+        "del /f",
+        "del /q",
+        "rmdir /s",
+        "format ",
+        "mkfs",
+        "diskutil erase",
+        "shred ",
+        "dd if=",
+    )
+    return any(marker in compact for marker in destructive_markers)
+
+
+def _file_write_requires_approval(arguments: Dict[str, Any]) -> bool:
+    path = str(arguments.get("path") or arguments.get("file_path") or "").strip().lower()
+    if not path:
+        return False
+    protected_markers = (
+        "/etc/",
+        "/bin/",
+        "/usr/",
+        "/system/",
+        "/library/",
+        ".ssh/",
+        ".gnupg/",
+        ".env",
+        ".git/config",
+    )
+    return any(marker in path for marker in protected_markers)
+
+
+def _local_direct_tool_requires_approval(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> bool:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "shell" and normalized_action == "exec":
+        return _shell_command_requires_approval(str(arguments.get("command") or ""))
+    if normalized_connector == "file" and normalized_action == "write":
+        return _file_write_requires_approval(arguments)
+    return False
+
+
+def _direct_tool_progress_text(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> str:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_connector == "file" and normalized_action == "read":
+        return "Reading file...\n"
+    if normalized_connector == "file" and normalized_action == "write":
+        return "Writing file...\n"
+    if normalized_connector == "shell" and normalized_action == "exec":
+        return "Running command...\n"
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        return "Capturing screenshot...\n"
+    return f"Running {normalized_connector} {normalized_action}...\n"
+
+
+def _direct_tool_result_progress_text(connector_id: str, action_id: str, result_text: str) -> str:
+    normalized_connector = str(connector_id or "").strip().lower()
+    normalized_action = str(action_id or "").strip().lower()
+    cleaned = str(result_text or "").strip()
+    if not cleaned:
+        return ""
+    if normalized_connector == "file" and normalized_action == "read":
+        return f"File contents:\n{cleaned}\n"
+    if normalized_connector == "shell" and normalized_action == "exec":
+        return f"Command output:\n{cleaned}\n"
+    if normalized_connector == "screenshot" and normalized_action == "capture":
+        return f"Screenshot captured:\n{cleaned}\n"
+    return f"Tool result:\n{cleaned}\n"
+
+
+def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:
+    cleaned_result = str(result_text or "").strip() or "No result."
+    return (
+        f"Tool result for {tool_name}:\n{cleaned_result}\n\n"
+        "Continue until the task is complete. If another tool is needed, call it now. "
+        "Otherwise provide the final answer to the user."
+    )
+
+
+def _execute_single_direct_tool_call(
     *,
-    tool_calls: List[Dict[str, Any]],
+    tool_call: Dict[str, Any],
     workspace_id: str,
     thread_id: str,
+    index: int = 1,
 ) -> str:
-    if not tool_calls:
-        return ""
     from server_modules.runs_execution import _workflow_execute_connector_action, _workflow_execute_local_tool
+
+    connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
+    argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
+    if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+        nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
+        if isinstance(nested_input, dict):
+            argument_payload = nested_input
 
     run_id = f"direct-chat-{uuid4().hex}"
     execution_context: Dict[str, Any] = {
@@ -968,44 +1070,64 @@ def _execute_direct_tool_calls(
             "execution_target_selected": "local_companion",
         },
     }
-    replies: List[str] = []
-    for index, call in enumerate(tool_calls, start=1):
-        connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
-        argument_payload = _tool_arguments_payload(call.get("arguments"))
-        if connector_id in {"file", "shell", "screenshot"}:
-            variant, config = _build_direct_local_tool_config(connector_id, action_id, argument_payload)
-            result = _workflow_execute_local_tool(
-                run_id,
-                execution_context,
-                config,
-                label=f"{connector_id}__{action_id}",
-                variant=variant,
-                current_text=str(argument_payload.get("content") or argument_payload.get("command") or "").strip(),
-            )
-            replies.append(_format_direct_local_tool_result(result))
-            continue
-        tool_input = str(argument_payload.get("input") or "").strip()
-        if not tool_input:
-            raise RuntimeError(f"Tool '{connector_id}__{action_id}' requires a non-empty input argument.")
-        config = _build_direct_tool_config(connector_id, action_id, tool_input)
-        result = _workflow_execute_connector_action(
+
+    if connector_id in {"file", "shell", "screenshot"}:
+        variant, config = _build_direct_local_tool_config(connector_id, action_id, argument_payload)
+        result = _workflow_execute_local_tool(
             run_id,
-            f"direct_chat_tool:{index}",
             execution_context,
             config,
-            current_text=tool_input,
+            label=f"{connector_id}__{action_id}",
+            variant=variant,
+            current_text=str(argument_payload.get("content") or argument_payload.get("command") or "").strip(),
         )
-        replies.append(_format_direct_tool_result(result))
+        return _format_direct_local_tool_result(result)
+
+    tool_input = str(argument_payload.get("input") or "").strip()
+    if not tool_input:
+        raise RuntimeError(f"Tool '{connector_id}__{action_id}' requires a non-empty input argument.")
+    config = _build_direct_tool_config(connector_id, action_id, tool_input)
+    result = _workflow_execute_connector_action(
+        run_id,
+        f"direct_chat_tool:{index}",
+        execution_context,
+        config,
+        current_text=tool_input,
+    )
+    return _format_direct_tool_result(result)
+
+
+def _execute_direct_tool_calls(
+    *,
+    tool_calls: List[Dict[str, Any]],
+    workspace_id: str,
+    thread_id: str,
+) -> str:
+    if not tool_calls:
+        return ""
+    replies: List[str] = []
+    for index, call in enumerate(tool_calls, start=1):
+        replies.append(
+            _execute_single_direct_tool_call(
+                tool_call=call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+            )
+        )
     return "\n\n".join(part for part in replies if part).strip()
 
 
 def _approval_required_for_direct_tool(
     connector_id: str,
     action_id: str,
+    arguments: Dict[str, Any],
     tool_capabilities: List[Dict[str, Any]],
 ) -> bool:
     normalized_connector_id = str(connector_id or "").strip().lower()
     normalized_action_id = str(action_id or "").strip()
+    if normalized_connector_id in {"file", "shell", "screenshot"}:
+        return _local_direct_tool_requires_approval(normalized_connector_id, normalized_action_id, arguments)
     for item in tool_capabilities:
         if not isinstance(item, dict):
             continue
@@ -1024,10 +1146,12 @@ def _build_direct_tool_approval_response(
     approval_actions: List[Dict[str, Any]] = []
     for index, call in enumerate(tool_calls, start=1):
         connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
-        if not _approval_required_for_direct_tool(connector_id, action_id, tool_capabilities):
-            continue
         argument_payload = _tool_arguments_payload(call.get("arguments"))
+        if not _approval_required_for_direct_tool(connector_id, action_id, argument_payload, tool_capabilities):
+            continue
         tool_input = str(argument_payload.get("input") or "").strip()
+        if connector_id in {"file", "shell", "screenshot"}:
+            tool_input = json.dumps(argument_payload, ensure_ascii=False)
         approval_actions.append(
             {
                 "type": "approval_required",
@@ -1399,171 +1523,197 @@ def build_direct_operator_reply(
     system_prompt = raw_system_prompt or None
     history_mode = "raw_messages" if normalized_prior_messages else "none"
     prior_messages_used = bool(normalized_prior_messages)
-    reply = ""
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
     llm_error = ""
     actual_provider: Optional[str] = provider
     actual_model: Optional[str] = normalized_requested_model or None
-    tool_calls: List[Dict[str, Any]] = []
+    executed_any_tools = False
+    conversation_messages: List[Dict[str, str]] = list(normalized_prior_messages)
+    current_prompt = normalized_message
+    max_iterations = 10
 
-    for event in generate_chat_reply_stream_with_provider_fallback(
-        context=context,
-        metadata=metadata,
-        user_goal=normalized_message,
-        system_prompt=system_prompt,
-        prior_messages=normalized_prior_messages or None,
-    ):
-        event_type = str(event.get("type") or "").strip().lower()
-        if event_type == "chunk":
-            delta = str(event.get("delta") or "")
-            if delta:
-                reply += delta
-                yield {"type": "chunk", "delta": delta}
-            continue
-        if event_type == "result":
-            final_reply = str(event.get("reply") or "").strip() or reply
-            usage_masked = event.get("usage_masked") if isinstance(event.get("usage_masked"), dict) else {}
-            attempted_providers = str(event.get("attempted_providers") or "").strip()
-            llm_error = str(event.get("error") or "").strip()
-            actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
-            actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
-            tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
-            if tool_calls:
-                approval_payload = _build_direct_tool_approval_response(
-                    tool_calls=tool_calls,
-                    tool_capabilities=tool_capabilities,
-                )
-                if approval_payload is not None:
-                    yield {
-                        "type": "final",
-                        "payload": {
-                            **approval_payload,
-                            "usage_masked": usage_masked,
-                            "provider": actual_provider,
-                            "model": actual_model,
-                            "attempted_providers": attempted_providers,
-                            "error": "",
-                            "context_used": _build_context_used(
-                                workspace_id=normalized_workspace_id,
-                                requested_provider=normalized_requested_provider,
-                                effective_provider=str(actual_provider or provider or "").strip() or None,
-                                requested_model=normalized_requested_model,
-                                effective_model=str(actual_model or "").strip() or None,
-                                reasoning_effort=normalized_reasoning_effort,
-                                connected_systems=connected_systems,
-                                tool_capabilities=tool_capabilities,
-                                prior_messages_used=prior_messages_used,
-                                history_mode=history_mode,
-                                run_created=False,
-                                fallback_used=False,
-                                fallback_reason=fallback_reason,
-                            ),
-                        },
-                    }
-                    return
-                try:
-                    tool_reply = _execute_direct_tool_calls(
-                        tool_calls=tool_calls,
-                        workspace_id=normalized_workspace_id,
-                        thread_id=normalized_thread_id,
-                    )
-                    yield {
-                        "type": "final",
-                        "payload": {
-                            "reply": tool_reply or final_reply or "Connector action completed.",
-                            "actions": [],
-                            "mode": "answer",
-                            "usage_masked": usage_masked,
-                            "provider": actual_provider,
-                            "model": actual_model,
-                            "attempted_providers": attempted_providers,
-                            "error": "",
-                            "context_used": _build_context_used(
-                                workspace_id=normalized_workspace_id,
-                                requested_provider=normalized_requested_provider,
-                                effective_provider=str(actual_provider or provider or "").strip() or None,
-                                requested_model=normalized_requested_model,
-                                effective_model=str(actual_model or "").strip() or None,
-                                reasoning_effort=normalized_reasoning_effort,
-                                connected_systems=connected_systems,
-                                tool_capabilities=tool_capabilities,
-                                prior_messages_used=prior_messages_used,
-                                history_mode=history_mode,
-                                run_created=False,
-                                fallback_used=False,
-                                fallback_reason=fallback_reason,
-                            ),
-                        },
-                    }
-                    return
-                except Exception as exc:
-                    llm_error = str(exc).strip() or "connector_action_failed"
-                    yield {
-                        "type": "final",
-                        "payload": {
-                            "reply": f"Connector action failed: {llm_error}",
-                            "actions": [],
-                            "mode": "answer",
-                            "usage_masked": usage_masked,
-                            "provider": actual_provider,
-                            "model": actual_model,
-                            "attempted_providers": attempted_providers,
-                            "error": llm_error,
-                            "context_used": _build_context_used(
-                                workspace_id=normalized_workspace_id,
-                                requested_provider=normalized_requested_provider,
-                                effective_provider=str(actual_provider or provider or "").strip() or None,
-                                requested_model=normalized_requested_model,
-                                effective_model=str(actual_model or "").strip() or None,
-                                reasoning_effort=normalized_reasoning_effort,
-                                connected_systems=connected_systems,
-                                tool_capabilities=tool_capabilities,
-                                prior_messages_used=prior_messages_used,
-                                history_mode=history_mode,
-                                run_created=False,
-                                fallback_used=False,
-                                fallback_reason=fallback_reason,
-                            ),
-                        },
-                    }
-                    return
-            actions = _suggest_actions(normalized_message, availability_payload)
-            yield {
-                "type": "final",
-                "payload": {
-                    "reply": final_reply,
-                    "actions": actions,
-                    "mode": "answer_with_action" if actions else "answer",
-                    "usage_masked": usage_masked,
-                    "provider": actual_provider,
-                    "model": actual_model,
-                    "attempted_providers": attempted_providers,
-                    "error": llm_error,
-                    "context_used": _build_context_used(
-                        workspace_id=normalized_workspace_id,
-                        requested_provider=normalized_requested_provider,
-                        effective_provider=str(actual_provider or provider or "").strip() or None,
-                        requested_model=normalized_requested_model,
-                        effective_model=str(actual_model or "").strip() or None,
-                        reasoning_effort=normalized_reasoning_effort,
-                        connected_systems=connected_systems,
+    for iteration in range(max_iterations):
+        if iteration > 0:
+            yield {"type": "chunk", "delta": "Thinking...\n"}
+
+        iteration_reply = ""
+        iteration_tool_calls: List[Dict[str, Any]] = []
+        iteration_failed = False
+
+        for event in generate_chat_reply_stream_with_provider_fallback(
+            context=context,
+            metadata=metadata,
+            user_goal=current_prompt,
+            system_prompt=system_prompt,
+            prior_messages=conversation_messages or None,
+        ):
+            event_type = str(event.get("type") or "").strip().lower()
+            if event_type == "chunk":
+                delta = str(event.get("delta") or "")
+                if delta:
+                    iteration_reply += delta
+                continue
+            if event_type == "result":
+                final_reply = str(event.get("reply") or "").strip() or iteration_reply
+                usage_masked = event.get("usage_masked") if isinstance(event.get("usage_masked"), dict) else {}
+                attempted_providers = str(event.get("attempted_providers") or "").strip()
+                llm_error = str(event.get("error") or "").strip()
+                actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
+                actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
+                iteration_tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+
+                conversation_messages.append({"role": "user", "content": current_prompt})
+                if final_reply:
+                    conversation_messages.append({"role": "assistant", "content": final_reply})
+
+                if iteration_tool_calls:
+                    approval_payload = _build_direct_tool_approval_response(
+                        tool_calls=iteration_tool_calls,
                         tool_capabilities=tool_capabilities,
-                        prior_messages_used=prior_messages_used,
-                        history_mode=history_mode,
-                        run_created=False,
-                        fallback_used=False,
-                        fallback_reason=fallback_reason,
-                    ),
-                },
-            }
-            return
-        if event_type == "failure":
-            attempted_providers = str(event.get("attempted_providers") or "").strip()
-            llm_error = str(event.get("error") or "").strip()
-            break
+                    )
+                    if approval_payload is not None:
+                        yield {
+                            "type": "final",
+                            "payload": {
+                                **approval_payload,
+                                "usage_masked": usage_masked,
+                                "provider": actual_provider,
+                                "model": actual_model,
+                                "attempted_providers": attempted_providers,
+                                "error": "",
+                                "context_used": _build_context_used(
+                                    workspace_id=normalized_workspace_id,
+                                    requested_provider=normalized_requested_provider,
+                                    effective_provider=str(actual_provider or provider or "").strip() or None,
+                                    requested_model=normalized_requested_model,
+                                    effective_model=str(actual_model or "").strip() or None,
+                                    reasoning_effort=normalized_reasoning_effort,
+                                    connected_systems=connected_systems,
+                                    tool_capabilities=tool_capabilities,
+                                    prior_messages_used=True,
+                                    history_mode="raw_messages",
+                                    run_created=False,
+                                    fallback_used=False,
+                                    fallback_reason=fallback_reason,
+                                ),
+                            },
+                        }
+                        return
 
-    actions = _suggest_actions(normalized_message, availability_payload)
+                    try:
+                        for tool_index, tool_call in enumerate(iteration_tool_calls, start=1):
+                            connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
+                            argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
+                            if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+                                nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
+                                if isinstance(nested_input, dict):
+                                    argument_payload = nested_input
+                            progress_text = _direct_tool_progress_text(connector_id, action_id, argument_payload)
+                            if progress_text:
+                                yield {"type": "chunk", "delta": progress_text}
+                            tool_result = _execute_single_direct_tool_call(
+                                tool_call=tool_call,
+                                workspace_id=normalized_workspace_id,
+                                thread_id=normalized_thread_id,
+                                index=tool_index,
+                            )
+                            executed_any_tools = True
+                            result_progress = _direct_tool_result_progress_text(connector_id, action_id, tool_result)
+                            if result_progress:
+                                yield {"type": "chunk", "delta": result_progress}
+                            conversation_messages.append(
+                                {
+                                    "role": "user",
+                                    "content": _direct_tool_followup_message(
+                                        str(tool_call.get("name") or f"{connector_id}__{action_id}"),
+                                        tool_result,
+                                    ),
+                                }
+                            )
+                        current_prompt = (
+                            "Continue until the task is complete. If another tool is needed, call it now. "
+                            "Otherwise provide the final answer to the user."
+                        )
+                        break
+                    except Exception as exc:
+                        llm_error = str(exc).strip() or "connector_action_failed"
+                        yield {
+                            "type": "final",
+                            "payload": {
+                                "reply": f"Connector action failed: {llm_error}",
+                                "actions": [],
+                                "mode": "answer",
+                                "usage_masked": usage_masked,
+                                "provider": actual_provider,
+                                "model": actual_model,
+                                "attempted_providers": attempted_providers,
+                                "error": llm_error,
+                                "context_used": _build_context_used(
+                                    workspace_id=normalized_workspace_id,
+                                    requested_provider=normalized_requested_provider,
+                                    effective_provider=str(actual_provider or provider or "").strip() or None,
+                                    requested_model=normalized_requested_model,
+                                    effective_model=str(actual_model or "").strip() or None,
+                                    reasoning_effort=normalized_reasoning_effort,
+                                    connected_systems=connected_systems,
+                                    tool_capabilities=tool_capabilities,
+                                    prior_messages_used=True,
+                                    history_mode="raw_messages",
+                                    run_created=False,
+                                    fallback_used=False,
+                                    fallback_reason=fallback_reason,
+                                ),
+                            },
+                        }
+                        return
+
+                actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
+                if final_reply:
+                    yield {"type": "chunk", "delta": final_reply}
+                yield {
+                    "type": "final",
+                    "payload": {
+                        "reply": final_reply,
+                        "actions": actions,
+                        "mode": "answer_with_action" if actions else "answer",
+                        "usage_masked": usage_masked,
+                        "provider": actual_provider,
+                        "model": actual_model,
+                        "attempted_providers": attempted_providers,
+                        "error": llm_error,
+                        "context_used": _build_context_used(
+                            workspace_id=normalized_workspace_id,
+                            requested_provider=normalized_requested_provider,
+                            effective_provider=str(actual_provider or provider or "").strip() or None,
+                            requested_model=normalized_requested_model,
+                            effective_model=str(actual_model or "").strip() or None,
+                            reasoning_effort=normalized_reasoning_effort,
+                            connected_systems=connected_systems,
+                            tool_capabilities=tool_capabilities,
+                            prior_messages_used=bool(conversation_messages),
+                            history_mode="raw_messages" if conversation_messages else history_mode,
+                            run_created=False,
+                            fallback_used=False,
+                            fallback_reason=fallback_reason,
+                        ),
+                    },
+                }
+                return
+            if event_type == "failure":
+                attempted_providers = str(event.get("attempted_providers") or "").strip()
+                llm_error = str(event.get("error") or "").strip()
+                iteration_failed = True
+                break
+
+        if iteration_failed:
+            break
+        if not iteration_tool_calls:
+            break
+    else:
+        llm_error = llm_error or f"max_tool_iterations_reached:{max_iterations}"
+
+    actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
     yield {
         "type": "final",
         "payload": {

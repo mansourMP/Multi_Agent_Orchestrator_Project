@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useCallback, useState } from 'react';
 import { Plus, PlayCircle, Search } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { MetricStrip } from '@/components/ui/MetricStrip';
@@ -17,10 +18,12 @@ import { useWorkflowLibrary } from '@/hooks/pages/useWorkflowLibrary';
 import { WorkflowListRow } from '@/components/orion/workflows/WorkflowListRow';
 import { useToast } from '@/components/Toast';
 import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
+import { runWorkflow } from '@/lib/api';
 
 export default function WorkflowsPage() {
   const router = useRouter();
   const { addToast } = useToast();
+  const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
   const modalPortalTarget = typeof document !== 'undefined' ? document.body : null;
   const {
     workflows,
@@ -43,6 +46,29 @@ export default function WorkflowsPage() {
   } = useWorkflowLibrary();
   const workflowLoadDetail = loadError ? humanizeUiError(loadError) : '';
   const showWorkflowLoadDetail = Boolean(workflowLoadDetail && workflowLoadDetail !== UI_ERROR_COPY.backend);
+  const handleRunWorkflow = useCallback(async (workflowId: string) => {
+    setRunningWorkflowId(workflowId);
+    try {
+      const payload = await runWorkflow(workflowId);
+      const runId = String(payload?.run_id || '').trim();
+      addToast({
+        type: 'success',
+        title: 'Workflow started',
+        message: runId ? `Run ${runId.slice(0, 8)} started.` : 'Workflow run started.',
+      });
+      if (runId) {
+        router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`);
+      }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Run failed',
+        message: error instanceof Error ? error.message : 'Failed to start workflow run.',
+      });
+    } finally {
+      setRunningWorkflowId(null);
+    }
+  }, [addToast, router]);
 
   return (
     <div className="orion-page-shell is-static-entry">
@@ -172,7 +198,10 @@ export default function WorkflowsPage() {
                   <WorkflowListRow
                     key={workflow.id}
                     workflow={workflow}
-                    onOpen={() => router.push(`/workflows/${workflow.id}`)}
+                    onEdit={() => router.push(`/workflows/${workflow.id}`)}
+                    onRun={() => {
+                      void handleRunWorkflow(workflow.id);
+                    }}
                     onDelete={() => setDeleteTarget(workflow)}
                     onDuplicate={() => {
                       void duplicateWorkflow(workflow.id).catch((error) => {
@@ -183,6 +212,7 @@ export default function WorkflowsPage() {
                         });
                       });
                     }}
+                    runBusy={runningWorkflowId === workflow.id}
                   />
                 ))}
               </section>

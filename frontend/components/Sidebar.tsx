@@ -7,6 +7,7 @@ import {
   Home,
   PanelLeft,
   Activity,
+  GitBranch,
   Key,
   MessageSquare,
   Settings,
@@ -27,6 +28,7 @@ const MAIN_NAV: NavItem[] = [
   { label: 'Home', href: '/home', icon: Home },
   { label: 'Chat', href: '/', icon: MessageSquare },
   { label: 'Agents', href: '/agents', icon: Bot },
+  { label: 'Workflows', href: '/workflows', icon: GitBranch },
   { label: 'Library', href: '/executions', icon: Activity },
   { label: 'Connectors', href: '/credentials', icon: Key },
 ];
@@ -44,9 +46,10 @@ function isActivePath(pathname: string, href: string): boolean {
   if (href === '/agents') {
     return pathname === '/agents'
       || pathname === '/builder'
-      || pathname.startsWith('/builder/')
-      || pathname === '/workflows'
-      || pathname.startsWith('/workflows/');
+      || pathname.startsWith('/builder/');
+  }
+  if (href === '/workflows') {
+    return pathname === '/workflows' || pathname.startsWith('/workflows/');
   }
   if (href === '/executions') {
     return pathname === '/executions'

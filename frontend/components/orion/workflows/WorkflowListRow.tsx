@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, Copy, Trash } from 'lucide-react';
+import { Clock, Copy, Pencil, Play, Trash } from 'lucide-react';
 import type { WorkflowRecord } from '@/hooks/pages/useWorkflowLibrary';
 import { ResourceActionGroup } from '@/components/orion/list/ResourceActionGroup';
 import { ResourceMetaLine } from '@/components/orion/list/ResourceMetaLine';
@@ -43,24 +43,26 @@ function getStatusDisplay(status?: string) {
 
 type WorkflowListRowProps = {
   workflow: WorkflowRecord;
-  onOpen: () => void;
+  onEdit: () => void;
+  onRun: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  runBusy?: boolean;
 };
 
-export function WorkflowListRow({ workflow, onOpen, onDelete, onDuplicate }: WorkflowListRowProps) {
+export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate, runBusy = false }: WorkflowListRowProps) {
   const status = getStatusDisplay(workflow.status);
 
   return (
     <article
       className="orion-list-row"
-      onClick={onOpen}
+      onClick={onEdit}
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          onOpen();
+          onEdit();
         }
       }}
     >
@@ -72,6 +74,16 @@ export function WorkflowListRow({ workflow, onOpen, onDelete, onDuplicate }: Wor
           <div className="orion-list-row-title">{workflow.name || 'Untitled Workflow'}</div>
           <div className="orion-list-row-subtitle">{compactWorkflowText(workflow.description)}</div>
           <ResourceMetaLine>
+            <span
+              className="orion-chip"
+              style={{
+                color: status.color,
+                border: `1px solid ${status.ring}`,
+                background: 'var(--bg-surface)',
+              }}
+            >
+              {status.label}
+            </span>
             <span className="orion-item-meta-entry">
               <Clock size={11} />
               Updated {formatDate(workflow.updatedAt)}
@@ -83,6 +95,31 @@ export function WorkflowListRow({ workflow, onOpen, onDelete, onDuplicate }: Wor
       </div>
 
       <ResourceActionGroup>
+        <button
+          type="button"
+          className="orion-btn orion-btn-ghost"
+          style={{ minHeight: 34, paddingInline: 10 }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit();
+          }}
+        >
+          <Pencil size={14} />
+          Edit
+        </button>
+        <button
+          type="button"
+          className="orion-btn orion-btn-primary"
+          style={{ minHeight: 34, paddingInline: 10 }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRun();
+          }}
+          disabled={runBusy}
+        >
+          <Play size={14} />
+          {runBusy ? 'Running…' : 'Run'}
+        </button>
         <button
           type="button"
           className="orion-icon-btn"
@@ -105,16 +142,6 @@ export function WorkflowListRow({ workflow, onOpen, onDelete, onDuplicate }: Wor
         >
           <Copy size={14} />
         </button>
-        <span className="orion-status-inline">
-          <span
-            className="orion-status-inline-dot"
-            style={{
-              background: status.color,
-              boxShadow: `0 0 0 3px ${status.ring}`,
-            }}
-          />
-          {status.label}
-        </span>
       </ResourceActionGroup>
     </article>
   );

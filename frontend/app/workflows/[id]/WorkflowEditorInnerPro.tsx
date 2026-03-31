@@ -61,7 +61,7 @@ import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPa
 type RunStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'error';
 type LogLevel = 'info' | 'warn' | 'error';
 type ConnectionMode = 'byok' | 'managed';
-type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex';
+type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex' | 'qwen' | 'deepseek' | 'mistral' | 'ollama';
 type TrustMode = 'ask' | 'auto';
 
 interface WorkflowEditorInnerProProps {
@@ -1203,7 +1203,15 @@ const workflowMutedCopyStyle = {
 
 function normalizeProvider(provider: string): ProviderId {
     if (provider === 'claude_code_cli') return 'anthropic';
-    if (provider === 'anthropic' || provider === 'gemini' || provider === 'vertex') return provider;
+    if (
+        provider === 'anthropic'
+        || provider === 'gemini'
+        || provider === 'vertex'
+        || provider === 'qwen'
+        || provider === 'deepseek'
+        || provider === 'mistral'
+        || provider === 'ollama'
+    ) return provider;
     return 'openai';
 }
 
@@ -1383,6 +1391,10 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 },
                 { id: 'gemini', label: 'Google Gemini', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'gemini-flash', note: 'Direct Gemini API key only.' },
                 { id: 'vertex', label: 'Google Vertex AI', auth: ['access_token', 'project_id', 'location'], auth_modes: [{ id: 'access_token', label: 'Access Token', secret_required: true }], default_auth_mode: 'access_token', default_model: 'vertex-gemini-flash', note: 'Direct Vertex AI access token with project and region.' },
+                { id: 'qwen', label: 'Qwen', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'qwen-turbo', note: 'Direct Qwen API key only.' },
+                { id: 'deepseek', label: 'DeepSeek', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'deepseek-chat', note: 'Direct DeepSeek API key only.' },
+                { id: 'mistral', label: 'Mistral', auth: ['api_key'], auth_modes: [{ id: 'api_key', label: 'API Key', secret_required: true }], default_auth_mode: 'api_key', default_model: 'mistral-small-latest', note: 'Direct Mistral API key only.' },
+                { id: 'ollama', label: 'Ollama', auth: ['none'], auth_modes: [{ id: 'none', label: 'Local endpoint', secret_required: false }], default_auth_mode: 'none', default_model: 'llama3', note: 'Use the local Ollama endpoint running on this machine.' },
             ];
     }, [providers]);
 
@@ -3657,6 +3669,12 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 auth_mode: activeProviderAuthMode,
             };
         }
+        if (connection.provider === 'ollama') {
+            return {
+                auth_mode: 'none',
+                base_url: 'http://localhost:11434/v1',
+            };
+        }
         const token = openaiKey.trim();
         if (activeProviderAuthMode === 'oauth_token') return { oauth_token: token, auth_mode: 'oauth_token' };
         if (activeProviderAuthMode === 'access_token') return { access_token: token, auth_mode: 'access_token' };
@@ -3922,6 +3940,15 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             return;
         }
 
+        let activeWorkflowId = String(workflowId || '').trim();
+        let activeWorkflowName = String(workflow?.name || activeWorkflowId || 'Workflow').trim() || 'Workflow';
+        if (!activeWorkflowId) {
+            const savedWorkflow = await saveWorkflowState();
+            activeWorkflowId = String(savedWorkflow?.id || '').trim();
+            if (!activeWorkflowId) return;
+            activeWorkflowName = String(savedWorkflow?.name || activeWorkflowName).trim() || activeWorkflowName;
+        }
+
         closeStream();
         setLogs([]);
         setUsageTelemetry(null);
@@ -3947,7 +3974,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             }
 
             const businessPlan = [
-                `Automation: ${workflow?.name || workflowId || 'Untitled'}`,
+                `Automation: ${activeWorkflowName || 'Untitled'}`,
                 `Goal: ${operator.userGoal.trim()}`,
                 `Agent Role: ${operator.agentRole}`,
                 `Duty: ${operator.duty.trim()}`,
@@ -3964,7 +3991,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                 method: 'POST',
                 body: JSON.stringify({
                     engine: 'codex',
-                    workflow_id: workflowId,
+                    workflow_id: activeWorkflowId,
                     workspace_id: workspaceId,
                     user_goal: operator.userGoal.trim(),
                     business_plan: businessPlan,
@@ -4007,7 +4034,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             upsertSeededRuntimeRun({
                 run_id: nextRunId,
                 status: 'running',
-                workflow_name: String(workflow?.name || workflowId || 'Workflow').trim() || 'Workflow',
+                workflow_name: activeWorkflowName,
                 user_goal: operator.userGoal.trim(),
                 created_at: new Date().toISOString(),
                 agent_role: operator.agentRole,
@@ -4122,7 +4149,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
         } finally {
             setIsPreflightChecking(false);
         }
-    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, controlPlaneFetch, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, refreshRunDetail, selectedProfileId, selectedRuntimeProfile]);
+    }, [operator, connection, workflow, workflowId, workspaceId, trustMode, controlPlaneFetch, closeStream, appendLog, addToast, executionTarget, hasLocalRuntime, loadDoctorDecision, refreshRunDetail, saveWorkflowState, selectedProfileId, selectedRuntimeProfile]);
 
     const runBadge = useMemo(() => {
         if (runStatus === 'running') return { label: 'Running', color: 'var(--success-fg)', bg: 'var(--success-bg)', border: 'var(--success-border)' };
@@ -4220,6 +4247,22 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                     Saved {new Date(lastSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </span>
                             )}
+                            <button
+                                onClick={startRun}
+                                disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked || isSaving}
+                                className="orion-btn orion-btn-ghost"
+                            >
+                                <Play size={14} />
+                                {runStatus === 'running' ? 'Running…' : isPreflightChecking ? 'Preparing…' : 'Run'}
+                            </button>
+                            {runId ? (
+                                <button
+                                    onClick={() => router.push(`/runs/${encodeURIComponent(runId)}/inspect?focus=timeline`)}
+                                    className="orion-btn orion-btn-ghost"
+                                >
+                                    {OPEN_LIVE_RUN_LABEL}
+                                </button>
+                            ) : null}
                             <button
                                 onClick={saveWorkflowState}
                                 disabled={isSaving}
@@ -4896,7 +4939,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                         </select>
                             <button
                                 onClick={startRun}
-                            disabled={runStatus === 'running' || isPreflightChecking || doctorBlocked}
+                            disabled={runStatus === 'running' || isPreflightChecking || routeBlocked || doctorBlocked || isSaving}
                             className="orion-btn orion-btn-primary"
                             style={{
                                 minHeight: 40,

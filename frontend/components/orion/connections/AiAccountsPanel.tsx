@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
+  CheckCircle2,
   ChevronDown,
   PauseCircle,
   PlayCircle,
@@ -590,6 +591,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
   const [providerConnectMethod, setProviderConnectMethod] = useState<ProviderConnectMethodId>(() => defaultConnectMethodForProvider(DEFAULT_PROVIDER_FORM.provider));
+  const [recentlyConnectedCredentialId, setRecentlyConnectedCredentialId] = useState<string | null>(null);
   const [claudeAuthStatus, setClaudeAuthStatus] = useState<ClaudeAuthStatus | null>(null);
   const [geminiCliStatus, setGeminiCliStatus] = useState<GeminiCliStatus | null>(null);
 
@@ -1275,6 +1277,14 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     void refreshGeminiCliStatus();
   }, [refreshGeminiCliStatus]);
 
+  useEffect(() => {
+    if (!recentlyConnectedCredentialId) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      setRecentlyConnectedCredentialId(null);
+    }, 2600);
+    return () => window.clearTimeout(timeoutId);
+  }, [recentlyConnectedCredentialId]);
+
   const upsertRuntimeProfileForCredential = useCallback(async (
     credential: ProviderCredentialRow,
     existingProfile?: ProviderProfileRow | null,
@@ -1368,6 +1378,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       resetProviderForm(providerForm.provider, authMode);
       setShowProviderForm(false);
       await loadProviderAccounts();
+      setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel(providerForm.label.trim());
       setProviderNotice(
         connectMode
@@ -1586,7 +1597,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to import the local Claude session.'));
       }
+      const credentialId = String(body?.credential_id || body?.id || '').trim();
+      setShowProviderForm(false);
       await Promise.all([loadProviderAccounts(), refreshClaudeAuthStatus(true)]);
+      setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel('Claude on this Mac');
       setProviderNotice(String(body?.message || 'Claude local session imported from this Mac.'));
     } catch (error) {
@@ -1614,7 +1628,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to complete Gemini CLI OAuth.'));
       }
+      const credentialId = String(body?.credential_id || body?.id || '').trim();
+      setShowProviderForm(false);
       await Promise.all([loadProviderAccounts(), refreshGeminiCliStatus()]);
+      setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel(String(body?.label || 'Google Gemini CLI'));
       setProviderNotice(String(body?.message || 'Gemini CLI OAuth connected.'));
     } catch (error) {
@@ -1641,7 +1658,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to import OpenAI / Codex session.'));
       }
+      const credentialId = String(body?.credential_id || body?.id || '').trim();
+      setShowProviderForm(false);
       await Promise.all([loadProviderAccounts(), loadLocalOpenAiAuth()]);
+      setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel('OpenAI / Codex on this Mac');
       setProviderNotice(String(body?.message || 'OpenAI / Codex session imported from this Mac.'));
     } catch (error) {
@@ -1671,8 +1691,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       if (!res.ok) {
         throw new Error(String(body?.detail || body?.message || 'Failed to complete OpenAI browser OAuth.'));
       }
-
+      const credentialId = String(body?.credential_id || body?.id || '').trim();
+      setShowProviderForm(false);
       await loadProviderAccounts();
+      setRecentlyConnectedCredentialId(credentialId || null);
       setLastConnectedAccountLabel(String(body?.label || 'OpenAI / Codex'));
       setProviderNotice(String(body?.message || 'OpenAI / Codex connected and ready.'));
     } catch (error) {
@@ -1898,6 +1920,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           <div style={{ display: 'grid', gap: 10 }}>
             {connectedAccounts.map(({ credential, primaryProfile, enabled }) => {
               const busyAction = providerBusy[credential.id] || '';
+              const wasJustConnected = recentlyConnectedCredentialId === credential.id;
               const statusTone = enabled
                 ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
                 : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
@@ -1932,6 +1955,22 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       <span className="orion-chip" style={statusTone}>
                         {enabled ? 'Enabled' : 'Disabled'}
                       </span>
+                      {wasJustConnected ? (
+                        <span
+                          className="orion-chip"
+                          style={{
+                            color: 'var(--success-fg)',
+                            border: '1px solid var(--success-border)',
+                            background: 'var(--success-bg)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                          }}
+                        >
+                          <CheckCircle2 size={12} />
+                          Connected
+                        </span>
+                      ) : null}
                       {primaryProfile?.model ? (
                         <span className="orion-chip">{primaryProfile.model}</span>
                       ) : null}

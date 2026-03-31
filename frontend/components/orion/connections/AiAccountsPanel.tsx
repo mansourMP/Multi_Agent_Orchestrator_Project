@@ -111,7 +111,11 @@ type ProviderConnectMethodId =
   | 'anthropic_local_import'
   | 'gemini_api_key'
   | 'gemini_cli_oauth'
-  | 'vertex_access_token';
+  | 'vertex_access_token'
+  | 'qwen_api_key'
+  | 'deepseek_api_key'
+  | 'mistral_api_key'
+  | 'ollama_local';
 
 type ProviderConnectMethodAction =
   | 'manual'
@@ -180,6 +184,10 @@ function defaultConnectMethodForProvider(provider: ProviderId): ProviderConnectM
   if (provider === 'openai') return 'openai_api_key';
   if (provider === 'anthropic') return 'anthropic_api_key';
   if (provider === 'gemini') return 'gemini_api_key';
+  if (provider === 'qwen') return 'qwen_api_key';
+  if (provider === 'deepseek') return 'deepseek_api_key';
+  if (provider === 'mistral') return 'mistral_api_key';
+  if (provider === 'ollama') return 'ollama_local';
   return 'vertex_access_token';
 }
 
@@ -194,9 +202,14 @@ function authModeForConnectMethod(methodId: ProviderConnectMethodId): string {
       return 'gemini_cli_oauth';
     case 'vertex_access_token':
       return 'access_token';
+    case 'ollama_local':
+      return 'none';
     case 'openai_api_key':
     case 'anthropic_api_key':
     case 'gemini_api_key':
+    case 'qwen_api_key':
+    case 'deepseek_api_key':
+    case 'mistral_api_key':
     default:
       return 'api_key';
   }
@@ -315,6 +328,12 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
       auth_mode: state.authMode || 'access_token',
     };
   }
+  if (state.provider === 'ollama') {
+    return {
+      auth_mode: state.authMode || 'none',
+      base_url: 'http://localhost:11434/v1',
+    };
+  }
   const token = state.secret.trim();
   if (state.authMode === 'access_token') {
     return { access_token: token, auth_mode: 'access_token' };
@@ -347,6 +366,9 @@ function providerSetupGuidance(provider: ProviderId, authMode: string, option: P
 function providerAccountContextLine(item: ProviderCredentialRow): string {
   if (item.provider === 'anthropic' && item.authMode === 'local_cli') {
     return 'Uses the local Claude subscription already signed into the `claude` CLI on this Mac.';
+  }
+  if (item.provider === 'ollama') {
+    return 'Uses the local Ollama OpenAI-compatible endpoint on this machine.';
   }
   if (item.provider === 'vertex') {
     const projectId = String(item.metadata?.project_id || '').trim();
@@ -413,6 +435,12 @@ function providerAccentStyles(provider: ProviderId): { border: string; soft: str
   if (provider === 'gemini') {
     return { border: 'var(--tone-success)', soft: 'color-mix(in srgb, var(--tone-success) 16%, transparent)', tint: 'color-mix(in srgb, var(--tone-success) 7%, var(--bg-surface))' };
   }
+  if (provider === 'deepseek') {
+    return { border: 'var(--tone-success)', soft: 'color-mix(in srgb, var(--tone-success) 12%, transparent)', tint: 'color-mix(in srgb, var(--tone-success) 5%, var(--bg-surface))' };
+  }
+  if (provider === 'mistral') {
+    return { border: 'var(--tone-warning)', soft: 'color-mix(in srgb, var(--tone-warning) 12%, transparent)', tint: 'color-mix(in srgb, var(--tone-warning) 5%, var(--bg-surface))' };
+  }
   return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 14%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 5%, var(--bg-surface))' };
 }
 
@@ -420,10 +448,15 @@ function providerMonogram(provider: ProviderId): string {
   if (provider === 'openai') return 'OA';
   if (provider === 'anthropic') return 'AN';
   if (provider === 'gemini') return 'GM';
+  if (provider === 'qwen') return 'QW';
+  if (provider === 'deepseek') return 'DS';
+  if (provider === 'mistral') return 'MS';
+  if (provider === 'ollama') return 'OL';
   return 'VX';
 }
 
 function simpleProviderAuthLabel(provider: ProviderId): string {
+  if (provider === 'ollama') return 'Use local Ollama';
   return provider === 'vertex' ? 'Add access token' : 'Add API key';
 }
 
@@ -431,6 +464,9 @@ function simpleProviderSecretPlaceholder(provider: ProviderId): string {
   if (provider === 'openai') return 'sk-...';
   if (provider === 'anthropic') return 'sk-ant-...';
   if (provider === 'gemini') return 'AIza...';
+  if (provider === 'qwen') return 'DashScope API key';
+  if (provider === 'deepseek') return 'sk-...';
+  if (provider === 'mistral') return 'Mistral API key';
   return 'Access token';
 }
 
@@ -563,6 +599,54 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         },
       ];
     }
+    if (providerForm.provider === 'qwen') {
+      return [
+        {
+          id: 'qwen_api_key',
+          provider: 'qwen',
+          label: 'Add API key',
+          description: 'Paste a direct Qwen API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+      ];
+    }
+    if (providerForm.provider === 'deepseek') {
+      return [
+        {
+          id: 'deepseek_api_key',
+          provider: 'deepseek',
+          label: 'Add API key',
+          description: 'Paste a direct DeepSeek API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+      ];
+    }
+    if (providerForm.provider === 'mistral') {
+      return [
+        {
+          id: 'mistral_api_key',
+          provider: 'mistral',
+          label: 'Add API key',
+          description: 'Paste a direct Mistral API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+      ];
+    }
+    if (providerForm.provider === 'ollama') {
+      return [
+        {
+          id: 'ollama_local',
+          provider: 'ollama',
+          label: 'Use local Ollama',
+          description: 'Connect the local Ollama OpenAI-compatible endpoint running on this machine.',
+          authMode: 'none',
+          action: 'manual',
+        },
+      ];
+    }
     return [
       {
         id: 'vertex_access_token',
@@ -578,6 +662,16 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     () => providerConnectMethods.find((item) => item.id === providerConnectMethod) || providerConnectMethods[0] || null,
     [providerConnectMethod, providerConnectMethods],
   );
+  const selectedConnectAuthMode = selectedConnectMethod?.authMode
+    || providerForm.authMode
+    || selectedProviderOption.defaultAuthMode
+    || selectedProviderAuthModes[0]?.id
+    || 'api_key';
+  const selectedConnectAuthConfig = useMemo(
+    () => selectedProviderAuthModes.find((item) => item.id === selectedConnectAuthMode) || null,
+    [selectedConnectAuthMode, selectedProviderAuthModes],
+  );
+  const selectedConnectNeedsSecret = selectedConnectAuthConfig?.secretRequired !== false;
   const effectiveModelAliases = useMemo(
     () => (modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS),
     [modelAliases],
@@ -1954,7 +2048,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 </label>
               ) : null}
 
-              {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) ? (
+              {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) && selectedConnectNeedsSecret ? (
                 <label style={{ display: 'grid', gap: 6 }}>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                     {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}

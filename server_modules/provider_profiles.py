@@ -207,6 +207,54 @@ PROVIDER_CATALOG = {
         "default_model": "gemini-2.0-flash-001",
         "note": "Direct Vertex AI access token with project and region.",
     },
+    "qwen": {
+        "label": "Qwen",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "qwen-turbo",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen-turbo", "qwen-plus", "qwen-max"],
+        "note": "Direct Qwen API key using Alibaba DashScope's OpenAI-compatible endpoint.",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "note": "Direct DeepSeek API key using the OpenAI-compatible endpoint.",
+    },
+    "mistral": {
+        "label": "Mistral",
+        "auth": ["api_key"],
+        "auth_modes": [
+            {"id": "api_key", "label": "API Key", "secret_required": True},
+        ],
+        "default_auth_mode": "api_key",
+        "default_model": "mistral-small-latest",
+        "base_url": "https://api.mistral.ai/v1",
+        "models": ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"],
+        "note": "Direct Mistral API key using the OpenAI-compatible endpoint.",
+    },
+    "ollama": {
+        "label": "Ollama",
+        "auth": ["none"],
+        "auth_modes": [
+            {"id": "none", "label": "No auth required", "secret_required": False},
+        ],
+        "default_auth_mode": "none",
+        "default_model": "llama3",
+        "base_url": "http://localhost:11434/v1",
+        "models": ["llama3", "mistral", "gemma", "phi3"],
+        "note": "Local Ollama endpoint on this machine. No credential is required.",
+    },
 }
 
 
@@ -249,7 +297,7 @@ def provider_supports_auth_mode(provider: Any, auth_mode: Any) -> bool:
 
 
 def provider_requires_credential(provider: Any, auth_mode: Any) -> bool:
-    return normalize_auth_mode(provider, auth_mode) not in {"local_cli"}
+    return normalize_auth_mode(provider, auth_mode) not in {"local_cli", "none"}
 
 
 def secretless_provider_credentials(provider: Any, auth_mode: Any) -> Dict[str, Any]:
@@ -484,6 +532,99 @@ class OpenAIAdapter(ProviderAdapter):
             credentials=credentials,
         )
         return str(result.get("content") or "").strip()
+
+
+class OpenAICompatibleAdapter(ProviderAdapter):
+    def __init__(self, provider_id: str, provider_label: str, *, requires_auth: bool = True) -> None:
+        self.provider_id = provider_id
+        self.provider_label = provider_label
+        self.requires_auth = requires_auth
+
+    def _base_url(self, credentials: Dict[str, Any]) -> str:
+        entry = provider_catalog_entry(self.provider_id)
+        base_url = str(credentials.get("base_url") or entry.get("base_url") or "").strip().rstrip("/")
+        if not base_url:
+            raise RuntimeError(f"{self.provider_label} base URL is not configured.")
+        return base_url
+
+    def _headers(self, credentials: Dict[str, Any], *, include_content_type: bool = False) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if include_content_type:
+            headers["Content-Type"] = "application/json"
+        if not self.requires_auth:
+            return headers
+        token = str(
+            credentials.get("api_key")
+            or credentials.get("access_token")
+            or credentials.get("oauth_token")
+            or credentials.get("token")
+            or ""
+        ).strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        if not token:
+            raise RuntimeError(f"{self.provider_label} api_key is required.")
+        headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        return _validation_result(self.provider_label, res)
+
+    def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        body = res.get("json") or {}
+        models: List[str] = []
+        for item in body.get("data", []) if isinstance(body.get("data"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if isinstance(model_id, str) and model_id.strip():
+                models.append(model_id.strip())
+        if models:
+            return sorted(set(models))
+        entry = provider_catalog_entry(self.provider_id)
+        fallback_models = [str(item).strip() for item in entry.get("models", []) if str(item).strip()]
+        return fallback_models
+
+    def generate(self, system_prompt: str, user_input: str, model: str, credentials: Dict[str, Any]) -> str:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": 0.2,
+        }
+        if not str(system_prompt or "").strip():
+            payload["messages"] = [{"role": "user", "content": user_input}]
+        res = http_json_request(
+            f"{self._base_url(credentials)}/chat/completions",
+            method="POST",
+            headers=self._headers(credentials, include_content_type=True),
+            payload=payload,
+            timeout=60,
+        )
+        body = res.get("json")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"{self.provider_label} returned invalid response.")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError(f"{self.provider_label} returned no choices.")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+            content = "\n".join(parts).strip()
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        raise RuntimeError(f"{self.provider_label} response did not include text content.")
 
 
 def _urlsafe_b64decode(value: str) -> bytes:
@@ -810,6 +951,10 @@ PROVIDER_ADAPTERS: Dict[str, ProviderAdapter] = {
     "claude_code_cli": ClaudeCodeCLIAdapter(),
     "gemini": GeminiAdapter(),
     "vertex": VertexAdapter(),
+    "qwen": OpenAICompatibleAdapter("qwen", "Qwen"),
+    "deepseek": OpenAICompatibleAdapter("deepseek", "DeepSeek"),
+    "mistral": OpenAICompatibleAdapter("mistral", "Mistral"),
+    "ollama": OpenAICompatibleAdapter("ollama", "Ollama", requires_auth=False),
 }
 
 # Approximate token pricing per 1K tokens; used only for masked telemetry.
@@ -820,6 +965,10 @@ PROVIDER_COST_PER_1K = {
     "claude_code_cli": {"input": 0.0, "output": 0.0},
     "gemini": {"input": 0.0010, "output": 0.0030},
     "vertex": {"input": 0.0010, "output": 0.0030},
+    "qwen": {"input": 0.0, "output": 0.0},
+    "deepseek": {"input": 0.0, "output": 0.0},
+    "mistral": {"input": 0.0, "output": 0.0},
+    "ollama": {"input": 0.0, "output": 0.0},
 }
 
 
@@ -1110,5 +1259,68 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 }
             )
             seen_labels.add("env-gemini")
+
+    if canonical_provider == "qwen":
+        env_key = str(
+            os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY")
+            or os.getenv("QWEN_API_KEY")
+            or os.getenv("DASHSCOPE_API_KEY")
+            or ""
+        ).strip()
+        if env_key and "env-qwen" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {"api_key": env_key},
+                    "profile_id": None,
+                    "label": "env-qwen",
+                }
+            )
+            seen_labels.add("env-qwen")
+
+    if canonical_provider == "deepseek":
+        env_key = str(
+            os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY")
+            or os.getenv("DEEPSEEK_API_KEY")
+            or ""
+        ).strip()
+        if env_key and "env-deepseek" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {"api_key": env_key},
+                    "profile_id": None,
+                    "label": "env-deepseek",
+                }
+            )
+            seen_labels.add("env-deepseek")
+
+    if canonical_provider == "mistral":
+        env_key = str(
+            os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY")
+            or os.getenv("MISTRAL_API_KEY")
+            or ""
+        ).strip()
+        if env_key and "env-mistral" not in seen_labels:
+            candidates.append(
+                {
+                    "source": "env",
+                    "credentials": {"api_key": env_key},
+                    "profile_id": None,
+                    "label": "env-mistral",
+                }
+            )
+            seen_labels.add("env-mistral")
+
+    if canonical_provider == "ollama" and "local-ollama" not in seen_labels:
+        candidates.append(
+            {
+                "source": "local",
+                "credentials": secretless_provider_credentials("ollama", "none"),
+                "profile_id": None,
+                "label": "local-ollama",
+            }
+        )
+        seen_labels.add("local-ollama")
 
     return candidates

@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama")
+SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "qwen", "deepseek", "mistral")
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
 PROVIDER_COST_PER_1K = {
     "codex_cli": {"input": 0.0, "output": 0.0},
@@ -22,6 +22,9 @@ PROVIDER_COST_PER_1K = {
     "anthropic": {"input": 0.0030, "output": 0.0150},
     "gemini": {"input": 0.0010, "output": 0.0030},
     "ollama": {"input": 0.0, "output": 0.0},
+    "qwen": {"input": 0.0, "output": 0.0},
+    "deepseek": {"input": 0.0, "output": 0.0},
+    "mistral": {"input": 0.0, "output": 0.0},
 }
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
@@ -355,6 +358,31 @@ def get_gemini_api_key() -> str:
     ).strip()
 
 
+def get_qwen_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_QWEN_API_KEY")
+        or os.getenv("QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_deepseek_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_API_KEY")
+        or os.getenv("DEEPSEEK_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_mistral_api_key() -> str:
+    return (
+        os.getenv("ORION_LOCAL_WORKER_MISTRAL_API_KEY")
+        or os.getenv("MISTRAL_API_KEY")
+        or ""
+    ).strip()
+
+
 def ollama_enabled() -> bool:
     raw = str(os.getenv("ORION_LOCAL_WORKER_OLLAMA_ENABLED", "0")).strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -374,6 +402,12 @@ def provider_has_key(provider: str) -> bool:
         return bool(get_gemini_api_key())
     if pid == "ollama":
         return ollama_enabled()
+    if pid == "qwen":
+        return bool(get_qwen_api_key())
+    if pid == "deepseek":
+        return bool(get_deepseek_api_key())
+    if pid == "mistral":
+        return bool(get_mistral_api_key())
     return False
 
 
@@ -450,6 +484,12 @@ def resolve_requested_model(context: Dict[str, Any], metadata: Dict[str, Any], p
         return (os.getenv("ORION_LOCAL_WORKER_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
     if pid == "ollama":
         return (os.getenv("ORION_LOCAL_WORKER_OLLAMA_MODEL") or "llama3.1:8b").strip() or "llama3.1:8b"
+    if pid == "qwen":
+        return (os.getenv("ORION_LOCAL_WORKER_QWEN_MODEL") or "qwen-turbo").strip() or "qwen-turbo"
+    if pid == "deepseek":
+        return (os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_MODEL") or "deepseek-chat").strip() or "deepseek-chat"
+    if pid == "mistral":
+        return (os.getenv("ORION_LOCAL_WORKER_MISTRAL_MODEL") or "mistral-small-latest").strip() or "mistral-small-latest"
     return ""
 
 
@@ -538,6 +578,15 @@ def provider_has_usable_credentials(provider: str, context: Dict[str, Any], meta
     if pid == "gemini":
         inline_key = sanitize_bearer_token(inline_credentials.get("api_key") or "")
         return bool(inline_key) or provider_has_key("gemini")
+    if pid in {"qwen", "deepseek", "mistral"}:
+        inline_key = sanitize_bearer_token(
+            inline_credentials.get("api_key")
+            or inline_credentials.get("access_token")
+            or inline_credentials.get("oauth_token")
+            or inline_credentials.get("token")
+            or ""
+        )
+        return bool(inline_key) or provider_has_key(pid)
     return provider_has_key(pid)
 
 
@@ -602,20 +651,95 @@ def codex_instructions(system_prompt: Optional[str]) -> str:
     return str(system_prompt or "")
 
 
+def resolve_openai_compatible_api_key(
+    provider: str,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    inline_key = sanitize_bearer_token(
+        override.get("api_key")
+        or override.get("access_token")
+        or override.get("oauth_token")
+        or override.get("token")
+        or ""
+    )
+    if inline_key:
+        return inline_key
+    pid = str(provider or "openai").strip().lower()
+    if pid == "openai":
+        return get_openai_api_key()
+    if pid == "qwen":
+        return get_qwen_api_key()
+    if pid == "deepseek":
+        return get_deepseek_api_key()
+    if pid == "mistral":
+        return get_mistral_api_key()
+    return ""
+
+
+def resolve_openai_compatible_base_url(
+    provider: str,
+    credential_override: Optional[Dict[str, Any]] = None,
+) -> str:
+    override = credential_override if isinstance(credential_override, dict) else {}
+    override_base_url = str(override.get("base_url") or "").strip()
+    if override_base_url:
+        return ensure_trailing_slashless(override_base_url)
+    pid = str(provider or "openai").strip().lower()
+    if pid == "qwen":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_QWEN_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+    if pid == "deepseek":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_URL") or "https://api.deepseek.com/v1"
+        )
+    if pid == "mistral":
+        return ensure_trailing_slashless(
+            os.getenv("ORION_LOCAL_WORKER_MISTRAL_URL") or "https://api.mistral.ai/v1"
+        )
+    return ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
+
+
+def default_openai_compatible_model(provider: str) -> str:
+    pid = str(provider or "openai").strip().lower()
+    if pid == "qwen":
+        return (os.getenv("ORION_LOCAL_WORKER_QWEN_MODEL") or "qwen-turbo").strip() or "qwen-turbo"
+    if pid == "deepseek":
+        return (os.getenv("ORION_LOCAL_WORKER_DEEPSEEK_MODEL") or "deepseek-chat").strip() or "deepseek-chat"
+    if pid == "mistral":
+        return (os.getenv("ORION_LOCAL_WORKER_MISTRAL_MODEL") or "mistral-small-latest").strip() or "mistral-small-latest"
+    return (os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+
+
+def openai_compatible_missing_key_error(provider: str) -> str:
+    pid = str(provider or "openai").strip().lower()
+    if pid == "qwen":
+        return "No Qwen API key configured. Add one from the AI accounts page."
+    if pid == "deepseek":
+        return "No DeepSeek API key configured. Add one from the AI accounts page."
+    if pid == "mistral":
+        return "No Mistral API key configured. Add one from the AI accounts page."
+    return OPENAI_API_KEY_MISSING_ERROR
+
+
 def openai_chat_json(
     system_prompt: Optional[str],
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    *,
+    provider: str = "openai",
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], str, str]:
-    api_key = get_openai_api_key()
+    api_key = resolve_openai_compatible_api_key(provider, credential_override=credential_override)
     if not api_key:
-        return None, None, "", OPENAI_API_KEY_MISSING_ERROR
+        return None, None, "", openai_compatible_missing_key_error(provider)
 
-    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
 
     messages: List[Dict[str, str]] = []
     if str(system_prompt or "").strip():
@@ -663,15 +787,18 @@ def openai_chat_text(
     user_prompt: str,
     model_override: Optional[str] = None,
     prior_messages: Any = None,
+    *,
+    provider: str = "openai",
+    credential_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]], str, str]:
-    api_key = get_openai_api_key()
+    api_key = resolve_openai_compatible_api_key(provider, credential_override=credential_override)
     if not api_key:
-        return "", None, "", OPENAI_API_KEY_MISSING_ERROR
+        return "", None, "", openai_compatible_missing_key_error(provider)
 
-    model = (str(model_override or "").strip() or os.getenv("ORION_LOCAL_WORKER_OPENAI_MODEL") or "gpt-4.1").strip() or "gpt-4.1"
+    model = (str(model_override or "").strip() or default_openai_compatible_model(provider)).strip() or default_openai_compatible_model(provider)
     temperature = to_float(os.getenv("ORION_LOCAL_WORKER_TEMPERATURE"), 0.2)
     timeout_seconds = max(10, to_int(os.getenv("ORION_LOCAL_WORKER_LLM_TIMEOUT_SECONDS"), 45))
-    base_url = ensure_trailing_slashless(os.getenv("ORION_LOCAL_WORKER_OPENAI_URL") or "https://api.openai.com/v1")
+    base_url = resolve_openai_compatible_base_url(provider, credential_override=credential_override)
 
     messages: List[Dict[str, str]] = []
     if str(system_prompt or "").strip():
@@ -1606,6 +1733,11 @@ def build_usage_masked_from_provider(provider: str, usage: Optional[Dict[str, An
         completion_tokens = to_int(source.get("completion_tokens"), 0)
         total_tokens = to_int(source.get("total_tokens"), prompt_tokens + completion_tokens)
         return build_usage_masked(pid, model or "gpt-4.1", prompt_tokens, completion_tokens, total_tokens)
+    if pid in {"qwen", "deepseek", "mistral"}:
+        prompt_tokens = to_int(source.get("prompt_tokens"), 0)
+        completion_tokens = to_int(source.get("completion_tokens"), 0)
+        total_tokens = to_int(source.get("total_tokens"), prompt_tokens + completion_tokens)
+        return build_usage_masked(pid, model or resolve_requested_model({}, {}, pid), prompt_tokens, completion_tokens, total_tokens)
     if pid == "anthropic":
         prompt_tokens = to_int(source.get("input_tokens"), 0)
         completion_tokens = to_int(source.get("output_tokens"), 0)
@@ -1716,7 +1848,21 @@ def generate_pack_with_provider_fallback(
             if direct_auth_error:
                 last_error = direct_auth_error
                 continue
-            result, usage, model, provider_error = openai_chat_json(system_prompt, user_prompt, model_override=provider_model)
+            result, usage, model, provider_error = openai_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                provider="openai",
+                credential_override=credential_override,
+            )
+        elif provider in {"qwen", "deepseek", "mistral"}:
+            result, usage, model, provider_error = openai_chat_json(
+                system_prompt,
+                user_prompt,
+                model_override=provider_model,
+                provider=provider,
+                credential_override=credential_override,
+            )
         elif provider == "anthropic":
             result, usage, model, provider_error = anthropic_chat_json(
                 system_prompt,
@@ -1820,6 +1966,8 @@ def generate_chat_reply_with_provider_fallback(
                 user_goal,
                 model_override=provider_model,
                 prior_messages=prior_messages,
+                provider="openai",
+                credential_override=credential_override,
             )
             if text:
                 return (
@@ -1832,6 +1980,19 @@ def generate_chat_reply_with_provider_fallback(
                 f"openai generation failed: "
                 f"{provider_error or provider_error_chat or 'unknown_error'}"
             )
+            continue
+        if provider in {"qwen", "deepseek", "mistral"}:
+            text, usage, model, provider_error = openai_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                provider=provider,
+                credential_override=credential_override,
+            )
+            if text:
+                return text, build_usage_masked_from_provider(provider, usage, model), ",".join(attempted), ""
+            last_error = f"{provider} generation failed: {provider_error or 'unknown_error'}"
             continue
         if provider == "anthropic":
             text, usage, model, provider_error = anthropic_chat_text(
@@ -1988,6 +2149,8 @@ def generate_chat_reply_stream_with_provider_fallback(
                     user_goal,
                     model_override=provider_model,
                     prior_messages=prior_messages,
+                    provider="openai",
+                    credential_override=credential_override,
                 )
             if text:
                 yield {"type": "chunk", "delta": text}
@@ -2002,6 +2165,30 @@ def generate_chat_reply_stream_with_provider_fallback(
                 }
                 return
             last_error = f"openai generation failed: {provider_error or 'unknown_error'}"
+            continue
+
+        if provider in {"qwen", "deepseek", "mistral"}:
+            text, usage, model, provider_error = openai_chat_text(
+                system_prompt,
+                user_goal,
+                model_override=provider_model,
+                prior_messages=prior_messages,
+                provider=provider,
+                credential_override=credential_override,
+            )
+            if text:
+                yield {"type": "chunk", "delta": text}
+                yield {
+                    "type": "result",
+                    "reply": text,
+                    "usage_masked": build_usage_masked_from_provider(provider, usage, model),
+                    "provider": provider,
+                    "model": model,
+                    "attempted_providers": attempted_str,
+                    "error": "",
+                }
+                return
+            last_error = f"{provider} generation failed: {provider_error or 'unknown_error'}"
             continue
 
         if provider == "anthropic":

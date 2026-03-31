@@ -27,7 +27,7 @@ export const UI = {
 
 export type RunStatus = 'idle' | 'queued_local' | 'running' | 'waiting' | 'completed' | 'error';
 export type LogLevel = 'info' | 'warn' | 'error';
-export type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex';
+export type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex' | 'qwen' | 'deepseek' | 'mistral' | 'ollama';
 export type ConnectorId =
   | 'google_workspace'
   | 'microsoft_365'
@@ -933,6 +933,42 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
     authModes: [{ id: 'access_token', label: 'Access Token', secretRequired: true }],
     note: 'Direct Vertex AI access token with project and region.',
   },
+  {
+    id: 'qwen',
+    label: 'Qwen',
+    defaultModel: 'qwen-turbo',
+    auth: ['api_key'],
+    defaultAuthMode: 'api_key',
+    authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
+    note: 'Direct Qwen API key using Alibaba DashScope.',
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    defaultModel: 'deepseek-chat',
+    auth: ['api_key'],
+    defaultAuthMode: 'api_key',
+    authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
+    note: 'Direct DeepSeek API key.',
+  },
+  {
+    id: 'mistral',
+    label: 'Mistral',
+    defaultModel: 'mistral-small-latest',
+    auth: ['api_key'],
+    defaultAuthMode: 'api_key',
+    authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
+    note: 'Direct Mistral API key.',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama',
+    defaultModel: 'llama3',
+    auth: ['none'],
+    defaultAuthMode: 'none',
+    authModes: [{ id: 'none', label: 'No auth required', secretRequired: false }],
+    note: 'Use a local Ollama server running on this machine.',
+  },
 ];
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
@@ -941,6 +977,10 @@ export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
   claude_code_cli: ['sonnet', 'opus'],
   gemini: ['gemini-flash', 'gemini-pro'],
   vertex: ['vertex-gemini-flash'],
+  qwen: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  mistral: ['mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest'],
+  ollama: ['llama3', 'mistral', 'gemma', 'phi3'],
 };
 
 export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
@@ -1064,6 +1104,102 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isGlobalDefault: false,
     isProviderDefault: true,
   },
+  {
+    alias: 'qwen-turbo',
+    provider: 'qwen',
+    model: 'qwen-turbo',
+    resolvedModel: 'qwen-turbo',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'qwen-plus',
+    provider: 'qwen',
+    model: 'qwen-plus',
+    resolvedModel: 'qwen-plus',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'qwen-max',
+    provider: 'qwen',
+    model: 'qwen-max',
+    resolvedModel: 'qwen-max',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'deepseek-chat',
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    resolvedModel: 'deepseek-chat',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'deepseek-reasoner',
+    provider: 'deepseek',
+    model: 'deepseek-reasoner',
+    resolvedModel: 'deepseek-reasoner',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'mistral-small-latest',
+    provider: 'mistral',
+    model: 'mistral-small-latest',
+    resolvedModel: 'mistral-small-latest',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'mistral-medium-latest',
+    provider: 'mistral',
+    model: 'mistral-medium-latest',
+    resolvedModel: 'mistral-medium-latest',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'mistral-large-latest',
+    provider: 'mistral',
+    model: 'mistral-large-latest',
+    resolvedModel: 'mistral-large-latest',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'llama3',
+    provider: 'ollama',
+    model: 'llama3',
+    resolvedModel: 'llama3',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'mistral',
+    provider: 'ollama',
+    model: 'mistral',
+    resolvedModel: 'mistral',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'gemma',
+    provider: 'ollama',
+    model: 'gemma',
+    resolvedModel: 'gemma',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
+  {
+    alias: 'phi3',
+    provider: 'ollama',
+    model: 'phi3',
+    resolvedModel: 'phi3',
+    isGlobalDefault: false,
+    isProviderDefault: false,
+  },
 ];
 
 export const DEFAULT_PROVIDER_LABELS: Record<ProviderId, string> = {
@@ -1072,6 +1208,10 @@ export const DEFAULT_PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code_cli: 'My Claude Subscription',
   gemini: 'My Gemini Key',
   vertex: 'My Vertex Key',
+  qwen: 'My Qwen Key',
+  deepseek: 'My DeepSeek Key',
+  mistral: 'My Mistral Key',
+  ollama: 'My Ollama Server',
 };
 
 export function normalizeProviderId(value: unknown): ProviderId {
@@ -1291,7 +1431,15 @@ export const PRIORITY_LAUNCH_CONNECTORS: ConnectorLaunchPlan[] = [
 ];
 
 export function isProviderId(value: string): value is ProviderId {
-  return value === 'openai' || value === 'anthropic' || value === 'claude_code_cli' || value === 'gemini' || value === 'vertex';
+  return value === 'openai'
+    || value === 'anthropic'
+    || value === 'claude_code_cli'
+    || value === 'gemini'
+    || value === 'vertex'
+    || value === 'qwen'
+    || value === 'deepseek'
+    || value === 'mistral'
+    || value === 'ollama';
 }
 
 export function isConnectorId(value: string): value is ConnectorId {

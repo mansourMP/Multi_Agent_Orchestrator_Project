@@ -359,7 +359,7 @@ def register_run_routes(app) -> None:
                 if event_type == "final":
                     data = event.get("payload") if isinstance(event.get("payload"), dict) else {}
                 else:
-                    data = {key: value for key, value in event.items() if key != "type"}
+                    data = dict(event)
                 yield f"event: {event_type}\n".encode("utf-8")
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 

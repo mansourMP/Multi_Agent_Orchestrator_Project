@@ -2,10 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowUp, ChevronDown, Plus, SlidersHorizontal, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Camera,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  LoaderCircle,
+  Plus,
+  PlugZap,
+  SlidersHorizontal,
+  Sparkles,
+  Terminal,
+  X,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { fmtTime } from '@/app/page.catalog';
-import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus } from './chatSchema';
+import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus, ChatStepRecord } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 
 export type ChatIdentityItem = {
@@ -119,6 +133,14 @@ function renderRunCardStatusLabel(status: ChatRunCardStatus): string {
   return 'Failed';
 }
 
+function renderChatStepIcon(step: ChatStepRecord) {
+  if (step.kind === 'thinking') return <Sparkles size={14} />;
+  if (step.kind === 'shell') return <Terminal size={14} />;
+  if (step.kind === 'connector') return <PlugZap size={14} />;
+  if (step.kind === 'screenshot') return <Camera size={14} />;
+  return <FileText size={14} />;
+}
+
 export function ChatSurface({
   goal,
   setGoal,
@@ -158,6 +180,7 @@ export function ChatSurface({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
+  const [expandedStepMessages, setExpandedStepMessages] = useState<Record<string, boolean>>({});
   const visibleMessages = useMemo(() => {
     const lastMessage = messages[messages.length - 1];
     const lastLifecycle = lastMessage?.role === 'assistant'
@@ -289,6 +312,10 @@ export function ChatSurface({
               const suppressBody = !isUser && shouldSuppressAssistantBody(displayContent, message.status);
               const inlineError = isError ? normalizeInlineErrorMessage(displayContent) : '';
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
+              const steps = !isUser && Array.isArray(message.steps) ? message.steps : [];
+              const hasSteps = steps.length > 0;
+              const activeStep = hasSteps ? steps.find((step) => step.status === 'active') || null : null;
+              const stepsExpanded = hasSteps ? (expandedStepMessages[message.id] ?? message.status !== 'completed') : false;
               return (
                 <article
                   key={message.id}
@@ -325,6 +352,60 @@ export function ChatSurface({
                               <span />
                               <span />
                             </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {hasSteps ? (
+                        <div className={`orion-chat-v2-steps${stepsExpanded ? ' is-expanded' : ''}`}>
+                          <button
+                            type="button"
+                            className="orion-chat-v2-steps-toggle"
+                            onClick={() => {
+                              setExpandedStepMessages((current) => ({
+                                ...current,
+                                [message.id]: !stepsExpanded,
+                              }));
+                            }}
+                            aria-expanded={stepsExpanded}
+                          >
+                            <div className="orion-chat-v2-steps-toggle-copy">
+                              <span className="orion-chat-v2-steps-toggle-title">
+                                {activeStep ? activeStep.label : `${steps.length} step${steps.length === 1 ? '' : 's'}`}
+                              </span>
+                              <span className="orion-chat-v2-steps-toggle-detail">
+                                {activeStep?.detail || (message.status === 'completed' ? 'Completed' : 'Click to inspect')}
+                              </span>
+                            </div>
+                            <span className="orion-chat-v2-steps-toggle-meta">
+                              <span>{stepsExpanded ? 'Hide' : 'Show'}</span>
+                              {stepsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </span>
+                          </button>
+                          {stepsExpanded ? (
+                            <div className="orion-chat-v2-step-list">
+                              {steps.map((step) => (
+                                <div key={step.id} className={`orion-chat-v2-step is-${step.status}`}>
+                                  <div className="orion-chat-v2-step-icon" aria-hidden>
+                                    {renderChatStepIcon(step)}
+                                  </div>
+                                  <div className="orion-chat-v2-step-copy">
+                                    <div className="orion-chat-v2-step-label">{step.label}</div>
+                                    {step.detail ? (
+                                      <div className="orion-chat-v2-step-detail">{step.detail}</div>
+                                    ) : null}
+                                  </div>
+                                  <div className="orion-chat-v2-step-state" aria-hidden>
+                                    {step.status === 'done' ? (
+                                      <CheckCircle2 size={14} />
+                                    ) : step.status === 'active' ? (
+                                      <LoaderCircle size={14} className="spin" />
+                                    ) : (
+                                      <X size={14} />
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           ) : null}
                         </div>
                       ) : null}

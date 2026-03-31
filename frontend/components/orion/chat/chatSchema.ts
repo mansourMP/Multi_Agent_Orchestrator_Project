@@ -2,10 +2,20 @@
 
 export type ChatMessageRole = 'user' | 'assistant';
 export type ChatMessageStatus = 'sending' | 'running' | 'completed' | 'waiting' | 'error';
+export type ChatStepStatus = 'active' | 'done' | 'error';
+export type ChatStepKind = 'file' | 'shell' | 'connector' | 'thinking' | 'screenshot';
 
 export type ChatMessageActionKind = 'run' | 'workflow' | 'connect' | 'open' | 'approval_required';
 export type ChatMessageActionVariant = 'primary' | 'secondary';
 export type ChatRunCardStatus = 'preparing' | 'running' | 'waiting' | 'completed' | 'needs_attention' | 'failed';
+
+export type ChatStepRecord = {
+  id: string;
+  label: string;
+  detail?: string | null;
+  status: ChatStepStatus;
+  kind?: ChatStepKind | null;
+};
 
 export type ChatMessageActionRecord = {
   id: string;
@@ -91,6 +101,7 @@ export type ChatMessageRecord = {
   ts: string;
   status?: ChatMessageStatus;
   run_id?: string | null;
+  steps?: ChatStepRecord[];
   actions?: ChatMessageActionRecord[];
   runCard?: ChatRunCardRecord | null;
   contextUsed?: ChatContextUsedRecord | null;
@@ -160,6 +171,7 @@ export function dedupeChatMessages(messages: ChatMessageRecord[]): ChatMessageRe
       normalized[normalized.length - 1] = {
         ...previous,
         ...nextMessage,
+        steps: nextMessage.steps ?? previous.steps,
         actions: nextMessage.actions ?? previous.actions,
         runCard: nextMessage.runCard ?? previous.runCard ?? null,
         contextUsed: nextMessage.contextUsed ?? previous.contextUsed ?? null,
@@ -219,7 +231,28 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
               const id = String(item.id || '').trim() || createChatId('message');
               const ts = String(item.ts || entry.updatedAt || entry.createdAt || new Date().toISOString()).trim() || new Date().toISOString();
               const content = normalizeChatContent(String(item.content || ''));
-              if (!content) return null;
+              const steps = Array.isArray(item.steps)
+                ? item.steps
+                    .map((step): ChatStepRecord | null => {
+                      if (!step || typeof step !== 'object') return null;
+                      const record = step as Record<string, unknown>;
+                      const label = String(record.label || '').trim();
+                      if (!label) return null;
+                      const rawStatus = String(record.status || 'active').trim().toLowerCase();
+                      const rawKind = String(record.kind || '').trim().toLowerCase();
+                      return {
+                        id: String(record.id || '').trim() || createChatId('step'),
+                        label,
+                        detail: typeof record.detail === 'string' ? record.detail : null,
+                        status: rawStatus === 'done' || rawStatus === 'error' ? rawStatus : 'active',
+                        kind: rawKind === 'file' || rawKind === 'shell' || rawKind === 'connector' || rawKind === 'thinking' || rawKind === 'screenshot'
+                          ? rawKind
+                          : null,
+                      } satisfies ChatStepRecord;
+                    })
+                    .filter((step): step is ChatStepRecord => Boolean(step))
+                : [];
+              if (!content && steps.length === 0) return null;
               return {
                 id,
                 role: normalizeChatRole(String(item.role || 'assistant')),
@@ -227,6 +260,7 @@ export function sanitizeChatStore(value: unknown): ChatStoreRecord | null {
                 ts,
                 status: item.status as ChatMessageStatus | undefined,
                 run_id: typeof item.run_id === 'string' ? item.run_id : null,
+                steps: steps.length > 0 ? steps : undefined,
                 actions: Array.isArray(item.actions)
                   ? item.actions
                       .map((action): ChatMessageActionRecord | null => {

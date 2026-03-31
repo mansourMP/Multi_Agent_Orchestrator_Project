@@ -2160,6 +2160,7 @@ export function AutopilotWorkspace() {
         ts: now,
       });
       setPendingSimpleChat({ sessionId, messageId, goal: '__approval_confirmed__' });
+      let streamedSteps: NonNullable<WorkbenchAgentChatMessage['steps']> = [];
       try {
         let streamedReply = '';
         const payload = await sendOperatorChat('__approval_confirmed__', {
@@ -2169,6 +2170,14 @@ export function AutopilotWorkspace() {
             connector,
             action: actionId,
             input,
+          },
+          onSteps: (steps) => {
+            streamedSteps = steps;
+            patchSimpleChatMessage(sessionId, messageId, {
+              steps,
+              status: 'running',
+              ts: new Date().toISOString(),
+            });
           },
           onChunk: (delta) => {
             streamedReply += delta;
@@ -2184,6 +2193,7 @@ export function AutopilotWorkspace() {
           status: 'completed',
           actions: Array.isArray(payload.actions) ? payload.actions : [],
           contextUsed: payload.context_used || null,
+          steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
           ts: new Date().toISOString(),
         });
       } catch (error) {
@@ -2192,6 +2202,7 @@ export function AutopilotWorkspace() {
           status: 'error',
           actions: [],
           contextUsed: null,
+          steps: streamedSteps,
           ts: new Date().toISOString(),
         });
       } finally {
@@ -2612,17 +2623,26 @@ export function AutopilotWorkspace() {
     appendSimpleChatMessage(sessionId, placeholder);
     setPendingSimpleChat({ sessionId, messageId: placeholderId, goal: text });
     setGoal('');
+    let streamedSteps: NonNullable<WorkbenchAgentChatMessage['steps']> = [];
     try {
       let streamedReply = '';
       const payload = await sendOperatorChat(text, {
         reasoningEffort: simpleChatDepth,
         threadId: sessionId,
         priorMessages,
+        onSteps: (steps) => {
+          streamedSteps = steps;
+          patchSimpleChatMessage(sessionId, placeholderId, {
+            steps,
+            status: 'running',
+            ts: new Date().toISOString(),
+          });
+        },
         onChunk: (delta) => {
           streamedReply += delta;
           patchSimpleChatMessage(sessionId, placeholderId, {
             content: streamedReply,
-            status: 'sending',
+            status: streamedSteps.length > 0 ? 'running' : 'sending',
             ts: new Date().toISOString(),
           });
         },
@@ -2632,6 +2652,7 @@ export function AutopilotWorkspace() {
         status: 'completed',
         actions: Array.isArray(payload.actions) ? payload.actions : [],
         contextUsed: payload.context_used || null,
+        steps: Array.isArray(payload.steps) && payload.steps.length > 0 ? payload.steps : streamedSteps,
         ts: new Date().toISOString(),
       });
     } catch (error) {
@@ -2640,6 +2661,7 @@ export function AutopilotWorkspace() {
         status: 'error',
         actions: [],
         contextUsed: null,
+        steps: streamedSteps,
         ts: new Date().toISOString(),
       });
     } finally {

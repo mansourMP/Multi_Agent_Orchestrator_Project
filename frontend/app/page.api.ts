@@ -226,6 +226,17 @@ export type OperatorChatContextUsedPayload = {
   run_created: boolean;
 };
 
+export type OperatorChatStepStatus = 'active' | 'done' | 'error';
+export type OperatorChatStepKind = 'file' | 'shell' | 'connector' | 'thinking' | 'screenshot';
+
+export type OperatorChatStepPayload = {
+  id: string;
+  label: string;
+  detail?: string | null;
+  status: OperatorChatStepStatus;
+  kind?: OperatorChatStepKind | null;
+};
+
 export type OperatorChatResponsePayload = {
   reply: string;
   actions?: OperatorChatActionPayload[];
@@ -236,7 +247,37 @@ export type OperatorChatResponsePayload = {
   attempted_providers?: string;
   error?: string;
   context_used?: OperatorChatContextUsedPayload | null;
+  steps?: OperatorChatStepPayload[];
 };
+
+function normalizeOperatorChatStepPayload(payload: unknown): OperatorChatStepPayload | null {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const label = typeof record.label === 'string' ? record.label.trim() : '';
+  if (!label) return null;
+  const id = typeof record.id === 'string' && record.id.trim()
+    ? record.id.trim()
+    : `${label.toLowerCase().replace(/\s+/g, '-')}:${typeof record.detail === 'string' ? record.detail.trim() : ''}`;
+  const rawStatus = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  const rawKind = typeof record.kind === 'string' ? record.kind.trim().toLowerCase() : '';
+  return {
+    id,
+    label,
+    detail: typeof record.detail === 'string' && record.detail.trim() ? record.detail.trim() : null,
+    status: rawStatus === 'done' || rawStatus === 'error' ? rawStatus : 'active',
+    kind: rawKind === 'file' || rawKind === 'shell' || rawKind === 'connector' || rawKind === 'thinking' || rawKind === 'screenshot'
+      ? rawKind
+      : null,
+  };
+}
+
+function upsertOperatorChatStepPayload(
+  current: OperatorChatStepPayload[],
+  nextStep: OperatorChatStepPayload,
+): OperatorChatStepPayload[] {
+  const existingIndex = current.findIndex((step) => step.id === nextStep.id);
+  if (existingIndex === -1) return [...current, nextStep];
+  return current.map((step, index) => (index === existingIndex ? { ...step, ...nextStep } : step));
+}
 
 function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatResponsePayload {
   const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -254,6 +295,11 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
     context_used: record.context_used && typeof record.context_used === 'object'
       ? record.context_used as OperatorChatContextUsedPayload
       : null,
+    steps: Array.isArray(record.steps)
+      ? record.steps
+          .map((step) => normalizeOperatorChatStepPayload(step))
+          .filter((step): step is OperatorChatStepPayload => Boolean(step))
+      : [],
   };
 }
 
@@ -1965,6 +2011,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       threadId?: string | null;
       priorMessages?: OperatorChatPriorMessagePayload[];
       onChunk?: (delta: string) => void;
+      onSteps?: (steps: OperatorChatStepPayload[]) => void;
       approvedAction?: OperatorChatApprovedActionPayload | null;
     },
   ): Promise<OperatorChatResponsePayload> => {
@@ -2000,6 +2047,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     let buffer = '';
     let finalPayload: OperatorChatResponsePayload | null = null;
     let streamedReply = '';
+    let streamedSteps: OperatorChatStepPayload[] = [];
     let currentEvent: { event: string; data: string[]; id?: string } = { event: 'message', data: [] };
 
     const dispatchEvent = () => {
@@ -2014,6 +2062,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         if (delta) {
           streamedReply += delta;
           options?.onChunk?.(delta);
+        }
+      } else if (eventName === 'step') {
+        const nextStep = normalizeOperatorChatStepPayload(parsed ?? raw);
+        if (nextStep) {
+          streamedSteps = upsertOperatorChatStepPayload(streamedSteps, nextStep);
+          options?.onSteps?.([...streamedSteps]);
         }
       } else if (eventName === 'final') {
         finalPayload = normalizeOperatorChatResponsePayload(parsed ?? raw);
@@ -2069,9 +2123,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       if (!resolvedFinalPayload.reply && streamedReply) {
         resolvedFinalPayload.reply = streamedReply;
       }
+      if ((!Array.isArray(resolvedFinalPayload.steps) || resolvedFinalPayload.steps.length === 0) && streamedSteps.length > 0) {
+        resolvedFinalPayload.steps = streamedSteps;
+      }
       return resolvedFinalPayload;
     }
-    return normalizeOperatorChatResponsePayload({ reply: streamedReply });
+    return normalizeOperatorChatResponsePayload({ reply: streamedReply, steps: streamedSteps });
   }, [buildOperatorChatAvailability, model, provider]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {

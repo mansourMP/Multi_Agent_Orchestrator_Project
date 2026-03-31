@@ -4593,6 +4593,116 @@ input:focus-visible {
   padding: 0;
 }
 
+.orion-chat-v2-steps {
+  width: 100%;
+  max-width: 640px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%);
+  background: color-mix(in srgb, var(--bg-element) 56%, var(--bg-surface) 44%);
+}
+
+.orion-chat-v2-steps-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.orion-chat-v2-steps-toggle-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.orion-chat-v2-steps-toggle-title {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.orion-chat-v2-steps-toggle-detail {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orion-chat-v2-steps-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.orion-chat-v2-step-list {
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent 30%);
+}
+
+.orion-chat-v2-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.orion-chat-v2-step + .orion-chat-v2-step {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent 30%);
+}
+
+.orion-chat-v2-step-icon,
+.orion-chat-v2-step-state {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.orion-chat-v2-step.is-done .orion-chat-v2-step-state {
+  color: var(--success-fg);
+}
+
+.orion-chat-v2-step.is-active .orion-chat-v2-step-state {
+  color: var(--primary-base);
+}
+
+.orion-chat-v2-step.is-error .orion-chat-v2-step-state {
+  color: var(--error-fg);
+}
+
+.orion-chat-v2-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.orion-chat-v2-step-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.orion-chat-v2-step-detail {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
 .orion-chat-v2-inline-error {
   font-size: 13px;
   line-height: 1.5;

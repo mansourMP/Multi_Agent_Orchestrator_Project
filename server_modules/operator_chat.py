@@ -1004,33 +1004,77 @@ def _local_direct_tool_requires_approval(connector_id: str, action_id: str, argu
     return False
 
 
-def _direct_tool_progress_text(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> str:
-    normalized_connector = str(connector_id or "").strip().lower()
-    normalized_action = str(action_id or "").strip().lower()
-    if normalized_connector == "file" and normalized_action == "read":
-        return "Reading file...\n"
-    if normalized_connector == "file" and normalized_action == "write":
-        return "Writing file...\n"
-    if normalized_connector == "shell" and normalized_action == "exec":
-        return "Running command...\n"
-    if normalized_connector == "screenshot" and normalized_action == "capture":
-        return "Capturing screenshot...\n"
-    return f"Running {normalized_connector} {normalized_action}...\n"
+def _titleize_direct_step_token(value: str) -> str:
+    words = [part for part in str(value or "").strip().replace("-", "_").split("_") if part]
+    return " ".join(word.capitalize() for word in words)
 
 
-def _direct_tool_result_progress_text(connector_id: str, action_id: str, result_text: str) -> str:
+def _compact_step_detail(value: Any, limit: int = 120) -> Optional[str]:
+    normalized = " ".join(str(value or "").split()).strip()
+    if not normalized:
+        return None
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1].rstrip()}…"
+
+
+def _direct_tool_step_payload(
+    connector_id: str,
+    action_id: str,
+    arguments: Dict[str, Any],
+    *,
+    step_id: str,
+    status: str,
+    detail_override: Optional[str] = None,
+) -> Dict[str, Any]:
     normalized_connector = str(connector_id or "").strip().lower()
     normalized_action = str(action_id or "").strip().lower()
-    cleaned = str(result_text or "").strip()
-    if not cleaned:
-        return ""
+    label = "Running tool"
+    kind = "connector"
+    detail = _compact_step_detail(detail_override)
+
     if normalized_connector == "file" and normalized_action == "read":
-        return ""
-    if normalized_connector == "shell" and normalized_action == "exec":
-        return f"Command output:\n{cleaned}\n"
-    if normalized_connector == "screenshot" and normalized_action == "capture":
-        return f"Screenshot captured:\n{cleaned}\n"
-    return f"Tool result:\n{cleaned}\n"
+        label = "Reading file"
+        kind = "file"
+        detail = detail or _compact_step_detail(arguments.get("path") or arguments.get("file_path"))
+    elif normalized_connector == "file" and normalized_action == "write":
+        label = "Writing file"
+        kind = "file"
+        detail = detail or _compact_step_detail(arguments.get("path") or arguments.get("file_path"))
+    elif normalized_connector == "shell" and normalized_action == "exec":
+        label = "Running command"
+        kind = "shell"
+        detail = detail or _compact_step_detail(arguments.get("command"))
+    elif normalized_connector == "screenshot" and normalized_action == "capture":
+        label = "Capturing screenshot"
+        kind = "screenshot"
+        detail = detail or _compact_step_detail(arguments.get("path") or arguments.get("file_path") or "Current screen")
+    else:
+        action_label = _titleize_direct_step_token(normalized_action) or "Connector action"
+        connector_label = _titleize_direct_step_token(normalized_connector) or normalized_connector
+        label = action_label
+        kind = "connector"
+        detail = detail or connector_label
+
+    return {
+        "type": "step",
+        "id": step_id,
+        "kind": kind,
+        "label": label,
+        "detail": detail,
+        "status": status,
+    }
+
+
+def _thinking_step_payload(iteration: int, status: str, detail: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "type": "step",
+        "id": f"thinking:{iteration}",
+        "kind": "thinking",
+        "label": "Thinking",
+        "detail": detail or ("Planning the response" if iteration <= 1 else "Planning the next step"),
+        "status": status,
+    }
 
 
 def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:
@@ -1534,8 +1578,8 @@ def build_direct_operator_reply(
     max_iterations = 10
 
     for iteration in range(max_iterations):
-        if iteration > 0:
-            yield {"type": "chunk", "delta": "Thinking...\n"}
+        thinking_iteration = iteration + 1
+        yield _thinking_step_payload(thinking_iteration, "active")
 
         iteration_reply = ""
         iteration_tool_calls: List[Dict[str, Any]] = []
@@ -1562,6 +1606,11 @@ def build_direct_operator_reply(
                 actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
                 actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
                 iteration_tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
+                yield _thinking_step_payload(
+                    thinking_iteration,
+                    "done",
+                    "Prepared the next action" if iteration_tool_calls else "Answer ready",
+                )
 
                 conversation_messages.append({"role": "user", "content": current_prompt})
                 if final_reply:
@@ -1602,6 +1651,10 @@ def build_direct_operator_reply(
                         return
 
                     try:
+                        connector_id = ""
+                        action_id = ""
+                        argument_payload: Dict[str, Any] = {}
+                        step_id = f"tool:{thinking_iteration}:0"
                         for tool_index, tool_call in enumerate(iteration_tool_calls, start=1):
                             connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
                             argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
@@ -1609,9 +1662,14 @@ def build_direct_operator_reply(
                                 nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
                                 if isinstance(nested_input, dict):
                                     argument_payload = nested_input
-                            progress_text = _direct_tool_progress_text(connector_id, action_id, argument_payload)
-                            if progress_text:
-                                yield {"type": "chunk", "delta": progress_text}
+                            step_id = f"tool:{thinking_iteration}:{tool_index}"
+                            yield _direct_tool_step_payload(
+                                connector_id,
+                                action_id,
+                                argument_payload,
+                                step_id=step_id,
+                                status="active",
+                            )
                             tool_result = _execute_single_direct_tool_call(
                                 tool_call=tool_call,
                                 workspace_id=normalized_workspace_id,
@@ -1619,9 +1677,13 @@ def build_direct_operator_reply(
                                 index=tool_index,
                             )
                             executed_any_tools = True
-                            result_progress = _direct_tool_result_progress_text(connector_id, action_id, tool_result)
-                            if result_progress:
-                                yield {"type": "chunk", "delta": result_progress}
+                            yield _direct_tool_step_payload(
+                                connector_id,
+                                action_id,
+                                argument_payload,
+                                step_id=step_id,
+                                status="done",
+                            )
                             conversation_messages.append(
                                 {
                                     "role": "user",
@@ -1638,6 +1700,14 @@ def build_direct_operator_reply(
                         break
                     except Exception as exc:
                         llm_error = str(exc).strip() or "connector_action_failed"
+                        yield _direct_tool_step_payload(
+                            connector_id,
+                            action_id,
+                            argument_payload,
+                            step_id=step_id,
+                            status="error",
+                            detail_override=llm_error,
+                        )
                         yield {
                             "type": "final",
                             "payload": {
@@ -1703,6 +1773,7 @@ def build_direct_operator_reply(
             if event_type == "failure":
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
                 llm_error = str(event.get("error") or "").strip()
+                yield _thinking_step_payload(thinking_iteration, "error", llm_error or "Model call failed")
                 iteration_failed = True
                 break
 

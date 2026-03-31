@@ -217,6 +217,16 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
+  github: {
+    assetSrc: '/connector-logos/github.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  slack: {
+    assetSrc: '/connector-logos/slack.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
   discord: {
     assetSrc: '/connector-logos/discord.svg',
     bg: ASSET_TILE_BG,

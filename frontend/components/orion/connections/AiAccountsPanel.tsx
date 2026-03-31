@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
@@ -142,6 +143,12 @@ type AiAccountsPanelProps = {
   returnTo?: string;
 };
 
+type ProviderVisual = {
+  assetSrc?: string;
+  bg: string;
+  border: string;
+};
+
 type ClaudeAuthStatus = {
   ok?: boolean;
   available?: boolean;
@@ -180,6 +187,74 @@ const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   model: 'claude-sonnet',
   enableRuntime: true,
 };
+
+const PROVIDER_ASSET_TILE_BG = 'var(--bg-element)';
+const PROVIDER_ASSET_TILE_BORDER = 'var(--border-subtle)';
+
+const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
+  openai: {
+    assetSrc: '/provider-logos/openai.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  gemini: {
+    assetSrc: '/provider-logos/gemini.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  vertex: {
+    assetSrc: '/provider-logos/vertex.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  mistral: {
+    assetSrc: '/provider-logos/mistral.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+};
+
+function providerVisual(provider: ProviderId): ProviderVisual | null {
+  return PROVIDER_VISUALS[provider] || null;
+}
+
+function ProviderMark({ provider, size }: { provider: ProviderId; size: number }) {
+  const visual = providerVisual(provider);
+  if (!visual?.assetSrc) {
+    return <ProviderLogoMark provider={provider} size={size} />;
+  }
+  const innerSize = Math.round(size * 0.88);
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(6, Math.round(size * 0.24)),
+        background: visual.bg,
+        border: `1px solid ${visual.border}`,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <Image
+        src={visual.assetSrc}
+        alt=""
+        aria-hidden="true"
+        unoptimized
+        width={innerSize}
+        height={innerSize}
+        style={{
+          width: innerSize,
+          height: innerSize,
+          objectFit: 'contain',
+        }}
+      />
+    </div>
+  );
+}
 
 function defaultConnectMethodForProvider(provider: ProviderId): ProviderConnectMethodId {
   if (provider === 'openai') return 'openai_api_key';
@@ -1817,7 +1892,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 >
                   <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                      <ProviderLogoMark provider={credential.provider} size={30} />
+                      <ProviderMark provider={credential.provider} size={30} />
                       <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
                           {providerLabel(credential.provider, providerOptions)}

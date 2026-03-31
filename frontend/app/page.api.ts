@@ -2013,121 +2013,244 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       onChunk?: (delta: string) => void;
       onSteps?: (steps: OperatorChatStepPayload[]) => void;
       approvedAction?: OperatorChatApprovedActionPayload | null;
+      signal?: AbortSignal | null;
     },
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
     await ensureControlPlaneSession();
     const availability = await buildOperatorChatAvailability();
-    const res = await fetch('/api/chat/respond', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workspace_id: WORKSPACE_ID,
-        thread_id: options?.threadId || undefined,
-        message: message.trim(),
-        provider,
-        model,
-        reasoning_effort: options?.reasoningEffort || undefined,
-        availability,
-        prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
-        approved_action: options?.approvedAction || undefined,
-      }),
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      throw new Error(await readResponseMessage(res, 'Failed to get assistant reply.'));
-    }
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('text/event-stream') || !res.body) {
-      return normalizeOperatorChatResponsePayload(await res.json());
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finalPayload: OperatorChatResponsePayload | null = null;
     let streamedReply = '';
     let streamedSteps: OperatorChatStepPayload[] = [];
-    let currentEvent: { event: string; data: string[]; id?: string } = { event: 'message', data: [] };
+    let sawStepEvent = false;
+    const maxRetries = 3;
+    const retryDelaysMs = [1000, 2000, 4000];
+    const externalSignal = options?.signal || null;
+    const requestBody = JSON.stringify({
+      workspace_id: WORKSPACE_ID,
+      thread_id: options?.threadId || undefined,
+      message: message.trim(),
+      provider,
+      model,
+      reasoning_effort: options?.reasoningEffort || undefined,
+      availability,
+      prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
+      approved_action: options?.approvedAction || undefined,
+    });
 
-    const dispatchEvent = () => {
-      if (currentEvent.data.length === 0) return;
-      const eventName = currentEvent.event || 'message';
-      const raw = currentEvent.data.join('\n');
-      const parsed = parseJson(raw);
-      if (eventName === 'chunk') {
-        const delta = parsed && typeof parsed === 'object' && typeof (parsed as { delta?: unknown }).delta === 'string'
-          ? String((parsed as { delta?: unknown }).delta || '')
-          : raw;
-        if (delta) {
-          streamedReply += delta;
-          options?.onChunk?.(delta);
-        }
-      } else if (eventName === 'step') {
-        const nextStep = normalizeOperatorChatStepPayload(parsed ?? raw);
-        if (nextStep) {
-          streamedSteps = upsertOperatorChatStepPayload(streamedSteps, nextStep);
-          options?.onSteps?.([...streamedSteps]);
-        }
-      } else if (eventName === 'final') {
-        finalPayload = normalizeOperatorChatResponsePayload(parsed ?? raw);
+    const createAbortError = (): Error => {
+      try {
+        return new DOMException('The operation was aborted.', 'AbortError');
+      } catch {
+        const error = new Error('The operation was aborted.');
+        error.name = 'AbortError';
+        return error;
       }
     };
 
-    const processBuffer = (flush = false) => {
-      while (true) {
-        const newlineIndex = buffer.indexOf('\n');
-        if (newlineIndex === -1) break;
-        const rawLine = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-        if (!line) {
-          dispatchEvent();
-          currentEvent = { event: 'message', data: [] };
-          continue;
-        }
-        if (line.startsWith(':')) continue;
-        const separatorIndex = line.indexOf(':');
-        const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
-        const value = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1).replace(/^\s/, '');
-        if (field === 'event') currentEvent.event = value || 'message';
-        else if (field === 'data') currentEvent.data.push(value);
-        else if (field === 'id') currentEvent.id = value;
-      }
-      if (flush && buffer.trim()) {
-        const tail = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer;
-        if (tail) {
-          const separatorIndex = tail.indexOf(':');
-          const field = separatorIndex === -1 ? tail : tail.slice(0, separatorIndex);
-          const value = separatorIndex === -1 ? '' : tail.slice(separatorIndex + 1).replace(/^\s/, '');
-          if (field === 'event') currentEvent.event = value || 'message';
-          else if (field === 'data') currentEvent.data.push(value);
-          else if (field === 'id') currentEvent.id = value;
-        }
-        buffer = '';
+    const isAbortError = (error: unknown): boolean => (
+      error != null
+      && typeof error === 'object'
+      && 'name' in error
+      && String((error as { name?: unknown }).name || '') === 'AbortError'
+    );
+
+    const throwIfAborted = () => {
+      if (externalSignal?.aborted) {
+        throw createAbortError();
       }
     };
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      processBuffer(false);
-    }
-    buffer += decoder.decode();
-    processBuffer(true);
-    dispatchEvent();
+    const waitForRetry = async (delayMs: number): Promise<void> => {
+      throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const timer = globalThis.setTimeout(() => {
+          if (externalSignal && abortListener) {
+            externalSignal.removeEventListener('abort', abortListener);
+          }
+          resolve();
+        }, delayMs);
+        const abortListener = () => {
+          globalThis.clearTimeout(timer);
+          externalSignal?.removeEventListener('abort', abortListener);
+          reject(createAbortError());
+        };
+        if (externalSignal) {
+          externalSignal.addEventListener('abort', abortListener, { once: true });
+        }
+      });
+    };
 
-    const resolvedFinalPayload = finalPayload as OperatorChatResponsePayload | null;
-    if (resolvedFinalPayload) {
-      if (!resolvedFinalPayload.reply && streamedReply) {
-        resolvedFinalPayload.reply = streamedReply;
+    const mergeChunkDelta = (attemptReply: string, delta: string): string => {
+      if (!delta) return attemptReply;
+      let nextAttemptReply = attemptReply;
+      if (delta === attemptReply || (attemptReply && attemptReply.startsWith(delta))) {
+        nextAttemptReply = attemptReply;
+      } else if (attemptReply && delta.startsWith(attemptReply)) {
+        nextAttemptReply = delta;
+      } else {
+        nextAttemptReply = `${attemptReply}${delta}`;
       }
-      if ((!Array.isArray(resolvedFinalPayload.steps) || resolvedFinalPayload.steps.length === 0) && streamedSteps.length > 0) {
-        resolvedFinalPayload.steps = streamedSteps;
+
+      if (streamedReply === nextAttemptReply || streamedReply.startsWith(nextAttemptReply)) {
+        return nextAttemptReply;
       }
-      return resolvedFinalPayload;
+      if (nextAttemptReply.startsWith(streamedReply)) {
+        const suffix = nextAttemptReply.slice(streamedReply.length);
+        streamedReply = nextAttemptReply;
+        if (suffix) {
+          options?.onChunk?.(suffix);
+        }
+        return nextAttemptReply;
+      }
+      const error = new Error('Chat stream diverged during reconnect.');
+      error.name = 'ChatStreamDivergedError';
+      throw error;
+    };
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      throwIfAborted();
+      let finalPayloadRaw: unknown = null;
+      let attemptReply = '';
+      let buffer = '';
+      let currentEvent: { event: string; data: string[]; id?: string } = { event: 'message', data: [] };
+      const controller = new AbortController();
+      const abortForward = () => controller.abort();
+      if (externalSignal) {
+        externalSignal.addEventListener('abort', abortForward, { once: true });
+      }
+
+      try {
+        const res = await fetch('/api/chat/respond', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBody,
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const error = new Error(await readResponseMessage(res, 'Failed to get assistant reply.'));
+          error.name = 'OperatorChatHttpError';
+          throw error;
+        }
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('text/event-stream') || !res.body) {
+          const payload = normalizeOperatorChatResponsePayload(await res.json());
+          if (!payload.reply && streamedReply) {
+            payload.reply = streamedReply;
+          }
+          if ((!Array.isArray(payload.steps) || payload.steps.length === 0) && streamedSteps.length > 0) {
+            payload.steps = streamedSteps;
+          }
+          return payload;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+
+        const dispatchEvent = () => {
+          if (currentEvent.data.length === 0) return;
+          const eventName = currentEvent.event || 'message';
+          const raw = currentEvent.data.join('\n');
+          const parsed = parseJson(raw);
+          if (eventName === 'chunk') {
+            const delta = parsed && typeof parsed === 'object' && typeof (parsed as { delta?: unknown }).delta === 'string'
+              ? String((parsed as { delta?: unknown }).delta || '')
+              : raw;
+            attemptReply = mergeChunkDelta(attemptReply, delta);
+          } else if (eventName === 'step') {
+            const nextStep = normalizeOperatorChatStepPayload(parsed ?? raw);
+            if (nextStep) {
+              sawStepEvent = true;
+              streamedSteps = upsertOperatorChatStepPayload(streamedSteps, nextStep);
+              options?.onSteps?.([...streamedSteps]);
+            }
+          } else if (eventName === 'final') {
+            finalPayloadRaw = parsed ?? raw;
+          }
+        };
+
+        const processBuffer = (flush = false) => {
+          while (true) {
+            const newlineIndex = buffer.indexOf('\n');
+            if (newlineIndex === -1) break;
+            const rawLine = buffer.slice(0, newlineIndex);
+            buffer = buffer.slice(newlineIndex + 1);
+            const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+            if (!line) {
+              dispatchEvent();
+              currentEvent = { event: 'message', data: [] };
+              continue;
+            }
+            if (line.startsWith(':')) continue;
+            const separatorIndex = line.indexOf(':');
+            const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
+            const value = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1).replace(/^\s/, '');
+            if (field === 'event') currentEvent.event = value || 'message';
+            else if (field === 'data') currentEvent.data.push(value);
+            else if (field === 'id') currentEvent.id = value;
+          }
+          if (flush && buffer.trim()) {
+            const tail = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer;
+            if (tail) {
+              const separatorIndex = tail.indexOf(':');
+              const field = separatorIndex === -1 ? tail : tail.slice(0, separatorIndex);
+              const value = separatorIndex === -1 ? '' : tail.slice(separatorIndex + 1).replace(/^\s/, '');
+              if (field === 'event') currentEvent.event = value || 'message';
+              else if (field === 'data') currentEvent.data.push(value);
+              else if (field === 'id') currentEvent.id = value;
+            }
+            buffer = '';
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          processBuffer(false);
+        }
+        buffer += decoder.decode();
+        processBuffer(true);
+        dispatchEvent();
+
+        if (finalPayloadRaw != null) {
+          const resolvedFinalPayload = normalizeOperatorChatResponsePayload(finalPayloadRaw);
+          if (!resolvedFinalPayload.reply && streamedReply) {
+            resolvedFinalPayload.reply = streamedReply;
+          }
+          if ((!Array.isArray(resolvedFinalPayload.steps) || resolvedFinalPayload.steps.length === 0) && streamedSteps.length > 0) {
+            resolvedFinalPayload.steps = streamedSteps;
+          }
+          return resolvedFinalPayload;
+        }
+
+        const error = new Error('Chat stream ended unexpectedly before completion.');
+        error.name = 'ChatStreamUnexpectedCloseError';
+        throw error;
+      } catch (error) {
+        if (externalSignal) {
+          externalSignal.removeEventListener('abort', abortForward);
+        }
+        if (isAbortError(error)) {
+          throw error;
+        }
+        const nonRetriable = sawStepEvent
+          || (error instanceof Error && (
+            error.name === 'OperatorChatHttpError'
+            || error.name === 'ChatStreamDivergedError'
+          ));
+        if (nonRetriable || attempt >= maxRetries) {
+          throw error;
+        }
+        await waitForRetry(retryDelaysMs[attempt] ?? retryDelaysMs[retryDelaysMs.length - 1] ?? 1000);
+        continue;
+      } finally {
+        if (externalSignal) {
+          externalSignal.removeEventListener('abort', abortForward);
+        }
+      }
     }
+
     return normalizeOperatorChatResponsePayload({ reply: streamedReply, steps: streamedSteps });
   }, [buildOperatorChatAvailability, model, provider]);
 

@@ -1604,6 +1604,7 @@ def build_direct_operator_reply(
                 delta = str(event.get("delta") or "")
                 if delta:
                     iteration_reply += delta
+                    yield {"type": "chunk", "delta": delta}
                 continue
             if event_type == "result":
                 final_reply = str(event.get("reply") or "").strip() or iteration_reply

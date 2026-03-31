@@ -197,16 +197,6 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },
-  anthropic: {
-    assetSrc: '/provider-logos/anthropic-icon.ico',
-    bg: PROVIDER_ASSET_TILE_BG,
-    border: PROVIDER_ASSET_TILE_BORDER,
-  },
-  claude_code_cli: {
-    assetSrc: '/provider-logos/anthropic-icon.ico',
-    bg: PROVIDER_ASSET_TILE_BG,
-    border: PROVIDER_ASSET_TILE_BORDER,
-  },
   gemini: {
     assetSrc: '/provider-logos/gemini.svg',
     bg: PROVIDER_ASSET_TILE_BG,
@@ -263,11 +253,12 @@ function ProviderMark({ provider, size }: { provider: ProviderId; size: number }
         height={innerSize}
         style={{
           width: innerSize,
-          height: innerSize,
-          objectFit: 'contain',
-        }}
-      />
-    </div>
+        height: innerSize,
+        objectFit: 'contain',
+        display: 'block',
+      }}
+    />
+  </div>
   );
 }
 

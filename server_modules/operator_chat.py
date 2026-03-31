@@ -964,6 +964,8 @@ def _execute_direct_tool_calls(
         "metadata": {
             "source": "chat_direct",
             "thread_id": thread_id or None,
+            "execution_target": "local_companion",
+            "execution_target_selected": "local_companion",
         },
     }
     replies: List[str] = []

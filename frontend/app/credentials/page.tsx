@@ -169,7 +169,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   telegram_bot: {
-    assetSrc: '/connector-logos/telegram.png',
+    assetSrc: '/connector-logos/telegram.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -178,22 +178,22 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   whatsapp_twilio: {
-    assetSrc: '/connector-logos/whatsapp-business.png',
+    assetSrc: '/connector-logos/whatsapp-business.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   discord_bot: {
-    assetSrc: '/connector-logos/discord.png',
+    assetSrc: '/connector-logos/discord.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   instagram_business: {
-    assetSrc: '/connector-logos/meta-business.png',
+    assetSrc: '/connector-logos/meta-business.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   microsoft_365: {
-    assetSrc: '/connector-logos/microsoft-365.png',
+    assetSrc: '/connector-logos/microsoft-365.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -203,7 +203,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   youtube: {
-    assetSrc: '/connector-logos/youtube.png',
+    assetSrc: '/connector-logos/youtube.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -213,11 +213,12 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   custom_api: {
+    assetSrc: '/connector-logos/webhook.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
   discord: {
-    assetSrc: '/connector-logos/discord.png',
+    assetSrc: '/connector-logos/discord.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },

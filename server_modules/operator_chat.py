@@ -1323,6 +1323,13 @@ def _direct_chat_error_reply(llm_error: str) -> str:
     return f"Chat failed: {detail}"
 
 
+_DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
+    "Do not repeat or quote file contents, shell output, or tool results in your response. "
+    "Use the information to answer the user's question directly and concisely. "
+    "Never paste raw content."
+)
+
+
 def build_direct_operator_reply(
     *,
     message: str,
@@ -1693,6 +1700,12 @@ def build_direct_operator_reply(
                                     ),
                                 }
                             )
+                        conversation_messages.append(
+                            {
+                                "role": "system",
+                                "content": _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE,
+                            }
+                        )
                         current_prompt = (
                             "Continue until the task is complete. If another tool is needed, call it now. "
                             "Otherwise provide the final answer to the user."

@@ -1932,9 +1932,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       hasEnabledRuntimeProviderProfile(provider).catch(() => false),
     ]);
     const legacyAiReady = Boolean(setupStatus?.accountConnected && setupStatus?.connectionTested);
+    const localMachineOnline = Boolean(
+      Number(state.localWorkerStatus?.summary?.online ?? 0) > 0
+      || state.localWorkerStatus?.items?.some((item) => item.online),
+    );
     return {
-      ai_ready: Boolean(runtimeAccountReady || enabledRuntimeProfile || legacyAiReady),
-      runtime_ok: Boolean(setupStatus?.runtimeReady),
+      ai_ready: localMachineOnline
+        ? true
+        : Boolean(runtimeAccountReady || enabledRuntimeProfile || legacyAiReady),
+      runtime_ok: localMachineOnline || Boolean(setupStatus?.runtimeReady),
       provider: provider,
       provider_label: providerOptions.find((item) => item.id === provider)?.label || provider,
       connection_mode: connectionMode,
@@ -1945,6 +1951,8 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     hasRuntimeProviderAccount,
     provider,
     providerOptions,
+    state.localWorkerStatus?.items,
+    state.localWorkerStatus?.summary?.online,
     setupStatus?.accountConnected,
     setupStatus?.connectionTested,
     setupStatus?.runtimeReady,

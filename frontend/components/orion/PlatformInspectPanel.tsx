@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
+import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 function toTitleCase(value: string): string {
   return value
@@ -32,7 +33,8 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
 }
 
 export default function PlatformInspectPanel() {
-  const { inspectPanelOpen, inspectState } = usePlatformShell();
+  const { inspectPanelOpen, inspectState, status } = usePlatformShell();
+  const [authBusy, setAuthBusy] = useState(false);
 
   useEffect(() => {
     document.body.classList.toggle('orion-inspect-open', inspectPanelOpen);
@@ -77,6 +79,15 @@ export default function PlatformInspectPanel() {
 
   const hasActiveRun = Boolean(inspectState?.runId && inspectState?.status && contract);
 
+  const promptSignIn = async () => {
+    setAuthBusy(true);
+    try {
+      await ensureControlPlaneSession({ forcePrompt: true });
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   return (
     <aside
       className={`orion-inspect-panel${inspectPanelOpen ? ' is-open' : ''}`}
@@ -86,14 +97,38 @@ export default function PlatformInspectPanel() {
         <div className="orion-inspect-panel-header">
           <div>
             <div className="orion-inspect-panel-kicker">Inspect</div>
-            <div className="orion-inspect-panel-title">Current run</div>
+            <div className="orion-inspect-panel-title">{status.authRequired ? 'System status' : 'Current run'}</div>
           </div>
         </div>
 
-        {!hasActiveRun ? (
+        {!hasActiveRun && !status.authRequired ? (
           <div className="orion-inspect-panel-empty">No active run.</div>
         ) : (
           <div className="orion-inspect-panel-sections">
+            {status.authRequired ? (
+              <section className="orion-inspect-panel-section">
+                <div className="orion-inspect-panel-label">Browser sign-in</div>
+                <div className="orion-inspect-panel-value">Continue in your browser to unlock protected actions.</div>
+                <div className="orion-inspect-panel-muted">
+                  {String(status.authMessage || 'Continue in your browser to sign in.').trim()}
+                </div>
+                <div className="orion-inspect-panel-actions">
+                  <button
+                    type="button"
+                    className="orion-btn orion-btn-secondary sm"
+                    onClick={() => {
+                      void promptSignIn();
+                    }}
+                    disabled={authBusy}
+                  >
+                    {authBusy ? 'Opening browser…' : 'Sign in'}
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
+            {hasActiveRun ? (
+              <>
             <section className="orion-inspect-panel-section">
               <div className="orion-inspect-panel-label">Current run status</div>
               <div className="orion-inspect-panel-value">{normalizeStatus(inspectState?.status)}</div>
@@ -153,6 +188,8 @@ export default function PlatformInspectPanel() {
                 <div className="orion-inspect-panel-muted">No pending approvals.</div>
               )}
             </section>
+              </>
+            ) : null}
           </div>
         )}
       </div>

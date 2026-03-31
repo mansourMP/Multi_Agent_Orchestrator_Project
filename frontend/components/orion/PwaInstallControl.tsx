@@ -96,6 +96,19 @@ export default function PwaInstallControl() {
     };
   }, [isDesktopShell, mounted]);
 
+  useEffect(() => {
+    if (!showInstructions) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowInstructions(false);
+    };
+    document.body.classList.add('orion-modal-open');
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.classList.remove('orion-modal-open');
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showInstructions]);
+
   const buttonLabel = deferredPrompt
     ? 'Install App'
     : safari.isSafari

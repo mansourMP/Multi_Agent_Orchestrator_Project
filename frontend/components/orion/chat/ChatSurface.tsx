@@ -32,6 +32,12 @@ export type ChatDepthOption = {
   description?: string;
 };
 
+type ChatEmptyState = {
+  title: string;
+  suggestions: string[];
+  onSelectSuggestion: (value: string) => void;
+};
+
 type ChatPermissionPrompt = {
   title: string;
   prompt: string;
@@ -57,6 +63,7 @@ type ChatSurfaceProps = {
   onRunApprovalDecision?: (scope: 'once' | 'deny') => void;
   chatBusy: boolean;
   messages: ChatMessageRecord[];
+  emptyState?: ChatEmptyState | null;
   inlineStatus: string | null;
   inlineAction?: {
     label: string;
@@ -230,6 +237,7 @@ export function ChatSurface({
   onRunApprovalDecision,
   chatBusy,
   messages,
+  emptyState = null,
   inlineStatus,
   inlineAction = null,
   emptyAction = null,
@@ -358,6 +366,24 @@ export function ChatSurface({
             <ChevronDown size={14} />
           </button>
         </div>
+
+        {!hasMessages && emptyState ? (
+          <div className="orion-chat-v2-compact-empty" aria-live="polite">
+            <h1 className="orion-chat-v2-compact-title">{emptyState.title}</h1>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+              {emptyState.suggestions.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  className="orion-chip orion-chip-action"
+                  onClick={() => emptyState.onSelectSuggestion(suggestion)}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {visibleMessages.length > 0 ? (
           <div className="orion-chat-v2-thread" aria-live="polite">

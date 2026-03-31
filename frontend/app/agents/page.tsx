@@ -243,7 +243,7 @@ export default function AgentsPage() {
           ) : draftAgents.length === 0 ? (
             <EmptyState
               title="No agents yet"
-              copy="Create your first reusable agent here, then use chat separately when you want to interact with it."
+              copy="Agents are specialized AI assistants you can assign to tasks. Create one or let Empyralis create one for you."
               actions={
                 <Link href="/builder/new" className="btn-primary">
                   <Plus size={14} />

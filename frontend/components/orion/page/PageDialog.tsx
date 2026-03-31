@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 type PageDialogProps = {
@@ -22,11 +22,29 @@ export function PageDialog({
   onClose,
   className,
 }: PageDialogProps) {
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.body.classList.add('orion-modal-open');
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.classList.remove('orion-modal-open');
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose, open]);
+
   if (!open || !portalTarget) return null;
 
   return createPortal(
     <div className="orion-modal-overlay" onClick={onClose}>
-      <div className={`orion-modal${className ? ` ${className}` : ''}`} onClick={(event) => event.stopPropagation()}>
+      <div
+        className={`orion-modal${className ? ` ${className}` : ''}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+      >
         <header className="orion-panel-header orion-page-dialog-header">
           <h2 className="orion-page-dialog-title">{title}</h2>
           <button

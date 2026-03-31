@@ -119,7 +119,7 @@
 
 .handle:hover {
     background: #C15F3C !important;
-    border-color: #ffffff !important;
+    border-color: var(--bg-surface) !important;
     transform: scale(1.2);
     box-shadow: 0 0 15px rgba(193, 95, 60, 0.8);
 }

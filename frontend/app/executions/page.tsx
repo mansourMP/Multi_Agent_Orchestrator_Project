@@ -829,8 +829,8 @@ export default function ExecutionsPage() {
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<Activity size={18} />}
-        title="Runs"
-        subtitle="Review active work, completed tasks, and anything that needs your attention."
+        title="Library"
+        subtitle="Everything that has run, been produced, or needs review"
         actions={
           <button className="orion-btn orion-btn-ghost" onClick={() => void loadExecutions()}>
             <RefreshCw size={14} />
@@ -841,7 +841,7 @@ export default function ExecutionsPage() {
 
       <section className="orion-panel orion-runs-overview">
         <div className="orion-runs-overview-main">
-          <div className="orion-home-overview-kicker">Run overview</div>
+          <div className="orion-home-overview-kicker">Library overview</div>
           <div className="orion-runs-overview-title">{activeSummary.title}</div>
           <div className="orion-runs-overview-copy">{activeSummary.note}</div>
           <div className="orion-home-overview-actions">
@@ -893,7 +893,7 @@ export default function ExecutionsPage() {
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
         <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Find a run</div>
+            <div className="orion-panel-title">Find in Library</div>
             <div className="orion-panel-copy">Search by task or run ID, then narrow by state, assistant, or tool.</div>
           </div>
         </div>
@@ -971,7 +971,7 @@ export default function ExecutionsPage() {
           <div className="orion-state-icon" aria-hidden="true">
             <AlertCircle size={18} />
           </div>
-          <div className="orion-panel-title">Runs are unavailable</div>
+          <div className="orion-panel-title">Library is unavailable</div>
           <div className="orion-panel-copy">{UI_ERROR_COPY.backend}</div>
           {showExecutionLoadDetail ? (
             <div className="orion-panel-copy" style={{ marginTop: -4 }}>{executionLoadDetail}</div>

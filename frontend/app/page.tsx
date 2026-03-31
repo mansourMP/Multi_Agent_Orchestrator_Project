@@ -46,7 +46,6 @@ import {
 import {
   type WorkbenchAgentChatMessage,
   type WorkbenchDeckMode,
-  type WorkbenchInspectStreamState,
 } from '../components/orion/workbench/WorkbenchControlDeck';
 import {
   GLOBAL_COMMAND_EVENT,
@@ -58,12 +57,11 @@ import {
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
 const WORKBENCH_AGENT_CHAT_STORAGE_KEY = 'orion.workbench.agent.chat.v1';
 const WORKBENCH_CHAT_MODE_STORAGE_KEY = 'orion.workbench.chat.mode.v1';
-const WORKBENCH_DECK_VISIBLE_STORAGE_KEY = 'orion.workbench.deck.visible.v1';
-const WORKBENCH_DECK_SIZE_STORAGE_KEY = 'orion.workbench.deck.size.v1';
 const PINNED_AGENT_STORAGE_KEY = 'empyralis.agents.pinned-rail';
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';
 const DEFAULT_AGENT_PROFILE_STORAGE_KEY = 'empyralis.agents.default-profile.v1';
@@ -116,6 +114,13 @@ const CHAT_DEPTH_OPTIONS: Array<{ value: ChatDepthValue; label: string; descript
   { value: 'high', label: 'Deep', description: 'More reasoning' },
 ];
 
+const EMPTY_CHAT_PROMPTS = [
+  'Summarize my emails from today',
+  'Draft a message to my team about the sprint',
+  'Check what ran yesterday and flag anything that failed',
+  'Set up a daily digest for my Slack',
+] as const;
+
 function normalizeAssistantProfileId(value: unknown): StoredAssistantProfileId {
   return ASSISTANT_PROFILE_LIBRARY.some((item) => item.id === value) ? (value as StoredAssistantProfileId) : 'custom';
 }
@@ -149,13 +154,6 @@ type SimpleChatPermissionPrompt = {
   scope: 'once';
   reusable: boolean;
   consequence?: string | null;
-};
-
-type WorkbenchAgentChannelBinding = {
-  channel?: string;
-  identity_label?: string | null;
-  label?: string | null;
-  status?: string | null;
 };
 
 type HomeWorkspaceRunItem = {
@@ -1244,10 +1242,6 @@ export function AutopilotWorkspace() {
   const [hasAttemptedSimpleChatOrTask, setHasAttemptedSimpleChatOrTask] = useState(false);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
-  const [selectedAgentChannels, setSelectedAgentChannels] = useState<WorkbenchAgentChannelBinding[]>([]);
-  const [selectedAgentChannelsLoading, setSelectedAgentChannelsLoading] = useState(false);
-  const [workbenchDeckVisible, setWorkbenchDeckVisible] = useState(true);
-  const [workbenchDeckSize, setWorkbenchDeckSize] = useState<'compact' | 'standard' | 'expanded'>('standard');
   const preloadQuerySignatureRef = useRef('');
 
   useEffect(() => {
@@ -1268,29 +1262,6 @@ export function AutopilotWorkspace() {
       // ignore storage write failures
     }
   }, [deckMode]);
-
-  useEffect(() => {
-    try {
-      const storedVisible = window.localStorage.getItem(WORKBENCH_DECK_VISIBLE_STORAGE_KEY);
-      if (storedVisible === 'true') setWorkbenchDeckVisible(true);
-      if (storedVisible === 'false') setWorkbenchDeckVisible(false);
-      const storedSize = window.localStorage.getItem(WORKBENCH_DECK_SIZE_STORAGE_KEY);
-      if (storedSize === 'compact' || storedSize === 'standard' || storedSize === 'expanded') {
-        setWorkbenchDeckSize(storedSize);
-      }
-    } catch {
-      // ignore storage read failures
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(WORKBENCH_DECK_VISIBLE_STORAGE_KEY, String(workbenchDeckVisible));
-      window.localStorage.setItem(WORKBENCH_DECK_SIZE_STORAGE_KEY, workbenchDeckSize);
-    } catch {
-      // ignore storage write failures
-    }
-  }, [workbenchDeckSize, workbenchDeckVisible]);
 
   useEffect(() => {
     try {
@@ -1401,43 +1372,6 @@ export function AutopilotWorkspace() {
       window.removeEventListener(EMPYRALIS_NEW_CHAT_EVENT, clearChatThread);
     };
   }, [closeStream, setGoal, setSelectedPackId, setTopError]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadSelectedAgentChannels = async () => {
-      setSelectedAgentChannelsLoading(true);
-      try {
-        await ensureControlPlaneSession();
-        const res = await fetch(`/api/workbench/agents/${encodeURIComponent(selectedAgentRole)}/channels`, {
-          cache: 'no-store',
-        });
-        if (!res.ok) {
-          if (!cancelled) setSelectedAgentChannels([]);
-          return;
-        }
-        const payload = await res.json();
-        const items = Array.isArray(payload?.channels) ? payload.channels : [];
-        if (!cancelled) {
-          setSelectedAgentChannels(
-            items.map((item: Record<string, unknown>) => ({
-              channel: typeof item?.channel === 'string' ? item.channel : undefined,
-              identity_label: typeof item?.identity_label === 'string' ? item.identity_label : null,
-              label: typeof item?.label === 'string' ? item.label : null,
-              status: typeof item?.status === 'string' ? item.status : null,
-            })),
-          );
-        }
-      } catch {
-        if (!cancelled) setSelectedAgentChannels([]);
-      } finally {
-      if (!cancelled) setSelectedAgentChannelsLoading(false);
-      }
-    };
-    void loadSelectedAgentChannels();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedAgentRole]);
 
   const refreshControlCenter = useCallback(async () => {
     try {
@@ -1732,12 +1666,10 @@ export function AutopilotWorkspace() {
     }
     if (agentParam && isAgentRoleId(agentParam)) {
       setSelectedAgentRole(agentParam);
-      setWorkbenchDeckVisible(true);
       if (!deckParam) setDeckMode('context');
     }
     if (deckParam === 'context' || deckParam === 'control' || deckParam === 'inspect') {
       setDeckMode(deckParam);
-      setWorkbenchDeckVisible(true);
     }
   }, [setGoal, setInboxInput, setLeadsInput, setSelectedPackId, setSlotsInput, setSelectedAgentRole]);
 
@@ -1874,6 +1806,27 @@ export function AutopilotWorkspace() {
   const latestDirectChatContext = useMemo<ChatContextUsedRecord | null>(() => {
     return [...selectedChatMessages].reverse().find((message) => message.role === 'assistant' && message.contextUsed)?.contextUsed || null;
   }, [selectedChatMessages]);
+
+  useEffect(() => {
+    let active = true;
+    if (selectedChatMessages.length > 0) return;
+
+    const checkSetupGate = async () => {
+      try {
+        const readiness = await fetchSetupReadiness();
+        if (!active || readiness.complete) return;
+        const returnTo = `${window.location.pathname || '/'}${window.location.search || ''}`;
+        router.replace(buildSetupRoute(returnTo || '/'));
+      } catch {
+        // Leave the chat surface visible when the session is not ready yet.
+      }
+    };
+
+    void checkSetupGate();
+    return () => {
+      active = false;
+    };
+  }, [router, selectedChatMessages.length]);
   const activeProviderOption = useMemo(
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
@@ -2346,7 +2299,7 @@ export function AutopilotWorkspace() {
       router.push('/skills');
       return;
     }
-    if (command === '/integrations' || command === '/credentials' || command === '/channels') {
+    if (command === '/connectors' || command === '/integrations' || command === '/credentials' || command === '/channels') {
       router.push('/credentials');
       return;
     }
@@ -2355,10 +2308,10 @@ export function AutopilotWorkspace() {
       return;
     }
     if (command === '/workflows' || command === '/automations') {
-      router.push('/workflows');
+      router.push('/agents');
       return;
     }
-    if (command === '/runs' || command === '/executions' || command === '/history') {
+    if (command === '/library' || command === '/runs' || command === '/executions' || command === '/history') {
       router.push('/executions');
       return;
     }
@@ -2373,8 +2326,8 @@ export function AutopilotWorkspace() {
     if (command === '/help') {
       setTopError(
         singleAgentMode
-          ? 'Commands: /run <goal>, /run, /connect-ai, /setup, /assistant, /workflows, /runs, /approvals, /integrations, /health.'
-          : 'Commands: /run <goal>, /run, /connect-ai, /setup, /agents, /workflows, /runs, /approvals, /integrations, /health.',
+          ? 'Commands: /run <goal>, /run, /connect-ai, /setup, /assistant, /workflows, /library, /approvals, /connectors, /health.'
+          : 'Commands: /run <goal>, /run, /connect-ai, /setup, /agents, /workflows, /library, /approvals, /connectors, /health.',
       );
       return;
     }
@@ -2694,6 +2647,17 @@ export function AutopilotWorkspace() {
     }
   }, [appendSimpleChatMessage, goal, patchSimpleChatMessage, selectedChatMessages, selectedChatSession?.id, sendOperatorChat, setGoal, simpleChatDepth]);
 
+  const handleSelectEmptyPrompt = useCallback((nextGoal: string) => {
+    setGoal(nextGoal);
+    requestAnimationFrame(() => {
+      const element = primaryGoalRef.current;
+      if (!element) return;
+      element.focus();
+      const cursor = nextGoal.length;
+      element.setSelectionRange(cursor, cursor);
+    });
+  }, [setGoal]);
+
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
     if (!text) return;
@@ -2758,6 +2722,11 @@ export function AutopilotWorkspace() {
           }}
           chatBusy={Boolean(pendingSimpleChat)}
           messages={selectedChatMessages}
+          emptyState={{
+            title: 'What do you want to get done?',
+            suggestions: [...EMPTY_CHAT_PROMPTS],
+            onSelectSuggestion: handleSelectEmptyPrompt,
+          }}
           inlineStatus={inlineSimpleChatStatus}
           inlineAction={inlineSimpleChatAction}
           emptyAction={emptySimpleChatAction}

@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo } from 'react';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Edit3, Laptop, PanelRight, Server, TriangleAlert, Wrench } from 'lucide-react';
+import { ChevronDown, Edit3, Laptop, PanelRight, Server, ShieldAlert, TriangleAlert, Wrench } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
 import { safeNavigate } from '@/lib/safeNavigate';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
@@ -95,6 +95,16 @@ export default function PlatformTopBar() {
           >
             <Edit3 size={13} />
             <span>New chat</span>
+          </button>
+        ) : null}
+        {status.authRequired ? (
+          <button
+            type="button"
+            className="orion-shellbar-status-inline is-runtime is-warn"
+            onClick={() => setInspectPanelOpen(true)}
+          >
+            <ShieldAlert size={13} />
+            <span>Sign in required</span>
           </button>
         ) : null}
         <button

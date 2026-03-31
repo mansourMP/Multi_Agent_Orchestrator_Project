@@ -84,7 +84,7 @@ function StandardCanvasNodeComponent({
                     padding: 12px 14px;
                     border: 1px solid rgba(15, 23, 42, 0.07);
                     border-radius: 20px;
-                    background: #ffffff;
+                    background: var(--bg-surface);
                     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
                     transition: box-shadow 160ms ease, border-color 160ms ease;
                     overflow: visible;
@@ -171,7 +171,7 @@ function StandardCanvasNodeComponent({
                     height: 9px;
                     border-radius: 999px;
                     border: 1px solid rgba(120, 120, 114, 0.32);
-                    background: #ffffff;
+                    background: var(--bg-surface);
                     opacity: 0;
                     transition: opacity 160ms ease;
                 }

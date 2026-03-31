@@ -389,6 +389,7 @@ const secondaryProviderActionButtonStyle: CSSProperties = {
 
 export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo = '/' }: AiAccountsPanelProps) {
   const router = useRouter();
+  const returningToSetup = returnTo.startsWith('/setup');
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(DEFAULT_PROVIDER_OPTIONS);
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
@@ -1468,7 +1469,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 {lastConnectedAccountLabel ? `${lastConnectedAccountLabel} connected` : `${readyProviderCard.label} connected`}
               </div>
               <div style={{ fontSize: 12, lineHeight: 1.5 }}>
-                Return to chat and continue. You can manage provider order later from Integrations if you need to.
+                {returningToSetup
+                  ? 'Return to setup and connect one integration before you start your first task.'
+                  : 'Return to chat and continue. You can manage provider order later from Connectors if you need to.'}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1477,7 +1480,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 style={{ minHeight: 36, paddingInline: 14 }}
                 onClick={() => router.push(returnTo)}
               >
-                Start chatting
+                {returningToSetup ? 'Continue setup' : 'Start chatting'}
               </button>
             </div>
           </div>
@@ -1538,7 +1541,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                       ? 'Retest'
                       : 'Reconnect'
                     : card.enabled
-                      ? 'Use account'
+                      ? returningToSetup
+                        ? 'Continue setup'
+                        : 'Use account'
                       : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
                         ? 'Use this Mac'
                         : card.credential

@@ -13,7 +13,7 @@ export default async function SignInCompletePage({ searchParams }: SignInComplet
   const params = await searchParams;
   const returnToValue = Array.isArray(params.returnTo) ? params.returnTo[0] : params.returnTo;
   const modeValue = Array.isArray(params.mode) ? params.mode[0] : params.mode;
-  const returnTo = sanitizeReturnTo(String(returnToValue || '/'));
+  const returnTo = sanitizeReturnTo(String(returnToValue || '/home'));
   const desktopMode = String(modeValue || '').trim() === 'desktop';
 
   return (
@@ -39,7 +39,7 @@ export default async function SignInCompletePage({ searchParams }: SignInComplet
           <Link href={`/connect-ai?returnTo=${encodeURIComponent(returnTo)}`} className="btn-primary orion-auth-back">
             Connect AI account
           </Link>
-          <Link href={returnTo} className="btn-ghost orion-auth-back">
+          <Link href={`/setup?returnTo=${encodeURIComponent(returnTo)}`} className="btn-ghost orion-auth-back">
             Stay in browser
           </Link>
         </div>

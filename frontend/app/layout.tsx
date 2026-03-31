@@ -5,7 +5,6 @@ import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import GlobalCommandPalette from "@/components/orion/GlobalCommandPalette";
-import ControlPlaneSessionBootstrap from "@/components/orion/ControlPlaneSessionBootstrap";
 import { PlatformShellProvider } from "@/components/orion/PlatformShellContext";
 import PlatformInspectPanel from "@/components/orion/PlatformInspectPanel";
 import PlatformTopBar from "@/components/orion/PlatformTopBar";
@@ -33,7 +32,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0a0a0a',
+  themeColor: '#f7f7f7',
 };
 
 const CRITICAL_SHELL_CSS = `
@@ -41,7 +40,7 @@ const CRITICAL_SHELL_CSS = `
   --sidebar-width: 56px;
   --topbar-height: 56px;
   --critical-bg-shell: #f7f7f7;
-  --critical-bg-app: #f4f4f4;
+  --critical-bg-app: #f7f7f7;
   --critical-bg-surface: #ffffff;
   --critical-border: #e2e2e2;
   --critical-text: #1a1c21;
@@ -169,7 +168,7 @@ html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-f
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid var(--critical-border);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--critical-bg-surface);
   color: var(--critical-text);
   font: inherit;
@@ -195,7 +194,7 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
     root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '200px');
     root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
-    document.body?.style?.setProperty('background', resolved === 'dark' ? '#141415' : '#f4f4f4');
+    document.body?.style?.setProperty('background', 'var(--critical-bg-app)');
   } catch {}
 })();
 `;
@@ -236,7 +235,6 @@ export default function RootLayout({
         <ThemeProvider>
           <PlatformShellProvider>
             <ToastProvider>
-              <ControlPlaneSessionBootstrap />
               <div className="orion-app-shell">
                 <Suspense fallback={null}>
                   <Sidebar />

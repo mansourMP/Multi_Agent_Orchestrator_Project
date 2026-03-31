@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowRight, MessageSquare, PlayCircle } from 'lucide-react';
 import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
 import { fetchWorkflows } from '@/lib/api';
+import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
 type WorkflowRecord = {
   id: string;
@@ -44,9 +46,31 @@ function runtimeProfileLabel(workflow: WorkflowRecord): string {
 }
 
 export default function HomePage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const showSetupCompleteBanner = searchParams.get('setup') === 'complete';
+
+  useEffect(() => {
+    let active = true;
+
+    const guardSetup = async () => {
+      try {
+        const readiness = await fetchSetupReadiness();
+        if (!active || readiness.complete) return;
+        router.replace(buildSetupRoute('/home'));
+      } catch {
+        // Keep Home accessible until the auth/session layer is available.
+      }
+    };
+
+    void guardSetup();
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   useEffect(() => {
     let alive = true;
@@ -93,23 +117,38 @@ export default function HomePage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
+      {showSetupCompleteBanner ? (
+        <div
+          className="orion-panel"
+          style={{
+            marginBottom: 16,
+            borderColor: 'var(--success-border)',
+            background: 'color-mix(in srgb, var(--success-bg) 72%, var(--bg-surface) 28%)',
+            color: 'var(--text-primary)',
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>You&apos;re ready. Start your first task.</div>
+        </div>
+      ) : null}
       <PageHero
         kicker="Home"
         title="See what is active, what changed, and where to continue."
-        copy="Use Home as your workspace overview. Open chat when you want to talk directly to an assistant. Open workflows when you want to edit or reuse a saved playbook."
+        copy="Your AI operations center. Say what you want done — Empyralis handles the rest."
         actions={
           <>
             <Link href="/" className="btn-primary">
               <MessageSquare size={14} />
-              Open chat
+              Start something
             </Link>
             <Link href="/executions" className="btn-secondary">
               <PlayCircle size={14} />
-              View Runs
+              See what happened
             </Link>
-            <Link href="/workflows" className="btn-secondary">
+            <Link href="/agents" className="btn-secondary">
               <ArrowRight size={14} />
-              Reusable workflows
+              Saved automations
             </Link>
           </>
         }
@@ -117,12 +156,12 @@ export default function HomePage() {
           <>
             <PageHeroCard label="Continue recent work">
               {loading ? (
-                <div className="orion-home-side-empty">Loading workflows…</div>
+                <div className="orion-home-side-empty">Loading automations…</div>
               ) : error ? (
-                <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
+                <div className="orion-home-side-empty">Couldn&apos;t load automations.</div>
               ) : featuredWorkflow ? (
                 <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
-                  <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
+                  <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Automation'}</div>
                   <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
                   <div className="orion-home-featured-meta">
                     {runtimeProfileLabel(featuredWorkflow) ? <span>{runtimeProfileLabel(featuredWorkflow)}</span> : null}
@@ -130,26 +169,26 @@ export default function HomePage() {
                   </div>
                 </Link>
               ) : (
-                <div className="orion-home-side-empty">No workflows yet.</div>
+                <div className="orion-home-side-empty">No automations yet.</div>
               )}
             </PageHeroCard>
 
-            <PageHeroCard label="Reusable workflows">
+            <PageHeroCard label="Saved automations">
               <div className="orion-home-side-stats">
                 <div>
                   <div className="orion-home-side-value">{workflows.length}</div>
-                  <div className="orion-home-side-note">Saved playbooks</div>
+                  <div className="orion-home-side-note">Saved automations</div>
                 </div>
                 <div>
                   <div className="orion-home-side-value">{recentWorkflows.length}</div>
-                  <div className="orion-home-side-note">Recently edited</div>
+                  <div className="orion-home-side-note">Recently updated automations</div>
                 </div>
               </div>
               {supportingWorkflows.length > 0 ? (
                 <div className="orion-home-mini-list">
                   {supportingWorkflows.map((workflow) => (
                     <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
-                      <span>{workflow.name || 'Untitled Workflow'}</span>
+                      <span>{workflow.name || 'Untitled Automation'}</span>
                       <ArrowRight size={13} />
                     </Link>
                   ))}
@@ -161,22 +200,22 @@ export default function HomePage() {
       />
 
       <PageSection
-        title="Recent workflows"
-        description="Saved playbooks you can reopen, refine, and run again."
+        title="Recent automations"
+        description="Saved automations you can reopen, refine, and run again."
         actions={
-          <Link href="/workflows" className="orion-control-link">
-            Open Workflows
+          <Link href="/agents" className="orion-control-link">
+            Open automations
           </Link>
         }
         className="orion-home-list-panel"
       >
 
         {loading ? (
-          <PageStatePanel variant="loading" title="Loading workflows…" />
+          <PageStatePanel variant="loading" title="Loading automations…" />
         ) : error ? (
           <PageStatePanel variant="error" title="Couldn't load this section." copy={error} />
         ) : recentWorkflows.length === 0 ? (
-          <PageStatePanel variant="empty" title="No workflows yet" copy="Start with a task. Save it as a workflow later if it works well." />
+          <PageStatePanel variant="empty" title="No automations yet" copy="Start with a task. Save it as an automation later if it works well." />
         ) : (
           <div className="orion-list">
             {recentWorkflows.map((workflow) => (
@@ -187,10 +226,10 @@ export default function HomePage() {
               >
                 <div className="orion-item-leading">
                   <div className="orion-item-avatar">
-                    {(workflow.name || 'WF').slice(0, 2).toUpperCase()}
+                    {(workflow.name || 'AU').slice(0, 2).toUpperCase()}
                   </div>
                   <div className="orion-list-row-main">
-                    <div className="orion-list-row-title">{workflow.name || 'Untitled Workflow'}</div>
+                    <div className="orion-list-row-title">{workflow.name || 'Untitled Automation'}</div>
                     <div className="orion-list-row-subtitle">{compactText(workflow.description)}</div>
                   </div>
                 </div>

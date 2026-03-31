@@ -14,17 +14,22 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
   const params = await searchParams;
   const returnToValue = Array.isArray(params.returnTo) ? params.returnTo[0] : params.returnTo;
   const returnTo = sanitizeReturnTo(String(returnToValue || '/'));
+  const returnToSetup = returnTo.startsWith('/setup');
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
       <OsPageHeader
         icon={<KeyRound size={18} />}
-        title="Connect AI account"
-        subtitle="Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate."
+        title={returnToSetup ? 'Connect your AI model' : 'Connect AI account'}
+        subtitle={
+          returnToSetup
+            ? 'Step 1 of 2. Choose one provider, connect it, then continue setup.'
+            : 'Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate.'
+        }
         actions={
           <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
             <ArrowLeft size={13} />
-            Back to chat
+            {returnToSetup ? 'Back to setup' : 'Back to chat'}
           </Link>
         }
       />

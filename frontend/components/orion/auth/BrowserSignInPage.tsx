@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck, Smartphone } from 'lucide-react';
 import { getDesktopBridge } from '@/lib/desktopBridge';
 import { waitForDesktopControlPlaneSignIn } from '@/lib/controlPlaneSession';
+import { buildPostSignInSetupHref } from '@/lib/setupReadiness';
 import { humanizeUiError } from '@/lib/uiError';
 
 type AuthProviders = {
@@ -43,6 +44,7 @@ type BrowserSignInPageProps = {
 };
 
 export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMode = false }: BrowserSignInPageProps) {
+  const postSignInTarget = buildPostSignInSetupHref(returnTo);
   const [providers, setProviders] = useState<AuthProviders>(DEFAULT_PROVIDERS);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
@@ -151,7 +153,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         return;
       }
 
-      window.location.assign(returnTo);
+      window.location.assign(postSignInTarget);
     } catch (submitError) {
       setSubmitting(false);
       setError(
@@ -183,7 +185,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           throw new Error('Unable to open Google sign-in in the system browser.');
         }
         await waitForDesktopControlPlaneSignIn();
-        window.location.assign(returnTo);
+        window.location.assign(postSignInTarget);
       } catch (oauthError) {
         setOauthSubmitting(null);
         setError(
@@ -216,7 +218,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
           throw new Error('Unable to open Apple sign-in in the system browser.');
         }
         await waitForDesktopControlPlaneSignIn();
-        window.location.assign(returnTo);
+        window.location.assign(postSignInTarget);
       } catch (oauthError) {
         setOauthSubmitting(null);
         setError(

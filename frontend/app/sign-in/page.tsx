@@ -15,7 +15,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
 
   return (
     <BrowserSignInPage
-      returnTo={sanitizeReturnTo(String(returnToValue || '/'))}
+      returnTo={sanitizeReturnTo(String(returnToValue || '/home'))}
       errorCode={String(errorValue || '')}
       desktopMode={String(desktopValue || '') === '1'}
     />

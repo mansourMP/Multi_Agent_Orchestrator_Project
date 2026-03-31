@@ -15,10 +15,12 @@ import { LoadingState } from '@/components/orion/state/LoadingState';
 import { RetryActions } from '@/components/orion/state/RetryActions';
 import { useWorkflowLibrary } from '@/hooks/pages/useWorkflowLibrary';
 import { WorkflowListRow } from '@/components/orion/workflows/WorkflowListRow';
+import { useToast } from '@/components/Toast';
 import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
 
 export default function WorkflowsPage() {
   const router = useRouter();
+  const { addToast } = useToast();
   const modalPortalTarget = typeof document !== 'undefined' ? document.body : null;
   const {
     workflows,
@@ -174,7 +176,11 @@ export default function WorkflowsPage() {
                     onDelete={() => setDeleteTarget(workflow)}
                     onDuplicate={() => {
                       void duplicateWorkflow(workflow.id).catch((error) => {
-                        alert(formatApiError(error, 'Failed to duplicate workflow'));
+                        addToast({
+                          type: 'error',
+                          title: 'Duplicate failed',
+                          message: formatApiError(error, 'Failed to duplicate workflow'),
+                        });
                       });
                     }}
                   />
@@ -198,7 +204,11 @@ export default function WorkflowsPage() {
               type="button"
               onClick={() => {
                 void confirmDelete().catch((error) => {
-                  alert(formatApiError(error, 'Failed to delete workflow'));
+                  addToast({
+                    type: 'error',
+                    title: 'Delete failed',
+                    message: formatApiError(error, 'Failed to delete workflow'),
+                  });
                 });
               }}
               className="orion-btn orion-btn-danger"

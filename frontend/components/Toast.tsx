@@ -51,16 +51,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
 function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast: (id: string) => void }) {
     return (
-        <div style={{
-            position: 'fixed',
-            bottom: '24px',
-            right: '24px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-            zIndex: 9999,
-            pointerEvents: 'none',
-        }}>
+        <div className="orion-toast-stack" aria-live="polite" aria-atomic="true">
             {toasts.map(toast => (
                 <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
             ))}
@@ -77,82 +68,34 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
     }, [toast.duration, onClose]);
 
     const icons = {
-        success: <CheckCircle size={18} color="#22c55e" />,
-        error: <XCircle size={18} color="#ef4444" />,
-        warning: <AlertCircle size={18} color="#f59e0b" />,
-        info: <Info size={18} color="#3b82f6" />,
-    };
-
-    const bgColors = {
-        success: 'rgba(34, 197, 94, 0.1)',
-        error: 'rgba(239, 68, 68, 0.1)',
-        warning: 'rgba(245, 158, 11, 0.1)',
-        info: 'rgba(59, 130, 246, 0.1)',
-    };
-
-    const borderColors = {
-        success: 'rgba(34, 197, 94, 0.2)',
-        error: 'rgba(239, 68, 68, 0.2)',
-        warning: 'rgba(245, 158, 11, 0.2)',
-        info: 'rgba(59, 130, 246, 0.2)',
+        success: <CheckCircle size={18} />,
+        error: <XCircle size={18} />,
+        warning: <AlertCircle size={18} />,
+        info: <Info size={18} />,
     };
 
     return (
-        <div style={{
-            background: '#1f2127',
-            border: `1px solid ${borderColors[toast.type]}`,
-            borderRadius: '6px',
-            padding: '12px 16px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
-            minWidth: '300px',
-            maxWidth: '400px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-            pointerEvents: 'auto',
-            animation: 'slideIn 0.2s ease-out',
-        }}>
-            <style jsx global>{`
-                @keyframes slideIn {
-                    from { transform: translateX(100%); opacity: 0; }
-                    to { transform: translateX(0); opacity: 1; }
-                }
-            `}</style>
-
-            <div style={{
-                padding: '4px',
-                borderRadius: '4px',
-                background: bgColors[toast.type],
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-            }}>
+        <div className={`orion-toast is-${toast.type}`} role="status">
+            <div className="orion-toast__icon">
                 {icons[toast.type]}
             </div>
 
-            <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '13px', color: '#fff', marginBottom: toast.message ? '4px' : 0 }}>
+            <div className="orion-toast__body">
+                <div className="orion-toast__title">
                     {toast.title}
                 </div>
                 {toast.message && (
-                    <div style={{ fontSize: '12px', color: '#9ca3af', lineHeight: 1.4 }}>
+                    <div className="orion-toast__message">
                         {toast.message}
                     </div>
                 )}
             </div>
 
             <button
+                type="button"
                 onClick={onClose}
-                style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#6b7280',
-                    cursor: 'pointer',
-                    padding: '4px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                }}
+                className="orion-toast__dismiss"
+                aria-label="Dismiss notification"
             >
                 <X size={14} />
             </button>

@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowUpRight,
   ChevronLeft,
@@ -584,6 +584,7 @@ function connectorTierLabel(tier: ConnectorRoadmapTier): string {
 }
 
 function CredentialsPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
   const [catalogViewFilter, setCatalogViewFilter] = useState<CatalogViewFilter>('all');
@@ -1218,6 +1219,9 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       if (!res.ok) throw new Error(String(body?.detail || body?.message || 'Failed to create connector.'));
       resetModal();
       await loadConnectors();
+      if (onboardingMode) {
+        router.push(returnTo);
+      }
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : 'Failed to create connector.');
     } finally {

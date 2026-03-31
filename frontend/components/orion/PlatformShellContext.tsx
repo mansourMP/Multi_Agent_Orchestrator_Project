@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
-import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { ensureControlPlaneSession, readControlPlaneFailure } from '@/lib/controlPlaneSession';
 
 export type PlatformAccessMode = 'default' | 'full';
 
@@ -57,6 +57,8 @@ type PlatformShellStatus = {
   machineCount: number;
   localRuntimeOnline: boolean;
   pendingApprovals: number;
+  authRequired: boolean;
+  authMessage: string | null;
 };
 
 type PlatformShellContextValue = {
@@ -107,6 +109,8 @@ const INITIAL_STATUS: PlatformShellStatus = {
   machineCount: 0,
   localRuntimeOnline: false,
   pendingApprovals: 0,
+  authRequired: false,
+  authMessage: null,
 };
 
 function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStatus): boolean {
@@ -116,7 +120,15 @@ function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStat
     && left.onlineWorkers === right.onlineWorkers
     && left.machineCount === right.machineCount
     && left.localRuntimeOnline === right.localRuntimeOnline
-    && left.pendingApprovals === right.pendingApprovals;
+    && left.pendingApprovals === right.pendingApprovals
+    && left.authRequired === right.authRequired
+    && left.authMessage === right.authMessage;
+}
+
+function isAuthRequiredError(message: string): boolean {
+  const lower = String(message || '').trim().toLowerCase();
+  if (!lower) return false;
+  return lower.includes('sign in') || lower.includes('requires login') || lower.includes('continue in your browser');
 }
 
 export function PlatformShellProvider({ children }: { children: React.ReactNode }) {
@@ -188,11 +200,18 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
               machineCount: Number(payload?.machineCount || 0),
               localRuntimeOnline: Boolean(payload?.localRuntimeOnline),
               pendingApprovals: Number(payload?.pendingApprovals || 0),
+              authRequired: false,
+              authMessage: null,
             };
             return areShellStatusEqual(current, next) ? current : next;
           });
         }
-      } catch {
+      } catch (error) {
+        const remembered = readControlPlaneFailure();
+        const detail = String(
+          remembered?.message || (error instanceof Error ? error.message : ''),
+        ).trim();
+        const authRequired = isAuthRequiredError(detail);
         if (alive) {
           setStatus((current) => {
             const next = {
@@ -201,6 +220,8 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
               onlineWorkers: 0,
               machineCount: 0,
               localRuntimeOnline: false,
+              authRequired,
+              authMessage: authRequired ? detail : null,
             };
             return areShellStatusEqual(current, next) ? current : next;
           });

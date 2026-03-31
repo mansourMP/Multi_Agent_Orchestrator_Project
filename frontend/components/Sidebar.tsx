@@ -8,7 +8,6 @@ import {
   PanelLeft,
   Activity,
   GitBranch,
-  Key,
   MessageSquare,
   Settings,
   UserRound,
@@ -30,7 +29,6 @@ const MAIN_NAV: NavItem[] = [
   { label: 'Agents', href: '/agents', icon: Bot },
   { label: 'Workflows', href: '/workflows', icon: GitBranch },
   { label: 'Library', href: '/executions', icon: Activity },
-  { label: 'Connectors', href: '/credentials', icon: Key },
 ];
 
 const PROFILE_NAV_ITEM: NavItem = { label: 'Profile', href: '/account', icon: UserRound };

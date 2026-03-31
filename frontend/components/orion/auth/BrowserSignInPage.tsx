@@ -91,6 +91,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   useEffect(() => {
     if (inDesktopWindow) return;
     if (loadingProviders || error) return;
+    if (providers.email.enabled) return;
     const socialProviders = [
       providers.google.enabled ? 'google' : null,
       providers.apple.enabled ? 'apple' : null,
@@ -105,7 +106,7 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
       ? `/api/control-plane/auth/google/start?${params.toString()}`
       : `/api/control-plane/auth/apple/start?${params.toString()}`;
     window.location.replace(target);
-  }, [desktopMode, error, inDesktopWindow, loadingProviders, providers.apple.enabled, providers.google.enabled, returnTo]);
+  }, [desktopMode, error, inDesktopWindow, loadingProviders, providers.apple.enabled, providers.email.enabled, providers.google.enabled, returnTo]);
 
   useEffect(() => {
     if (loadingProviders) return;

@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -130,6 +131,12 @@ type DesktopBridge = {
   openExternal?: (target: string) => Promise<boolean>;
 };
 
+type ConnectorVisual = {
+  assetSrc?: string;
+  bg: string;
+  border: string;
+};
+
 const EMPTY_FORM: ConnectModalState = {
   label: '',
   connector: 'google_workspace',
@@ -150,6 +157,70 @@ const EMPTY_FORM: ConnectModalState = {
   instagramPageId: '',
   calendarId: 'primary',
   timezone: 'UTC',
+};
+
+const ASSET_TILE_BG = 'var(--bg-element)';
+const ASSET_TILE_BORDER = 'var(--border-subtle)';
+
+const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
+  google_workspace: {
+    assetSrc: '/connector-logos/google-workspace.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  telegram_bot: {
+    assetSrc: '/connector-logos/telegram.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  wechat_work: {
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  whatsapp_twilio: {
+    assetSrc: '/connector-logos/whatsapp-business.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  discord_bot: {
+    assetSrc: '/connector-logos/discord.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  instagram_business: {
+    assetSrc: '/connector-logos/meta-business.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  microsoft_365: {
+    assetSrc: '/connector-logos/microsoft-365.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  x_twitter: {
+    assetSrc: '/connector-logos/x.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  youtube: {
+    assetSrc: '/connector-logos/youtube.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  tiktok_business: {
+    assetSrc: '/connector-logos/tiktok.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  custom_api: {
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  discord: {
+    assetSrc: '/connector-logos/discord.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
 };
 
 function formatDate(value?: string | null): string {
@@ -175,6 +246,51 @@ function resolveCatalogConnectorId(item: Pick<ConnectorCatalogEntry, 'id' | 'con
   if (isConnectorId(item.id)) return item.id;
   if (item.id === 'discord') return 'discord_bot';
   return null;
+}
+
+function connectorVisual(id: string): ConnectorVisual {
+  return CONNECTOR_VISUALS[id] || {
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  };
+}
+
+function ConnectorMark({ id, size }: { id: string; size: number }) {
+  const visual = connectorVisual(id);
+  if (!visual.assetSrc) {
+    return <ConnectorLogoMark id={id as Parameters<typeof ConnectorLogoMark>[0]['id']} size={size} />;
+  }
+  const innerSize = Math.round(size * (visual.assetSrc ? 0.88 : 0.76));
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.max(6, Math.round(size * 0.24)),
+        background: visual.bg,
+        border: `1px solid ${visual.border}`,
+        display: 'grid',
+        placeItems: 'center',
+        flexShrink: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <Image
+        src={visual.assetSrc}
+        alt=""
+        aria-hidden="true"
+        unoptimized
+        width={innerSize}
+        height={innerSize}
+        style={{
+          width: innerSize,
+          height: innerSize,
+          objectFit: 'contain',
+        }}
+      />
+    </div>
+  );
 }
 
 function agentRoleLabel(value?: unknown): string {
@@ -1245,7 +1361,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 >
                   <div className="orion-integration-card-head">
                     <div className="orion-integration-card-main">
-                      <ConnectorLogoMark id={item.id} size={52} />
+                      <ConnectorMark id={item.id} size={52} />
                       <div className="orion-integration-card-copy">
                         <div className="orion-integration-card-kicker">{connectorTierLabel(tier)}</div>
                         <div className="orion-integration-card-title">{item.label}</div>
@@ -1315,7 +1431,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               >
                 <div className="orion-focus-panel-head">
                   <div className="orion-focus-panel-main">
-                    <ConnectorLogoMark id={focusedCatalogEntry.id} size={44} />
+                    <ConnectorMark id={focusedCatalogEntry.id} size={44} />
                     <div className="orion-focus-panel-copy">
                       <div className="orion-focus-panel-title">{focusedCatalogEntry.label}</div>
                       <div className="orion-focus-panel-note">{focusedCatalogEntry.note}</div>
@@ -1583,7 +1699,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
           return (
             <div id={`connector-row-${row.id}`} className="orion-connector-detail-card">
               <div className="orion-connector-detail-header">
-                <ConnectorLogoMark id={row.connector} size={58} />
+                <ConnectorMark id={row.connector} size={58} />
                 <div className="orion-connector-detail-copy">
                   <div className="orion-connector-detail-title-row">
                     <div className="orion-list-row-title">{row.label}</div>
@@ -1947,7 +2063,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               return (
             <div className="orion-panel-header orion-modal-header orion-credentials-modal-header">
               <div className="orion-credentials-modal-title-group">
-                <ConnectorLogoMark id={form.connector} size={52} />
+                <ConnectorMark id={form.connector} size={52} />
                 <div>
                   <h2 className="orion-modal-title">{title}</h2>
                   <p className="orion-modal-copy">{copy}</p>

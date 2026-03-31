@@ -52,6 +52,7 @@ OPENCLAW_GATEWAY_POLICY="${ORION_OPENCLAW_GATEWAY_POLICY:-auto_stop}" # auto_sto
 #   or opts in with ORION_STACK_PREFER_API_KEY=1.
 ORION_STACK_PREFER_API_KEY="${ORION_STACK_PREFER_API_KEY:-0}"
 ORION_STACK_START_LOCK_WAIT_SECONDS="${ORION_STACK_START_LOCK_WAIT_SECONDS:-15}"
+LOCAL_DEV_JWT_SECRET_DEFAULT="${LOCAL_DEV_JWT_SECRET_DEFAULT:-dev-secret-change-in-production}"
 if [[ -n "${ORION_AUTH_MODE:-}" ]]; then
   ORION_AUTH_MODE_VALUE="${ORION_AUTH_MODE}"
 else
@@ -97,6 +98,14 @@ if [[ -z "${RUNTIME_KEY}" ]]; then
 fi
 if [[ "${RUNTIME_KEY}" != "${RUNTIME_KEY_RAW}" ]]; then
   echo "Warning: runtime key contained whitespace and was normalized."
+fi
+JWT_SECRET_RAW="${JWT_SECRET:-${ORION_JWT_SECRET:-${LOCAL_DEV_JWT_SECRET_DEFAULT}}}"
+JWT_SECRET_VALUE="$(printf "%s" "${JWT_SECRET_RAW}" | tr -d '[:space:]')"
+if [[ -z "${JWT_SECRET_VALUE}" ]]; then
+  JWT_SECRET_VALUE="${LOCAL_DEV_JWT_SECRET_DEFAULT}"
+fi
+if [[ "${JWT_SECRET_VALUE}" != "${JWT_SECRET_RAW}" ]]; then
+  echo "Warning: JWT secret contained whitespace and was normalized."
 fi
 ORION_API_URL="http://${ORION_HOST}:${ORION_PORT}"
 BACKEND_URL="http://127.0.0.1:${BACKEND_PORT}"
@@ -152,6 +161,8 @@ ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX=${WHATSAPP_AUTOPILOT_REQUIRE_PREFIX}
 ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET=${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}
 ORION_AUTH_MODE=${ORION_AUTH_MODE_VALUE}
 ORION_DISABLE_OPENAI_API_KEY=${ORION_DISABLE_OPENAI_API_KEY_VALUE}
+JWT_SECRET=${JWT_SECRET_VALUE}
+ORION_JWT_SECRET=${JWT_SECRET_VALUE}
 EOF
 chmod 600 "${STATE_DIR}/stack.env" 2>/dev/null || true
 
@@ -516,6 +527,8 @@ start_runtime() {
     export ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET="${WHATSAPP_AUTOPILOT_EXECUTION_TARGET}"
     export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
     export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    export JWT_SECRET="${JWT_SECRET_VALUE}"
+    export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     export OPENAI_HEALTHCHECK="${OPENAI_HEALTHCHECK:-0}"
     spawn_detached "${PID_DIR}/runtime.pid" "${LOG_DIR}/runtime.log" "${ROOT_DIR}" \
       "${runtime_launcher[@]}" server:app --host "${ORION_BIND_HOST}" --port "${ORION_PORT}" >/dev/null
@@ -544,6 +557,8 @@ start_backend() {
     export ORION_API_KEY="${RUNTIME_KEY}"
     export RUNTIME_KEY="${RUNTIME_KEY}"
     export ORION_API_URL="${ORION_API_URL}"
+    export JWT_SECRET="${JWT_SECRET_VALUE}"
+    export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     if [[ "${mode}" == "dist" ]]; then
       if [[ -f "${ROOT_DIR}/backend/dist/main.js" ]]; then
         spawn_detached "${PID_DIR}/backend.pid" "${LOG_DIR}/backend.log" "${ROOT_DIR}/backend" \
@@ -564,6 +579,8 @@ start_frontend() {
   (
     export EMPYRALIS_TAURI_DESKTOP=1
     export NEXT_PUBLIC_ORION_API_URL="${ORION_API_URL}"
+    export JWT_SECRET="${JWT_SECRET_VALUE}"
+    export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     spawn_detached "${PID_DIR}/frontend.pid" "${LOG_DIR}/frontend.log" "${ROOT_DIR}/frontend" \
       npm run dev -- --hostname "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" >/dev/null
   )
@@ -577,6 +594,8 @@ start_worker() {
     export ORION_API_URL="${ORION_API_URL}"
     export ORION_AUTH_MODE="${ORION_AUTH_MODE_VALUE}"
     export ORION_DISABLE_OPENAI_API_KEY="${ORION_DISABLE_OPENAI_API_KEY_VALUE}"
+    export JWT_SECRET="${JWT_SECRET_VALUE}"
+    export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     spawn_detached "${PID_DIR}/worker.pid" "${LOG_DIR}/worker.log" "${ROOT_DIR}" \
       bash scripts/run_local_worker.sh >/dev/null
   )

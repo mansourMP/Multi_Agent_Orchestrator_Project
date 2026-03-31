@@ -103,6 +103,34 @@ type ProviderAccountFormState = {
   enableRuntime: boolean;
 };
 
+type ProviderConnectMethodId =
+  | 'openai_api_key'
+  | 'openai_browser_oauth'
+  | 'openai_local_import'
+  | 'anthropic_api_key'
+  | 'anthropic_local_import'
+  | 'gemini_api_key'
+  | 'gemini_cli_oauth'
+  | 'vertex_access_token';
+
+type ProviderConnectMethodAction =
+  | 'manual'
+  | 'openai_browser_oauth'
+  | 'openai_local_import'
+  | 'anthropic_local_import'
+  | 'gemini_cli_oauth';
+
+type ProviderConnectMethod = {
+  id: ProviderConnectMethodId;
+  provider: ProviderId;
+  label: string;
+  description: string;
+  authMode: string;
+  action: ProviderConnectMethodAction;
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
 type AiAccountsPanelProps = {
   workspaceId: string;
   mode?: 'manage' | 'connect';
@@ -139,14 +167,44 @@ type ProviderCardState = {
 
 const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   provider: 'anthropic',
-  label: 'My Claude Subscription',
-  authMode: 'local_cli',
+  label: 'My Anthropic Key',
+  authMode: 'api_key',
   secret: '',
   projectId: '',
   location: 'us-central1',
   model: 'claude-sonnet',
   enableRuntime: true,
 };
+
+function defaultConnectMethodForProvider(provider: ProviderId): ProviderConnectMethodId {
+  if (provider === 'openai') return 'openai_api_key';
+  if (provider === 'anthropic') return 'anthropic_api_key';
+  if (provider === 'gemini') return 'gemini_api_key';
+  return 'vertex_access_token';
+}
+
+function authModeForConnectMethod(methodId: ProviderConnectMethodId): string {
+  switch (methodId) {
+    case 'openai_browser_oauth':
+    case 'openai_local_import':
+      return 'oauth_token';
+    case 'anthropic_local_import':
+      return 'local_cli';
+    case 'gemini_cli_oauth':
+      return 'gemini_cli_oauth';
+    case 'vertex_access_token':
+      return 'access_token';
+    case 'openai_api_key':
+    case 'anthropic_api_key':
+    case 'gemini_api_key':
+    default:
+      return 'api_key';
+  }
+}
+
+function isManualConnectMethod(action: ProviderConnectMethodAction): boolean {
+  return action === 'manual';
+}
 
 function formatDate(value?: string | null): string {
   const date = value ? new Date(value) : null;
@@ -405,6 +463,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [providerDetailsOpen, setProviderDetailsOpen] = useState<Record<string, boolean>>({});
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerForm, setProviderForm] = useState<ProviderAccountFormState>(DEFAULT_PROVIDER_FORM);
+  const [providerConnectMethod, setProviderConnectMethod] = useState<ProviderConnectMethodId>(() => defaultConnectMethodForProvider(DEFAULT_PROVIDER_FORM.provider));
   const [claudeAuthStatus, setClaudeAuthStatus] = useState<ClaudeAuthStatus | null>(null);
   const [geminiCliStatus, setGeminiCliStatus] = useState<GeminiCliStatus | null>(null);
 
@@ -426,6 +485,104 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const selectedProviderAuthModes = useMemo(
     () => getProviderAuthModes(selectedProviderOption),
     [selectedProviderOption],
+  );
+  const providerConnectMethods = useMemo<ProviderConnectMethod[]>(() => {
+    if (providerForm.provider === 'openai') {
+      return [
+        {
+          id: 'openai_api_key',
+          provider: 'openai',
+          label: 'Add API key',
+          description: 'Paste a direct OpenAI API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+        {
+          id: 'openai_browser_oauth',
+          provider: 'openai',
+          label: 'Sign in with OpenAI',
+          description: 'Open OpenAI in your browser and connect the session automatically.',
+          authMode: 'oauth_token',
+          action: 'openai_browser_oauth',
+        },
+        {
+          id: 'openai_local_import',
+          provider: 'openai',
+          label: 'Import local session',
+          description: localOpenAiAuth?.importable
+            ? 'Use the OpenAI / Codex session already signed in on this Mac.'
+            : 'Requires a saved local OpenAI / Codex session on this Mac.',
+          authMode: 'oauth_token',
+          action: 'openai_local_import',
+          disabled: !localOpenAiAuth?.importable,
+          disabledReason: !localOpenAiAuth?.importable ? 'No local OpenAI / Codex session is available to import on this Mac.' : undefined,
+        },
+      ];
+    }
+    if (providerForm.provider === 'anthropic') {
+      return [
+        {
+          id: 'anthropic_api_key',
+          provider: 'anthropic',
+          label: 'Add API key',
+          description: 'Paste a direct Anthropic API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+        {
+          id: 'anthropic_local_import',
+          provider: 'anthropic',
+          label: 'Use local Claude session',
+          description: claudeAuthStatus?.loggedIn === true
+            ? 'Use the Claude session already signed in on this machine.'
+            : 'Requires Claude to already be signed in on this machine.',
+          authMode: 'local_cli',
+          action: 'anthropic_local_import',
+          disabled: claudeAuthStatus?.loggedIn !== true,
+          disabledReason: claudeAuthStatus?.loggedIn === true
+            ? undefined
+            : claudeAuthStatus?.message || 'Claude is not signed in on this machine yet.',
+        },
+      ];
+    }
+    if (providerForm.provider === 'gemini') {
+      return [
+        {
+          id: 'gemini_api_key',
+          provider: 'gemini',
+          label: 'Add API key',
+          description: 'Paste a direct Gemini API key and store it in the encrypted vault.',
+          authMode: 'api_key',
+          action: 'manual',
+        },
+        {
+          id: 'gemini_cli_oauth',
+          provider: 'gemini',
+          label: 'Sign in with Google',
+          description: geminiCliStatus?.available === true
+            ? 'Use the Gemini CLI OAuth session available on this machine.'
+            : 'Gemini CLI OAuth is not available on this machine right now.',
+          authMode: 'gemini_cli_oauth',
+          action: 'gemini_cli_oauth',
+          disabled: geminiCliStatus?.available !== true,
+          disabledReason: geminiCliStatus?.message || 'Gemini CLI OAuth is unavailable.',
+        },
+      ];
+    }
+    return [
+      {
+        id: 'vertex_access_token',
+        provider: 'vertex',
+        label: 'Add access token',
+        description: 'Paste a Vertex access token and provide the project and region it should use.',
+        authMode: 'access_token',
+        action: 'manual',
+      },
+    ];
+  }, [claudeAuthStatus, geminiCliStatus, localOpenAiAuth, providerForm.provider]);
+  const selectedConnectMethod = useMemo(
+    () => providerConnectMethods.find((item) => item.id === providerConnectMethod) || providerConnectMethods[0] || null,
+    [providerConnectMethod, providerConnectMethods],
   );
   const effectiveModelAliases = useMemo(
     () => (modelAliases.length > 0 ? modelAliases : DEFAULT_MODEL_ALIAS_OPTIONS),
@@ -602,46 +759,36 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     });
   }, [providerOptions]);
 
-  const openOpenAiApiKeyForm = useCallback(() => {
-    resetProviderForm('openai', 'api_key');
-    setProviderForm((prev) => ({
-      ...prev,
-      provider: 'openai',
-      authMode: 'api_key',
-      label: defaultProviderLabel('openai', 'api_key'),
-      model: defaultProviderModel('openai', 'api_key', providerOptions),
-      secret: '',
-    }));
-    setShowProviderForm(true);
-  }, [providerOptions, resetProviderForm]);
-
-  const openGeminiApiKeyForm = useCallback(() => {
-    resetProviderForm('gemini', 'api_key');
-    setProviderForm((prev) => ({
-      ...prev,
-      provider: 'gemini',
-      authMode: 'api_key',
-      label: defaultProviderLabel('gemini', 'api_key'),
-      model: defaultProviderModel('gemini', 'api_key', providerOptions),
-      secret: '',
-    }));
-    setShowProviderForm(true);
-  }, [providerOptions, resetProviderForm]);
-
-  const openVertexCredentialsForm = useCallback(() => {
-    resetProviderForm('vertex', 'access_token');
-    setProviderForm((prev) => ({
-      ...prev,
-      provider: 'vertex',
-      authMode: 'access_token',
-      label: defaultProviderLabel('vertex', 'access_token'),
-      model: defaultProviderModel('vertex', 'access_token', providerOptions),
+  const openProviderFormForMethod = useCallback((nextProvider: ProviderId, nextMethodId?: ProviderConnectMethodId) => {
+    const resolvedMethodId = nextMethodId || defaultConnectMethodForProvider(nextProvider);
+    const nextAuthMode = authModeForConnectMethod(resolvedMethodId);
+    setProviderConnectMethod(resolvedMethodId);
+    setProviderForm({
+      provider: nextProvider,
+      label: defaultProviderLabel(nextProvider, nextAuthMode),
+      authMode: nextAuthMode,
       secret: '',
       projectId: '',
       location: 'us-central1',
-    }));
+      model: defaultProviderModel(nextProvider, nextAuthMode, providerOptions),
+      enableRuntime: true,
+    });
+    setProviderError('');
+    setProviderNotice('');
     setShowProviderForm(true);
-  }, [providerOptions, resetProviderForm]);
+  }, [providerOptions]);
+
+  const openOpenAiApiKeyForm = useCallback(() => {
+    openProviderFormForMethod('openai', 'openai_api_key');
+  }, [openProviderFormForMethod]);
+
+  const openGeminiApiKeyForm = useCallback(() => {
+    openProviderFormForMethod('gemini', 'gemini_api_key');
+  }, [openProviderFormForMethod]);
+
+  const openVertexCredentialsForm = useCallback(() => {
+    openProviderFormForMethod('vertex', 'vertex_access_token');
+  }, [openProviderFormForMethod]);
 
   const loadProviderAccounts = useCallback(async () => {
     setProviderLoading(true);
@@ -824,7 +971,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [controlPlaneFetch, workspaceId]);
 
   const loadLocalOpenAiAuth = useCallback(async () => {
-    if (!connectMode) return;
     try {
       const res = await controlPlaneFetch('/api/control-plane/providers/openai/local-auth/status');
       const body = await res.json().catch(() => null) as LocalOpenAiAuthStatus | null;
@@ -836,7 +982,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     } catch {
       setLocalOpenAiAuth(null);
     }
-  }, [connectMode, controlPlaneFetch]);
+  }, [controlPlaneFetch]);
 
   useEffect(() => {
     void loadProviderAccounts();
@@ -847,6 +993,9 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   }, [loadLocalOpenAiAuth]);
 
   useEffect(() => {
+    if (selectedConnectMethod && !isManualConnectMethod(selectedConnectMethod.action)) {
+      return;
+    }
     const availableAuthMode = selectedProviderAuthModes.find((item) => item.id === providerForm.authMode)?.id
       || selectedProviderOption.defaultAuthMode
       || selectedProviderAuthModes[0]?.id
@@ -861,7 +1010,27 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         model: defaultProviderModel(prev.provider, availableAuthMode, providerOptions),
       }));
     }
-  }, [providerForm.authMode, providerForm.provider, providerOptions, selectedProviderAuthModes, selectedProviderOption.defaultAuthMode]);
+  }, [providerForm.authMode, providerForm.provider, providerOptions, selectedConnectMethod, selectedProviderAuthModes, selectedProviderOption.defaultAuthMode]);
+
+  useEffect(() => {
+    const fallbackMethod = providerConnectMethods[0] || null;
+    if (!fallbackMethod) return;
+    if (!selectedConnectMethod || selectedConnectMethod.provider !== providerForm.provider) {
+      const nextMethod = fallbackMethod;
+      const nextAuthMode = authModeForConnectMethod(nextMethod.id);
+      setProviderConnectMethod(nextMethod.id);
+      setProviderForm((prev) => ({
+        ...prev,
+        provider: nextMethod.provider,
+        authMode: nextAuthMode,
+        label: defaultProviderLabel(nextMethod.provider, nextAuthMode),
+        model: defaultProviderModel(nextMethod.provider, nextAuthMode, providerOptions),
+        secret: '',
+        projectId: '',
+        location: nextMethod.provider === 'vertex' ? 'us-central1' : prev.location,
+      }));
+    }
+  }, [providerConnectMethods, providerForm.provider, providerOptions, selectedConnectMethod]);
 
   useEffect(() => {
     if (!showProviderForm || typeof document === 'undefined') return;
@@ -1347,6 +1516,81 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     workspaceId,
   ]);
 
+  const selectedConnectBusy = (() => {
+    if (!selectedConnectMethod) return false;
+    if (selectedConnectMethod.action === 'manual') {
+      return providerBusy['provider-create'] === 'save';
+    }
+    if (selectedConnectMethod.action === 'openai_browser_oauth') {
+      return providerBusy['openai-codex-oauth'] === 'login';
+    }
+    if (selectedConnectMethod.action === 'openai_local_import') {
+      return providerBusy['openai-local-import'] === 'import';
+    }
+    if (selectedConnectMethod.action === 'anthropic_local_import') {
+      return providerBusy['anthropic-local-import'] === 'import';
+    }
+    if (selectedConnectMethod.action === 'gemini_cli_oauth') {
+      return providerBusy['gemini-cli-oauth'] === 'import';
+    }
+    return false;
+  })();
+
+  const selectedConnectDisabled = Boolean(
+    !selectedConnectMethod
+    || selectedConnectBusy
+    || selectedConnectMethod.disabled,
+  );
+
+  const selectedConnectDisabledReason = selectedConnectMethod?.disabledReason || '';
+
+  const handleConnectSelectedMethod = useCallback(async () => {
+    if (!selectedConnectMethod || selectedConnectMethod.disabled) return;
+    if (selectedConnectMethod.action === 'manual') {
+      await handleSaveProviderCredential();
+      return;
+    }
+    if (selectedConnectMethod.action === 'openai_browser_oauth') {
+      await handleOpenAiCodexOauthSignIn();
+      return;
+    }
+    if (selectedConnectMethod.action === 'openai_local_import') {
+      await handleImportLocalOpenAiAuth();
+      return;
+    }
+    if (selectedConnectMethod.action === 'anthropic_local_import') {
+      await handleImportLocalClaudeAuth();
+      return;
+    }
+    if (selectedConnectMethod.action === 'gemini_cli_oauth') {
+      await handleGeminiCliOauthImport();
+    }
+  }, [
+    handleGeminiCliOauthImport,
+    handleImportLocalClaudeAuth,
+    handleImportLocalOpenAiAuth,
+    handleOpenAiCodexOauthSignIn,
+    handleSaveProviderCredential,
+    selectedConnectMethod,
+  ]);
+
+  const applyProviderConnectMethod = useCallback((method: ProviderConnectMethod) => {
+    const nextAuthMode = authModeForConnectMethod(method.id);
+    setProviderConnectMethod(method.id);
+    setProviderError('');
+    setProviderNotice('');
+    setProviderForm((prev) => ({
+      ...prev,
+      provider: method.provider,
+      authMode: nextAuthMode,
+      label: defaultProviderLabel(method.provider, nextAuthMode),
+      model: defaultProviderModel(method.provider, nextAuthMode, providerOptions),
+      secret: '',
+      projectId: method.provider === 'vertex' ? prev.projectId : '',
+      location: method.provider === 'vertex' ? prev.location || 'us-central1' : prev.location,
+    }));
+  }, [providerOptions]);
+
   return (
     <>
       <section style={{ display: 'grid', gap: 16, overflow: 'visible' }}>
@@ -1376,8 +1620,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 className="orion-btn orion-btn-primary"
                 style={{ minHeight: 38, paddingInline: 14 }}
                 onClick={() => {
-                  resetProviderForm(providerForm.provider, providerForm.authMode);
-                  setShowProviderForm(true);
+                  openProviderFormForMethod(providerForm.provider, providerConnectMethod);
                 }}
               >
                 <Plus size={14} />
@@ -1615,8 +1858,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                               void handleTestProviderCredential(card.credential);
                               return;
                             }
-                            resetProviderForm(card.provider, defaultAuthMode);
-                            setShowProviderForm(true);
+                            openProviderFormForMethod(card.provider);
                             return;
                           }
                           if (card.enabled) {
@@ -1631,16 +1873,14 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                             void handleToggleProviderProfile(card.credential, card.profile);
                             return;
                           }
-                          resetProviderForm(card.provider, defaultAuthMode);
-                          setShowProviderForm(true);
+                          openProviderFormForMethod(card.provider);
                           return;
                         }
                         if (card.credential) {
                           void handleTestProviderCredential(card.credential);
                           return;
                         }
-                        resetProviderForm(card.provider, defaultAuthMode);
-                        setShowProviderForm(true);
+                        openProviderFormForMethod(card.provider);
                       }}
                       disabled={visibleActionBusy}
                     >
@@ -2078,25 +2318,17 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div
               style={{
                 display: 'grid',
-                gap: 16,
-                borderRadius: 20,
+                gap: 18,
+                borderRadius: 16,
                 border: '1px solid var(--border-subtle)',
                 background: 'var(--bg-element)',
-                padding: 22,
+                padding: 20,
               }}
             >
-              <div style={{ display: 'grid', gap: 4 }}>
+              <div style={{ display: 'grid', gap: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                  Account setup
+                  Step 1
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  {connectMode
-                    ? 'Choose a provider, pick the sign-in method you already use, and confirm the default model.'
-                    : 'Choose the provider, choose the auth method, and confirm the default model.'}
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 6 }}>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Provider</span>
                   <select
@@ -2104,18 +2336,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     value={providerForm.provider}
                     onChange={(event) => {
                       const nextProvider = knownProviderId(event.target.value) || 'anthropic';
-                      const nextOption = providerOptionFor(nextProvider, providerOptions);
-                      const nextAuthMode = nextOption.defaultAuthMode || getProviderAuthModes(nextOption)[0]?.id || 'api_key';
-                      setProviderForm((prev) => ({
-                        ...prev,
-                        provider: nextProvider,
-                        authMode: nextAuthMode,
-                        label: defaultProviderLabel(nextProvider, nextAuthMode),
-                        model: defaultProviderModel(nextProvider, nextAuthMode, providerOptions),
-                        secret: '',
-                        projectId: '',
-                        location: nextProvider === 'vertex' ? 'us-central1' : prev.location,
-                      }));
+                      openProviderFormForMethod(nextProvider);
                     }}
                   >
                     {providerOptions.map((option) => (
@@ -2123,205 +2344,135 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                     ))}
                   </select>
                 </label>
-
-                <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Auth method</span>
-                  <select
-                    className="input"
-                    value={providerForm.authMode}
-                    onChange={(event) => {
-                      const nextAuthMode = event.target.value;
-                      setProviderForm((prev) => ({
-                        ...prev,
-                        authMode: nextAuthMode,
-                        label: defaultProviderLabel(prev.provider, nextAuthMode),
-                        model: defaultProviderModel(prev.provider, nextAuthMode, providerOptions),
-                        secret: '',
-                      }));
-                    }}
-                  >
-                    {selectedProviderAuthModes.map((mode) => (
-                      <option key={mode.id} value={mode.id}>{mode.label}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Label</span>
-                  <input
-                    className="input"
-                    value={providerForm.label}
-                    onChange={(event) => setProviderForm((prev) => ({ ...prev, label: event.target.value }))}
-                    placeholder={defaultProviderLabel(providerForm.provider, providerForm.authMode)}
-                  />
-                </label>
-
-                <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Runtime model</span>
-                  <select
-                    className="input"
-                    value={providerForm.model}
-                    onChange={(event) => {
-                      const nextAlias = event.target.value;
-                      const nextAliasOption = effectiveModelAliases.find((item) => item.alias === nextAlias) || null;
-                      if (!nextAliasOption) {
-                        setProviderForm((prev) => ({ ...prev, model: nextAlias }));
-                        return;
-                      }
-                      if (nextAliasOption.provider !== providerForm.provider) {
-                        const nextProvider = nextAliasOption.provider;
-                        const nextOption = providerOptionFor(nextProvider, providerOptions);
-                        const nextAuthMode = nextOption.defaultAuthMode || getProviderAuthModes(nextOption)[0]?.id || 'api_key';
-                        setProviderForm((prev) => ({
-                          ...prev,
-                          provider: nextProvider,
-                          authMode: nextAuthMode,
-                          label: prev.label === defaultProviderLabel(prev.provider, prev.authMode)
-                            ? defaultProviderLabel(nextProvider, nextAuthMode)
-                            : prev.label,
-                          model: nextAlias,
-                          secret: '',
-                          projectId: '',
-                          location: nextProvider === 'vertex' ? 'us-central1' : prev.location,
-                        }));
-                        return;
-                      }
-                      setProviderForm((prev) => ({ ...prev, model: nextAlias }));
-                    }}
-                  >
-                    {groupedModelAliases.map((group) => (
-                      <optgroup key={group.provider} label={group.label}>
-                        {group.items.map((item) => (
-                          <option key={item.alias} value={item.alias}>{item.alias}</option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </label>
-
-                {providerForm.provider === 'vertex' ? (
-                  <>
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
-                      <input
-                        className="input"
-                        value={providerForm.projectId}
-                        onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
-                        placeholder="my-gcp-project"
-                      />
-                    </label>
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Region</span>
-                      <input
-                        className="input"
-                        value={providerForm.location}
-                        onChange={(event) => setProviderForm((prev) => ({ ...prev, location: event.target.value }))}
-                        placeholder="us-central1"
-                      />
-                    </label>
-                  </>
-                ) : null}
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gap: 6,
-                  borderRadius: 16,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-surface)',
-                  padding: '14px 16px',
-                }}
-              >
-                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                  Connection guidance
+              <div style={{ display: 'grid', gap: 10 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    Step 2
+                  </div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                    Pick how to connect {providerLabel(providerForm.provider, providerOptions)}.
+                  </div>
                 </div>
-                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  {providerSetupGuidance(providerForm.provider, providerForm.authMode, selectedProviderOption)}
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {providerConnectMethods.map((method) => {
+                    const isSelected = selectedConnectMethod?.id === method.id;
+                    return (
+                      <button
+                        key={method.id}
+                        type="button"
+                        className="orion-btn orion-btn-ghost"
+                        style={{
+                          minHeight: 0,
+                          width: '100%',
+                          justifyContent: 'flex-start',
+                          alignItems: 'flex-start',
+                          padding: '14px 16px',
+                          borderRadius: 8,
+                          border: isSelected ? '1px solid var(--accent-border)' : '1px solid var(--border-subtle)',
+                          background: isSelected ? 'var(--accent-soft)' : 'var(--bg-surface)',
+                          color: 'var(--text-primary)',
+                        }}
+                        onClick={() => applyProviderConnectMethod(method)}
+                        disabled={method.disabled}
+                        title={method.disabledReason || undefined}
+                      >
+                        <span style={{ display: 'grid', gap: 4, textAlign: 'left' }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{method.label}</span>
+                          <span style={{ fontSize: 12.5, lineHeight: 1.55, color: method.disabled ? 'var(--warning-fg)' : 'var(--text-secondary)' }}>
+                            {method.disabled && method.disabledReason ? method.disabledReason : method.description}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {selectedProviderAuthModes.find((item) => item.id === providerForm.authMode)?.secretRequired === false ? (
-                <div
-                  style={{
-                    display: 'grid',
-                    gap: 12,
-                    borderRadius: 14,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-surface)',
-                    padding: '14px 16px',
-                  }}
-                >
-                  <div style={{ display: 'grid', gap: 4 }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                      Claude login
-                    </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                      No API key is needed. This account uses the local Claude subscription already signed into the `claude` CLI on this machine.
-                    </div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
+                    Step 3
                   </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span className="orion-chip" style={claudeAuthTone(Boolean(claudeAuthStatus?.loggedIn))}>
-                      {claudeAuthStatus?.loggedIn ? 'Signed in' : 'Not signed in'}
-                    </span>
-                    {claudeAuthStatus?.authMethod ? <span className="orion-chip">Method {claudeAuthStatus.authMethod}</span> : null}
-                    {claudeAuthStatus?.apiProvider ? <span className="orion-chip">Provider {claudeAuthStatus.apiProvider}</span> : null}
-                  </div>
-                  <div style={{ fontSize: 12.5, color: claudeAuthStatus?.loggedIn ? 'var(--success-fg)' : 'var(--text-secondary)', lineHeight: 1.55 }}>
-                    {claudeAuthStatus?.message || 'Check Claude login status before saving this account.'}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 36, paddingInline: 14 }}
-                      onClick={() => void refreshClaudeAuthStatus()}
-                      disabled={providerBusy['claude-auth'] === 'status'}
-                    >
-                      <RefreshCw size={13} />
-                      {providerBusy['claude-auth'] === 'status' ? 'Checking…' : 'Check login'}
-                    </button>
-                    <button
-                      className="orion-btn orion-btn-primary"
-                      style={{ minHeight: 36, paddingInline: 14 }}
-                      onClick={() => void handleClaudeAuthLogin()}
-                      disabled={providerBusy['claude-auth'] === 'login'}
-                    >
-                      <Plus size={13} />
-                      {providerBusy['claude-auth'] === 'login' ? 'Starting…' : 'Sign in to Claude'}
-                    </button>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                    {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action)
+                      ? 'Enter the credential details needed for this connection.'
+                      : 'Review the selected connection method, then connect.'}
                   </div>
                 </div>
-              ) : (
-                <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {providerForm.provider === 'vertex' ? 'Access token' : providerForm.provider === 'openai' ? 'API key or token' : 'Secret'}
-                  </span>
-                  <input
-                    className="input"
-                    type="password"
-                    value={providerForm.secret}
-                    onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
-                    placeholder={
-                      providerForm.provider === 'openai'
-                        ? 'sk-...'
-                        : providerForm.provider === 'anthropic'
-                          ? 'sk-ant-...'
-                          : providerForm.provider === 'gemini'
-                            ? 'AIza...'
-                            : 'Access token'
-                    }
-                  />
-                </label>
-              )}
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={providerForm.enableRuntime}
-                  onChange={(event) => setProviderForm((prev) => ({ ...prev, enableRuntime: event.target.checked }))}
-                />
-                Enable this account for runtime immediately
-              </label>
+                {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) ? (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    {providerForm.provider === 'vertex' ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
+                          <input
+                            className="input"
+                            value={providerForm.projectId}
+                            onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
+                            placeholder="my-gcp-project"
+                          />
+                        </label>
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Region</span>
+                          <input
+                            className="input"
+                            value={providerForm.location}
+                            onChange={(event) => setProviderForm((prev) => ({ ...prev, location: event.target.value }))}
+                            placeholder="us-central1"
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
+                      </span>
+                      <input
+                        className="input"
+                        type="password"
+                        value={providerForm.secret}
+                        onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
+                        placeholder={
+                          providerForm.provider === 'openai'
+                            ? 'sk-...'
+                            : providerForm.provider === 'anthropic'
+                              ? 'sk-ant-...'
+                              : providerForm.provider === 'gemini'
+                                ? 'AIza...'
+                                : 'Access token'
+                        }
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 6,
+                      borderRadius: 8,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-surface)',
+                      padding: '14px 16px',
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {selectedConnectMethod?.label || 'Connect method'}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                      {selectedConnectMethod?.description || 'Pick how to connect this provider.'}
+                    </div>
+                    {selectedConnectDisabledReason ? (
+                      <div style={{ fontSize: 12.5, color: 'var(--warning-fg)', lineHeight: 1.55 }}>
+                        {selectedConnectDisabledReason}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
             </div>
 
             {providerError ? (
@@ -2343,7 +2494,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div
               style={{
                 display: 'flex',
-                justifyContent: 'space-between',
+                justifyContent: 'flex-end',
                 gap: 12,
                 alignItems: 'center',
                 borderTop: '1px solid var(--border-subtle)',
@@ -2351,11 +2502,6 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 flexWrap: 'wrap',
               }}
             >
-              <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                {connectMode
-                  ? 'Connect a provider here, then return to chat.'
-                  : 'Save the account here, then continue managing runtime order from Integrations.'}
-              </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button
                   className="orion-btn orion-btn-ghost"
@@ -2367,13 +2513,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 <button
                   className="orion-btn orion-btn-primary"
                   style={{ minHeight: 40, paddingInline: 16 }}
-                  onClick={() => void handleSaveProviderCredential()}
-                  disabled={providerBusy['provider-create'] === 'save'}
+                  onClick={() => void handleConnectSelectedMethod()}
+                  disabled={selectedConnectDisabled}
+                  title={selectedConnectDisabledReason || undefined}
                 >
                   <Plus size={14} />
-                  {providerBusy['provider-create'] === 'save'
-                    ? (connectMode ? 'Connecting…' : 'Saving…')
-                    : (connectMode ? 'Connect provider' : 'Save account')}
+                  {selectedConnectBusy ? 'Connecting…' : 'Connect'}
                 </button>
               </div>
             </div>

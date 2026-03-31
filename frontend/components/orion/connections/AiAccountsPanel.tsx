@@ -197,6 +197,16 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },
+  anthropic: {
+    assetSrc: '/provider-logos/anthropic-icon.ico',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
+  claude_code_cli: {
+    assetSrc: '/provider-logos/anthropic-icon.ico',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
   gemini: {
     assetSrc: '/provider-logos/gemini.svg',
     bg: PROVIDER_ASSET_TILE_BG,
@@ -208,7 +218,7 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     border: PROVIDER_ASSET_TILE_BORDER,
   },
   mistral: {
-    assetSrc: '/provider-logos/mistral.svg',
+    assetSrc: '/provider-logos/mistral-icon.ico',
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },

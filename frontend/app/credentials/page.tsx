@@ -198,7 +198,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   x_twitter: {
-    assetSrc: '/connector-logos/x.png',
+    assetSrc: '/connector-logos/x.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -208,7 +208,7 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   tiktok_business: {
-    assetSrc: '/connector-logos/tiktok.png',
+    assetSrc: '/connector-logos/tiktok.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },

@@ -212,6 +212,11 @@ const PROVIDER_VISUALS: Partial<Record<ProviderId, ProviderVisual>> = {
     bg: PROVIDER_ASSET_TILE_BG,
     border: PROVIDER_ASSET_TILE_BORDER,
   },
+  deepseek: {
+    assetSrc: '/provider-logos/deepseek.svg',
+    bg: PROVIDER_ASSET_TILE_BG,
+    border: PROVIDER_ASSET_TILE_BORDER,
+  },
   vertex: {
     assetSrc: '/provider-logos/vertex.svg',
     bg: PROVIDER_ASSET_TILE_BG,

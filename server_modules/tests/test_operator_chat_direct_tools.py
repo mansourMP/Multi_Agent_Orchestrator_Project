@@ -275,6 +275,87 @@ class OperatorChatDirectToolTests(unittest.TestCase):
         self.assertIn("telegram_bot.send_message", payload["reply"])
         execute_tool_mock.assert_called_once()
 
+    @patch("operator_chat_direct_tools_under_test._start_direct_chat_run_handoff")
+    @patch("operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch("operator_chat_direct_tools_under_test._preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_direct_tools_under_test._supports_direct_message_native_chat", return_value=True)
+    @patch("operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback")
+    @patch("server_modules.runs_execution._workflow_execute_local_tool")
+    def test_simple_local_file_request_stays_on_direct_tool_path(
+        self,
+        execute_local_tool_mock,
+        stream_mock,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+        _resolve_workspace_tool_capabilities,
+        start_run_mock,
+    ):
+        stream_mock.side_effect = [
+            iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "",
+                        "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                        "provider": "codex_cli",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "codex_cli",
+                        "error": "",
+                        "tool_calls": [
+                            {
+                                "name": "file__read",
+                                "arguments": "{\"path\":\"/tmp/README.md\"}",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "I read the file successfully.",
+                        "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                        "provider": "codex_cli",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "codex_cli",
+                        "error": "",
+                    }
+                ]
+            ),
+        ]
+        execute_local_tool_mock.return_value = {
+            "summary": "Read local file: /tmp/README.md",
+            "result_data": {
+                "tool_variant": "file",
+                "child_result": {
+                    "outputs": {
+                        "actions": [
+                            {
+                                "tool": "read_write_files",
+                                "mode": "read",
+                                "path": "/tmp/README.md",
+                                "content_preview": "Example file contents",
+                            }
+                        ]
+                    }
+                },
+            },
+        }
+
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Open file /tmp/README.md",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["reply"], "I read the file successfully.")
+        execute_local_tool_mock.assert_called_once()
+        start_run_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

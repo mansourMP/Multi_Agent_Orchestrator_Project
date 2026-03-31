@@ -573,6 +573,52 @@ class OperatorChatTests(unittest.TestCase):
         self.assertFalse(payload["context_used"]["run_created"])
         start_run_mock.assert_not_called()
 
+    @patch("operator_chat_under_test._direct_chat_run_snapshot")
+    @patch("operator_chat_under_test._start_direct_chat_run_handoff")
+    @patch("operator_chat_under_test._preferred_provider", return_value=("codex_cli", {}))
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_complex_local_task_prefers_durable_run_handoff(
+        self,
+        _capabilities,
+        _preferred_provider,
+        start_run_mock,
+        snapshot_mock,
+    ):
+        start_run_mock.return_value = {
+            "run_id": "run-handoff-local-1",
+            "route": {"selected": "local_companion"},
+            "status": "queued_local",
+        }
+        snapshot_mock.return_value = (
+            {"status": "completed", "result": "Finished the local agent task.", "events": []},
+            {
+                "run_id": "run-handoff-local-1",
+                "status": "completed",
+                "result_summary": "Finished the local agent task.",
+                "effective_provider": "codex_cli",
+                "effective_model": "gpt-5.4",
+                "fallback_used": False,
+                "usage_masked": {},
+            },
+        )
+
+        events = list(
+            stream_direct_operator_reply(
+                message="Open file /tmp/README.md, then inspect the logs and prepare next steps.",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": True, "runtime_ok": True, "connection_mode": "local_companion"},
+            )
+        )
+
+        self.assertEqual(events[0]["type"], "step")
+        self.assertEqual(events[0]["label"], "Starting durable run")
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["payload"]["reply"], "Finished the local agent task.")
+        self.assertTrue(events[-1]["payload"]["context_used"]["run_created"])
+        start_run_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

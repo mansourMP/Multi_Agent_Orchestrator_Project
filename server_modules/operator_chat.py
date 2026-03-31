@@ -99,6 +99,26 @@ LOCAL_SCREENSHOT_KEYWORDS = (
     "capture the screen",
     "take a screenshot",
 )
+COMPLEX_TASK_SEQUENCE_MARKERS = (
+    " and then ",
+    " then ",
+    " after that ",
+    " afterwards ",
+    " next ",
+    " finally ",
+    " step by step",
+    " end to end",
+)
+COMPLEX_TASK_OUTCOME_MARKERS = (
+    "next steps",
+    "plan",
+    "report",
+    "investigate",
+    "debug",
+    "fix",
+    "compare",
+    "audit",
+)
 DIRECT_RUN_OPENERS = (
     "summarize",
     "check",
@@ -496,6 +516,69 @@ def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optiona
             "mode": "answer_with_action",
         }
     return None
+
+
+def _action_marker_count(compact_message: str) -> int:
+    if not compact_message:
+        return 0
+    count = 0
+    for marker in EXECUTION_MARKERS:
+        if re.search(rf"\b{re.escape(marker)}\b", compact_message):
+            count += 1
+    return count
+
+
+def _path_like_reference_count(message: str) -> int:
+    if not message:
+        return 0
+    return len(
+        re.findall(
+            r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])\S+",
+            str(message),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    if not _can_auto_start_run_handoff(availability):
+        return False
+
+    local_file = _message_requests_local_file_tool(message)
+    local_shell = _message_requests_local_shell_tool(message)
+    local_screenshot = _message_requests_local_screenshot_tool(message)
+    local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot) if flag)
+    if local_request_count <= 0:
+        return False
+
+    sequence_requested = any(marker in compact for marker in COMPLEX_TASK_SEQUENCE_MARKERS)
+    outcome_requested = any(marker in compact for marker in COMPLEX_TASK_OUTCOME_MARKERS)
+    path_reference_count = _path_like_reference_count(message)
+    action_count = _action_marker_count(compact)
+    mixes_connector_work = _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) or _mentions_any(compact, TELEGRAM_KEYWORDS)
+
+    if local_request_count >= 2:
+        return True
+    if path_reference_count >= 2:
+        return True
+    if mixes_connector_work:
+        return True
+    if sequence_requested and (action_count >= 2 or len(compact) >= 110):
+        return True
+    if outcome_requested and (sequence_requested or action_count >= 2):
+        return True
+    return False
+
+
+def _durable_run_preferred_response(message: str) -> Dict[str, Any]:
+    return {
+        "reply": "I can run that here.",
+        "actions": [_run_action(message)],
+        "mode": "answer_with_action",
+    }
 
 
 def _run_handoff_execution_target(availability: Dict[str, Any]) -> str:
@@ -1953,6 +2036,7 @@ def build_direct_operator_reply(
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
             provider = "codex_cli"
             direct_chat_credentials = codex_credentials
+    prefer_durable_run_handoff = _prefer_durable_run_handoff(normalized_message, availability_payload)
     allow_direct_tool_calls = _message_can_use_direct_connector_tools(
         normalized_message,
         provider=provider,
@@ -1962,9 +2046,13 @@ def build_direct_operator_reply(
         provider=provider,
         tools=tools,
     )
+    if prefer_durable_run_handoff:
+        allow_direct_tool_calls = False
     fallback_reason = None
     if not allow_direct_tool_calls:
         preview = _preview_run_response(normalized_message, availability_payload)
+        if preview is None and prefer_durable_run_handoff:
+            preview = _durable_run_preferred_response(normalized_message)
         if preview is not None:
             preview_actions = preview.get("actions") if isinstance(preview.get("actions"), list) else []
             should_auto_start_run = any(

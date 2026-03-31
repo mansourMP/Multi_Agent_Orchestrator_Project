@@ -416,6 +416,24 @@ function providerAccentStyles(provider: ProviderId): { border: string; soft: str
   return { border: 'var(--tone-accent)', soft: 'color-mix(in srgb, var(--tone-accent) 14%, transparent)', tint: 'color-mix(in srgb, var(--tone-accent) 5%, var(--bg-surface))' };
 }
 
+function providerMonogram(provider: ProviderId): string {
+  if (provider === 'openai') return 'OA';
+  if (provider === 'anthropic') return 'AN';
+  if (provider === 'gemini') return 'GM';
+  return 'VX';
+}
+
+function simpleProviderAuthLabel(provider: ProviderId): string {
+  return provider === 'vertex' ? 'Add access token' : 'Add API key';
+}
+
+function simpleProviderSecretPlaceholder(provider: ProviderId): string {
+  if (provider === 'openai') return 'sk-...';
+  if (provider === 'anthropic') return 'sk-ant-...';
+  if (provider === 'gemini') return 'AIza...';
+  return 'Access token';
+}
+
 function summarizeProviderCardError(message: string | null): string | null {
   const normalized = String(message || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
@@ -728,6 +746,17 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     () => providerCards.find((card) => card.enabled && !String(card.errorMessage || '').trim()) || null,
     [providerCards],
   );
+  const connectedAccounts = useMemo(() => {
+    return providerCredentials.map((credential) => {
+      const linkedProfiles = [...(providerProfilesByCredential.get(credential.id) || [])].sort(sortProviderProfiles);
+      const primaryProfile = linkedProfiles.find((profile) => profile.enabled && profile.health !== 'cooldown') || linkedProfiles[0] || null;
+      return {
+        credential,
+        primaryProfile,
+        enabled: linkedProfiles.some((profile) => profile.enabled),
+      };
+    });
+  }, [providerCredentials, providerProfilesByCredential]);
 
   const connectMode = mode === 'connect';
 
@@ -1603,11 +1632,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           }}
         >
           <div style={{ display: 'grid', gap: 3 }}>
-            <div className="orion-panel-title">{connectMode ? 'Connect a provider' : 'AI accounts'}</div>
+            <div className="orion-panel-title">{connectMode ? 'Connect AI account' : 'AI accounts'}</div>
             <div className="orion-panel-copy">
               {connectMode
-                ? 'Choose one provider and connect it. Use the details toggle only when you need account metadata or alternate setup paths.'
-                : 'Connect direct provider accounts here, then decide which one the runtime should use by default.'}
+                ? 'Connect one provider account, then return to your setup flow or chat.'
+                : 'Manage the provider accounts connected to this workspace.'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -1615,30 +1644,18 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               <RefreshCw size={14} />
               Refresh
             </button>
-            {!connectMode ? (
-              <button
-                className="orion-btn orion-btn-primary"
-                style={{ minHeight: 38, paddingInline: 14 }}
-                onClick={() => {
-                  openProviderFormForMethod(providerForm.provider, providerConnectMethod);
-                }}
-              >
-                <Plus size={14} />
-                Add AI account
-              </button>
-            ) : null}
+            <button
+              className="orion-btn orion-btn-primary"
+              style={{ minHeight: 38, paddingInline: 14 }}
+              onClick={() => {
+                openProviderFormForMethod(providerForm.provider, providerConnectMethod);
+              }}
+            >
+              <Plus size={14} />
+              Add account
+            </button>
           </div>
         </div>
-
-        {!connectMode ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span className="orion-chip">{providerCredentials.length} saved</span>
-            <span className="orion-chip">{providerHealth.total} runtime profiles</span>
-            {providerHealth.healthy ? <span className="orion-chip">{providerHealth.healthy} healthy</span> : null}
-            {providerHealth.cooldown ? <span className="orion-chip">{providerHealth.cooldown} cooling down</span> : null}
-            {providerHealth.disabled ? <span className="orion-chip">{providerHealth.disabled} disabled</span> : null}
-          </div>
-        ) : null}
 
         {providerError ? (
           <div
@@ -1656,7 +1673,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           </div>
         ) : null}
 
-        {providerNotice && !hasProviderCardError ? (
+        {providerNotice ? (
           <div
             style={{
               borderRadius: 12,
@@ -1672,30 +1689,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           </div>
         ) : null}
 
-        {connectMode && hasProviderCardError ? (
-          <div
-            style={{
-              display: 'grid',
-              gap: 8,
-              borderRadius: 12,
-              border: '1px solid var(--error-border)',
-              background: 'var(--error-bg)',
-              color: 'var(--error-fg)',
-              padding: '11px 13px',
-            }}
-          >
-            <div style={{ display: 'grid', gap: 3 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>
-                AI provider needs attention
-              </div>
-              <div style={{ fontSize: 12, lineHeight: 1.5 }}>
-                Fix the provider error below before using chat.
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {connectMode && providerCredentials.length > 0 && readyProviderCard && !hasProviderCardError ? (
+        {connectMode && providerCredentials.length > 0 && readyProviderCard ? (
           <div
             style={{
               display: 'grid',
@@ -1734,534 +1728,108 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div className="orion-empty-title">Loading AI accounts</div>
             <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
           </section>
-        ) : (
-          <div style={{ display: 'grid', gap: 12, overflow: 'visible' }}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 12,
-                alignItems: 'stretch',
-                overflow: 'visible',
+        ) : connectedAccounts.length === 0 ? (
+          <section className="orion-empty" style={{ minHeight: 220, gap: 12 }}>
+            <div className="orion-empty-title">No AI accounts connected yet</div>
+            <div className="orion-empty-copy">
+              Add one provider account to start using AI inside Empyralis.
+            </div>
+            <button
+              className="orion-btn orion-btn-primary"
+              style={{ minHeight: 38, paddingInline: 14 }}
+              onClick={() => {
+                openProviderFormForMethod(providerForm.provider, providerConnectMethod);
               }}
             >
-              {providerCards.map((card) => {
-                const option = providerOptionFor(card.provider, providerOptions);
-                const defaultAuthMode = option.defaultAuthMode || getProviderAuthModes(option)[0]?.id || 'api_key';
-                const busyAction = card.credential ? providerBusy[card.credential.id] || '' : '';
-                const profileBusyAction = card.profile ? providerBusy[card.profile.id] || '' : '';
-                const accent = providerAccentStyles(card.provider);
-                const detailsOpen = Boolean(providerDetailsOpen[card.provider]);
-                const runtimeModelLabel = String(card.profile?.model || '').trim();
-                const catalogDefaultModel = String(option.defaultModel || '').trim();
-                const topCardError = summarizeProviderCardError(card.errorMessage);
-                const hasActiveError = Boolean(topCardError);
-                const openAiNeedsApiKey = card.provider === 'openai' && !card.credential && !openAiHasApiKeyCredential;
-                const showOpenAiApiKeyRecovery = card.provider === 'openai' && (openAiNeedsApiKey || hasActiveError);
-                const showGeminiApiKeyAction = card.provider === 'gemini';
-                const showGeminiCliOauthAction = card.provider === 'gemini' && geminiCliStatus?.available === true;
-                const showVertexCredentialsAction = card.provider === 'vertex';
-                const visibleActionBusy = connectMode
-                  ? openAiNeedsApiKey
-                    ? false
-                    : hasActiveError
-                    ? busyAction === 'test'
-                    : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
-                      ? providerBusy['openai-local-import'] === 'import'
-                      : busyAction === 'enable-runtime'
-                  : busyAction === 'test';
-                const visibleBadgeLabel = hasActiveError ? 'Error' : card.enabled ? 'Enabled' : 'Disabled';
-                const visibleBadgeStyle = hasActiveError
-                  ? { color: 'var(--error-fg)', border: '1px solid var(--error-border)', background: 'var(--error-bg)' }
-                  : card.enabled
-                    ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
-                    : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
-                const visibleActionLabel = connectMode
-                  ? openAiNeedsApiKey
-                    ? 'Add API key'
-                    : hasActiveError
-                    ? card.credential
-                      ? 'Retest'
-                      : 'Reconnect'
-                    : card.enabled
-                      ? returningToSetup
-                        ? 'Continue setup'
-                        : 'Use account'
-                      : card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable
-                        ? 'Use this Mac'
-                        : card.credential
-                          ? 'Enable'
-                          : 'Connect'
-                  : card.credential
-                    ? 'Test'
-                    : 'Add account';
+              <Plus size={14} />
+              Add account
+            </button>
+          </section>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {connectedAccounts.map(({ credential, primaryProfile, enabled }) => {
+              const accent = providerAccentStyles(credential.provider);
+              const busyAction = providerBusy[credential.id] || '';
+              const statusTone = enabled
+                ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
+                : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
 
-                return (
-                  <article
-                    key={card.provider}
-                    style={{
-                      display: 'grid',
-                      gap: 10,
-                      overflow: 'visible',
-                      height: '100%',
-                      borderRadius: 0,
-                      border: '1px solid var(--border-subtle)',
-                      borderLeft: `4px solid ${accent.border}`,
-                      background: accent.tint,
-                      padding: '14px',
-                    }}
-                  >
-                    {topCardError ? (
+              return (
+                <div
+                  key={credential.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: 12,
+                    alignItems: 'center',
+                    borderRadius: 0,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-surface)',
+                    padding: '14px 16px',
+                  }}
+                >
+                  <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
                       <div
+                        aria-hidden
                         style={{
-                          borderRadius: 10,
-                          border: '1px solid var(--error-border)',
-                          background: 'var(--error-bg)',
-                          color: 'var(--error-fg)',
-                          padding: '8px 10px',
-                          fontSize: 11.5,
-                          lineHeight: 1.45,
-                        }}
-                      >
-                        {topCardError}
-                      </div>
-                    ) : null}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ display: 'grid', gap: 2 }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{card.label}</div>
-                        <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
-                          {runtimeModelLabel
-                            ? `Runtime model: ${runtimeModelLabel}`
-                            : catalogDefaultModel
-                              ? `Catalog default: ${catalogDefaultModel}`
-                              : 'No runtime model selected'}
-                        </div>
-                      </div>
-                      <span
-                        className="orion-chip"
-                        style={visibleBadgeStyle}
-                      >
-                        {visibleBadgeLabel}
-                      </span>
-                    </div>
-                    <button
-                      className="orion-btn orion-btn-primary"
-                      style={{ minHeight: 34, paddingInline: 14, width: 'fit-content' }}
-                      onClick={() => {
-                        if (connectMode) {
-                          if (openAiNeedsApiKey) {
-                            openOpenAiApiKeyForm();
-                            return;
-                          }
-                          if (hasActiveError) {
-                            if (card.credential) {
-                              void handleTestProviderCredential(card.credential);
-                              return;
-                            }
-                            openProviderFormForMethod(card.provider);
-                            return;
-                          }
-                          if (card.enabled) {
-                            router.push(returnTo);
-                            return;
-                          }
-                          if (card.provider === 'openai' && !card.credential && localOpenAiAuth?.importable) {
-                            void handleImportLocalOpenAiAuth();
-                            return;
-                          }
-                          if (card.credential) {
-                            void handleToggleProviderProfile(card.credential, card.profile);
-                            return;
-                          }
-                          openProviderFormForMethod(card.provider);
-                          return;
-                        }
-                        if (card.credential) {
-                          void handleTestProviderCredential(card.credential);
-                          return;
-                        }
-                        openProviderFormForMethod(card.provider);
-                      }}
-                      disabled={visibleActionBusy}
-                    >
-                      {visibleActionBusy ? (connectMode ? 'Working…' : 'Testing…') : visibleActionLabel}
-                    </button>
-                    {card.provider === 'openai' ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {showOpenAiApiKeyRecovery && visibleActionLabel !== 'Add API key' ? (
-                          <button
-                            type="button"
-                            className="orion-btn orion-btn-primary"
-                            style={{ minHeight: 30, paddingInline: 10 }}
-                            onClick={openOpenAiApiKeyForm}
-                          >
-                            Add API key
-                          </button>
-                        ) : null}
-                          <button
-                            type="button"
-                            className="orion-btn orion-btn-ghost"
-                            style={secondaryProviderActionButtonStyle}
-                            disabled={providerBusy['openai-codex-oauth'] === 'login'}
-                            onClick={() => void handleOpenAiCodexOauthSignIn()}
-                        >
-                          {providerBusy['openai-codex-oauth'] === 'login'
-                            ? 'Opening OpenAI…'
-                            : 'Sign in with OpenAI'}
-                        </button>
-                          <button
-                            type="button"
-                            className="orion-btn orion-btn-ghost"
-                            style={secondaryProviderActionButtonStyle}
-                            disabled={!localOpenAiAuth?.importable || providerBusy['openai-local-import'] === 'import'}
-                            title={!localOpenAiAuth?.importable ? 'Import requires a saved local OpenAI / Codex session on this Mac.' : undefined}
-                            onClick={() => void handleImportLocalOpenAiAuth()}
-                          >
-                          {providerBusy['openai-local-import'] === 'import' ? 'Importing…' : 'Import local session'}
-                        </button>
-                      </div>
-                    ) : null}
-                    {card.provider === 'anthropic' && claudeAuthStatus?.available ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={secondaryProviderActionButtonStyle}
-                          disabled={providerBusy['anthropic-local-import'] === 'import' || claudeAuthStatus.loggedIn !== true}
-                          title={claudeAuthStatus.loggedIn === true ? undefined : 'Sign in to Claude on this machine first.'}
-                          onClick={() => void handleImportLocalClaudeAuth()}
-                        >
-                          {providerBusy['anthropic-local-import'] === 'import' ? 'Importing…' : 'Use local Claude session'}
-                        </button>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={secondaryProviderActionButtonStyle}
-                          disabled={providerBusy['claude-auth'] === 'login'}
-                          onClick={() => void handleClaudeAuthLogin()}
-                        >
-                          {providerBusy['claude-auth'] === 'login' ? 'Signing in…' : 'Sign in to Claude'}
-                        </button>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={secondaryProviderActionButtonStyle}
-                          disabled={providerBusy['claude-auth'] === 'status'}
-                          onClick={() => void refreshClaudeAuthStatus()}
-                        >
-                          {providerBusy['claude-auth'] === 'status' ? 'Refreshing…' : 'Refresh Claude status'}
-                        </button>
-                      </div>
-                    ) : null}
-                    {showGeminiApiKeyAction ? (
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={secondaryProviderActionButtonStyle}
-                          onClick={openGeminiApiKeyForm}
-                        >
-                          Add API key
-                        </button>
-                          {showGeminiCliOauthAction ? (
-                            <button
-                              type="button"
-                              className="orion-btn orion-btn-ghost"
-                              style={secondaryProviderActionButtonStyle}
-                              disabled={providerBusy['gemini-cli-oauth'] === 'import'}
-                              onClick={() => void handleGeminiCliOauthImport()}
-                            >
-                              {providerBusy['gemini-cli-oauth'] === 'import' ? 'Opening Google…' : 'Sign in with Google (Gemini CLI)'}
-                            </button>
-                          ) : null}
-                        </div>
-                        {showGeminiCliOauthAction ? (
-                          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: 'var(--warning-fg)' }}>
-                            Unofficial integration. Use at your own risk.
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {showVertexCredentialsAction ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="orion-btn orion-btn-ghost"
-                          style={secondaryProviderActionButtonStyle}
-                          onClick={openVertexCredentialsForm}
-                        >
-                          Add credentials
-                        </button>
-                      </div>
-                    ) : null}
-                    {!connectMode && card.credential ? (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 30, paddingInline: 10 }}
-                          onClick={() => void handleToggleProviderProfile(card.credential!, card.profile)}
-                          disabled={Boolean(busyAction)}
-                        >
-                          {card.profile?.enabled ? <PauseCircle size={13} /> : <PlayCircle size={13} />}
-                          {busyAction === 'disable-runtime'
-                            ? 'Disabling…'
-                            : busyAction === 'enable-runtime'
-                              ? 'Enabling…'
-                              : card.profile?.enabled
-                                ? 'Disable runtime'
-                                : card.profile
-                                  ? 'Enable runtime'
-                                  : 'Use in runtime'}
-                        </button>
-                        {card.profile && !card.isDefaultProfile ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 30, paddingInline: 10 }}
-                            onClick={() => void handlePromoteProviderProfile(card.profile!)}
-                            disabled={profileBusyAction === 'make-default'}
-                          >
-                            {profileBusyAction === 'make-default' ? 'Setting default…' : 'Make default'}
-                          </button>
-                        ) : null}
-                        {card.profile ? (
-                          <button
-                            className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 30, paddingInline: 10 }}
-                            onClick={() => void handleDeleteProviderProfile(card.profile!)}
-                            disabled={profileBusyAction === 'remove-profile'}
-                          >
-                            <X size={13} />
-                            {profileBusyAction === 'remove-profile' ? 'Removing profile…' : 'Remove profile'}
-                          </button>
-                        ) : null}
-                        <button
-                          className="orion-btn orion-btn-danger"
-                          style={{ minHeight: 30, paddingInline: 10 }}
-                          onClick={() => void handleRemoveProviderCredential(card.credential!)}
-                          disabled={busyAction === 'remove'}
-                        >
-                          <Trash2 size={13} />
-                          {busyAction === 'remove' ? 'Removing…' : 'Remove account'}
-                        </button>
-                      </div>
-                    ) : null}
-                    <section
-                      style={{
-                        display: 'grid',
-                        alignContent: 'start',
-                        gap: 10,
-                        minHeight: 136,
-                        borderRadius: 12,
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-element)',
-                        padding: '10px 12px',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="orion-btn orion-btn-ghost"
-                        style={{
-                          minHeight: 28,
-                          justifyContent: 'space-between',
-                          paddingInline: 0,
-                          color: 'var(--text-secondary)',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          background: 'transparent',
-                        }}
-                        onClick={() => {
-                          setProviderDetailsOpen((prev) => ({
-                            ...prev,
-                            [card.provider]: !prev[card.provider],
-                          }));
-                        }}
-                      >
-                        <span>{detailsOpen ? 'Hide details' : 'Details'}</span>
-                        <ChevronDown
-                          size={14}
-                          style={{
-                            transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                            transition: 'transform 160ms ease',
-                          }}
-                        />
-                      </button>
-                      <div
-                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 6,
+                          border: `1px solid ${accent.border}`,
+                          background: accent.soft,
+                          color: 'var(--text-primary)',
                           display: 'grid',
-                          gap: 8,
-                          alignContent: 'start',
-                          visibility: detailsOpen ? 'visible' : 'hidden',
-                          opacity: detailsOpen ? 1 : 0,
-                          pointerEvents: detailsOpen ? 'auto' : 'none',
-                          transition: 'opacity 160ms ease',
+                          placeItems: 'center',
+                          fontSize: 11,
+                          fontWeight: 800,
+                          letterSpacing: '0.04em',
+                          flexShrink: 0,
                         }}
                       >
-                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 6 }}>
-                          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                            Account: {card.credential?.label || 'Not connected'}
-                          </div>
-                          <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                            Auth: {card.credential ? providerAuthModeLabel(card.provider, card.credential.authMode, providerOptions) : providerSetupGuidance(card.provider, defaultAuthMode, option)}
-                          </div>
-                          {runtimeModelLabel ? (
-                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                              Runtime model: {runtimeModelLabel}
-                            </div>
-                          ) : null}
-                          {typeof card.order === 'number' ? (
-                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                              Order: #{card.order}
-                            </div>
-                          ) : null}
+                        {providerMonogram(credential.provider)}
+                      </div>
+                      <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
+                          {providerLabel(credential.provider, providerOptions)}
+                        </div>
+                        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45, wordBreak: 'break-word' }}>
+                          {credential.label}
                         </div>
                       </div>
-                    </section>
-                  </article>
-                );
-              })}
-            </div>
-
-            {!connectMode && runtimeProfileGroups.length > 0 ? (
-              <section style={{ display: 'grid', gap: 10 }}>
-                <div style={{ display: 'grid', gap: 3 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Runtime profile order
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
-                    Runs try the first ready profile in each provider group. Reorder profiles to change the default and fallback order.
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 12 }}>
-                  {runtimeProfileGroups.map((group) => (
-                    <div key={group.provider} style={{ display: 'grid', gap: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{group.label}</div>
-                        <span className="orion-chip">{group.items.length} profiles</span>
-                      </div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        {group.items.map((profile, index) => {
-                          const linkedCredentialLabel = profile.credential_id ? credentialLabelById.get(profile.credential_id) || profile.credential_id : null;
-                          const isDefaultProfile = index === 0;
-                          const isActiveProfile = activeProfileIdByProvider.get(group.provider) === profile.id;
-                          const busyAction = providerBusy[profile.id] || '';
-                          return (
-                            <div
-                              key={profile.id}
-                              style={{
-                                display: 'grid',
-                                gridTemplateColumns: 'minmax(0, 1fr) auto',
-                                gap: 10,
-                                alignItems: 'center',
-                                borderRadius: 12,
-                                border: '1px solid var(--border-subtle)',
-                                background: 'var(--bg-element)',
-                                padding: '10px 12px',
-                              }}
-                            >
-                              <div style={{ display: 'grid', gap: 5, minWidth: 0 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                  <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                                    #{index + 1} {profile.label}
-                                  </div>
-                                  {isDefaultProfile ? <span className="orion-chip">Default</span> : null}
-                                  {isActiveProfile ? <span className="orion-chip">Active now</span> : null}
-                                  <span className="orion-chip" style={profileTone(profile)}>
-                                    {profileStatusLabel(profile, mode)}
-                                  </span>
-                                </div>
-                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                                  {linkedCredentialLabel ? `${linkedCredentialLabel} • ` : ''}
-                                  {providerAuthModeLabel(profile.provider, profile.auth_mode || undefined, providerOptions)}
-                                  {profile.model ? ` • ${profile.model}` : ''}
-                                  {typeof profile.priority === 'number' ? ` • priority ${profile.priority}` : ''}
-                                </div>
-                              </div>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                                {!isDefaultProfile ? (
-                                  <button
-                                    className="orion-btn orion-btn-ghost"
-                                    style={{ minHeight: 32, paddingInline: 10 }}
-                                    onClick={() => void handlePromoteProviderProfile(profile)}
-                                    disabled={busyAction === 'make-default'}
-                                  >
-                                    {busyAction === 'make-default' ? 'Setting default…' : 'Make default'}
-                                  </button>
-                                ) : null}
-                                <button
-                                  className="orion-btn orion-btn-ghost"
-                                  style={{ minHeight: 32, paddingInline: 10 }}
-                                  onClick={() => void handleDeleteProviderProfile(profile)}
-                                  disabled={busyAction === 'remove-profile'}
-                                >
-                                  <Trash2 size={13} />
-                                  {busyAction === 'remove-profile' ? 'Removing…' : 'Remove'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
                     </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span className="orion-chip" style={statusTone}>
+                        {enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                      {primaryProfile?.model ? (
+                        <span className="orion-chip">{primaryProfile.model}</span>
+                      ) : null}
+                    </div>
+                  </div>
 
-            {!connectMode && orphanProviderProfiles.length > 0 ? (
-              <div
-                style={{
-                  display: 'grid',
-                  gap: 10,
-                  borderRadius: 16,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-element)',
-                  padding: 14,
-                }}
-              >
-                <div style={{ display: 'grid', gap: 3 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Runtime-only profiles
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
-                    These profiles no longer point at a saved vault account. Remove them if they are stale.
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  {orphanProviderProfiles.map((profile) => (
-                    <div
-                      key={profile.id}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'minmax(0, 1fr) auto',
-                        gap: 10,
-                        alignItems: 'center',
-                        borderRadius: 12,
-                        border: '1px solid var(--border-subtle)',
-                        background: 'var(--bg-surface)',
-                        padding: '10px 12px',
-                      }}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <button
+                      className="orion-btn orion-btn-ghost"
+                      style={{ minHeight: 34, paddingInline: 12 }}
+                      onClick={() => void handleTestProviderCredential(credential)}
+                      disabled={busyAction === 'test'}
                     >
-                      <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>{profile.label}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                          {providerLabel(profile.provider, providerOptions)} • {providerAuthModeLabel(profile.provider, profile.auth_mode || undefined, providerOptions)}
-                        </div>
-                      </div>
-                      <button
-                        className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 32, paddingInline: 10 }}
-                        onClick={() => void handleDeleteProviderProfile(profile)}
-                        disabled={providerBusy[profile.id] === 'remove-profile'}
-                      >
-                        <Trash2 size={13} />
-                        {providerBusy[profile.id] === 'remove-profile' ? 'Removing…' : 'Remove'}
-                      </button>
-                    </div>
-                  ))}
+                      {busyAction === 'test' ? 'Testing…' : 'Test'}
+                    </button>
+                    <button
+                      className="orion-btn orion-btn-danger"
+                      style={{ minHeight: 34, paddingInline: 12 }}
+                      onClick={() => void handleRemoveProviderCredential(credential)}
+                      disabled={busyAction === 'remove'}
+                    >
+                      <Trash2 size={13} />
+                      {busyAction === 'remove' ? 'Removing…' : 'Remove'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              );
+            })}
           </div>
         )}
       </section>
@@ -2283,26 +1851,24 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           <div
             className="orion-panel"
             style={{
-              width: connectMode ? 'min(820px, calc(100vw - 48px))' : 'min(1120px, calc(100vw - 48px))',
+              width: 'min(560px, calc(100vw - 48px))',
               maxHeight: 'calc(100vh - 48px)',
               overflow: 'auto',
               display: 'grid',
-              gap: 22,
-              padding: 28,
-              borderRadius: 28,
-              boxShadow: 'var(--shadow-card)',
+              gap: 18,
+              padding: 24,
+              borderRadius: 12,
+              boxShadow: 'none',
             }}
             onClick={(event) => event.stopPropagation()}
           >
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 20, alignItems: 'start' }}>
               <div style={{ display: 'grid', gap: 6 }}>
                 <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>
-                  {connectMode ? 'Connect provider' : 'Add AI account'}
+                  Add account
                 </div>
                 <div style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  {connectMode
-                    ? 'Choose a direct provider, add the credential you already control, and start using it right away.'
-                    : 'Connect a direct provider account, store it in the encrypted vault, then optionally enable it for runtime use immediately.'}
+                  Connect one provider account to this workspace.
                 </div>
               </div>
               <button
@@ -2318,161 +1884,69 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div
               style={{
                 display: 'grid',
-                gap: 18,
-                borderRadius: 16,
+                gap: 14,
+                borderRadius: 8,
                 border: '1px solid var(--border-subtle)',
                 background: 'var(--bg-element)',
-                padding: 20,
+                padding: 18,
               }}
             >
-              <div style={{ display: 'grid', gap: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                  Step 1
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Provider</span>
+                <select
+                  className="input"
+                  value={providerForm.provider}
+                  onChange={(event) => {
+                    const nextProvider = knownProviderId(event.target.value) || 'anthropic';
+                    openProviderFormForMethod(nextProvider);
+                  }}
+                >
+                  {providerOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 4,
+                  borderRadius: 8,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-surface)',
+                  padding: '12px 14px',
+                }}
+              >
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Connection method</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {simpleProviderAuthLabel(providerForm.provider)}
                 </div>
+              </div>
+
+              {providerForm.provider === 'vertex' ? (
                 <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Provider</span>
-                  <select
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
+                  <input
                     className="input"
-                    value={providerForm.provider}
-                    onChange={(event) => {
-                      const nextProvider = knownProviderId(event.target.value) || 'anthropic';
-                      openProviderFormForMethod(nextProvider);
-                    }}
-                  >
-                    {providerOptions.map((option) => (
-                      <option key={option.id} value={option.id}>{option.label}</option>
-                    ))}
-                  </select>
+                    value={providerForm.projectId}
+                    onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
+                    placeholder="my-gcp-project"
+                  />
                 </label>
-              </div>
+              ) : null}
 
-              <div style={{ display: 'grid', gap: 10 }}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Step 2
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                    Pick how to connect {providerLabel(providerForm.provider, providerOptions)}.
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {providerConnectMethods.map((method) => {
-                    const isSelected = selectedConnectMethod?.id === method.id;
-                    return (
-                      <button
-                        key={method.id}
-                        type="button"
-                        className="orion-btn orion-btn-ghost"
-                        style={{
-                          minHeight: 0,
-                          width: '100%',
-                          justifyContent: 'flex-start',
-                          alignItems: 'flex-start',
-                          padding: '14px 16px',
-                          borderRadius: 8,
-                          border: isSelected ? '1px solid var(--accent-border)' : '1px solid var(--border-subtle)',
-                          background: isSelected ? 'var(--accent-soft)' : 'var(--bg-surface)',
-                          color: 'var(--text-primary)',
-                        }}
-                        onClick={() => applyProviderConnectMethod(method)}
-                        disabled={method.disabled}
-                        title={method.disabledReason || undefined}
-                      >
-                        <span style={{ display: 'grid', gap: 4, textAlign: 'left' }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{method.label}</span>
-                          <span style={{ fontSize: 12.5, lineHeight: 1.55, color: method.disabled ? 'var(--warning-fg)' : 'var(--text-secondary)' }}>
-                            {method.disabled && method.disabledReason ? method.disabledReason : method.description}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gap: 10 }}>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>
-                    Step 3
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                    {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action)
-                      ? 'Enter the credential details needed for this connection.'
-                      : 'Review the selected connection method, then connect.'}
-                  </div>
-                </div>
-
-                {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) ? (
-                  <div style={{ display: 'grid', gap: 12 }}>
-                    {providerForm.provider === 'vertex' ? (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                        <label style={{ display: 'grid', gap: 6 }}>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
-                          <input
-                            className="input"
-                            value={providerForm.projectId}
-                            onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
-                            placeholder="my-gcp-project"
-                          />
-                        </label>
-                        <label style={{ display: 'grid', gap: 6 }}>
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Region</span>
-                          <input
-                            className="input"
-                            value={providerForm.location}
-                            onChange={(event) => setProviderForm((prev) => ({ ...prev, location: event.target.value }))}
-                            placeholder="us-central1"
-                          />
-                        </label>
-                      </div>
-                    ) : null}
-
-                    <label style={{ display: 'grid', gap: 6 }}>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
-                      </span>
-                      <input
-                        className="input"
-                        type="password"
-                        value={providerForm.secret}
-                        onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
-                        placeholder={
-                          providerForm.provider === 'openai'
-                            ? 'sk-...'
-                            : providerForm.provider === 'anthropic'
-                              ? 'sk-ant-...'
-                              : providerForm.provider === 'gemini'
-                                ? 'AIza...'
-                                : 'Access token'
-                        }
-                      />
-                    </label>
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: 6,
-                      borderRadius: 8,
-                      border: '1px solid var(--border-subtle)',
-                      background: 'var(--bg-surface)',
-                      padding: '14px 16px',
-                    }}
-                  >
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {selectedConnectMethod?.label || 'Connect method'}
-                    </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                      {selectedConnectMethod?.description || 'Pick how to connect this provider.'}
-                    </div>
-                    {selectedConnectDisabledReason ? (
-                      <div style={{ fontSize: 12.5, color: 'var(--warning-fg)', lineHeight: 1.55 }}>
-                        {selectedConnectDisabledReason}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
+                </span>
+                <input
+                  className="input"
+                  type="password"
+                  value={providerForm.secret}
+                  onChange={(event) => setProviderForm((prev) => ({ ...prev, secret: event.target.value }))}
+                  placeholder={simpleProviderSecretPlaceholder(providerForm.provider)}
+                />
+              </label>
             </div>
 
             {providerError ? (
@@ -2513,12 +1987,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 <button
                   className="orion-btn orion-btn-primary"
                   style={{ minHeight: 40, paddingInline: 16 }}
-                  onClick={() => void handleConnectSelectedMethod()}
-                  disabled={selectedConnectDisabled}
-                  title={selectedConnectDisabledReason || undefined}
+                  onClick={() => void handleSaveProviderCredential()}
+                  disabled={providerBusy['provider-create'] === 'save'}
                 >
                   <Plus size={14} />
-                  {selectedConnectBusy ? 'Connecting…' : 'Connect'}
+                  {providerBusy['provider-create'] === 'save' ? 'Connecting…' : 'Connect'}
                 </button>
               </div>
             </div>

@@ -4,7 +4,12 @@ from server_modules.runtime_events_api import register_inbox_routes
 from server_modules.runtime_runs_api import register_run_routes
 from server_modules.runtime_runtime_api import register_runtime_routes
 from server_modules.runtime_common import require_admin_api_key, require_api_key
-from server_modules.runtime_models import WeeklySchedulePatchRequest, WeeklyScheduleUpsertRequest
+from server_modules.runtime_models import (
+    CronSchedulePatchRequest,
+    CronScheduleUpsertRequest,
+    WeeklySchedulePatchRequest,
+    WeeklyScheduleUpsertRequest,
+)
 from server_modules import runs_core as core
 from server_modules import runs_history as history
 
@@ -28,9 +33,28 @@ async def list_weekly_schedules(request: Request, current_user=Depends(require_a
     return await core.list_weekly_schedules(workspace_id=workspace_id)
 
 
+async def list_schedules(request: Request, current_user=Depends(require_api_key)):
+    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    return await core.list_schedules(workspace_id=workspace_id)
+
+
 async def create_weekly_schedule(body: WeeklyScheduleUpsertRequest, current_user=Depends(require_api_key)):
     body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
     return await core.create_weekly_schedule(body)
+
+
+async def create_schedule(body: CronScheduleUpsertRequest, current_user=Depends(require_api_key)):
+    body.workspace_id = enforce_workspace_access(current_user, body.workspace_id)
+    return await core.create_schedule(body)
+
+
+async def update_schedule(
+    schedule_id: str,
+    body: CronSchedulePatchRequest,
+    current_user=Depends(require_api_key),
+):
+    enforce_workspace_access(current_user, _schedule_workspace_or_404(schedule_id))
+    return await core.update_schedule(schedule_id, body)
 
 
 async def update_weekly_schedule(
@@ -45,6 +69,16 @@ async def update_weekly_schedule(
 async def delete_weekly_schedule(schedule_id: str, current_user=Depends(require_api_key)):
     enforce_workspace_access(current_user, _schedule_workspace_or_404(schedule_id))
     return await core.delete_weekly_schedule(schedule_id)
+
+
+async def delete_schedule(schedule_id: str, current_user=Depends(require_api_key)):
+    enforce_workspace_access(current_user, _schedule_workspace_or_404(schedule_id))
+    return await core.delete_schedule(schedule_id)
+
+
+async def trigger_schedule_now(schedule_id: str, current_user=Depends(require_api_key)):
+    enforce_workspace_access(current_user, _schedule_workspace_or_404(schedule_id))
+    return await core.trigger_schedule_now(schedule_id)
 
 
 async def trigger_weekly_schedule_now(schedule_id: str, current_user=Depends(require_api_key)):
@@ -66,6 +100,11 @@ router.add_api_route("/cognitive/approvals/{event_id}/resolve", history.resolve_
 router.add_api_route("/approvals/audit", history.get_approval_audit, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/approvals", history.list_pending_approvals, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/audit", history.get_audit, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/schedules", list_schedules, methods=['GET'])
+router.add_api_route("/schedules", create_schedule, methods=['POST'])
+router.add_api_route("/schedules/{schedule_id}", update_schedule, methods=['PATCH'])
+router.add_api_route("/schedules/{schedule_id}", delete_schedule, methods=['DELETE'])
+router.add_api_route("/schedules/{schedule_id}/run-now", trigger_schedule_now, methods=['POST'])
 router.add_api_route("/schedules/weekly", list_weekly_schedules, methods=['GET'])
 router.add_api_route("/schedules/weekly", create_weekly_schedule, methods=['POST'])
 router.add_api_route("/schedules/weekly/{schedule_id}", update_weekly_schedule, methods=['PATCH'])

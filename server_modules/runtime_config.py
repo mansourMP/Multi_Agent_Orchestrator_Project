@@ -305,6 +305,8 @@ from server_modules.runtime_models import (
     RunDelegationRetryRequest,
     MemoryUpsertRequest,
     MemorySearchRequest,
+    CronScheduleUpsertRequest,
+    CronSchedulePatchRequest,
     WeeklyScheduleUpsertRequest,
     WeeklySchedulePatchRequest,
     DecisionPayload,

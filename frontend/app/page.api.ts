@@ -44,6 +44,7 @@ import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { getLocalExecutionCapabilityTitle, inferLocalExecutionCapabilityFromCommand } from '@/lib/localExecutionCapabilities';
 import { buildRunStartedMessage, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
 import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
+import { StreamAssembler, extractDisplaySuffix } from '@/lib/StreamAssembler';
 
 export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
@@ -76,6 +77,14 @@ const providerModelsCache = new Map<string, TimedResourceCache<string[]>>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function createStreamRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function readFreshCache<T>(cache: TimedResourceCache<T>, staleMs: number): T | null {
@@ -240,6 +249,7 @@ export type OperatorChatStepPayload = {
 export type OperatorChatResponsePayload = {
   reply: string;
   actions?: OperatorChatActionPayload[];
+  suggestions?: string[];
   mode?: string;
   usage_masked?: Record<string, unknown> | null;
   provider?: string | null;
@@ -284,6 +294,9 @@ function normalizeOperatorChatResponsePayload(payload: unknown): OperatorChatRes
   return {
     reply: typeof record.reply === 'string' ? record.reply : '',
     actions: Array.isArray(record.actions) ? record.actions as OperatorChatActionPayload[] : [],
+    suggestions: Array.isArray(record.suggestions)
+      ? record.suggestions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
+      : [],
     mode: typeof record.mode === 'string' ? record.mode : undefined,
     usage_masked: record.usage_masked && typeof record.usage_masked === 'object'
       ? record.usage_masked as Record<string, unknown>
@@ -2021,21 +2034,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     const availability = await buildOperatorChatAvailability();
     let streamedReply = '';
     let streamedSteps: OperatorChatStepPayload[] = [];
-    let sawStepEvent = false;
     const maxRetries = 3;
     const retryDelaysMs = [1000, 2000, 4000];
     const externalSignal = options?.signal || null;
-    const requestBody = JSON.stringify({
-      workspace_id: WORKSPACE_ID,
-      thread_id: options?.threadId || undefined,
-      message: message.trim(),
-      provider,
-      model,
-      reasoning_effort: options?.reasoningEffort || undefined,
-      availability,
-      prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
-      approved_action: options?.approvedAction || undefined,
-    });
+    const clientRequestId = createStreamRequestId();
+    let lastEventId = '';
+    const streamAssembler = new StreamAssembler();
 
     const createAbortError = (): Error => {
       try {
@@ -2080,37 +2084,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       });
     };
 
-    const mergeChunkDelta = (attemptReply: string, delta: string): string => {
-      if (!delta) return attemptReply;
-      let nextAttemptReply = attemptReply;
-      if (delta === attemptReply || (attemptReply && attemptReply.startsWith(delta))) {
-        nextAttemptReply = attemptReply;
-      } else if (attemptReply && delta.startsWith(attemptReply)) {
-        nextAttemptReply = delta;
-      } else {
-        nextAttemptReply = `${attemptReply}${delta}`;
-      }
-
-      if (streamedReply === nextAttemptReply || streamedReply.startsWith(nextAttemptReply)) {
-        return nextAttemptReply;
-      }
-      if (nextAttemptReply.startsWith(streamedReply)) {
-        const suffix = nextAttemptReply.slice(streamedReply.length);
-        streamedReply = nextAttemptReply;
-        if (suffix) {
-          options?.onChunk?.(suffix);
-        }
-        return nextAttemptReply;
-      }
-      const error = new Error('Chat stream diverged during reconnect.');
-      error.name = 'ChatStreamDivergedError';
-      throw error;
-    };
-
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       throwIfAborted();
       let finalPayloadRaw: unknown = null;
-      let attemptReply = '';
       let buffer = '';
       let currentEvent: { event: string; data: string[]; id?: string } = { event: 'message', data: [] };
       const controller = new AbortController();
@@ -2120,9 +2096,26 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       try {
+        const requestBody = JSON.stringify({
+          workspace_id: WORKSPACE_ID,
+          thread_id: options?.threadId || undefined,
+          client_request_id: clientRequestId,
+          last_event_id: lastEventId || undefined,
+          message: message.trim(),
+          provider,
+          model,
+          reasoning_effort: options?.reasoningEffort || undefined,
+          availability,
+          prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
+          approved_action: options?.approvedAction || undefined,
+        });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (lastEventId) {
+          headers['Last-Event-ID'] = lastEventId;
+        }
         const res = await fetch('/api/chat/respond', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: requestBody,
           cache: 'no-store',
           signal: controller.signal,
@@ -2135,8 +2128,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         const contentType = res.headers.get('content-type') || '';
         if (!contentType.includes('text/event-stream') || !res.body) {
           const payload = normalizeOperatorChatResponsePayload(await res.json());
-          if (!payload.reply && streamedReply) {
-            payload.reply = streamedReply;
+          const finalizedReply = streamAssembler.finalize(payload.reply || streamedReply);
+          if (finalizedReply) {
+            payload.reply = finalizedReply;
           }
           if ((!Array.isArray(payload.steps) || payload.steps.length === 0) && streamedSteps.length > 0) {
             payload.steps = streamedSteps;
@@ -2152,15 +2146,23 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           const eventName = currentEvent.event || 'message';
           const raw = currentEvent.data.join('\n');
           const parsed = parseJson(raw);
+          if (typeof currentEvent.id === 'string' && currentEvent.id.trim()) {
+            lastEventId = currentEvent.id.trim();
+          }
           if (eventName === 'chunk') {
             const delta = parsed && typeof parsed === 'object' && typeof (parsed as { delta?: unknown }).delta === 'string'
               ? String((parsed as { delta?: unknown }).delta || '')
               : raw;
-            attemptReply = mergeChunkDelta(attemptReply, delta);
+            const previousDisplay = streamedReply;
+            const nextDisplay = streamAssembler.ingestDelta(delta);
+            const suffix = extractDisplaySuffix(previousDisplay, nextDisplay);
+            streamedReply = nextDisplay;
+            if (suffix) {
+              options?.onChunk?.(suffix);
+            }
           } else if (eventName === 'step') {
             const nextStep = normalizeOperatorChatStepPayload(parsed ?? raw);
             if (nextStep) {
-              sawStepEvent = true;
               streamedSteps = upsertOperatorChatStepPayload(streamedSteps, nextStep);
               options?.onSteps?.([...streamedSteps]);
             }
@@ -2215,8 +2217,10 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
         if (finalPayloadRaw != null) {
           const resolvedFinalPayload = normalizeOperatorChatResponsePayload(finalPayloadRaw);
-          if (!resolvedFinalPayload.reply && streamedReply) {
-            resolvedFinalPayload.reply = streamedReply;
+          const finalizedReply = streamAssembler.finalize(resolvedFinalPayload.reply || streamedReply);
+          streamedReply = finalizedReply;
+          if (finalizedReply) {
+            resolvedFinalPayload.reply = finalizedReply;
           }
           if ((!Array.isArray(resolvedFinalPayload.steps) || resolvedFinalPayload.steps.length === 0) && streamedSteps.length > 0) {
             resolvedFinalPayload.steps = streamedSteps;
@@ -2234,11 +2238,9 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         if (isAbortError(error)) {
           throw error;
         }
-        const nonRetriable = sawStepEvent
-          || (error instanceof Error && (
+        const nonRetriable = error instanceof Error && (
             error.name === 'OperatorChatHttpError'
-            || error.name === 'ChatStreamDivergedError'
-          ));
+          );
         if (nonRetriable || attempt >= maxRetries) {
           throw error;
         }

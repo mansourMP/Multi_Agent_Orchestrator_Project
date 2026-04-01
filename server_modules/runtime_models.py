@@ -219,6 +219,57 @@ class WeeklySchedulePatchRequest(BaseModel):
                 raise HTTPException(status_code=400, detail="timezone must be local or utc.")
 
 
+class CronScheduleUpsertRequest(BaseModel):
+    name: str
+    workspace_id: Optional[str] = None
+    enabled: bool = True
+    cron: str
+    timezone: str = "local"
+    run_request: RunStartRequest
+
+    def validate_fields(self) -> None:
+        try:
+            from croniter import croniter
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"croniter is unavailable: {exc}")
+        if not self.name or len(self.name.strip()) < 2:
+            raise HTTPException(status_code=400, detail="Schedule name is required.")
+        cron_value = str(self.cron or "").strip()
+        if not cron_value:
+            raise HTTPException(status_code=400, detail="cron is required.")
+        if not croniter.is_valid(cron_value):
+            raise HTTPException(status_code=400, detail="cron must be a valid cron expression.")
+        tz_mode = str(self.timezone or "").strip().lower()
+        if tz_mode not in {"local", "utc"}:
+            raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+        if not isinstance(self.run_request, RunStartRequest):
+            raise HTTPException(status_code=400, detail="run_request is required.")
+
+
+class CronSchedulePatchRequest(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    cron: Optional[str] = None
+    timezone: Optional[str] = None
+    run_request: Optional[RunStartRequest] = None
+
+    def validate_fields(self) -> None:
+        try:
+            from croniter import croniter
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"croniter is unavailable: {exc}")
+        if self.cron is not None:
+            cron_value = str(self.cron or "").strip()
+            if not cron_value:
+                raise HTTPException(status_code=400, detail="cron is required.")
+            if not croniter.is_valid(cron_value):
+                raise HTTPException(status_code=400, detail="cron must be a valid cron expression.")
+        if self.timezone is not None:
+            tz_mode = str(self.timezone).strip().lower()
+            if tz_mode not in {"local", "utc"}:
+                raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+
+
 class DecisionPayload(BaseModel):
     decision: str
     note: Optional[str] = None

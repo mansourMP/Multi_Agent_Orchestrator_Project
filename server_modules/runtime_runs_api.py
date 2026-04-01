@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
+import time
 
 from fastapi.responses import StreamingResponse
 
 from server_modules.doctor_gate import build_doctor_run_gate_live
+from server_modules.heartbeat import HeartbeatScheduler
+from server_modules.runtime_policy import (
+    browser_automation_plan_hash_from_pack_inputs,
+    build_browser_execution_binding,
+)
+
+_CHAT_STREAM_LOCK = threading.Lock()
+_CHAT_STREAM_BUFFER_LIMIT = 50
+_CHAT_STREAM_TTL_SECONDS = 15 * 60
+_CHAT_STREAM_SESSIONS: dict[str, dict[str, Any]] = {}
+_HEARTBEAT_SCHEDULER_LOCK = threading.Lock()
+_HEARTBEAT_SCHEDULER: Optional[HeartbeatScheduler] = None
 
 
 def _late_server_export(name: str):
@@ -19,6 +33,196 @@ def _refresh_server_exports():
 
     globals().update(_server.__dict__)
     return _server
+
+
+def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
+    with _HEARTBEAT_SCHEDULER_LOCK:
+        return _HEARTBEAT_SCHEDULER
+
+
+def _normalize_chat_stream_cursor(value: Any) -> int:
+    token = str(value or "").strip()
+    if not token:
+        return 0
+    try:
+        return max(0, int(token))
+    except Exception:
+        return 0
+
+
+def _chat_stream_request_signature(body: dict) -> str:
+    payload = {
+        "workspace_id": str(body.get("workspace_id") or "").strip(),
+        "thread_id": str(body.get("thread_id") or "").strip(),
+        "client_request_id": str(body.get("client_request_id") or "").strip(),
+        "message": str(body.get("message") or "").strip(),
+        "provider": str(body.get("provider") or "").strip(),
+        "model": str(body.get("model") or "").strip(),
+        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
+        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
+    owner = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+        or "anonymous"
+    )
+    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
+    client_request_id = str(body.get("client_request_id") or "").strip() or _chat_stream_request_signature(body)
+    return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
+
+
+def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:
+    reference = float(now_ts or time.time())
+    stale_keys = [
+        key
+        for key, session in _CHAT_STREAM_SESSIONS.items()
+        if reference - float(session.get("last_accessed_at") or reference) > _CHAT_STREAM_TTL_SECONDS
+    ]
+    for key in stale_keys:
+        _CHAT_STREAM_SESSIONS.pop(key, None)
+
+
+def _get_or_create_chat_stream_session(key: str, *, thread_id: str, request_id: str) -> dict[str, Any]:
+    with _CHAT_STREAM_LOCK:
+        _prune_chat_stream_sessions_locked()
+        session = _CHAT_STREAM_SESSIONS.get(key)
+        if isinstance(session, dict):
+            session["last_accessed_at"] = time.time()
+            return session
+        session = {
+            "key": key,
+            "thread_id": thread_id,
+            "request_id": request_id,
+            "condition": threading.Condition(),
+            "events": [],
+            "next_event_id": 1,
+            "producer_started": False,
+            "completed": False,
+            "last_accessed_at": time.time(),
+        }
+        _CHAT_STREAM_SESSIONS[key] = session
+        return session
+
+
+def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+    if not isinstance(raw_event, dict):
+        return None, None
+    event_name = str(raw_event.get("type") or "message").strip() or "message"
+    if event_name == "final":
+        payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
+        return "final", payload
+    payload = {key: value for key, value in raw_event.items() if key != "type"}
+    return event_name, payload
+
+
+def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
+    condition = session.get("condition")
+    if not isinstance(condition, threading.Condition):
+        return
+    with condition:
+        next_event_id = int(session.get("next_event_id") or 1)
+        record = {
+            "id": str(next_event_id),
+            "seq": next_event_id,
+            "event": event_name,
+            "payload": payload,
+        }
+        session["next_event_id"] = next_event_id + 1
+        events = session.get("events") if isinstance(session.get("events"), list) else []
+        events.append(record)
+        if len(events) > _CHAT_STREAM_BUFFER_LIMIT:
+            del events[:-_CHAT_STREAM_BUFFER_LIMIT]
+        session["events"] = events
+        session["last_accessed_at"] = time.time()
+        if event_name == "final":
+            session["completed"] = True
+        condition.notify_all()
+
+
+def _complete_chat_stream_session(session: dict[str, Any]) -> None:
+    condition = session.get("condition")
+    if not isinstance(condition, threading.Condition):
+        return
+    with condition:
+        session["completed"] = True
+        session["last_accessed_at"] = time.time()
+        condition.notify_all()
+
+
+def _chat_stream_error_payload(message: str) -> dict[str, Any]:
+    detail = str(message or "").strip() or "unknown_error"
+    return {
+        "reply": f"Chat failed: {detail}",
+        "actions": [],
+        "mode": "answer",
+        "error": detail,
+    }
+
+
+def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:
+    condition = session.get("condition")
+    if not isinstance(condition, threading.Condition):
+        return
+    with condition:
+        if bool(session.get("producer_started")):
+            return
+        session["producer_started"] = True
+
+    def _producer_main() -> None:
+        final_emitted = False
+        try:
+            for raw_event in producer_fn():
+                event_name, payload = _chat_stream_payload(raw_event)
+                if not event_name or not isinstance(payload, dict):
+                    continue
+                if event_name == "final":
+                    final_emitted = True
+                _append_chat_stream_event(session, event_name, payload)
+        except Exception as exc:
+            if not final_emitted:
+                _append_chat_stream_event(session, "final", _chat_stream_error_payload(str(exc)))
+        finally:
+            _complete_chat_stream_session(session)
+
+    worker = threading.Thread(
+        target=_producer_main,
+        daemon=True,
+        name=f"chat-stream-{str(session.get('request_id') or '')[:10]}",
+    )
+    worker.start()
+
+
+def _iter_chat_stream_events(session: dict[str, Any], last_event_id: Any):
+    cursor = _normalize_chat_stream_cursor(last_event_id)
+    condition = session.get("condition")
+    if not isinstance(condition, threading.Condition):
+        return
+    while True:
+        with condition:
+            session["last_accessed_at"] = time.time()
+            pending = [
+                dict(item)
+                for item in (session.get("events") if isinstance(session.get("events"), list) else [])
+                if int(item.get("seq") or 0) > cursor
+            ]
+            completed = bool(session.get("completed"))
+            if not pending and completed:
+                break
+            if not pending:
+                condition.wait(timeout=15.0)
+                continue
+        for item in pending:
+            cursor = int(item.get("seq") or cursor)
+            yield f"id: {item['id']}\n".encode("utf-8")
+            yield f"event: {item['event']}\n".encode("utf-8")
+            yield f"data: {json.dumps(item.get('payload') or {}, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 def _can_view_sensitive_run_payload(user: Optional[dict]) -> bool:
@@ -163,14 +367,58 @@ def _resolve_local_execution_start_approval(
     )
 
     if approved:
-        _clear_pending_confirmation(run)
         context = run.get("context")
+        metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
+        precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
+        browser_policy = precheck.get("browser_automation_policy") if isinstance(precheck.get("browser_automation_policy"), dict) else {}
+        expected_plan_hash = (
+            str(metadata.get("browser_immutable_plan_hash") or "").strip()
+            or str(browser_policy.get("immutable_plan_hash") or "").strip()
+        )
+        current_plan_hash = browser_automation_plan_hash_from_pack_inputs(metadata.get("pack_inputs")) if isinstance(metadata, dict) else ""
+        if expected_plan_hash and current_plan_hash and expected_plan_hash != current_plan_hash:
+            _clear_pending_confirmation(run)
+            run["result"] = "Local browser execution plan changed after approval."
+            run["result_data"] = {
+                "summary": "Local browser execution plan changed after approval.",
+                "error": "browser_plan_hash_mismatch",
+                "expected_plan_hash": expected_plan_hash,
+                "current_plan_hash": current_plan_hash,
+            }
+            emit_log(
+                run["logs"],
+                "error",
+                "Approved browser plan changed before execution. Run failed.",
+                event="approval_plan_hash_mismatch",
+                data={
+                    "approval_id": approval_id,
+                    "correlation_id": correlation_id,
+                    "expected_plan_hash": expected_plan_hash,
+                    "current_plan_hash": current_plan_hash,
+                },
+            )
+            set_run_status(run_id_str, "failed")
+            run["logs"].put(None)
+            raise HTTPException(status_code=409, detail="Approved browser execution plan changed before execution.")
+        _clear_pending_confirmation(run)
         if isinstance(context, dict):
-            metadata = context.get("metadata")
             if isinstance(metadata, dict):
                 metadata.pop("local_execution_waiting_confirmation", None)
                 metadata.pop("local_execution_waiting_approval", None)
                 _mark_local_execution_tools_approved(metadata)
+                if expected_plan_hash or current_plan_hash:
+                    metadata["browser_immutable_plan_hash"] = current_plan_hash or expected_plan_hash
+                    try:
+                        metadata["browser_execution_binding"] = build_browser_execution_binding(
+                            _late_server_export("ROOT_DIR"),
+                            current_plan_hash or expected_plan_hash,
+                            str(metadata.get("browser_session_profile") or "").strip(),
+                        )
+                    except Exception:
+                        metadata.pop("browser_execution_binding", None)
+                if bool(browser_policy.get("reviewed_approval_required")):
+                    metadata["browser_reviewed_approved"] = True
+                    metadata["browser_reviewed_approved_at"] = _utc_now_iso()
                 context["metadata"] = metadata
         emit_log(
             run["logs"],
@@ -283,6 +531,31 @@ def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
         return False
     if bool(run.get("_resume_after_confirmation_scheduled")):
         return True
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    selected_target = str(
+        metadata.get("execution_target_selected")
+        or metadata.get("execution_target")
+        or ""
+    ).strip().lower()
+    if selected_target == "local_companion":
+        run["_resume_after_confirmation_scheduled"] = True
+        run["thread_id"] = None
+        run["updated_at"] = _utc_now_iso()
+        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        metadata["browser_resume_supported"] = bool(checkpoint)
+        context["metadata"] = metadata
+        run["context"] = context
+        _late_server_export("_enqueue_local_companion_run")(
+            run_id_str,
+            message=(
+                "Resuming local companion run from saved browser checkpoint."
+                if checkpoint
+                else "Resuming local companion run."
+            ),
+            event=("local_resumed_from_checkpoint" if checkpoint else "local_resumed"),
+        )
+        return True
     run["_resume_after_confirmation_scheduled"] = True
     run["thread_id"] = None
     run["updated_at"] = _utc_now_iso()
@@ -299,12 +572,58 @@ def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
 
 def register_run_routes(app) -> None:
     import server as _server
+    from server_modules.autopilot_connectors import handle_telegram_send_message
+    from server_modules.agent_memory import delete_memory, get_memory, list_memory_entries
     from server_modules.operator_chat import build_direct_operator_reply
+    from server_modules.runtime_models import RunStartRequest
+    from server_modules.workspace_context import (
+        read_workspace_context_files,
+        write_workspace_context_file,
+    )
 
     module_globals = globals()
     for key, value in _server.__dict__.items():
         if key not in module_globals:
             module_globals[key] = value
+
+    def _start_heartbeat_run(tasks: List[str], metadata: Dict[str, Any]) -> Dict[str, Any]:
+        heartbeat_goal = (
+            "Heartbeat checklist tasks:\n"
+            + "\n".join(f"- {task}" for task in tasks)
+            + "\n\nHandle the pending items from HEARTBEAT.md."
+        )
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id=str(metadata.get("workspace_id") or "default").strip() or "default",
+            user_goal=heartbeat_goal,
+            agent_role="orchestrator",
+            metadata={
+                "source": "heartbeat",
+                "heartbeat_tasks": list(tasks),
+                "heartbeat_trigger": str(metadata.get("trigger") or "scheduled"),
+                "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
+            },
+        )
+        return _late_server_export("_create_run_from_request")(request)
+
+    def _heartbeat_notify(message: str) -> None:
+        try:
+            import asyncio
+
+            asyncio.run(handle_telegram_send_message(message, workspace_id="default"))
+        except Exception:
+            return
+
+    global _HEARTBEAT_SCHEDULER
+    with _HEARTBEAT_SCHEDULER_LOCK:
+        if _HEARTBEAT_SCHEDULER is None:
+            _HEARTBEAT_SCHEDULER = HeartbeatScheduler(
+                interval_seconds=30 * 60,
+                workspace_id="default",
+                run_callback=_start_heartbeat_run,
+                notify_callback=_heartbeat_notify,
+            )
+            _HEARTBEAT_SCHEDULER.start()
 
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
@@ -343,8 +662,16 @@ def register_run_routes(app) -> None:
         if not message:
             raise HTTPException(status_code=400, detail="Chat message is required.")
 
-        def iter_chat_events():
-            for event in build_direct_operator_reply(
+        session_key, thread_id, client_request_id = _chat_stream_key(current_user, body)
+        session = _get_or_create_chat_stream_session(
+            session_key,
+            thread_id=thread_id,
+            request_id=client_request_id,
+        )
+        replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
+
+        def producer():
+            return build_direct_operator_reply(
                 message=message,
                 workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
                 requested_model=str(body.get("model") or "").strip(),
@@ -354,17 +681,12 @@ def register_run_routes(app) -> None:
                 reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
                 availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
                 approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-            ):
-                event_type = str(event.get("type") or "message").strip() or "message"
-                if event_type == "final":
-                    data = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                else:
-                    data = dict(event)
-                yield f"event: {event_type}\n".encode("utf-8")
-                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+            )
+
+        _start_chat_stream_producer(session, producer)
 
         return StreamingResponse(
-            iter_chat_events(),
+            _iter_chat_stream_events(session, replay_cursor),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
@@ -372,6 +694,93 @@ def register_run_routes(app) -> None:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.get("/memory/{workspace_id}", dependencies=[Depends(require_api_key)])
+    async def list_workspace_memory(workspace_id: str, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+        return {
+            "workspace_id": normalized_workspace_id,
+            "entries": list_memory_entries(normalized_workspace_id),
+            "text": get_memory(normalized_workspace_id),
+        }
+
+    @app.delete("/memory/{workspace_id}/{key}", dependencies=[Depends(require_api_key)])
+    async def delete_workspace_memory(workspace_id: str, key: str, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            raise HTTPException(status_code=400, detail="Memory key is required.")
+        deleted = delete_memory(normalized_workspace_id, normalized_key)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Memory entry not found.")
+        return {
+            "ok": True,
+            "workspace_id": normalized_workspace_id,
+            "key": normalized_key,
+        }
+
+    @app.get("/workspace/context-files", dependencies=[Depends(require_api_key)])
+    async def get_workspace_context_files(current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        files = read_workspace_context_files()
+        return {
+            "ok": True,
+            "files": [
+                {
+                    "filename": filename,
+                    "content": str(content or ""),
+                }
+                for filename, content in files.items()
+            ],
+        }
+
+    @app.post("/workspace/context-files/{filename}", dependencies=[Depends(require_api_key)])
+    async def update_workspace_context_file(filename: str, request: Request, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid context file payload: {exc}") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Invalid context file payload.")
+        content = body.get("content")
+        if content is None:
+            raise HTTPException(status_code=400, detail="Field 'content' is required.")
+        try:
+            saved = write_workspace_context_file(filename, str(content))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            **saved,
+        }
+
+    @app.get("/heartbeat/status", dependencies=[Depends(require_api_key)])
+    async def get_heartbeat_status(current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        scheduler = _heartbeat_scheduler()
+        if scheduler is None:
+            return {
+                "ok": False,
+                "detail": "Heartbeat scheduler is not configured.",
+            }
+        return {
+            "ok": True,
+            **scheduler.status(),
+        }
+
+    @app.post("/heartbeat/trigger", dependencies=[Depends(require_api_key)])
+    async def trigger_heartbeat(current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        scheduler = _heartbeat_scheduler()
+        if scheduler is None:
+            raise HTTPException(status_code=503, detail="Heartbeat scheduler is not configured.")
+        return {
+            "ok": True,
+            **scheduler.trigger_now(),
+        }
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):
@@ -712,6 +1121,7 @@ def register_run_routes(app) -> None:
                 "pending_confirmation": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
                 # Deprecated compatibility alias. Prefer `pending_confirmation`.
                 "pending_approval": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
+                "browser_checkpoint": snapshot.get("browser_checkpoint") if include_sensitive else None,
                 "dag": snapshot.get("dag") if include_sensitive else None,
                 "context": safe_context,
                 "execution_target_requested": snapshot.get("execution_target_requested"),
@@ -811,6 +1221,7 @@ def register_run_routes(app) -> None:
             "pending_confirmation": _get_pending_confirmation(run) or None,
             # Deprecated compatibility alias. Prefer `pending_confirmation`.
             "pending_approval": _get_pending_confirmation(run) or None,
+            "browser_checkpoint": run.get("browser_checkpoint") if include_sensitive and isinstance(run.get("browser_checkpoint"), dict) else None,
             "dag": run.get("dag") if include_sensitive else None,
             "context": safe_context,
             "execution_target_requested": metadata.get("execution_target_requested"),
@@ -1065,4 +1476,40 @@ def register_run_routes(app) -> None:
             "scope": "once",
             "reusable": False,
             "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
+        }
+
+    @app.post("/runs/{run_id}/resume", dependencies=[Depends(require_api_key)])
+    async def resume_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        run_id_str = str(run_id)
+        run = runs.get(run_id_str)
+        if not isinstance(run, dict):
+            raise HTTPException(status_code=404, detail="Run ID not found")
+        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
+        _enforce_run_owner_access(current_user, snapshot)
+        if str(run.get("status") or "").strip().lower() != "waiting_for_input":
+            raise HTTPException(status_code=409, detail="Run is not waiting for input.")
+        if isinstance(_get_pending_confirmation(run), dict) and _get_pending_confirmation(run):
+            raise HTTPException(status_code=409, detail="Run requires confirmation resolution, not direct resume.")
+        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        if not checkpoint:
+            raise HTTPException(status_code=409, detail="Run does not have a resumable browser checkpoint.")
+        emit_log(
+            run["logs"],
+            "info",
+            "Resume requested for paused browser operator run.",
+            event="browser_resume_requested",
+            data={
+                "run_id": run_id_str,
+                "next_action_index": checkpoint.get("next_action_index"),
+                "session_profile": checkpoint.get("session_profile"),
+            },
+        )
+        if not _schedule_restored_run_resume(run_id_str, run):
+            raise HTTPException(status_code=409, detail="Run could not be resumed.")
+        return {
+            "status": "ok",
+            "run_id": run_id_str,
+            "resume_kind": "browser_checkpoint",
+            "next_action_index": checkpoint.get("next_action_index"),
         }

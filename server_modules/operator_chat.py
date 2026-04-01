@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import sys
 import time
 import importlib.util
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 from uuid import uuid4
@@ -30,6 +32,15 @@ except Exception:
     assert _tool_availability_spec and _tool_availability_spec.loader
     _tool_availability_spec.loader.exec_module(_tool_availability_module)
     resolve_workspace_tool_capabilities = _tool_availability_module.resolve_workspace_tool_capabilities
+
+from server_modules.agent_memory import (
+    get_memory,
+    get_recent_logs,
+    list_memory_entries,
+    save_daily_log,
+    save_memory,
+)
+from server_modules.workspace_context import read_workspace_context_files, workspace_context_dir
 
 WORKFLOW_REQUEST_MARKERS = (
     "turn this into a workflow",
@@ -146,6 +157,19 @@ MAX_CONTEXT_TOOL_CAPABILITIES = 6
 MAX_CONTEXT_TOOL_ACTIONS = 6
 DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS = 12.0
 DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS = 0.25
+_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX = (
+    "Persistent workspace memory. Use this only as background context when it is relevant, "
+    "and do not repeat it unless it helps answer the user.\n"
+)
+_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT = (
+    "You extract durable memory from a chat. Return only a JSON array of strings. "
+    "Include stable user preferences, facts, and lasting project context that will be useful in future conversations. "
+    "Do not include temporary task details, one-off requests, raw tool outputs, or assistant opinions."
+)
+_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT = (
+    "What important facts about the user or their preferences were revealed in this conversation? "
+    "Reply with a JSON list or empty list."
+)
 
 
 def _compact_text(value: Any) -> str:
@@ -274,6 +298,166 @@ def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
             content = content[: MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS - 1].rstrip() + "…"
         normalized.append({"role": role, "content": content})
     return normalized[-MAX_DIRECT_CHAT_PRIOR_MESSAGES:]
+
+
+def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:
+    memory = get_memory(workspace_id)
+    if not memory:
+        return None
+    return {
+        "role": "system",
+        "content": f"{_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX}{memory}",
+    }
+
+
+def _direct_chat_workspace_context_text(workspace_id: str) -> str:
+    sections: List[str] = []
+    try:
+        context_files = read_workspace_context_files()
+    except Exception:
+        context_files = {}
+
+    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
+        content = str(context_files.get(filename) or "").strip()
+        if content:
+            sections.append(f"{filename}\n{content}")
+
+    recent_logs = get_recent_logs(workspace_id, days=7)
+    if recent_logs:
+        sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
+
+    memory_facts = get_memory(workspace_id)
+    if memory_facts:
+        sections.append(f"Runtime Memory Facts\n{memory_facts}")
+
+    if not sections:
+        return ""
+    return (
+        "Workspace context files. Use these as durable background instructions and facts when they are relevant.\n\n"
+        + "\n\n".join(sections)
+    ).strip()
+
+
+def _parse_direct_chat_memory_facts(raw_text: str) -> List[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+    candidate = text
+    fenced = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text, re.IGNORECASE)
+    if fenced:
+        candidate = str(fenced.group(1) or "").strip()
+    else:
+        array_match = re.search(r"\[[\s\S]*\]", text)
+        if array_match:
+            candidate = str(array_match.group(0) or "").strip()
+    parsed: Any = None
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+    if isinstance(parsed, dict):
+        facts_value = parsed.get("facts")
+        if isinstance(facts_value, list):
+            parsed = facts_value
+    if not isinstance(parsed, list):
+        return []
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        fact = re.sub(r"\s+", " ", str(item or "").strip())
+        if not fact:
+            continue
+        normalized_key = fact.lower()
+        if normalized_key in seen:
+            continue
+        seen.add(normalized_key)
+        normalized.append(fact)
+    return normalized
+
+
+def _save_direct_chat_memory_fact(workspace_id: str, fact: str) -> None:
+    normalized_fact = re.sub(r"\s+", " ", str(fact or "").strip())
+    if not normalized_fact:
+        return
+    memory_key = f"fact-{hashlib.sha1(normalized_fact.encode('utf-8')).hexdigest()[:16]}"
+    save_memory(workspace_id, memory_key, normalized_fact)
+
+
+def _build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
+    normalized_user_message = re.sub(r"\s+", " ", str(user_message or "").strip())
+    normalized_assistant_reply = re.sub(r"\s+", " ", str(assistant_reply or "").strip())
+    if not normalized_user_message or not normalized_assistant_reply:
+        return ""
+    user_excerpt = normalized_user_message[:320].rstrip()
+    assistant_excerpt = normalized_assistant_reply[:500].rstrip()
+    return (
+        f"- User: {user_excerpt}\n"
+        f"- Assistant: {assistant_excerpt}"
+    ).strip()
+
+
+def _persist_direct_chat_memory_best_effort(
+    *,
+    workspace_id: str,
+    provider: Optional[str],
+    model: Optional[str],
+    credentials: Optional[Dict[str, Any]],
+    reasoning_effort: str,
+    prior_messages: List[Dict[str, str]],
+    user_message: str,
+    assistant_reply: str,
+) -> None:
+    normalized_user_message = str(user_message or "").strip()
+    normalized_assistant_reply = str(assistant_reply or "").strip()
+    if not normalized_user_message or not normalized_assistant_reply:
+        return
+    daily_log_summary = _build_direct_chat_daily_log_summary(
+        user_message=normalized_user_message,
+        assistant_reply=normalized_assistant_reply,
+    )
+    if daily_log_summary:
+        try:
+            save_daily_log(workspace_id, daily_log_summary)
+        except Exception:
+            pass
+    extraction_prior_messages: List[Dict[str, str]] = list(prior_messages or [])
+    extraction_prior_messages.append({"role": "user", "content": normalized_user_message})
+    extraction_prior_messages.append({"role": "assistant", "content": normalized_assistant_reply})
+    extraction_context = {
+        "workspace_id": workspace_id,
+        "provider": provider,
+        "model": model,
+        "source": "chat_direct_memory_extract",
+        "reasoning_effort": reasoning_effort,
+        "tools": [],
+    }
+    extraction_metadata: Dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "source": "chat_direct_memory_extract",
+        "reasoning_effort": reasoning_effort,
+        "tools": [],
+    }
+    if isinstance(credentials, dict) and credentials:
+        extraction_metadata["credentials"] = credentials
+    try:
+        extraction_reply, _usage, _attempted, extraction_error = generate_chat_reply_with_provider_fallback(
+            context=extraction_context,
+            metadata=extraction_metadata,
+            user_goal=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
+            system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
+            prior_messages=extraction_prior_messages,
+        )
+        if extraction_error or not extraction_reply:
+            return
+        extracted_facts = _parse_direct_chat_memory_facts(extraction_reply)
+        for fact in extracted_facts:
+            _save_direct_chat_memory_fact(workspace_id, fact)
+    except Exception:
+        return
 
 
 def _build_context_used(
@@ -499,6 +683,99 @@ def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[st
     if _mentions_any(compact, EXECUTION_MARKERS) and not _question_like(compact):
         actions.append(_run_action(message))
     return actions
+
+
+def _heartbeat_pending_tasks_for_suggestions() -> List[str]:
+    try:
+        from server_modules.heartbeat import parse_unchecked_heartbeat_tasks
+    except Exception:
+        return []
+    heartbeat_path = workspace_context_dir() / "HEARTBEAT.md"
+    if not heartbeat_path.exists():
+        return []
+    try:
+        text = heartbeat_path.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    return parse_unchecked_heartbeat_tasks(text)[:3]
+
+
+def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
+    try:
+        from server_modules.shared import RUN_HISTORY, RUN_HISTORY_LOCK
+    except Exception:
+        return []
+    prompts: List[str] = []
+    seen: set[str] = set()
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    with RUN_HISTORY_LOCK:
+        history_items = list(RUN_HISTORY)
+    for item in history_items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("workspace_id") or "").strip() != normalized_workspace_id:
+            continue
+        goal = re.sub(r"\s+", " ", str(item.get("user_goal") or "").strip())
+        if len(goal) < 12:
+            continue
+        key = goal.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        prompts.append(goal)
+        if len(prompts) >= 3:
+            break
+    return prompts
+
+
+def _time_of_day_suggestion() -> str:
+    hour = datetime.now().astimezone().hour
+    if hour < 12:
+        return "Review today's priorities and queue the next durable run."
+    if hour < 18:
+        return "Check what is running now and clear any waiting approvals."
+    return "Wrap up open work and schedule the next task for tomorrow."
+
+
+def _build_proactive_suggestions(workspace_id: str) -> List[str]:
+    suggestions: List[str] = []
+    seen: set[str] = set()
+
+    def push(value: str) -> None:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        suggestions.append(text)
+
+    for task in _heartbeat_pending_tasks_for_suggestions():
+        push(f"Handle heartbeat task: {task}")
+
+    for prompt in _recent_run_prompts_for_suggestions(workspace_id):
+        push(f"Continue: {prompt[:120].rstrip()}")
+
+    memory_entries = list_memory_entries(workspace_id)
+    for entry in memory_entries[:2]:
+        fact = re.sub(r"\s+", " ", str(entry.get("content") or "").strip())
+        if not fact:
+            continue
+        push(f"Use my saved context: {fact[:120].rstrip()}")
+
+    push(_time_of_day_suggestion())
+
+    fallback_prompts = [
+        "Summarize what you know about me and keep it concise.",
+        "Review the latest runs and tell me what needs attention.",
+        "Check pending approvals and suggest the next best action.",
+    ]
+    for item in fallback_prompts:
+        push(item)
+        if len(suggestions) >= 3:
+            break
+    return suggestions[:3]
 
 
 def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -754,7 +1031,7 @@ def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[
             "kind": "thinking",
         }, None
 
-    if event_name in {"local_heartbeat", "workflow_node_start", "workflow_data_step", "workflow_tool_http", "workflow_tool_connector_action", "pack_phase", "orion_plan", "dag_node_start"}:
+    if event_name in {"local_heartbeat", "local_still_working", "workflow_node_start", "workflow_data_step", "workflow_tool_http", "workflow_tool_connector_action", "pack_phase", "orion_plan", "dag_node_start"}:
         return {
             "type": "step",
             "id": f"run-handoff:working:{run_id}",
@@ -785,12 +1062,14 @@ def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[
             "kind": "thinking",
         }, None
 
-    if event_name in {"run_error", "timeout", "run_stopped"}:
+    if event_name in {"run_error", "timeout", "run_stopped", "local_worker_lost"}:
         label = "Run failed"
         if event_name == "timeout":
             label = "Run timed out"
         elif event_name == "run_stopped":
             label = "Run stopped"
+        elif event_name == "local_worker_lost":
+            label = "Worker disconnected"
         return {
             "type": "step",
             "id": f"run-handoff:error:{run_id}",
@@ -1869,6 +2148,21 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
 
 def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tuple[str, Dict[str, Any]]:
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    requested = str(requested_provider or "").strip().lower()
+    normalized_requested = "codex_cli" if requested == "openai-codex" else requested
+    if normalized_requested in SUPPORTED_PROVIDERS:
+        requested_credentials = _direct_chat_credentials(normalized_workspace_id, normalized_requested)
+        if normalized_requested == "openai":
+            if _credential_auth_mode("openai", requested_credentials) == "oauth_token":
+                codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+                if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+                    return "codex_cli", codex_credentials
+        if _supports_direct_message_native_chat(normalized_requested, requested_credentials):
+            return normalized_requested, requested_credentials
+        if normalized_requested == "openai":
+            codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+            if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+                return "codex_cli", codex_credentials
     prioritized_message_native = ("anthropic", "openai", "gemini")
     for provider in prioritized_message_native:
         credentials = _direct_chat_credentials(normalized_workspace_id, provider)
@@ -1877,7 +2171,6 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
     codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
     if _supports_direct_message_native_chat("codex_cli", codex_credentials):
         return "codex_cli", codex_credentials
-    requested = str(requested_provider or "").strip().lower()
     fallback_provider = requested if requested in SUPPORTED_PROVIDERS else "openai"
     fallback_credentials = _direct_chat_credentials(normalized_workspace_id, fallback_provider)
     return fallback_provider, fallback_credentials
@@ -1978,6 +2271,8 @@ def build_direct_operator_reply(
     normalized_requested_model = str(requested_model or "").strip()
     normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
     normalized_prior_messages = _normalize_prior_messages(prior_messages)
+    workspace_context_text = _direct_chat_workspace_context_text(normalized_workspace_id)
+    proactive_suggestions = _build_proactive_suggestions(normalized_workspace_id) if not normalized_prior_messages else []
     availability_payload = {
         **availability_payload,
         "tool_capabilities": resolve_workspace_tool_capabilities(normalized_workspace_id),
@@ -2005,9 +2300,10 @@ def build_direct_operator_reply(
         yield {
             "type": "final",
             "payload": _with_context_used({
-            "reply": "Tell me the outcome you want and I’ll help you move it forward.",
-            "actions": [],
-            "mode": "answer",
+                "reply": "Tell me the outcome you want and I’ll help you move it forward.",
+                "actions": [],
+                "suggestions": proactive_suggestions,
+                "mode": "answer",
             }, base_context_used),
         }
         return
@@ -2019,6 +2315,7 @@ def build_direct_operator_reply(
                 "payload": _with_context_used({
                     "reply": "Approval confirmation is missing the connector action payload.",
                     "actions": [],
+                    "suggestions": proactive_suggestions,
                     "mode": "answer",
                     "error": "missing_approved_action",
                 }, base_context_used),
@@ -2034,6 +2331,7 @@ def build_direct_operator_reply(
                 "payload": _with_context_used({
                     "reply": "That connector action is not available in this workspace right now.",
                     "actions": [],
+                    "suggestions": proactive_suggestions,
                     "mode": "answer",
                     "error": "unavailable_approved_action",
                 }, base_context_used),
@@ -2050,6 +2348,7 @@ def build_direct_operator_reply(
                 "payload": {
                     "reply": tool_reply or "Connector action completed.",
                     "actions": [],
+                    "suggestions": proactive_suggestions,
                     "mode": "answer",
                     "usage_masked": {},
                     "provider": None,
@@ -2081,6 +2380,7 @@ def build_direct_operator_reply(
                 "payload": {
                     "reply": f"Connector action failed: {error_text}",
                     "actions": [],
+                    "suggestions": proactive_suggestions,
                     "mode": "answer",
                     "usage_masked": {},
                     "provider": None,
@@ -2110,14 +2410,14 @@ def build_direct_operator_reply(
     if gated is not None:
         yield {
             "type": "final",
-            "payload": _with_context_used(gated, base_context_used),
+            "payload": _with_context_used({**gated, "suggestions": proactive_suggestions}, base_context_used),
         }
         return
 
     if not bool(availability_payload.get("ai_ready")) and not _connector_write_preview_allowed(normalized_message, availability_payload):
         yield {
             "type": "final",
-            "payload": _with_context_used(_no_ai_chat_response(availability_payload), base_context_used),
+            "payload": _with_context_used({**_no_ai_chat_response(availability_payload), "suggestions": proactive_suggestions}, base_context_used),
         }
         return
 
@@ -2210,14 +2510,14 @@ def build_direct_operator_reply(
                     preview = _direct_chat_run_handoff_failure_payload(normalized_message, detail)
             yield {
                 "type": "final",
-                "payload": _with_context_used(preview, base_context_used),
+                "payload": _with_context_used({**preview, "suggestions": proactive_suggestions}, base_context_used),
             }
             return
     if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
         yield {
             "type": "final",
             "payload": _with_context_used(
-                _provider_unavailable_response(provider),
+                {**_provider_unavailable_response(provider), "suggestions": proactive_suggestions},
                 _build_context_used(
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,
@@ -2245,6 +2545,7 @@ def build_direct_operator_reply(
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
         "tools": tools,
+        "disable_provider_fallback": True,
     }
     metadata = {
         "provider": provider,
@@ -2253,6 +2554,7 @@ def build_direct_operator_reply(
         "reasoning_effort": normalized_reasoning_effort,
         "thread_id": normalized_thread_id or None,
         "tools": tools,
+        "disable_provider_fallback": True,
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials
@@ -2260,15 +2562,21 @@ def build_direct_operator_reply(
         _availability_lines(normalized_workspace_id, availability_payload),
     )
     system_prompt = raw_system_prompt or None
-    history_mode = "raw_messages" if normalized_prior_messages else "none"
-    prior_messages_used = bool(normalized_prior_messages)
+    if workspace_context_text:
+        if system_prompt:
+            system_prompt = workspace_context_text + "\n\n" + system_prompt
+        else:
+            system_prompt = workspace_context_text
+    history_mode = "raw_messages" if normalized_prior_messages else ("summary" if workspace_context_text else "none")
+    prior_messages_used = bool(normalized_prior_messages or workspace_context_text)
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
     llm_error = ""
     actual_provider: Optional[str] = provider
     actual_model: Optional[str] = normalized_requested_model or None
     executed_any_tools = False
-    conversation_messages: List[Dict[str, str]] = list(normalized_prior_messages)
+    conversation_messages: List[Dict[str, str]] = []
+    conversation_messages.extend(normalized_prior_messages)
     current_prompt = normalized_message
     max_iterations = 10
 
@@ -2280,12 +2588,13 @@ def build_direct_operator_reply(
         iteration_tool_calls: List[Dict[str, Any]] = []
         iteration_failed = False
 
+        messages = conversation_messages or []
         for event in generate_chat_reply_stream_with_provider_fallback(
             context=context,
             metadata=metadata,
             user_goal=current_prompt,
             system_prompt=system_prompt,
-            prior_messages=conversation_messages or None,
+            prior_messages=messages or None,
         ):
             event_type = str(event.get("type") or "").strip().lower()
             if event_type == "chunk":
@@ -2322,6 +2631,7 @@ def build_direct_operator_reply(
                             "type": "final",
                             "payload": {
                                 **approval_payload,
+                                "suggestions": proactive_suggestions,
                                 "usage_masked": usage_masked,
                                 "provider": actual_provider,
                                 "model": actual_model,
@@ -2415,6 +2725,7 @@ def build_direct_operator_reply(
                             "payload": {
                                 "reply": f"Connector action failed: {llm_error}",
                                 "actions": [],
+                                "suggestions": proactive_suggestions,
                                 "mode": "answer",
                                 "usage_masked": usage_masked,
                                 "provider": actual_provider,
@@ -2441,13 +2752,12 @@ def build_direct_operator_reply(
                         return
 
                 actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
-                if final_reply:
-                    yield {"type": "chunk", "delta": final_reply}
                 yield {
                     "type": "final",
                     "payload": {
                         "reply": final_reply,
                         "actions": actions,
+                        "suggestions": proactive_suggestions,
                         "mode": "answer_with_action" if actions else "answer",
                         "usage_masked": usage_masked,
                         "provider": actual_provider,
@@ -2463,14 +2773,24 @@ def build_direct_operator_reply(
                             reasoning_effort=normalized_reasoning_effort,
                             connected_systems=connected_systems,
                             tool_capabilities=tool_capabilities,
-                            prior_messages_used=bool(conversation_messages),
-                            history_mode="raw_messages" if conversation_messages else history_mode,
+                            prior_messages_used=prior_messages_used,
+                            history_mode="raw_messages" if normalized_prior_messages else history_mode,
                             run_created=False,
                             fallback_used=False,
                             fallback_reason=fallback_reason,
                         ),
                     },
                 }
+                _persist_direct_chat_memory_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    provider=str(actual_provider or provider or "").strip() or None,
+                    model=str(actual_model or "").strip() or None,
+                    credentials=direct_chat_credentials,
+                    reasoning_effort=normalized_reasoning_effort,
+                    prior_messages=normalized_prior_messages,
+                    user_message=normalized_message,
+                    assistant_reply=final_reply,
+                )
                 return
             if event_type == "failure":
                 attempted_providers = str(event.get("attempted_providers") or "").strip()
@@ -2492,6 +2812,7 @@ def build_direct_operator_reply(
         "payload": {
             "reply": _direct_chat_error_reply(llm_error),
             "actions": actions,
+            "suggestions": proactive_suggestions,
             "mode": "answer_with_action" if actions else "answer",
             "usage_masked": usage_masked,
             "provider": actual_provider,

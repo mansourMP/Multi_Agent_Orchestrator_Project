@@ -132,6 +132,7 @@ export type RuntimeMetrics = {
     enabled: boolean;
     poll_seconds: number;
     weekly_schedules: number;
+    active_schedules?: number;
   };
   local_companion?: {
     enabled: boolean;

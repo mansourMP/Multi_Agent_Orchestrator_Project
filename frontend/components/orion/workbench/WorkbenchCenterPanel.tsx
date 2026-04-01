@@ -116,6 +116,14 @@ export type HomeLiveOverview = {
   workerOnlineCount: number;
   workerBusyCount: number;
   approvalWaitingCount: number;
+  activeScheduleCount: number;
+  scheduleItems: Array<{
+    id: string;
+    name: string;
+    cron: string;
+    timezone: string;
+    nextRunAt: string | null;
+  }>;
   activeAgentCards: HomeLiveAgentCard[];
   recentLocalActions: HomeLiveLocalAction[];
   updatedAt: string | null;
@@ -422,6 +430,12 @@ function HomeOperationsScene({
   onOpenRunOutput,
   onOpenApprovalsPage,
 }: HomeOperationsSceneProps) {
+  const formatScheduleTime = (value: string | null): string => {
+    if (!value) return 'Next run pending';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return 'Next run pending';
+    return parsed.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
   const visibleCardLimit = isMobile ? 3 : 6;
   const liveCards = overview.activeAgentCards.filter((card) => card.state !== 'completed');
   const recentCompletedCards = overview.activeAgentCards.filter((card) => card.state === 'completed');
@@ -505,6 +519,7 @@ function HomeOperationsScene({
     { label: 'Local queue', value: queueLabel },
     { label: 'Workers', value: overview.workerOnlineCount > 0 ? `${overview.workerBusyCount}/${overview.workerOnlineCount} busy` : 'Offline' },
     { label: 'Approvals', value: overview.approvalWaitingCount > 0 ? `${overview.approvalWaitingCount} waiting` : 'Clear' },
+    { label: 'Schedules', value: overview.activeScheduleCount > 0 ? `${overview.activeScheduleCount} active` : 'None' },
   ];
   const agentStations: Array<{
     id: string;
@@ -613,7 +628,7 @@ function HomeOperationsScene({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+            gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))',
             gap: 10,
           }}
         >
@@ -638,6 +653,53 @@ function HomeOperationsScene({
             </div>
           ))}
         </div>
+
+        {overview.scheduleItems.length > 0 ? (
+          <div
+            style={{
+              borderRadius: 12,
+              border: `1px solid ${UI.borderSoft}`,
+              background: `linear-gradient(180deg, color-mix(in srgb, ${UI.surfaceAlt} 88%, ${UI.surface} 12%) 0%, ${UI.surface} 100%)`,
+              padding: '10px 12px',
+              display: 'grid',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 10.5, color: UI.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>
+                Scheduled runs
+              </div>
+              <div style={{ fontSize: 11.5, color: UI.textMuted }}>
+                {overview.activeScheduleCount} active
+              </div>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {overview.scheduleItems.map((item) => (
+                <div
+                  key={item.id}
+                  style={{
+                    display: 'grid',
+                    gap: 2,
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: `1px solid ${UI.borderSoft}`,
+                    background: UI.surface,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, color: UI.textSoft }}>
+                    {item.name}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: UI.textMuted }}>
+                    Next run {formatScheduleTime(item.nextRunAt)}
+                  </div>
+                  <div style={{ fontSize: 11, color: UI.textMuted }}>
+                    {item.cron} · {item.timezone.toUpperCase()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div
           style={{

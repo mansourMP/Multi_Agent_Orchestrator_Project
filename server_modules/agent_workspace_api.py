@@ -928,6 +928,7 @@ def register_agent_workspace_routes(app) -> None:
         telegram_payload = await handle_telegram_autopilot_status()
         whatsapp_payload = await handle_whatsapp_autopilot_status()
         metrics_payload = await _late_server_export("get_runtime_metrics")()
+        schedules_payload = await _late_server_export("list_schedules")(workspace_id=workspace_filter)
         memory_snapshot = _memory_health_snapshot()
 
         active_statuses = {"starting", "running", "running_local", "queued_local", "waiting_for_input"}
@@ -1029,6 +1030,8 @@ def register_agent_workspace_routes(app) -> None:
 
         runs_metrics = metrics_payload.get("runs") if isinstance(metrics_payload.get("runs"), dict) else {}
         kpis_metrics = metrics_payload.get("kpis") if isinstance(metrics_payload.get("kpis"), dict) else {}
+        schedule_items = schedules_payload.get("items") if isinstance(schedules_payload.get("items"), list) else []
+        active_schedule_items = [item for item in schedule_items if isinstance(item, dict) and bool(item.get("enabled"))]
 
         return {
             "ok": True,
@@ -1068,6 +1071,10 @@ def register_agent_workspace_routes(app) -> None:
                 "queued_runs": queue_payload.get("queued_runs") if isinstance(queue_payload.get("queued_runs"), list) else [],
                 "claimed_runs": queue_payload.get("claimed_runs") if isinstance(queue_payload.get("claimed_runs"), list) else [],
                 "recent_runs": history_recent,
+            },
+            "schedules": {
+                "active_count": len(active_schedule_items),
+                "items": active_schedule_items[:8],
             },
             "approvals": {
                 "pending": pending_approvals,

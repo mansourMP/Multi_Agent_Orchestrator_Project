@@ -6,6 +6,7 @@ import sys
 import re
 from typing import Any, Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
+from croniter import croniter
 from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
@@ -94,47 +95,16 @@ def _is_local_runtime_run(run: Dict[str, Any]) -> bool:
 
 def _load_live_runtime_state() -> None:
     try:
-        persisted_runs = list_live_run_states(ORION_RUNTIME_STATE_DB)
-        local_state = load_local_runtime_state(ORION_RUNTIME_STATE_DB)
+        shared.sync_acp_manager_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
+        ACP_MANAGER.reload_runtime_state()
     except Exception:
-        persisted_runs = []
-        local_state = {}
+        pass
 
-    runs.clear()
     RUN_QUEUE_INDEX.clear()
-    for item in persisted_runs:
-        restored = _restore_live_run_state(item)
-        if not restored:
-            continue
-        run_id, run = restored
-        runs[run_id] = run
-        RUN_QUEUE_INDEX[id(run["logs"])] = run_id
-
-    with LOCAL_QUEUE_LOCK:
-        LOCAL_PENDING_RUN_IDS.clear()
-        LOCAL_PENDING_RUN_IDS.extend(
-            [
-                run_id
-                for run_id in (local_state.get("pending_run_ids") if isinstance(local_state, dict) else [])
-                if run_id in runs
-            ]
-        )
-        LOCAL_CLAIMED_RUNS.clear()
-        LOCAL_CLAIMED_RUNS.update(
-            {
-                run_id: dict(claim)
-                for run_id, claim in (local_state.get("claimed_runs") if isinstance(local_state, dict) else {}).items()
-                if run_id in runs and isinstance(claim, dict)
-            }
-        )
-        LOCAL_WORKER_REGISTRY.clear()
-        LOCAL_WORKER_REGISTRY.update(
-            {
-                runtime_id: dict(record)
-                for runtime_id, record in (local_state.get("runtime_registrations") if isinstance(local_state, dict) else {}).items()
-                if isinstance(record, dict)
-            }
-        )
+    for run_id, run in list(runs.items()):
+        log_queue = run.get("logs") if isinstance(run, dict) else None
+        if log_queue is not None:
+            RUN_QUEUE_INDEX[id(log_queue)] = run_id
 
     recovered_queue = False
     for run_id, run in list(runs.items()):
@@ -333,6 +303,14 @@ def _load_weekly_schedules():
                 WEEKLY_SCHEDULES[schedule_id] = item
 
 
+def _persist_schedules():
+    _persist_weekly_schedules()
+
+
+def _load_schedules():
+    _load_weekly_schedules()
+
+
 def _schedule_now_snapshot(now: datetime, tz_mode: str) -> Dict[str, Any]:
     if tz_mode == "utc":
         current = now.astimezone(timezone.utc)
@@ -432,11 +410,79 @@ def _normalized_weekday(value: str) -> str:
     return str(value or "").strip().capitalize()
 
 
+def _normalized_schedule_timezone(value: str) -> str:
+    tz_mode = str(value or "local").strip().lower()
+    return tz_mode if tz_mode in {"local", "utc"} else "local"
+
+
+def _schedule_reference_now(now: datetime, tz_mode: str) -> datetime:
+    return now.astimezone(timezone.utc) if tz_mode == "utc" else now.astimezone()
+
+
+def _cron_from_weekly(day_of_week: str, time_hhmm: str) -> str:
+    weekday_map = {
+        "monday": "1",
+        "tuesday": "2",
+        "wednesday": "3",
+        "thursday": "4",
+        "friday": "5",
+        "saturday": "6",
+        "sunday": "0",
+    }
+    day = str(day_of_week or "").strip().lower()
+    hh, mm = str(time_hhmm or "09:00").strip().split(":")
+    return f"{int(mm)} {int(hh)} * * {weekday_map.get(day, '1')}"
+
+
+def _latest_schedule_slot_in_window(schedule: Dict[str, Any], window_start_utc: datetime, window_end_utc: datetime) -> Optional[datetime]:
+    cron_expr = str(schedule.get("cron") or "").strip()
+    if not cron_expr or not croniter.is_valid(cron_expr):
+        return None
+    tz_mode = _normalized_schedule_timezone(str(schedule.get("timezone") or "local"))
+    local_start = _schedule_reference_now(window_start_utc, tz_mode)
+    local_end = _schedule_reference_now(window_end_utc, tz_mode)
+    iterator = croniter(cron_expr, local_start - timedelta(minutes=1))
+    latest: Optional[datetime] = None
+    for _ in range(32):
+        candidate = iterator.get_next(datetime)
+        if candidate.tzinfo is None:
+            candidate = candidate.replace(tzinfo=local_start.tzinfo)
+        if candidate <= local_start:
+            continue
+        if candidate > local_end:
+            break
+        latest = candidate
+    return latest
+
+
+def _compute_schedule_next_run_at(schedule: Dict[str, Any], *, now_utc: Optional[datetime] = None) -> Optional[str]:
+    cron_expr = str(schedule.get("cron") or "").strip()
+    if not cron_expr or not croniter.is_valid(cron_expr):
+        return None
+    reference_utc = now_utc or datetime.now(timezone.utc)
+    tz_mode = _normalized_schedule_timezone(str(schedule.get("timezone") or "local"))
+    local_reference = _schedule_reference_now(reference_utc, tz_mode)
+    iterator = croniter(cron_expr, local_reference)
+    candidate = iterator.get_next(datetime)
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=local_reference.tzinfo)
+    return candidate.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _serialize_schedule_item(schedule: Dict[str, Any], *, now_utc: Optional[datetime] = None) -> Dict[str, Any]:
+    payload = dict(schedule)
+    payload["timezone"] = _normalized_schedule_timezone(str(payload.get("timezone") or "local"))
+    payload["next_run_at"] = _compute_schedule_next_run_at(payload, now_utc=now_utc)
+    payload["schedule_kind"] = "weekly" if payload.get("day_of_week") and payload.get("time_hhmm") else "cron"
+    return payload
+
+
 def _run_weekly_scheduler_forever():
     poll_seconds = max(5, ORION_SCHEDULER_POLL_SECONDS)
     while True:
         time.sleep(poll_seconds)
         now = datetime.now(timezone.utc)
+        window_start = now - timedelta(seconds=poll_seconds + 1)
         changed = False
         with SCHEDULES_LOCK:
             schedule_items = [dict(item) for item in WEEKLY_SCHEDULES.values()]
@@ -444,17 +490,12 @@ def _run_weekly_scheduler_forever():
         for schedule in schedule_items:
             if not bool(schedule.get("enabled")):
                 continue
-            tz_mode = str(schedule.get("timezone") or "local").strip().lower()
-            if tz_mode not in {"local", "utc"}:
-                tz_mode = "local"
-            day = _normalized_weekday(str(schedule.get("day_of_week") or ""))
-            hhmm = str(schedule.get("time_hhmm") or "").strip()
-            snapshot = _schedule_now_snapshot(now, tz_mode)
-            if day != snapshot["weekday"]:
+            matched_slot = _latest_schedule_slot_in_window(schedule, window_start, now)
+            if matched_slot is None:
                 continue
-            if hhmm != snapshot["hhmm"]:
-                continue
-            if str(schedule.get("last_trigger_date") or "") == snapshot["date_key"]:
+            snapshot = _schedule_now_snapshot(now, _normalized_schedule_timezone(str(schedule.get("timezone") or "local")))
+            slot_key = matched_slot.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+            if str(schedule.get("last_trigger_slot") or "") == slot_key:
                 continue
 
             schedule_id = str(schedule.get("id") or "")
@@ -468,6 +509,7 @@ def _run_weekly_scheduler_forever():
                 with SCHEDULES_LOCK:
                     current = WEEKLY_SCHEDULES.get(schedule_id)
                     if current is not None:
+                        current["last_trigger_slot"] = slot_key
                         current["last_trigger_date"] = snapshot["date_key"]
                         current["last_run_id"] = run_result.get("run_id")
                         current["last_error"] = None
@@ -478,6 +520,7 @@ def _run_weekly_scheduler_forever():
                 with SCHEDULES_LOCK:
                     current = WEEKLY_SCHEDULES.get(schedule_id)
                     if current is not None:
+                        current["last_trigger_slot"] = slot_key
                         current["last_trigger_date"] = snapshot["date_key"]
                         current["last_error"] = str(exc)
                         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
@@ -485,7 +528,7 @@ def _run_weekly_scheduler_forever():
                         changed = True
 
         if changed:
-            _persist_weekly_schedules()
+            _persist_schedules()
 
 
 _runtime_services_initialized = False
@@ -496,14 +539,26 @@ def initialize_runtime_services() -> None:
     if _runtime_services_initialized:
         return
     init_runtime_state_db(ORION_RUNTIME_STATE_DB)
+    shared.sync_acp_manager_paths(
+        runtime_db_path=ORION_RUNTIME_STATE_DB,
+        setup_sessions_path=ORION_SETUP_SESSIONS_FILE,
+        provider_profiles_path=ORION_PROVIDER_PROFILES_FILE,
+        idempotency_path=ORION_IDEMPOTENCY_FILE,
+    )
     _load_live_runtime_state()
     _load_run_history()
     _load_approval_audit()
     _load_channel_events()
-    _load_weekly_schedules()
+    _load_schedules()
     _load_setup_sessions()
     _load_provider_profiles()
     _load_idempotency()
+    try:
+        from server_modules import local_queue as _local_queue
+
+        _local_queue.recover_orphaned_local_runs_on_startup()
+    except Exception:
+        pass
     from server_modules.health_diagnostics import _load_runtime_skills_state
 
     _load_runtime_skills_state()
@@ -1149,6 +1204,21 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
     metadata["tool_policy_precheck"] = precheck
 
 
+def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
+    precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
+    browser_policy = precheck.get("browser_automation_policy") if isinstance(precheck.get("browser_automation_policy"), dict) else {}
+    session_profiles = list(browser_policy.get("session_profiles") or []) if isinstance(browser_policy, dict) else []
+    immutable_plan_hash = str(browser_policy.get("immutable_plan_hash") or "").strip() if isinstance(browser_policy, dict) else ""
+    if session_profiles:
+        metadata["browser_session_profile"] = session_profiles[0]
+    if immutable_plan_hash:
+        metadata["browser_immutable_plan_hash"] = immutable_plan_hash
+    if bool(browser_policy.get("reviewed_approval_required")):
+        metadata["browser_reviewed_approval_required"] = True
+    elif "browser_reviewed_approval_required" in metadata:
+        metadata.pop("browser_reviewed_approval_required", None)
+
+
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
     from server_modules.runs_execution import _compute_tool_policy_precheck, create_run
 
@@ -1191,6 +1261,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
     metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
+    _apply_browser_execution_metadata(metadata)
     if metadata["tool_policy_precheck"].get("blocked_count"):
         raise HTTPException(
             status_code=409,
@@ -1258,32 +1329,112 @@ async def list_weekly_schedules(workspace_id: Optional[str] = None):
         items = list(WEEKLY_SCHEDULES.values())
     if workspace_id:
         items = [item for item in items if str(item.get("workspace_id") or "").strip() == workspace_id]
+    items = [item for item in items if item.get("day_of_week") and item.get("time_hhmm")]
     items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
-    return {"items": items}
+    return {"items": [_serialize_schedule_item(item) for item in items]}
 
-async def create_weekly_schedule(body: WeeklyScheduleUpsertRequest):
-    body.validate_fields()
-    schedule_id = str(uuid.uuid4())
+
+async def list_schedules(workspace_id: Optional[str] = None):
+    with SCHEDULES_LOCK:
+        items = list(WEEKLY_SCHEDULES.values())
+    if workspace_id:
+        items = [item for item in items if str(item.get("workspace_id") or "").strip() == workspace_id]
+    items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return {"items": [_serialize_schedule_item(item) for item in items]}
+
+
+def _build_schedule_item(
+    *,
+    schedule_id: str,
+    name: str,
+    workspace_id: Optional[str],
+    enabled: bool,
+    cron: str,
+    timezone_value: str,
+    run_request_payload: Dict[str, Any],
+    day_of_week: Optional[str] = None,
+    time_hhmm: Optional[str] = None,
+) -> Dict[str, Any]:
     now = datetime.utcnow().isoformat() + "Z"
-    item = {
+    return {
         "id": schedule_id,
-        "name": body.name.strip(),
-        "workspace_id": _normalize_workspace_id(body.workspace_id),
-        "enabled": bool(body.enabled),
-        "day_of_week": _normalized_weekday(body.day_of_week),
-        "time_hhmm": body.time_hhmm.strip(),
-        "timezone": str(body.timezone).strip().lower(),
-        "run_request": body.run_request.model_dump(),
+        "name": name.strip(),
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "enabled": bool(enabled),
+        "cron": cron.strip(),
+        "timezone": _normalized_schedule_timezone(timezone_value),
+        "run_request": run_request_payload,
+        "day_of_week": _normalized_weekday(day_of_week) if day_of_week else None,
+        "time_hhmm": time_hhmm.strip() if isinstance(time_hhmm, str) and time_hhmm.strip() else None,
+        "last_trigger_slot": None,
         "last_trigger_date": None,
         "last_run_id": None,
         "last_error": None,
         "created_at": now,
         "updated_at": now,
     }
+
+
+async def create_schedule(body: CronScheduleUpsertRequest):
+    body.validate_fields()
+    schedule_id = str(uuid.uuid4())
+    item = _build_schedule_item(
+        schedule_id=schedule_id,
+        name=body.name,
+        workspace_id=body.workspace_id,
+        enabled=body.enabled,
+        cron=body.cron,
+        timezone_value=body.timezone,
+        run_request_payload=body.run_request.model_dump(),
+    )
     with SCHEDULES_LOCK:
         WEEKLY_SCHEDULES[schedule_id] = item
-    _persist_weekly_schedules()
-    return item
+    _persist_schedules()
+    return _serialize_schedule_item(item)
+
+async def create_weekly_schedule(body: WeeklyScheduleUpsertRequest):
+    body.validate_fields()
+    schedule_id = str(uuid.uuid4())
+    item = _build_schedule_item(
+        schedule_id=schedule_id,
+        name=body.name,
+        workspace_id=body.workspace_id,
+        enabled=body.enabled,
+        cron=_cron_from_weekly(body.day_of_week, body.time_hhmm),
+        timezone_value=body.timezone,
+        run_request_payload=body.run_request.model_dump(),
+        day_of_week=body.day_of_week,
+        time_hhmm=body.time_hhmm,
+    )
+    with SCHEDULES_LOCK:
+        WEEKLY_SCHEDULES[schedule_id] = item
+    _persist_schedules()
+    return _serialize_schedule_item(item)
+
+
+async def update_schedule(schedule_id: str, body: CronSchedulePatchRequest):
+    body.validate_fields()
+    with SCHEDULES_LOCK:
+        current = WEEKLY_SCHEDULES.get(schedule_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        if body.name is not None:
+            current["name"] = body.name.strip()
+        if body.enabled is not None:
+            current["enabled"] = bool(body.enabled)
+        if body.cron is not None:
+            current["cron"] = body.cron.strip()
+            current["day_of_week"] = None
+            current["time_hhmm"] = None
+        if body.timezone is not None:
+            current["timezone"] = _normalized_schedule_timezone(body.timezone)
+        if body.run_request is not None:
+            current["run_request"] = body.run_request.model_dump()
+        current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        WEEKLY_SCHEDULES[schedule_id] = current
+        updated = dict(current)
+    _persist_schedules()
+    return _serialize_schedule_item(updated)
 
 async def update_weekly_schedule(schedule_id: str, body: WeeklySchedulePatchRequest):
     body.validate_fields()
@@ -1299,25 +1450,35 @@ async def update_weekly_schedule(schedule_id: str, body: WeeklySchedulePatchRequ
             current["day_of_week"] = _normalized_weekday(body.day_of_week)
         if body.time_hhmm is not None:
             current["time_hhmm"] = body.time_hhmm.strip()
+        if body.day_of_week is not None or body.time_hhmm is not None:
+            current["cron"] = _cron_from_weekly(
+                str(current.get("day_of_week") or body.day_of_week or "Monday"),
+                str(current.get("time_hhmm") or body.time_hhmm or "09:00"),
+            )
         if body.timezone is not None:
-            current["timezone"] = str(body.timezone).strip().lower()
+            current["timezone"] = _normalized_schedule_timezone(body.timezone)
         if body.run_request is not None:
             current["run_request"] = body.run_request.model_dump()
         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
         WEEKLY_SCHEDULES[schedule_id] = current
-    _persist_weekly_schedules()
-    with SCHEDULES_LOCK:
-        return dict(WEEKLY_SCHEDULES[schedule_id])
+        updated = dict(current)
+    _persist_schedules()
+    return _serialize_schedule_item(updated)
 
-async def delete_weekly_schedule(schedule_id: str):
+async def delete_schedule(schedule_id: str):
     with SCHEDULES_LOCK:
         if schedule_id not in WEEKLY_SCHEDULES:
             raise HTTPException(status_code=404, detail="Schedule not found")
         deleted = WEEKLY_SCHEDULES.pop(schedule_id)
-    _persist_weekly_schedules()
+    _persist_schedules()
     return {"status": "ok", "deleted": {"id": deleted.get("id"), "name": deleted.get("name")}}
 
-async def trigger_weekly_schedule_now(schedule_id: str):
+
+async def delete_weekly_schedule(schedule_id: str):
+    return await delete_schedule(schedule_id)
+
+
+async def trigger_schedule_now(schedule_id: str):
     with SCHEDULES_LOCK:
         schedule = WEEKLY_SCHEDULES.get(schedule_id)
         if schedule is None:
@@ -1338,8 +1499,12 @@ async def trigger_weekly_schedule_now(schedule_id: str):
             current["last_error"] = None
             current["updated_at"] = datetime.utcnow().isoformat() + "Z"
             WEEKLY_SCHEDULES[schedule_id] = current
-    _persist_weekly_schedules()
+    _persist_schedules()
     return result
+
+
+async def trigger_weekly_schedule_now(schedule_id: str):
+    return await trigger_schedule_now(schedule_id)
 
 async def get_runtime_metrics():
     _cleanup_stale_local_claims()
@@ -1388,7 +1553,8 @@ async def get_runtime_metrics():
         "scheduler": {
             "enabled": ORION_SCHEDULER_ENABLED,
             "poll_seconds": ORION_SCHEDULER_POLL_SECONDS,
-            "weekly_schedules": schedule_count,
+            "weekly_schedules": len([item for item in WEEKLY_SCHEDULES.values() if item.get("day_of_week") and item.get("time_hhmm")]),
+            "active_schedules": schedule_count,
         },
         "local_companion": {
             "enabled": ORION_LOCAL_COMPANION_ENABLED,

@@ -216,6 +216,16 @@ type HomeWorkspaceSnapshotPayload = {
     claimed_runs?: HomeWorkspaceRunItem[];
     recent_runs?: HomeWorkspaceRunItem[];
   };
+  schedules?: {
+    active_count?: number;
+    items?: Array<{
+      id?: string;
+      name?: string;
+      cron?: string;
+      timezone?: string;
+      next_run_at?: string | null;
+    }>;
+  };
   approvals?: {
     pending?: HomeWorkspaceApprovalItem[];
     audit?: Array<{
@@ -271,6 +281,8 @@ const INITIAL_HOME_OVERVIEW: HomeLiveOverview = {
   workerOnlineCount: 0,
   workerBusyCount: 0,
   approvalWaitingCount: 0,
+  activeScheduleCount: 0,
+  scheduleItems: [],
   activeAgentCards: [],
   recentLocalActions: [],
   updatedAt: null,
@@ -468,6 +480,7 @@ function buildHomeLiveOverview(payload: HomeWorkspaceSnapshotPayload): HomeLiveO
   const claimedRuns = Array.isArray(payload.tasks?.claimed_runs) ? payload.tasks?.claimed_runs : [];
   const recentRuns = Array.isArray(payload.tasks?.recent_runs) ? payload.tasks?.recent_runs : [];
   const pendingApprovals = Array.isArray(payload.approvals?.pending) ? payload.approvals?.pending : [];
+  const activeSchedules = Array.isArray(payload.schedules?.items) ? payload.schedules?.items : [];
 
   type Candidate = HomeLiveAgentCard & {
     priority: number;
@@ -660,6 +673,14 @@ function buildHomeLiveOverview(payload: HomeWorkspaceSnapshotPayload): HomeLiveO
       };
     });
 
+  const scheduleItems: HomeLiveOverview['scheduleItems'] = activeSchedules.slice(0, 4).map((item, index) => ({
+    id: String(item?.id || `schedule-${index}`),
+    name: String(item?.name || '').trim() || 'Scheduled run',
+    cron: String(item?.cron || '').trim() || 'Custom cron',
+    timezone: String(item?.timezone || '').trim() || 'local',
+    nextRunAt: String(item?.next_run_at || '').trim() || null,
+  }));
+
   return {
     activeAgentCount: activeKeys.size,
     localQueuePendingCount: Number(queueSummary?.queued_count ?? workerSummary?.pending_runs ?? 0),
@@ -667,6 +688,8 @@ function buildHomeLiveOverview(payload: HomeWorkspaceSnapshotPayload): HomeLiveO
     workerOnlineCount: Number(workerSummary?.online ?? 0),
     workerBusyCount: Number(workerSummary?.busy ?? 0),
     approvalWaitingCount: pendingApprovals.length,
+    activeScheduleCount: Number(payload.schedules?.active_count ?? activeSchedules.length ?? 0),
+    scheduleItems,
     activeAgentCards,
     recentLocalActions,
     updatedAt: String(payload.updated_at || '').trim() || null,
@@ -1239,6 +1262,7 @@ export function AutopilotWorkspace() {
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
   const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
+  const [chatBootstrapSuggestions, setChatBootstrapSuggestions] = useState<Record<string, string[]>>({});
   const [hasAttemptedSimpleChatOrTask, setHasAttemptedSimpleChatOrTask] = useState(false);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
@@ -1806,6 +1830,15 @@ export function AutopilotWorkspace() {
   const latestDirectChatContext = useMemo<ChatContextUsedRecord | null>(() => {
     return [...selectedChatMessages].reverse().find((message) => message.role === 'assistant' && message.contextUsed)?.contextUsed || null;
   }, [selectedChatMessages]);
+  const selectedChatSuggestions = useMemo(() => {
+    const sessionId = selectedChatSession?.id;
+    if (!sessionId) return [...EMPTY_CHAT_PROMPTS];
+    const suggestions = chatBootstrapSuggestions[sessionId];
+    if (Array.isArray(suggestions) && suggestions.length > 0) {
+      return suggestions.slice(0, 3);
+    }
+    return [...EMPTY_CHAT_PROMPTS];
+  }, [chatBootstrapSuggestions, selectedChatSession?.id]);
 
   useEffect(() => {
     let active = true;
@@ -1827,6 +1860,36 @@ export function AutopilotWorkspace() {
       active = false;
     };
   }, [router, selectedChatMessages.length]);
+
+  useEffect(() => {
+    const sessionId = selectedChatSession?.id;
+    if (!sessionId) return;
+    if (selectedChatMessages.length > 0) return;
+    if (Array.isArray(chatBootstrapSuggestions[sessionId]) && chatBootstrapSuggestions[sessionId].length > 0) return;
+    let active = true;
+
+    const loadSuggestions = async () => {
+      try {
+        const payload = await sendOperatorChat('', {
+          threadId: sessionId,
+          priorMessages: [],
+        });
+        if (!active) return;
+        const nextSuggestions = Array.isArray(payload.suggestions) && payload.suggestions.length > 0
+          ? payload.suggestions.slice(0, 3)
+          : [...EMPTY_CHAT_PROMPTS];
+        setChatBootstrapSuggestions((current) => ({ ...current, [sessionId]: nextSuggestions }));
+      } catch {
+        if (!active) return;
+        setChatBootstrapSuggestions((current) => ({ ...current, [sessionId]: [...EMPTY_CHAT_PROMPTS] }));
+      }
+    };
+
+    void loadSuggestions();
+    return () => {
+      active = false;
+    };
+  }, [chatBootstrapSuggestions, selectedChatMessages.length, selectedChatSession?.id, sendOperatorChat]);
   const activeProviderOption = useMemo(
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
@@ -2746,7 +2809,7 @@ export function AutopilotWorkspace() {
           messages={selectedChatMessages}
           emptyState={{
             title: 'What do you want to get done?',
-            suggestions: [...EMPTY_CHAT_PROMPTS],
+            suggestions: selectedChatSuggestions,
             onSelectSuggestion: handleSelectEmptyPrompt,
           }}
           inlineStatus={inlineSimpleChatStatus}

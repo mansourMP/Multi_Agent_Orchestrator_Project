@@ -34,12 +34,18 @@ except Exception:
     resolve_workspace_tool_capabilities = _tool_availability_module.resolve_workspace_tool_capabilities
 
 from server_modules.agent_memory import (
+    delete_memory,
     get_memory,
     get_recent_logs,
     list_memory_entries,
     save_daily_log,
     save_memory,
+    semantic_search,
 )
+from server_modules.conversation_compaction import compact_conversation_history
+from server_modules.llm_task import llm_task
+from server_modules.session_transcript_store import save_session_transcript
+from server_modules.web_tools import web_fetch, web_search
 from server_modules.workspace_context import read_workspace_context_files, workspace_context_dir
 
 WORKFLOW_REQUEST_MARKERS = (
@@ -110,6 +116,28 @@ LOCAL_SCREENSHOT_KEYWORDS = (
     "capture the screen",
     "take a screenshot",
 )
+WEB_LOOKUP_KEYWORDS = (
+    "latest",
+    "today",
+    "current",
+    "look up",
+    "lookup",
+    "search the web",
+    "search web",
+    "online",
+    "website",
+    "web",
+    "news",
+)
+LLM_TASK_KEYWORDS = (
+    "analyze",
+    "classify",
+    "extract",
+    "compare",
+    "summarize",
+    "rewrite",
+    "convert",
+)
 COMPLEX_TASK_SEQUENCE_MARKERS = (
     " and then ",
     " then ",
@@ -151,12 +179,14 @@ DIRECT_RUN_OPENERS = (
     "could you",
     "would you",
 )
-MAX_DIRECT_CHAT_PRIOR_MESSAGES = 6
-MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS = 280
+MAX_DIRECT_CHAT_PRIOR_MESSAGES = 80
+MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS = 4000
 MAX_CONTEXT_TOOL_CAPABILITIES = 6
 MAX_CONTEXT_TOOL_ACTIONS = 6
 DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS = 12.0
 DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS = 0.25
+DIRECT_CHAT_COMPACTION_TOKEN_LIMIT = 8000
+DIRECT_CHAT_LOOP_REPEAT_LIMIT = 3
 _DIRECT_CHAT_MEMORY_SYSTEM_PREFIX = (
     "Persistent workspace memory. Use this only as background context when it is relevant, "
     "and do not repeat it unless it helps answer the user.\n"
@@ -170,6 +200,10 @@ _DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT = (
     "What important facts about the user or their preferences were revealed in this conversation? "
     "Reply with a JSON list or empty list."
 )
+_DIRECT_CHAT_LOOP_REPLY = "I appear to be stuck in a loop. Please clarify what you want me to do."
+_DIRECT_TOOL_LOOP_STATE: Dict[str, Dict[str, Any]] = {}
+_DIRECT_CHAT_MODEL_PREFERENCES: Dict[str, Dict[str, Optional[str]]] = {}
+_DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
 
 
 def _compact_text(value: Any) -> str:
@@ -300,6 +334,133 @@ def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
     return normalized[-MAX_DIRECT_CHAT_PRIOR_MESSAGES:]
 
 
+def _direct_tool_session_key(workspace_id: str, thread_id: str) -> str:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    normalized_thread_id = str(thread_id or "").strip() or "direct-chat"
+    return f"{normalized_workspace_id}:{normalized_thread_id}"
+
+
+def _direct_chat_session_key(workspace_id: str, thread_id: str) -> str:
+    return _direct_tool_session_key(workspace_id, thread_id)
+
+
+def _parse_slash_command(message: str) -> Dict[str, str]:
+    normalized = str(message or "").strip()
+    if not normalized.startswith("/"):
+        return {}
+    tokens = normalized.split()
+    if not tokens:
+        return {}
+    command = tokens[0][1:].strip().lower()
+    remainder = normalized[len(tokens[0]):].strip()
+    return {
+        "command": command,
+        "remainder": remainder,
+    }
+
+
+def _session_model_preference(session_key: str) -> Dict[str, Optional[str]]:
+    stored = _DIRECT_CHAT_MODEL_PREFERENCES.get(session_key)
+    if not isinstance(stored, dict):
+        return {"provider": None, "model": None}
+    return {
+        "provider": str(stored.get("provider") or "").strip() or None,
+        "model": str(stored.get("model") or "").strip() or None,
+    }
+
+
+def _set_session_model_preference(session_key: str, *, provider: Optional[str], model: Optional[str]) -> None:
+    _DIRECT_CHAT_MODEL_PREFERENCES[session_key] = {
+        "provider": str(provider or "").strip() or None,
+        "model": str(model or "").strip() or None,
+    }
+
+
+def _mark_thread_cleared(session_key: str) -> None:
+    _DIRECT_CHAT_CLEAR_MARKERS.add(session_key)
+
+
+def _consume_thread_cleared(session_key: str) -> bool:
+    if session_key not in _DIRECT_CHAT_CLEAR_MARKERS:
+        return False
+    _DIRECT_CHAT_CLEAR_MARKERS.discard(session_key)
+    return True
+
+
+def _connected_provider_tokens(workspace_id: str) -> List[str]:
+    connected: List[str] = []
+    for provider in SUPPORTED_PROVIDERS:
+        try:
+            credentials = _direct_chat_credentials(workspace_id, provider)
+        except Exception:
+            credentials = {}
+        if isinstance(credentials, dict) and credentials:
+            connected.append(provider)
+    return connected
+
+
+def _active_run_count(workspace_id: str) -> int:
+    try:
+        from server_modules.shared import runs as live_runs
+    except Exception:
+        return 0
+    total = 0
+    for run in list(live_runs.values()) if isinstance(live_runs, dict) else []:
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        if status in {"completed", "failed", "timeout", "stopped", "cancelled"}:
+            continue
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        run_workspace_id = str(context.get("workspace_id") or "").strip() or "default"
+        if run_workspace_id == workspace_id:
+            total += 1
+    return total
+
+
+def _slash_command_help_text() -> str:
+    return (
+        "Available commands:\n"
+        "/status\n"
+        "/memory\n"
+        "/forget <key>\n"
+        "/model <name>\n"
+        "/clear\n"
+        "/help"
+    )
+
+
+def _tool_call_signature(tool_call: Dict[str, Any]) -> str:
+    name = str(tool_call.get("name") or "").strip()
+    argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
+    if "__" in name:
+        connector_id, _action_id = _parse_tool_name(name)
+        if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+            nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
+            if isinstance(nested_input, dict):
+                argument_payload = nested_input
+    try:
+        normalized_payload = json.dumps(argument_payload, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        normalized_payload = str(argument_payload)
+    return f"{name}:{normalized_payload}"
+
+
+def _record_direct_tool_signature(session_key: str, tool_call: Dict[str, Any]) -> bool:
+    signature = _tool_call_signature(tool_call)
+    state = _DIRECT_TOOL_LOOP_STATE.get(session_key) or {"signature": "", "count": 0}
+    if state.get("signature") == signature:
+        state["count"] = int(state.get("count") or 0) + 1
+    else:
+        state = {"signature": signature, "count": 1}
+    _DIRECT_TOOL_LOOP_STATE[session_key] = state
+    return int(state.get("count") or 0) >= DIRECT_CHAT_LOOP_REPEAT_LIMIT
+
+
+def _clear_direct_tool_loop_state(session_key: str) -> None:
+    _DIRECT_TOOL_LOOP_STATE.pop(session_key, None)
+
+
 def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:
     memory = get_memory(workspace_id)
     if not memory:
@@ -310,7 +471,7 @@ def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str,
     }
 
 
-def _direct_chat_workspace_context_text(workspace_id: str) -> str:
+def _direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str = "") -> str:
     sections: List[str] = []
     try:
         context_files = read_workspace_context_files()
@@ -326,7 +487,15 @@ def _direct_chat_workspace_context_text(workspace_id: str) -> str:
     if recent_logs:
         sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
 
-    memory_facts = get_memory(workspace_id)
+    memory_entries = semantic_search(workspace_id, memory_query, top_k=5) if str(memory_query or "").strip() else []
+    if memory_entries:
+        memory_facts = "\n".join(
+            f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
+            for item in memory_entries
+            if str(item.get("content") or "").strip()
+        ).strip()
+    else:
+        memory_facts = get_memory(workspace_id)
     if memory_facts:
         sections.append(f"Runtime Memory Facts\n{memory_facts}")
 
@@ -456,6 +625,30 @@ def _persist_direct_chat_memory_best_effort(
         extracted_facts = _parse_direct_chat_memory_facts(extraction_reply)
         for fact in extracted_facts:
             _save_direct_chat_memory_fact(workspace_id, fact)
+    except Exception:
+        return
+
+
+def _persist_direct_chat_transcript_best_effort(
+    *,
+    workspace_id: str,
+    thread_id: str,
+    provider: Optional[str],
+    model: Optional[str],
+    messages: List[Dict[str, str]],
+    user_message: str,
+    assistant_reply: str,
+) -> None:
+    try:
+        save_session_transcript(
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            provider=provider,
+            model=model,
+            messages=messages,
+            user_message=user_message,
+            assistant_reply=assistant_reply,
+        )
     except Exception:
         return
 
@@ -1484,6 +1677,45 @@ def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Di
     return tools
 
 
+def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": "web__search",
+            "description": "Search the web and return the top 5 results with titles, URLs, and snippets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query to run."},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "web__fetch",
+            "description": "Fetch a webpage and extract readable text from it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch."},
+                },
+                "required": ["url"],
+            },
+        },
+        {
+            "name": "llm__task",
+            "description": "Run a focused sub-task with no tools. Optionally require JSON output with a schema.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The sub-task prompt."},
+                    "schema": {"type": "object", "description": "Optional JSON schema for the required output."},
+                },
+                "required": ["prompt"],
+            },
+        },
+    ]
+
+
 def _message_can_use_direct_connector_tools(
     message: str,
     *,
@@ -1555,6 +1787,23 @@ def _message_can_use_direct_local_tools(
     if _message_requests_local_shell_tool(message) and "shell__exec" in tool_names:
         return True
     if _message_requests_local_screenshot_tool(message) and "screenshot__capture" in tool_names:
+        return True
+    return False
+
+
+def _message_can_use_builtin_direct_tools(
+    message: str,
+    *,
+    tools: List[Dict[str, Any]],
+) -> bool:
+    compact = _compact_text(message)
+    if not compact or not tools:
+        return False
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    if {"web__search", "web__fetch"} & tool_names:
+        if _mentions_any(compact, WEB_LOOKUP_KEYWORDS) or bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
+            return True
+    if "llm__task" in tool_names and _mentions_any(compact, LLM_TASK_KEYWORDS):
         return True
     return False
 
@@ -1999,11 +2248,57 @@ def _execute_single_direct_tool_call(
     workspace_id: str,
     thread_id: str,
     index: int = 1,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    credentials: Optional[Dict[str, Any]] = None,
+    reasoning_effort: str = "",
 ) -> str:
     from server_modules.runs_execution import _workflow_execute_connector_action, _workflow_execute_local_tool
 
     connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
     argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
+    if connector_id == "web" and action_id == "search":
+        query = str(argument_payload.get("query") or argument_payload.get("input") or "").strip()
+        results = web_search(query)
+        if not results:
+            return f"No web search results found for '{query}'."
+        return "\n\n".join(
+            f"{index}. {result['title']}\nURL: {result['url']}\nSnippet: {result['snippet']}"
+            for index, result in enumerate(results, start=1)
+        )
+    if connector_id == "web" and action_id == "fetch":
+        url = str(argument_payload.get("url") or argument_payload.get("input") or "").strip()
+        return web_fetch(url)
+    if connector_id == "llm" and action_id == "task":
+        prompt = str(argument_payload.get("prompt") or argument_payload.get("input") or "").strip()
+        schema = argument_payload.get("schema") if isinstance(argument_payload.get("schema"), dict) else None
+        llm_task_metadata: Dict[str, Any] = {
+            "provider": provider,
+            "model": model,
+            "source": "chat_direct_llm_task",
+            "reasoning_effort": _normalize_reasoning_effort(reasoning_effort),
+            "tools": [],
+            "disable_provider_fallback": True,
+        }
+        if isinstance(credentials, dict) and credentials:
+            llm_task_metadata["credentials"] = credentials
+        result = llm_task(
+            prompt,
+            schema=schema,
+            context={
+                "workspace_id": workspace_id,
+                "provider": provider,
+                "model": model,
+                "source": "chat_direct_llm_task",
+                "reasoning_effort": _normalize_reasoning_effort(reasoning_effort),
+                "tools": [],
+                "disable_provider_fallback": True,
+            },
+            metadata=llm_task_metadata,
+        )
+        if isinstance(result, (dict, list)):
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        return str(result or "").strip()
     if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
         nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
         if isinstance(nested_input, dict):
@@ -2053,6 +2348,10 @@ def _execute_direct_tool_calls(
     tool_calls: List[Dict[str, Any]],
     workspace_id: str,
     thread_id: str,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    credentials: Optional[Dict[str, Any]] = None,
+    reasoning_effort: str = "",
 ) -> str:
     if not tool_calls:
         return ""
@@ -2064,6 +2363,10 @@ def _execute_direct_tool_calls(
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 index=index,
+                provider=provider,
+                model=model,
+                credentials=credentials,
+                reasoning_effort=reasoning_effort,
             )
         )
     return "\n\n".join(part for part in replies if part).strip()
@@ -2266,13 +2569,67 @@ def build_direct_operator_reply(
     normalized_message = str(message or "").strip()
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     normalized_thread_id = str(thread_id or "").strip()
+    session_key = _direct_chat_session_key(normalized_workspace_id, normalized_thread_id)
     availability_payload = availability if isinstance(availability, dict) else {}
     normalized_requested_provider = str(requested_provider or "").strip().lower()
     normalized_requested_model = str(requested_model or "").strip()
+    session_model_preference = _session_model_preference(session_key)
+    if session_model_preference.get("provider"):
+        normalized_requested_provider = str(session_model_preference.get("provider") or "").strip().lower()
+    if session_model_preference.get("model"):
+        normalized_requested_model = str(session_model_preference.get("model") or "").strip()
     normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
+    slash_command = _parse_slash_command(normalized_message)
+    slash_command_name = str(slash_command.get("command") or "").strip().lower()
+    slash_remainder = str(slash_command.get("remainder") or "").strip()
+    if slash_command_name == "model":
+        model_parts = slash_remainder.split(None, 1) if slash_remainder else []
+        selected_model_token = str(model_parts[0] or "").strip() if model_parts else ""
+        trailing_content = str(model_parts[1] or "").strip() if len(model_parts) > 1 else ""
+        selected_provider = normalized_requested_provider or None
+        selected_model = selected_model_token
+        if ":" in selected_model_token:
+            provider_token, model_token = selected_model_token.split(":", 1)
+            selected_provider = str(provider_token or "").strip().lower() or selected_provider
+            selected_model = str(model_token or "").strip()
+        if selected_provider:
+            normalized_requested_provider = selected_provider
+        if selected_model:
+            normalized_requested_model = selected_model
+        if selected_provider or selected_model:
+            _set_session_model_preference(
+                session_key,
+                provider=normalized_requested_provider or None,
+                model=normalized_requested_model or None,
+            )
+        if trailing_content:
+            normalized_message = trailing_content
+            slash_command_name = ""
+            slash_remainder = ""
+    elif slash_command_name == "clear" and slash_remainder:
+        _mark_thread_cleared(session_key)
+        normalized_message = slash_remainder
+        slash_command_name = ""
+        slash_remainder = ""
     normalized_prior_messages = _normalize_prior_messages(prior_messages)
-    workspace_context_text = _direct_chat_workspace_context_text(normalized_workspace_id)
+    if _consume_thread_cleared(session_key):
+        normalized_prior_messages = []
+    compaction = compact_conversation_history(
+        normalized_prior_messages,
+        max_tokens=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
+        preserve_last_messages=10,
+    )
+    compacted_prior_messages = [
+        item
+        for item in (compaction.get("messages") if isinstance(compaction, dict) else [])
+        if isinstance(item, dict)
+    ]
+    workspace_context_text = _direct_chat_workspace_context_text(
+        normalized_workspace_id,
+        memory_query=normalized_message,
+    )
     proactive_suggestions = _build_proactive_suggestions(normalized_workspace_id) if not normalized_prior_messages else []
+    tool_loop_session_key = _direct_tool_session_key(normalized_workspace_id, normalized_thread_id)
     availability_payload = {
         **availability_payload,
         "tool_capabilities": resolve_workspace_tool_capabilities(normalized_workspace_id),
@@ -2281,6 +2638,7 @@ def build_direct_operator_reply(
     tool_capabilities = _context_tool_capabilities(availability_payload)
     tools = _build_direct_chat_tools(tool_capabilities)
     tools.extend(_build_local_direct_chat_tools(availability_payload))
+    tools.extend(_build_builtin_direct_chat_tools())
     approved_action_payload = _normalize_direct_approved_action(approved_action)
     base_context_used = _build_context_used(
         workspace_id=normalized_workspace_id,
@@ -2295,6 +2653,47 @@ def build_direct_operator_reply(
         history_mode="none",
         run_created=False,
     )
+
+    if slash_command_name:
+        if slash_command_name == "status":
+            connected_providers = _connected_provider_tokens(normalized_workspace_id)
+            reply = (
+                "Runtime status\n"
+                f"- AI ready: {'yes' if bool(availability_payload.get('ai_ready')) else 'no'}\n"
+                f"- Connected providers: {', '.join(connected_providers) if connected_providers else 'none'}\n"
+                f"- Memory facts: {len(list_memory_entries(normalized_workspace_id))}\n"
+                f"- Active runs: {_active_run_count(normalized_workspace_id)}"
+            )
+            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
+        if slash_command_name == "memory":
+            memory_text = get_memory(normalized_workspace_id) or "No memory facts saved yet."
+            yield {"type": "final", "payload": _with_context_used({"reply": memory_text, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
+        if slash_command_name == "forget":
+            memory_key = str(slash_remainder or "").strip()
+            if not memory_key:
+                reply = "Usage: /forget <key>"
+            else:
+                deleted = delete_memory(normalized_workspace_id, memory_key)
+                reply = f"Forgot memory '{memory_key}'." if deleted else f"Memory '{memory_key}' was not found."
+            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
+        if slash_command_name == "model":
+            if not normalized_requested_model:
+                reply = "Usage: /model <name>"
+            else:
+                provider_label = f" ({normalized_requested_provider})" if normalized_requested_provider else ""
+                reply = f"Chat model set to {normalized_requested_model}{provider_label} for this session."
+            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
+        if slash_command_name == "clear":
+            _mark_thread_cleared(session_key)
+            yield {"type": "final", "payload": _with_context_used({"reply": "Conversation history cleared for this thread.", "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
+        if slash_command_name == "help":
+            yield {"type": "final", "payload": _with_context_used({"reply": _slash_command_help_text(), "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
+            return
 
     if not normalized_message:
         yield {
@@ -2342,6 +2741,12 @@ def build_direct_operator_reply(
                 tool_calls=[_approved_action_to_tool_call(approved_action_payload)],
                 workspace_id=normalized_workspace_id,
                 thread_id=normalized_thread_id,
+                provider=normalized_requested_provider or None,
+                model=normalized_requested_model or None,
+                credentials=_direct_chat_credentials(normalized_workspace_id, normalized_requested_provider)
+                if normalized_requested_provider
+                else None,
+                reasoning_effort=normalized_reasoning_effort or "",
             )
             yield {
                 "type": "final",
@@ -2443,6 +2848,9 @@ def build_direct_operator_reply(
     ) or _message_can_use_direct_local_tools(
         normalized_message,
         provider=provider,
+        tools=tools,
+    ) or _message_can_use_builtin_direct_tools(
+        normalized_message,
         tools=tools,
     )
     if prefer_durable_run_handoff:
@@ -2567,8 +2975,8 @@ def build_direct_operator_reply(
             system_prompt = workspace_context_text + "\n\n" + system_prompt
         else:
             system_prompt = workspace_context_text
-    history_mode = "raw_messages" if normalized_prior_messages else ("summary" if workspace_context_text else "none")
-    prior_messages_used = bool(normalized_prior_messages or workspace_context_text)
+    history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else ("summary" if workspace_context_text else "none"))
+    prior_messages_used = bool(compacted_prior_messages or workspace_context_text)
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
     llm_error = ""
@@ -2576,7 +2984,7 @@ def build_direct_operator_reply(
     actual_model: Optional[str] = normalized_requested_model or None
     executed_any_tools = False
     conversation_messages: List[Dict[str, str]] = []
-    conversation_messages.extend(normalized_prior_messages)
+    conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
     max_iterations = 10
 
@@ -2622,6 +3030,43 @@ def build_direct_operator_reply(
                     conversation_messages.append({"role": "assistant", "content": final_reply})
 
                 if iteration_tool_calls:
+                    loop_detected = any(
+                        _record_direct_tool_signature(tool_loop_session_key, tool_call)
+                        for tool_call in iteration_tool_calls
+                        if isinstance(tool_call, dict)
+                    )
+                    if loop_detected:
+                        yield {
+                            "type": "final",
+                            "payload": {
+                                "reply": _DIRECT_CHAT_LOOP_REPLY,
+                                "actions": [],
+                                "suggestions": proactive_suggestions,
+                                "mode": "answer",
+                                "usage_masked": usage_masked,
+                                "provider": actual_provider,
+                                "model": actual_model,
+                                "attempted_providers": attempted_providers,
+                                "error": "tool_loop_detected",
+                                "context_used": _build_context_used(
+                                    workspace_id=normalized_workspace_id,
+                                    requested_provider=normalized_requested_provider,
+                                    effective_provider=str(actual_provider or provider or "").strip() or None,
+                                    requested_model=normalized_requested_model,
+                                    effective_model=str(actual_model or "").strip() or None,
+                                    reasoning_effort=normalized_reasoning_effort,
+                                    connected_systems=connected_systems,
+                                    tool_capabilities=tool_capabilities,
+                                    prior_messages_used=True,
+                                    history_mode=history_mode,
+                                    run_created=False,
+                                    fallback_used=False,
+                                    fallback_reason=fallback_reason,
+                                ),
+                            },
+                        }
+                        _clear_direct_tool_loop_state(tool_loop_session_key)
+                        return
                     approval_payload = _build_direct_tool_approval_response(
                         tool_calls=iteration_tool_calls,
                         tool_capabilities=tool_capabilities,
@@ -2647,7 +3092,7 @@ def build_direct_operator_reply(
                                     connected_systems=connected_systems,
                                     tool_capabilities=tool_capabilities,
                                     prior_messages_used=True,
-                                    history_mode="raw_messages",
+                                    history_mode=history_mode,
                                     run_created=False,
                                     fallback_used=False,
                                     fallback_reason=fallback_reason,
@@ -2681,6 +3126,10 @@ def build_direct_operator_reply(
                                 workspace_id=normalized_workspace_id,
                                 thread_id=normalized_thread_id,
                                 index=tool_index,
+                                provider=str(actual_provider or provider or "").strip() or None,
+                                model=str(actual_model or "").strip() or None,
+                                credentials=direct_chat_credentials if isinstance(direct_chat_credentials, dict) else None,
+                                reasoning_effort=normalized_reasoning_effort or "",
                             )
                             executed_any_tools = True
                             yield _direct_tool_step_payload(
@@ -2742,7 +3191,7 @@ def build_direct_operator_reply(
                                     connected_systems=connected_systems,
                                     tool_capabilities=tool_capabilities,
                                     prior_messages_used=True,
-                                    history_mode="raw_messages",
+                                    history_mode=history_mode,
                                     run_created=False,
                                     fallback_used=False,
                                     fallback_reason=fallback_reason,
@@ -2774,20 +3223,30 @@ def build_direct_operator_reply(
                             connected_systems=connected_systems,
                             tool_capabilities=tool_capabilities,
                             prior_messages_used=prior_messages_used,
-                            history_mode="raw_messages" if normalized_prior_messages else history_mode,
+                            history_mode=history_mode,
                             run_created=False,
                             fallback_used=False,
                             fallback_reason=fallback_reason,
                         ),
                     },
                 }
+                _clear_direct_tool_loop_state(tool_loop_session_key)
                 _persist_direct_chat_memory_best_effort(
                     workspace_id=normalized_workspace_id,
                     provider=str(actual_provider or provider or "").strip() or None,
                     model=str(actual_model or "").strip() or None,
                     credentials=direct_chat_credentials,
                     reasoning_effort=normalized_reasoning_effort,
-                    prior_messages=normalized_prior_messages,
+                    prior_messages=compacted_prior_messages,
+                    user_message=normalized_message,
+                    assistant_reply=final_reply,
+                )
+                _persist_direct_chat_transcript_best_effort(
+                    workspace_id=normalized_workspace_id,
+                    thread_id=normalized_thread_id,
+                    provider=str(actual_provider or provider or "").strip() or None,
+                    model=str(actual_model or "").strip() or None,
+                    messages=conversation_messages,
                     user_message=normalized_message,
                     assistant_reply=final_reply,
                 )
@@ -2807,6 +3266,7 @@ def build_direct_operator_reply(
         llm_error = llm_error or f"max_tool_iterations_reached:{max_iterations}"
 
     actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
+    _clear_direct_tool_loop_state(tool_loop_session_key)
     yield {
         "type": "final",
         "payload": {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import threading
 import time
+import uuid
 
 from fastapi.responses import StreamingResponse
 
@@ -20,6 +22,9 @@ _CHAT_STREAM_TTL_SECONDS = 15 * 60
 _CHAT_STREAM_SESSIONS: dict[str, dict[str, Any]] = {}
 _HEARTBEAT_SCHEDULER_LOCK = threading.Lock()
 _HEARTBEAT_SCHEDULER: Optional[HeartbeatScheduler] = None
+_WEBHOOK_TRIGGER_LOCK = threading.Lock()
+_WEBHOOK_TRIGGERS_LOADED = False
+_WEBHOOK_TRIGGERS: dict[str, dict[str, Any]] = {}
 
 
 def _late_server_export(name: str):
@@ -38,6 +43,53 @@ def _refresh_server_exports():
 def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
     with _HEARTBEAT_SCHEDULER_LOCK:
         return _HEARTBEAT_SCHEDULER
+
+
+def _load_webhook_triggers() -> None:
+    global _WEBHOOK_TRIGGERS_LOADED
+    with _WEBHOOK_TRIGGER_LOCK:
+        if _WEBHOOK_TRIGGERS_LOADED:
+            return
+        path = _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE")
+        payload = _late_server_export("_safe_read_json")(path, {"version": 1, "items": []})
+        items = payload.get("items") if isinstance(payload, dict) else []
+        _WEBHOOK_TRIGGERS.clear()
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                trigger_id = str(item.get("id") or "").strip()
+                if not trigger_id:
+                    continue
+                _WEBHOOK_TRIGGERS[trigger_id] = dict(item)
+        _WEBHOOK_TRIGGERS_LOADED = True
+
+
+def _persist_webhook_triggers_locked() -> None:
+    path = _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE")
+    _late_server_export("_safe_write_json")(
+        path,
+        {
+            "version": 1,
+            "updated_at": time.time(),
+            "items": list(_WEBHOOK_TRIGGERS.values()),
+        },
+    )
+
+
+def _match_webhook_trigger(workspace_id: str, request_url: str) -> Optional[dict[str, Any]]:
+    _load_webhook_triggers()
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    with _WEBHOOK_TRIGGER_LOCK:
+        for item in _WEBHOOK_TRIGGERS.values():
+            if not isinstance(item, dict) or not bool(item.get("enabled", True)):
+                continue
+            if str(item.get("workspace_id") or "default").strip() != normalized_workspace_id:
+                continue
+            pattern = str(item.get("url_pattern") or "").strip()
+            if not pattern or fnmatch.fnmatch(request_url, pattern) or fnmatch.fnmatch(f"/webhooks/ingest/{normalized_workspace_id}", pattern):
+                return dict(item)
+    return None
 
 
 def _normalize_chat_stream_cursor(value: Any) -> int:
@@ -587,6 +639,22 @@ def register_run_routes(app) -> None:
             module_globals[key] = value
 
     def _start_heartbeat_run(tasks: List[str], metadata: Dict[str, Any]) -> Dict[str, Any]:
+        from server_modules import runs_core as _runs_core
+
+        pending_schedule_result = _runs_core.trigger_pending_heartbeat_schedules()
+        pending_started = pending_schedule_result.get("started") if isinstance(pending_schedule_result, dict) else []
+        if not tasks:
+            if pending_started:
+                first = pending_started[0] if isinstance(pending_started, list) and pending_started else {}
+                return {
+                    "acted": True,
+                    "run_id": str((first or {}).get("run_id") or "").strip() or None,
+                    "summary": f"Heartbeat started {len(pending_started)} pending schedule(s).",
+                }
+            return {
+                "acted": False,
+                "summary": "No pending heartbeat tasks.",
+            }
         heartbeat_goal = (
             "Heartbeat checklist tasks:\n"
             + "\n".join(f"- {task}" for task in tasks)
@@ -600,11 +668,20 @@ def register_run_routes(app) -> None:
             metadata={
                 "source": "heartbeat",
                 "heartbeat_tasks": list(tasks),
+                "heartbeat_pending_schedules": pending_started if isinstance(pending_started, list) else [],
                 "heartbeat_trigger": str(metadata.get("trigger") or "scheduled"),
                 "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
             },
         )
-        return _late_server_export("_create_run_from_request")(request)
+        result = _late_server_export("_create_run_from_request")(request)
+        return {
+            "acted": True,
+            **(result if isinstance(result, dict) else {}),
+            "summary": (
+                f"Heartbeat started a run for {len(tasks)} task(s)."
+                + (f" Also started {len(pending_started)} pending schedule(s)." if pending_started else "")
+            ),
+        }
 
     def _heartbeat_notify(message: str) -> None:
         try:
@@ -624,6 +701,7 @@ def register_run_routes(app) -> None:
                 notify_callback=_heartbeat_notify,
             )
             _HEARTBEAT_SCHEDULER.start()
+    _load_webhook_triggers()
 
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
@@ -780,6 +858,73 @@ def register_run_routes(app) -> None:
         return {
             "ok": True,
             **scheduler.trigger_now(),
+        }
+
+    @app.post("/webhooks/register", dependencies=[Depends(require_api_key)])
+    async def register_webhook_trigger(request: Request, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        _load_webhook_triggers()
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid webhook trigger payload: {exc}") from exc
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Invalid webhook trigger payload.")
+        workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
+        url_pattern = str(body.get("url_pattern") or "").strip()
+        workflow_id = str(body.get("workflow_id") or "").strip()
+        if not url_pattern:
+            raise HTTPException(status_code=400, detail="url_pattern is required.")
+        if not workflow_id:
+            raise HTTPException(status_code=400, detail="workflow_id is required.")
+        trigger_id = str(uuid.uuid4())
+        trigger = {
+            "id": trigger_id,
+            "workspace_id": workspace_id,
+            "url_pattern": url_pattern,
+            "workflow_id": workflow_id,
+            "user_goal": str(body.get("user_goal") or "").strip() or None,
+            "metadata": body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
+            "enabled": bool(body.get("enabled", True)),
+            "created_at": time.time(),
+        }
+        with _WEBHOOK_TRIGGER_LOCK:
+            _WEBHOOK_TRIGGERS[trigger_id] = trigger
+            _persist_webhook_triggers_locked()
+        return {"ok": True, **trigger}
+
+    @app.post("/webhooks/ingest/{workspace_id}", dependencies=[Depends(require_api_key)])
+    async def ingest_webhook(workspace_id: str, request: Request, current_user=Depends(require_api_key)):
+        _refresh_server_exports()
+        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid webhook payload: {exc}") from exc
+        matched_trigger = _match_webhook_trigger(normalized_workspace_id, str(request.url))
+        if not isinstance(matched_trigger, dict):
+            raise HTTPException(status_code=404, detail="No webhook trigger matched this request.")
+        workflow_id = str(matched_trigger.get("workflow_id") or "").strip()
+        user_goal = str(matched_trigger.get("user_goal") or "").strip() or f"Handle webhook event for workflow '{workflow_id}'."
+        request_payload = RunStartRequest(
+            engine="orion",
+            workflow_id=workflow_id or None,
+            workspace_id=normalized_workspace_id,
+            user_goal=user_goal,
+            metadata={
+                "source": "webhook",
+                "webhook_trigger_id": str(matched_trigger.get("id") or "").strip() or None,
+                "webhook_url_pattern": str(matched_trigger.get("url_pattern") or "").strip(),
+                "webhook_request_url": str(request.url),
+                "webhook_payload": payload,
+                **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
+            },
+        )
+        result = _late_server_export("_create_run_from_request")(request_payload)
+        return {
+            "ok": True,
+            "run_id": str((result or {}).get("run_id") or "").strip() or None,
+            "trigger_id": str(matched_trigger.get("id") or "").strip() or None,
         }
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])

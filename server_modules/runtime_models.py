@@ -173,6 +173,8 @@ class WeeklyScheduleUpsertRequest(BaseModel):
     day_of_week: str
     time_hhmm: str
     timezone: str = "local"
+    wake_mode: str = "now"
+    delivery: str = "announce"
     run_request: RunStartRequest
 
     def validate_fields(self) -> None:
@@ -190,6 +192,12 @@ class WeeklyScheduleUpsertRequest(BaseModel):
         tz_mode = str(self.timezone or "").strip().lower()
         if tz_mode not in {"local", "utc"}:
             raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+        wake_mode = str(self.wake_mode or "").strip().lower()
+        if wake_mode not in {"now", "next-heartbeat"}:
+            raise HTTPException(status_code=400, detail="wake_mode must be now or next-heartbeat.")
+        delivery = str(self.delivery or "").strip().lower()
+        if delivery not in {"announce", "silent"}:
+            raise HTTPException(status_code=400, detail="delivery must be announce or silent.")
         if not isinstance(self.run_request, RunStartRequest):
             raise HTTPException(status_code=400, detail="run_request is required.")
 
@@ -200,6 +208,8 @@ class WeeklySchedulePatchRequest(BaseModel):
     day_of_week: Optional[str] = None
     time_hhmm: Optional[str] = None
     timezone: Optional[str] = None
+    wake_mode: Optional[str] = None
+    delivery: Optional[str] = None
     run_request: Optional[RunStartRequest] = None
 
     def validate_fields(self) -> None:
@@ -217,6 +227,16 @@ class WeeklySchedulePatchRequest(BaseModel):
             tz_mode = str(self.timezone).strip().lower()
             if tz_mode not in {"local", "utc"}:
                 raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+        if self.wake_mode is not None:
+            wake_mode = str(self.wake_mode).strip().lower()
+            if wake_mode not in {"now", "next-heartbeat"}:
+                raise HTTPException(status_code=400, detail="wake_mode must be now or next-heartbeat.")
+            self.wake_mode = wake_mode
+        if self.delivery is not None:
+            delivery = str(self.delivery).strip().lower()
+            if delivery not in {"announce", "silent"}:
+                raise HTTPException(status_code=400, detail="delivery must be announce or silent.")
+            self.delivery = delivery
 
 
 class CronScheduleUpsertRequest(BaseModel):
@@ -225,6 +245,8 @@ class CronScheduleUpsertRequest(BaseModel):
     enabled: bool = True
     cron: str
     timezone: str = "local"
+    wake_mode: str = "now"
+    delivery: str = "announce"
     run_request: RunStartRequest
 
     def validate_fields(self) -> None:
@@ -242,6 +264,12 @@ class CronScheduleUpsertRequest(BaseModel):
         tz_mode = str(self.timezone or "").strip().lower()
         if tz_mode not in {"local", "utc"}:
             raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+        wake_mode = str(self.wake_mode or "").strip().lower()
+        if wake_mode not in {"now", "next-heartbeat"}:
+            raise HTTPException(status_code=400, detail="wake_mode must be now or next-heartbeat.")
+        delivery = str(self.delivery or "").strip().lower()
+        if delivery not in {"announce", "silent"}:
+            raise HTTPException(status_code=400, detail="delivery must be announce or silent.")
         if not isinstance(self.run_request, RunStartRequest):
             raise HTTPException(status_code=400, detail="run_request is required.")
 
@@ -251,6 +279,8 @@ class CronSchedulePatchRequest(BaseModel):
     enabled: Optional[bool] = None
     cron: Optional[str] = None
     timezone: Optional[str] = None
+    wake_mode: Optional[str] = None
+    delivery: Optional[str] = None
     run_request: Optional[RunStartRequest] = None
 
     def validate_fields(self) -> None:
@@ -268,6 +298,16 @@ class CronSchedulePatchRequest(BaseModel):
             tz_mode = str(self.timezone).strip().lower()
             if tz_mode not in {"local", "utc"}:
                 raise HTTPException(status_code=400, detail="timezone must be local or utc.")
+        if self.wake_mode is not None:
+            wake_mode = str(self.wake_mode).strip().lower()
+            if wake_mode not in {"now", "next-heartbeat"}:
+                raise HTTPException(status_code=400, detail="wake_mode must be now or next-heartbeat.")
+            self.wake_mode = wake_mode
+        if self.delivery is not None:
+            delivery = str(self.delivery).strip().lower()
+            if delivery not in {"announce", "silent"}:
+                raise HTTPException(status_code=400, detail="delivery must be announce or silent.")
+            self.delivery = delivery
 
 
 class DecisionPayload(BaseModel):

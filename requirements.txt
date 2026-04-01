@@ -19,3 +19,4 @@ transformers>=4.48.0
 torch>=2.2.0
 mcp[cli]
 croniter>=2.0.0
+sentence-transformers>=3.0.0

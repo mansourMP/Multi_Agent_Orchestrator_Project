@@ -300,6 +300,12 @@ def _load_weekly_schedules():
                 continue
             schedule_id = item.get("id")
             if isinstance(schedule_id, str) and schedule_id.strip():
+                item["wake_mode"] = str(item.get("wake_mode") or "now").strip().lower() or "now"
+                item["delivery"] = str(item.get("delivery") or "announce").strip().lower() or "announce"
+                item["run_log"] = list(item.get("run_log") or [])[-10:]
+                item["pending_heartbeat"] = bool(item.get("pending_heartbeat"))
+                item["pending_heartbeat_slot"] = str(item.get("pending_heartbeat_slot") or "").strip() or None
+                item["next_run_at"] = str(item.get("next_run_at") or "").strip() or _compute_schedule_next_run_at(item)
                 WEEKLY_SCHEDULES[schedule_id] = item
 
 
@@ -474,6 +480,37 @@ def _serialize_schedule_item(schedule: Dict[str, Any], *, now_utc: Optional[date
     payload["timezone"] = _normalized_schedule_timezone(str(payload.get("timezone") or "local"))
     payload["next_run_at"] = _compute_schedule_next_run_at(payload, now_utc=now_utc)
     payload["schedule_kind"] = "weekly" if payload.get("day_of_week") and payload.get("time_hhmm") else "cron"
+    payload["wake_mode"] = str(payload.get("wake_mode") or "now").strip().lower() or "now"
+    payload["delivery"] = str(payload.get("delivery") or "announce").strip().lower() or "announce"
+    payload["run_log"] = list(payload.get("run_log") or [])[:10]
+    return payload
+
+
+def _append_schedule_run_log(
+    schedule: Dict[str, Any],
+    *,
+    status: str,
+    now_utc: Optional[datetime] = None,
+    run_id: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = dict(schedule)
+    reference_utc = now_utc or datetime.now(timezone.utc)
+    timestamp = reference_utc.isoformat().replace("+00:00", "Z")
+    run_log = list(payload.get("run_log") or [])
+    run_log.append(
+        {
+            "at": timestamp,
+            "status": str(status or "").strip() or "unknown",
+            "run_id": str(run_id or "").strip() or None,
+            "detail": str(detail or "").strip() or None,
+        }
+    )
+    payload["run_log"] = run_log[-10:]
+    payload["last_run_at"] = timestamp
+    payload["last_run_id"] = str(run_id or "").strip() or payload.get("last_run_id")
+    payload["last_error"] = None if status in {"queued", "started", "completed"} else (str(detail or "").strip() or payload.get("last_error"))
+    payload["next_run_at"] = _compute_schedule_next_run_at(payload, now_utc=reference_utc)
     return payload
 
 
@@ -504,6 +541,22 @@ def _run_weekly_scheduler_forever():
                 continue
 
             try:
+                with SCHEDULES_LOCK:
+                    current = WEEKLY_SCHEDULES.get(schedule_id)
+                    if current is None:
+                        continue
+                    current["last_trigger_slot"] = slot_key
+                    current["last_trigger_date"] = snapshot["date_key"]
+                    wake_mode = str(current.get("wake_mode") or "now").strip().lower() or "now"
+                    if wake_mode == "next-heartbeat":
+                        current["pending_heartbeat"] = True
+                        current["pending_heartbeat_slot"] = slot_key
+                        current["last_error"] = None
+                        current["next_run_at"] = _compute_schedule_next_run_at(current, now_utc=now)
+                        current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+                        WEEKLY_SCHEDULES[schedule_id] = current
+                        changed = True
+                        continue
                 req = RunStartRequest(**req_payload)
                 run_result = _create_run_from_request(req, schedule_id=schedule_id)
                 with SCHEDULES_LOCK:
@@ -511,8 +564,15 @@ def _run_weekly_scheduler_forever():
                     if current is not None:
                         current["last_trigger_slot"] = slot_key
                         current["last_trigger_date"] = snapshot["date_key"]
-                        current["last_run_id"] = run_result.get("run_id")
-                        current["last_error"] = None
+                        current["pending_heartbeat"] = False
+                        current["pending_heartbeat_slot"] = None
+                        current = _append_schedule_run_log(
+                            current,
+                            status="started",
+                            now_utc=now,
+                            run_id=str(run_result.get("run_id") or "").strip() or None,
+                            detail="Scheduled run started immediately.",
+                        )
                         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
                         WEEKLY_SCHEDULES[schedule_id] = current
                         changed = True
@@ -522,13 +582,83 @@ def _run_weekly_scheduler_forever():
                     if current is not None:
                         current["last_trigger_slot"] = slot_key
                         current["last_trigger_date"] = snapshot["date_key"]
-                        current["last_error"] = str(exc)
+                        current = _append_schedule_run_log(
+                            current,
+                            status="failed",
+                            now_utc=now,
+                            detail=str(exc),
+                        )
                         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
                         WEEKLY_SCHEDULES[schedule_id] = current
                         changed = True
 
         if changed:
             _persist_schedules()
+
+
+def trigger_pending_heartbeat_schedules() -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    started: List[Dict[str, Any]] = []
+    changed = False
+    with SCHEDULES_LOCK:
+        pending_items = [
+            dict(item)
+            for item in WEEKLY_SCHEDULES.values()
+            if bool(item.get("enabled")) and bool(item.get("pending_heartbeat"))
+        ]
+    for schedule in pending_items:
+        schedule_id = str(schedule.get("id") or "").strip()
+        req_payload = schedule.get("run_request") if isinstance(schedule.get("run_request"), dict) else {}
+        if not schedule_id or not isinstance(req_payload, dict):
+            continue
+        try:
+            req = RunStartRequest(**req_payload)
+            run_result = _create_run_from_request(req, schedule_id=schedule_id)
+            with SCHEDULES_LOCK:
+                current = WEEKLY_SCHEDULES.get(schedule_id)
+                if current is None:
+                    continue
+                current["pending_heartbeat"] = False
+                current["pending_heartbeat_slot"] = None
+                current = _append_schedule_run_log(
+                    current,
+                    status="started",
+                    now_utc=now,
+                    run_id=str(run_result.get("run_id") or "").strip() or None,
+                    detail="Scheduled run started on heartbeat wake.",
+                )
+                current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+                WEEKLY_SCHEDULES[schedule_id] = current
+                changed = True
+            started.append(
+                {
+                    "schedule_id": schedule_id,
+                    "run_id": str(run_result.get("run_id") or "").strip() or None,
+                    "name": str(schedule.get("name") or "").strip() or schedule_id,
+                }
+            )
+        except Exception as exc:
+            with SCHEDULES_LOCK:
+                current = WEEKLY_SCHEDULES.get(schedule_id)
+                if current is None:
+                    continue
+                current["pending_heartbeat"] = False
+                current["pending_heartbeat_slot"] = None
+                current = _append_schedule_run_log(
+                    current,
+                    status="failed",
+                    now_utc=now,
+                    detail=str(exc),
+                )
+                current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+                WEEKLY_SCHEDULES[schedule_id] = current
+                changed = True
+    if changed:
+        _persist_schedules()
+    return {
+        "acted": bool(started),
+        "started": started,
+    }
 
 
 _runtime_services_initialized = False
@@ -1343,6 +1473,18 @@ async def list_schedules(workspace_id: Optional[str] = None):
     return {"items": [_serialize_schedule_item(item) for item in items]}
 
 
+async def get_schedule_logs(schedule_id: str):
+    with SCHEDULES_LOCK:
+        schedule = WEEKLY_SCHEDULES.get(schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        return {
+            "id": schedule_id,
+            "name": str(schedule.get("name") or "").strip() or schedule_id,
+            "run_log": list(schedule.get("run_log") or [])[-10:],
+        }
+
+
 def _build_schedule_item(
     *,
     schedule_id: str,
@@ -1351,28 +1493,39 @@ def _build_schedule_item(
     enabled: bool,
     cron: str,
     timezone_value: str,
+    wake_mode: str,
+    delivery: str,
     run_request_payload: Dict[str, Any],
     day_of_week: Optional[str] = None,
     time_hhmm: Optional[str] = None,
 ) -> Dict[str, Any]:
     now = datetime.utcnow().isoformat() + "Z"
-    return {
+    item = {
         "id": schedule_id,
         "name": name.strip(),
         "workspace_id": _normalize_workspace_id(workspace_id),
         "enabled": bool(enabled),
         "cron": cron.strip(),
         "timezone": _normalized_schedule_timezone(timezone_value),
+        "wake_mode": str(wake_mode or "now").strip().lower() or "now",
+        "delivery": str(delivery or "announce").strip().lower() or "announce",
         "run_request": run_request_payload,
         "day_of_week": _normalized_weekday(day_of_week) if day_of_week else None,
         "time_hhmm": time_hhmm.strip() if isinstance(time_hhmm, str) and time_hhmm.strip() else None,
         "last_trigger_slot": None,
         "last_trigger_date": None,
         "last_run_id": None,
+        "last_run_at": None,
         "last_error": None,
+        "next_run_at": None,
+        "pending_heartbeat": False,
+        "pending_heartbeat_slot": None,
+        "run_log": [],
         "created_at": now,
         "updated_at": now,
     }
+    item["next_run_at"] = _compute_schedule_next_run_at(item)
+    return item
 
 
 async def create_schedule(body: CronScheduleUpsertRequest):
@@ -1385,6 +1538,8 @@ async def create_schedule(body: CronScheduleUpsertRequest):
         enabled=body.enabled,
         cron=body.cron,
         timezone_value=body.timezone,
+        wake_mode=body.wake_mode,
+        delivery=body.delivery,
         run_request_payload=body.run_request.model_dump(),
     )
     with SCHEDULES_LOCK:
@@ -1402,6 +1557,8 @@ async def create_weekly_schedule(body: WeeklyScheduleUpsertRequest):
         enabled=body.enabled,
         cron=_cron_from_weekly(body.day_of_week, body.time_hhmm),
         timezone_value=body.timezone,
+        wake_mode=body.wake_mode,
+        delivery=body.delivery,
         run_request_payload=body.run_request.model_dump(),
         day_of_week=body.day_of_week,
         time_hhmm=body.time_hhmm,
@@ -1428,8 +1585,13 @@ async def update_schedule(schedule_id: str, body: CronSchedulePatchRequest):
             current["time_hhmm"] = None
         if body.timezone is not None:
             current["timezone"] = _normalized_schedule_timezone(body.timezone)
+        if body.wake_mode is not None:
+            current["wake_mode"] = str(body.wake_mode).strip().lower()
+        if body.delivery is not None:
+            current["delivery"] = str(body.delivery).strip().lower()
         if body.run_request is not None:
             current["run_request"] = body.run_request.model_dump()
+        current["next_run_at"] = _compute_schedule_next_run_at(current)
         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
         WEEKLY_SCHEDULES[schedule_id] = current
         updated = dict(current)
@@ -1457,8 +1619,13 @@ async def update_weekly_schedule(schedule_id: str, body: WeeklySchedulePatchRequ
             )
         if body.timezone is not None:
             current["timezone"] = _normalized_schedule_timezone(body.timezone)
+        if body.wake_mode is not None:
+            current["wake_mode"] = str(body.wake_mode).strip().lower()
+        if body.delivery is not None:
+            current["delivery"] = str(body.delivery).strip().lower()
         if body.run_request is not None:
             current["run_request"] = body.run_request.model_dump()
+        current["next_run_at"] = _compute_schedule_next_run_at(current)
         current["updated_at"] = datetime.utcnow().isoformat() + "Z"
         WEEKLY_SCHEDULES[schedule_id] = current
         updated = dict(current)
@@ -1490,13 +1657,30 @@ async def trigger_schedule_now(schedule_id: str):
     except HTTPException:
         raise
     except Exception as exc:
+        with SCHEDULES_LOCK:
+            current = WEEKLY_SCHEDULES.get(schedule_id)
+            if current is not None:
+                current = _append_schedule_run_log(
+                    current,
+                    status="failed",
+                    detail=str(exc),
+                )
+                current["updated_at"] = datetime.utcnow().isoformat() + "Z"
+                WEEKLY_SCHEDULES[schedule_id] = current
+        _persist_schedules()
         raise HTTPException(status_code=400, detail=str(exc))
 
     with SCHEDULES_LOCK:
         current = WEEKLY_SCHEDULES.get(schedule_id)
         if current is not None:
-            current["last_run_id"] = result.get("run_id")
-            current["last_error"] = None
+            current["pending_heartbeat"] = False
+            current["pending_heartbeat_slot"] = None
+            current = _append_schedule_run_log(
+                current,
+                status="started",
+                run_id=str(result.get("run_id") or "").strip() or None,
+                detail="Scheduled run started manually.",
+            )
             current["updated_at"] = datetime.utcnow().isoformat() + "Z"
             WEEKLY_SCHEDULES[schedule_id] = current
     _persist_schedules()

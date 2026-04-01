@@ -266,15 +266,16 @@ from server_modules.runtime_events_api import register_inbox_routes
 from server_modules.agent_workspace_api import AGENT_WORKSPACE_LABELS, register_agent_workspace_routes
 from server_modules.profile_api import register_profile_routes
 from server_modules.app_registry_api import register_app_registry_routes, resolve_app_permissions
+from server_modules.config_loader import config_bool, config_float, config_int, config_str, config_value
 
 
 EMPYRALIS_STATE_HOME = Path(
-    os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
+    config_str("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
 ).expanduser()
 
 
 def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: Optional[str] = None) -> Path:
-    explicit = os.getenv(env_name)
+    explicit = config_str(env_name, "")
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
     preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
@@ -286,7 +287,7 @@ def _resolve_state_file(env_name: str, default_relative: str, legacy_filename: O
 
 
 def _resolve_state_dir(env_name: str, default_relative: str, legacy_dirname: Optional[str] = None) -> Path:
-    explicit = os.getenv(env_name)
+    explicit = config_str(env_name, "")
     if explicit is not None and explicit.strip():
         return Path(explicit.strip()).expanduser()
     preferred = (EMPYRALIS_STATE_HOME / default_relative).expanduser()
@@ -346,38 +347,39 @@ async def app_lifespan(_: FastAPI):
 
 
 # --- CONFIG ---
-FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
-ORION_API_KEY = os.getenv("ORION_API_KEY")
-_ORION_AUTH_REQUIRED_RAW = os.getenv("ORION_AUTH_REQUIRED")
-ORION_DEV_INSECURE_NO_AUTH = os.getenv("ORION_DEV_INSECURE_NO_AUTH", "0") == "1"
+FRONTEND_ORIGINS = config_str("FRONTEND_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
+ORION_API_KEY = config_value("ORION_API_KEY")
+_ORION_AUTH_REQUIRED_RAW = config_value("ORION_AUTH_REQUIRED")
+ORION_DEV_INSECURE_NO_AUTH = config_bool("ORION_DEV_INSECURE_NO_AUTH", False)
 # Fail-closed by default (OpenClaw-style): auth is on unless explicitly disabled.
 ORION_AUTH_REQUIRED = (_ORION_AUTH_REQUIRED_RAW != "0") if _ORION_AUTH_REQUIRED_RAW is not None else True
 if ORION_DEV_INSECURE_NO_AUTH:
     ORION_AUTH_REQUIRED = False
     print("[WARN] ORION_DEV_INSECURE_NO_AUTH=1 set; runtime API auth is disabled for this process.")
-ORION_ENABLE_LEGACY_LOCAL_ROUTES = str(os.getenv("ORION_ENABLE_LEGACY_LOCAL_ROUTES", "0")).strip().lower() in {"1", "true", "yes", "on"}
-ORION_ALLOW_SYSTEM_PROXY = os.getenv("ORION_ALLOW_SYSTEM_PROXY", "0") == "1"
-ORION_RUN_TIMEOUT_SECONDS = int(os.getenv("ORION_RUN_TIMEOUT_SECONDS", "300"))
-ORION_MAX_RETRIES = int(os.getenv("ORION_MAX_RETRIES", "2"))
-ORION_RETRY_BACKOFF_SECONDS = float(os.getenv("ORION_RETRY_BACKOFF_SECONDS", "1.5"))
-ORION_MAX_EVENT_BUFFER = int(os.getenv("ORION_MAX_EVENT_BUFFER", "2000"))
-ORION_HISTORY_LIMIT = int(os.getenv("ORION_HISTORY_LIMIT", "800"))
+ORION_ENABLE_LEGACY_LOCAL_ROUTES = config_bool("ORION_ENABLE_LEGACY_LOCAL_ROUTES", False)
+ORION_ALLOW_SYSTEM_PROXY = config_bool("ORION_ALLOW_SYSTEM_PROXY", False)
+ORION_RUN_TIMEOUT_SECONDS = config_int("ORION_RUN_TIMEOUT_SECONDS", 300)
+ORION_MAX_RETRIES = config_int("ORION_MAX_RETRIES", 2)
+ORION_RETRY_BACKOFF_SECONDS = config_float("ORION_RETRY_BACKOFF_SECONDS", 1.5)
+ORION_MAX_EVENT_BUFFER = config_int("ORION_MAX_EVENT_BUFFER", 2000)
+ORION_HISTORY_LIMIT = config_int("ORION_HISTORY_LIMIT", 800)
 ORION_HISTORY_FILE = _resolve_state_file("ORION_HISTORY_FILE", "runtime/run_history.json", ".orion_run_history.json")
 ORION_RUNTIME_STATE_DB = _resolve_state_file("ORION_RUNTIME_STATE_DB", "runtime/state.db", ".orion_runtime_state.db")
-ORION_CHANNEL_EVENTS_LIMIT = int(os.getenv("ORION_CHANNEL_EVENTS_LIMIT", "2000"))
-ORION_CHANNEL_SESSIONS_LIMIT = int(os.getenv("ORION_CHANNEL_SESSIONS_LIMIT", "80"))
+ORION_CHANNEL_EVENTS_LIMIT = config_int("ORION_CHANNEL_EVENTS_LIMIT", 2000)
+ORION_CHANNEL_SESSIONS_LIMIT = config_int("ORION_CHANNEL_SESSIONS_LIMIT", 80)
 ORION_CHANNEL_EVENTS_FILE = _resolve_state_file("ORION_CHANNEL_EVENTS_FILE", "channels/events.json", ".orion_channel_events.json")
 ORION_CHANNEL_DEAD_LETTER_FILE = _resolve_state_file(
     "ORION_CHANNEL_DEAD_LETTER_FILE",
     "channels/dead_letters.json",
     ".orion_channel_dead_letters.json",
 )
-ORION_CHANNEL_DEAD_LETTER_LIMIT = int(os.getenv("ORION_CHANNEL_DEAD_LETTER_LIMIT", "500"))
+ORION_CHANNEL_DEAD_LETTER_LIMIT = config_int("ORION_CHANNEL_DEAD_LETTER_LIMIT", 500)
 ORION_APPROVAL_AUDIT_FILE = _resolve_state_file("ORION_APPROVAL_AUDIT_FILE", "approvals/audit.json", ".orion_approval_audit.json")
-ORION_APPROVAL_AUDIT_LIMIT = int(os.getenv("ORION_APPROVAL_AUDIT_LIMIT", "2000"))
+ORION_APPROVAL_AUDIT_LIMIT = config_int("ORION_APPROVAL_AUDIT_LIMIT", 2000)
 ORION_SCHEDULES_FILE = _resolve_state_file("ORION_SCHEDULES_FILE", "automations/weekly_schedules.json", ".orion_weekly_schedules.json")
+ORION_WEBHOOK_TRIGGERS_FILE = _resolve_state_file("ORION_WEBHOOK_TRIGGERS_FILE", "automations/webhooks.json", ".orion_webhooks.json")
 ORION_SETUP_SESSIONS_FILE = _resolve_state_file("ORION_SETUP_SESSIONS_FILE", "setup/sessions.json", ".orion_setup_sessions.json")
-ORION_SETUP_SESSION_TTL_SECONDS = int(os.getenv("ORION_SETUP_SESSION_TTL_SECONDS", "1800"))
+ORION_SETUP_SESSION_TTL_SECONDS = config_int("ORION_SETUP_SESSION_TTL_SECONDS", 1800)
 ORION_PROVIDER_PROFILES_FILE = _resolve_state_file(
     "ORION_PROVIDER_PROFILES_FILE",
     "providers/profiles.json",
@@ -389,38 +391,38 @@ ORION_PROFILE_ROOT = _resolve_state_dir("ORION_PROFILE_ROOT", "profiles", ".orio
 ORION_PROFILE_DEFAULT_FILE = _resolve_state_file("ORION_PROFILE_DEFAULT_FILE", "profiles/default.json", ".orion_default_profile.json")
 ORION_VALIDATION_REPORT_DIR = _resolve_state_dir("ORION_VALIDATION_REPORT_DIR", "validation", ".orion-validation")
 ORION_VALIDATION_LATEST_FILE = Path(
-    os.getenv("ORION_VALIDATION_LATEST_FILE", str(ORION_VALIDATION_REPORT_DIR / "latest_core_smoke.json"))
+    config_str("ORION_VALIDATION_LATEST_FILE", str(ORION_VALIDATION_REPORT_DIR / "latest_core_smoke.json"))
 )
 ORION_DOCTOR_REPORT_FILE = _resolve_state_file("ORION_DOCTOR_REPORT_FILE", "diagnostics/doctor_latest.json", ".orion_doctor_latest.json")
 ORION_DOCTOR_HISTORY_FILE = _resolve_state_file("ORION_DOCTOR_HISTORY_FILE", "diagnostics/doctor_history.json", ".orion_doctor_history.json")
-ORION_DOCTOR_HISTORY_LIMIT = int(os.getenv("ORION_DOCTOR_HISTORY_LIMIT", "120"))
-ORION_PROFILE_COOLDOWN_AUTH_SECONDS = int(os.getenv("ORION_PROFILE_COOLDOWN_AUTH_SECONDS", "600"))
-ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS = int(os.getenv("ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS", "120"))
-ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS = int(os.getenv("ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS", "60"))
-ORION_APPROVAL_TTL_SECONDS = int(os.getenv("ORION_APPROVAL_TTL_SECONDS", "180"))
+ORION_DOCTOR_HISTORY_LIMIT = config_int("ORION_DOCTOR_HISTORY_LIMIT", 120)
+ORION_PROFILE_COOLDOWN_AUTH_SECONDS = config_int("ORION_PROFILE_COOLDOWN_AUTH_SECONDS", 600)
+ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS = config_int("ORION_PROFILE_COOLDOWN_RATE_LIMIT_SECONDS", 120)
+ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS = config_int("ORION_PROFILE_COOLDOWN_TRANSIENT_SECONDS", 60)
+ORION_APPROVAL_TTL_SECONDS = config_int("ORION_APPROVAL_TTL_SECONDS", 180)
 ORION_IDEMPOTENCY_FILE = _resolve_state_file("ORION_IDEMPOTENCY_FILE", "runtime/idempotency.json", ".orion_idempotency_log.json")
-ORION_IDEMPOTENCY_TTL_SECONDS = int(os.getenv("ORION_IDEMPOTENCY_TTL_SECONDS", "86400"))
-ORION_SCHEDULER_ENABLED = os.getenv("ORION_SCHEDULER_ENABLED", "1") == "1"
-ORION_SCHEDULER_POLL_SECONDS = int(os.getenv("ORION_SCHEDULER_POLL_SECONDS", "20"))
-ORION_LOCAL_COMPANION_ENABLED = os.getenv("ORION_LOCAL_COMPANION_ENABLED", "1") == "1"
-ORION_LOCAL_LEASE_SECONDS = int(os.getenv("ORION_LOCAL_LEASE_SECONDS", "120"))
+ORION_IDEMPOTENCY_TTL_SECONDS = config_int("ORION_IDEMPOTENCY_TTL_SECONDS", 86400)
+ORION_SCHEDULER_ENABLED = config_bool("ORION_SCHEDULER_ENABLED", True)
+ORION_SCHEDULER_POLL_SECONDS = config_int("ORION_SCHEDULER_POLL_SECONDS", 20)
+ORION_LOCAL_COMPANION_ENABLED = config_bool("ORION_LOCAL_COMPANION_ENABLED", True)
+ORION_LOCAL_LEASE_SECONDS = config_int("ORION_LOCAL_LEASE_SECONDS", 120)
 
 
 def _compat_env(primary: str, legacy: str, default: str) -> str:
-    value = os.getenv(primary)
+    value = config_value(primary)
     if value is not None:
-        return value
-    value = os.getenv(legacy)
+        return str(value)
+    value = config_value(legacy)
     if value is not None:
-        return value
+        return str(value)
     return default
 
-ORION_TELEGRAM_AUTOPILOT_ENABLED = os.getenv("ORION_TELEGRAM_AUTOPILOT_ENABLED", "1") == "1"
-ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS = float(os.getenv("ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS", "3"))
-ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES = int(os.getenv("ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES", "20"))
-ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS = int(os.getenv("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS", "180"))
-ORION_TELEGRAM_AUTOPILOT_ENGINE = os.getenv("ORION_TELEGRAM_AUTOPILOT_ENGINE", "codex").strip() or "codex"
-ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID = (os.getenv("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID", "").strip() or None)
+ORION_TELEGRAM_AUTOPILOT_ENABLED = config_bool("ORION_TELEGRAM_AUTOPILOT_ENABLED", True)
+ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS = config_float("ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS", 3.0)
+ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES = config_int("ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES", 20)
+ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS = config_int("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS", 180)
+ORION_TELEGRAM_AUTOPILOT_ENGINE = config_str("ORION_TELEGRAM_AUTOPILOT_ENGINE", "codex").strip() or "codex"
+ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID = (config_str("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID", "").strip() or None)
 ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX = (
     _compat_env("EMPYRALIS_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX", "ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX", "0") == "1"
 )
@@ -432,25 +434,25 @@ ORION_TELEGRAM_AUTOPILOT_PROFILE = (
     _compat_env("EMPYRALIS_TELEGRAM_AUTOPILOT_PROFILE", "ORION_TELEGRAM_AUTOPILOT_PROFILE", "assistant").strip().lower()
     or "assistant"
 )
-ORION_TELEGRAM_AUTOPILOT_SEND_ACK = os.getenv("ORION_TELEGRAM_AUTOPILOT_SEND_ACK", "0") == "1"
-ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT = os.getenv("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", "1") == "1"
-ORION_TELEGRAM_AUTOPILOT_TRUST_MODE = os.getenv("ORION_TELEGRAM_AUTOPILOT_TRUST_MODE", "guarded").strip().lower() or "guarded"
+ORION_TELEGRAM_AUTOPILOT_SEND_ACK = config_bool("ORION_TELEGRAM_AUTOPILOT_SEND_ACK", False)
+ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT = config_bool("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", True)
+ORION_TELEGRAM_AUTOPILOT_TRUST_MODE = config_str("ORION_TELEGRAM_AUTOPILOT_TRUST_MODE", "guarded").strip().lower() or "guarded"
 ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET = (
-    os.getenv("ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET", "local_companion").strip().lower() or "local_companion"
+    config_str("ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET", "local_companion").strip().lower() or "local_companion"
 )
 ORION_TELEGRAM_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_AUTOPILOT_STATE_FILE",
     "channels/telegram/autopilot_state.json",
     ".orion_telegram_autopilot_state.json",
 )
-ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS = int(os.getenv("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS", "1400"))
-ORION_WHATSAPP_AUTOPILOT_ENABLED = os.getenv("ORION_WHATSAPP_AUTOPILOT_ENABLED", "1") == "1"
+ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS = config_int("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS", 1400)
+ORION_WHATSAPP_AUTOPILOT_ENABLED = config_bool("ORION_WHATSAPP_AUTOPILOT_ENABLED", True)
 ORION_WHATSAPP_AUTOPILOT_PROFILE = (
     _compat_env("EMPYRALIS_WHATSAPP_AUTOPILOT_PROFILE", "ORION_WHATSAPP_AUTOPILOT_PROFILE", "assistant").strip().lower()
     or "assistant"
 )
-ORION_WHATSAPP_AUTOPILOT_ENGINE = os.getenv("ORION_WHATSAPP_AUTOPILOT_ENGINE", "codex").strip() or "codex"
-ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID = (os.getenv("ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID", "").strip() or None)
+ORION_WHATSAPP_AUTOPILOT_ENGINE = config_str("ORION_WHATSAPP_AUTOPILOT_ENGINE", "codex").strip() or "codex"
+ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID = (config_str("ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID", "").strip() or None)
 ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX = (
     _compat_env("EMPYRALIS_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX", "ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX", "0") == "1"
 )
@@ -458,44 +460,44 @@ ORION_WHATSAPP_AUTOPILOT_PREFIX = (
     _compat_env("EMPYRALIS_WHATSAPP_AUTOPILOT_PREFIX", "ORION_WHATSAPP_AUTOPILOT_PREFIX", "/empyralis").strip()
     or "/empyralis"
 )
-ORION_WHATSAPP_AUTOPILOT_SEND_ACK = os.getenv("ORION_WHATSAPP_AUTOPILOT_SEND_ACK", "0") == "1"
-ORION_WHATSAPP_AUTOPILOT_TRUST_MODE = os.getenv("ORION_WHATSAPP_AUTOPILOT_TRUST_MODE", "guarded").strip().lower() or "guarded"
+ORION_WHATSAPP_AUTOPILOT_SEND_ACK = config_bool("ORION_WHATSAPP_AUTOPILOT_SEND_ACK", False)
+ORION_WHATSAPP_AUTOPILOT_TRUST_MODE = config_str("ORION_WHATSAPP_AUTOPILOT_TRUST_MODE", "guarded").strip().lower() or "guarded"
 ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET = (
-    os.getenv("ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET", "local_companion").strip().lower() or "local_companion"
+    config_str("ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET", "local_companion").strip().lower() or "local_companion"
 )
-ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS = int(os.getenv("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS", "180"))
-ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS = int(os.getenv("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS", "700"))
+ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS = config_int("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS", 180)
+ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS = config_int("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS", 700)
 ORION_WHATSAPP_AUTOPILOT_STATE_FILE = _resolve_state_file(
     "ORION_WHATSAPP_AUTOPILOT_STATE_FILE",
     "channels/whatsapp/autopilot_state.json",
     ".orion_whatsapp_autopilot_state.json",
 )
-ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET = os.getenv("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET", "").strip()
-OPENAI_API_URL = os.getenv("OPENAI_API_URL", "https://api.openai.com/v1/models")
-OPENAI_RESPONSES_URL = os.getenv("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
-OPENAI_ORG_ID = os.getenv("OPENAI_ORG_ID")
-OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID")
-OPENAI_ACCESS_TOKEN = os.getenv("OPENAI_ACCESS_TOKEN")
-OPENAI_OAUTH_TOKEN = os.getenv("OPENAI_OAUTH_TOKEN")
-CODEX_OAUTH_TOKEN = os.getenv("CODEX_OAUTH_TOKEN")
-OPENAI_HEALTHCHECK = os.getenv("OPENAI_HEALTHCHECK", "1") == "1"
-ORION_AUTH_MODE = (os.getenv("ORION_AUTH_MODE", "codex").strip().lower() or "codex")
-ORION_DISABLE_OPENAI_API_KEY = os.getenv("ORION_DISABLE_OPENAI_API_KEY", "1") == "1"
+ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET = config_str("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET", "").strip()
+OPENAI_API_URL = config_str("OPENAI_API_URL", "https://api.openai.com/v1/models")
+OPENAI_RESPONSES_URL = config_str("OPENAI_RESPONSES_URL", "https://api.openai.com/v1/responses")
+OPENAI_ORG_ID = config_value("OPENAI_ORG_ID")
+OPENAI_PROJECT_ID = config_value("OPENAI_PROJECT_ID")
+OPENAI_ACCESS_TOKEN = config_value("OPENAI_ACCESS_TOKEN")
+OPENAI_OAUTH_TOKEN = config_value("OPENAI_OAUTH_TOKEN")
+CODEX_OAUTH_TOKEN = config_value("CODEX_OAUTH_TOKEN")
+OPENAI_HEALTHCHECK = config_bool("OPENAI_HEALTHCHECK", True)
+ORION_AUTH_MODE = (config_str("ORION_AUTH_MODE", "codex").strip().lower() or "codex")
+ORION_DISABLE_OPENAI_API_KEY = config_bool("ORION_DISABLE_OPENAI_API_KEY", True)
 ORION_SINGLE_AGENT_MODE = _compat_env("EMPYRALIS_SINGLE_AGENT_MODE", "ORION_SINGLE_AGENT_MODE", "0") == "1"
 ORION_SINGLE_AGENT_ROLE = "orchestrator"
 CODEX_AUTH_FILE = Path(
-    os.getenv("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))
+    config_str("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))
 ).expanduser()
-CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-4.1")
-ORION_CODEX_SYSTEM_PROMPT = os.getenv(
+CODEX_MODEL = config_str("CODEX_MODEL", "gpt-4.1")
+ORION_CODEX_SYSTEM_PROMPT = config_str(
     "ORION_CODEX_SYSTEM_PROMPT",
     "You are Empyralis runtime assistant. Be concise, accurate, and action-focused.",
 )
-ORION_PLANNER_SYSTEM_PROMPT = os.getenv(
+ORION_PLANNER_SYSTEM_PROMPT = config_str(
     "ORION_PLANNER_SYSTEM_PROMPT",
     "You are Empyralis Planner. Produce deterministic execution plans. Be explicit about side effects.",
 )
-ORION_OPERATOR_SYSTEM_PROMPT = os.getenv(
+ORION_OPERATOR_SYSTEM_PROMPT = config_str(
     "ORION_OPERATOR_SYSTEM_PROMPT",
     "You are Empyralis Operator. Execute safely and report outcomes clearly.",
 )
@@ -510,43 +512,43 @@ VAULT_KEY_FILE = _resolve_state_file(
     "vault/key",
     ".orion_vault_key",
 )
-VAULT_KEY_ENV = os.getenv("CREDENTIAL_VAULT_KEY")
-ORION_VAULT_CIPHER_PREFIX = os.getenv("ORION_VAULT_CIPHER_PREFIX", "orion.v2:")
+VAULT_KEY_ENV = config_value("CREDENTIAL_VAULT_KEY")
+ORION_VAULT_CIPHER_PREFIX = config_str("ORION_VAULT_CIPHER_PREFIX", "orion.v2:")
 ORION_VAULT_KDF_ITERATIONS = max(
     120000,
-    min(int(os.getenv("ORION_VAULT_KDF_ITERATIONS", "390000")), 3000000),
+    min(config_int("ORION_VAULT_KDF_ITERATIONS", 390000), 3000000),
 )
-ORION_VAULT_LEGACY_OPENSSL_DECRYPT = os.getenv("ORION_VAULT_LEGACY_OPENSSL_DECRYPT", "1") == "1"
+ORION_VAULT_LEGACY_OPENSSL_DECRYPT = config_bool("ORION_VAULT_LEGACY_OPENSSL_DECRYPT", True)
 ORION_VAULT_LEGACY_OPENSSL_ENCRYPT_FALLBACK = (
-    os.getenv("ORION_VAULT_LEGACY_OPENSSL_ENCRYPT_FALLBACK", "1") == "1"
+    config_bool("ORION_VAULT_LEGACY_OPENSSL_ENCRYPT_FALLBACK", True)
 )
-PROVIDER_TIMEOUT_SECONDS = int(os.getenv("PROVIDER_TIMEOUT_SECONDS", "12"))
-CONTROL_PLANE_ORIGINS = [origin.strip() for origin in os.getenv("CONTROL_PLANE_ORIGINS", FRONTEND_ORIGINS).split(",") if origin.strip()]
-CONTROL_PLANE_RATE_LIMIT_PER_MINUTE = int(os.getenv("CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", "60"))
-CONTROL_PLANE_RATE_LIMIT_BURST = int(os.getenv("CONTROL_PLANE_RATE_LIMIT_BURST", "20"))
-ORION_RUNTIME_API_VERSION = os.getenv("ORION_RUNTIME_API_VERSION", "1.0.0").strip() or "1.0.0"
+PROVIDER_TIMEOUT_SECONDS = config_int("PROVIDER_TIMEOUT_SECONDS", 12)
+CONTROL_PLANE_ORIGINS = [origin.strip() for origin in config_str("CONTROL_PLANE_ORIGINS", FRONTEND_ORIGINS).split(",") if origin.strip()]
+CONTROL_PLANE_RATE_LIMIT_PER_MINUTE = config_int("CONTROL_PLANE_RATE_LIMIT_PER_MINUTE", 60)
+CONTROL_PLANE_RATE_LIMIT_BURST = config_int("CONTROL_PLANE_RATE_LIMIT_BURST", 20)
+ORION_RUNTIME_API_VERSION = config_str("ORION_RUNTIME_API_VERSION", "1.0.0").strip() or "1.0.0"
 ORION_RUNTIME_API_MIN_CLI_VERSION = (
-    os.getenv("ORION_RUNTIME_API_MIN_CLI_VERSION", "2026.2.0").strip() or "2026.2.0"
+    config_str("ORION_RUNTIME_API_MIN_CLI_VERSION", "2026.2.0").strip() or "2026.2.0"
 )
 ORION_RUNTIME_CONTRACT_SCHEMA_VERSION = (
-    os.getenv("ORION_RUNTIME_CONTRACT_SCHEMA_VERSION", "2026.2.0").strip() or "2026.2.0"
+    config_str("ORION_RUNTIME_CONTRACT_SCHEMA_VERSION", "2026.2.0").strip() or "2026.2.0"
 )
-ORION_MEMORY_ENABLED = os.getenv("ORION_MEMORY_ENABLED", "1") == "1"
-ORION_MEMORY_READ_K = max(1, min(int(os.getenv("ORION_MEMORY_READ_K", "5")), 20))
-ORION_MEMORY_MAX_TEXT_CHARS = max(400, min(int(os.getenv("ORION_MEMORY_MAX_TEXT_CHARS", "2400")), 12000))
+ORION_MEMORY_ENABLED = config_bool("ORION_MEMORY_ENABLED", True)
+ORION_MEMORY_READ_K = max(1, min(config_int("ORION_MEMORY_READ_K", 5), 20))
+ORION_MEMORY_MAX_TEXT_CHARS = max(400, min(config_int("ORION_MEMORY_MAX_TEXT_CHARS", 2400), 12000))
 ORION_MEMORY_RETENTION_DAYS_DEFAULT = max(
     1,
-    min(int(os.getenv("ORION_MEMORY_RETENTION_DAYS_DEFAULT", "365")), 3650),
+    min(config_int("ORION_MEMORY_RETENTION_DAYS_DEFAULT", 365), 3650),
 )
 ORION_MEMORY_DB_PATH = (
-    os.getenv(
+    config_str(
         "ORION_MEMORY_DB_PATH",
         str(Path(__file__).resolve().parent / "python_engine" / "agency_memory.db"),
     ).strip()
     or str(Path(__file__).resolve().parent / "python_engine" / "agency_memory.db")
 )
 ORION_MEMORY_LANCEDB_URI = (
-    os.getenv(
+    config_str(
         "ORION_MEMORY_LANCEDB_URI",
         str(Path(__file__).resolve().parent / "python_engine" / "data" / "lancedb"),
     ).strip()

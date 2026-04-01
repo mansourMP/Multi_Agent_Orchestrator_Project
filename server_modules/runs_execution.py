@@ -12,8 +12,11 @@ from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.runs_engine import (
     ENGINE_REGISTRY,
+    RUN_TOOL_LOOP_REPLY,
+    clear_run_tool_signature_state,
     format_agent_summary,
     generate_with_candidate_failover,
+    record_run_tool_signature,
     requires_human_approval,
     wait_for_human_response,
     resolve_run_execution_context,
@@ -25,6 +28,7 @@ from server_modules.health_diagnostics import _build_skill_contract_from_metadat
 from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
+from server_modules.runtime_policy import browser_automation_plan_hash
 from server_modules.url_security import assert_safe_outbound_url
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 
@@ -577,6 +581,8 @@ def _browser_automation_policy_from_operations(browser_ops: List[Dict[str, Any]]
         "capture_page": bool(capture_page),
         "requires_approval": requires_approval,
         "reason": approval_reason,
+        "reviewed_approval_required": profile in {"authenticated_interactive", "authenticated_privileged"},
+        "immutable_plan_hash": browser_automation_plan_hash(browser_ops),
     }
 
 
@@ -776,6 +782,7 @@ def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for 
 
 
 def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enqueue: bool = False) -> str:
+    shared.sync_acp_manager_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
     run_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat() + "Z"
     started_mono = time.monotonic()
@@ -1183,6 +1190,7 @@ def _workflow_tool_create_child_local_run(
     label: str,
     operation: Dict[str, Any],
     summary: str,
+    metadata_overrides: Optional[Dict[str, Any]] = None,
 ) -> str:
     from server_modules.runtime_models import RunStartRequest
     from server_modules.runs_delegation import _create_run_from_request as _create_child_run
@@ -1198,6 +1206,8 @@ def _workflow_tool_create_child_local_run(
             "workflow_tool_parent_run_id": run_id,
         }
     )
+    if isinstance(metadata_overrides, dict):
+        child_metadata.update(metadata_overrides)
     child_req = RunStartRequest(
         engine=str(context.get("engine") or "orion"),
         workflow_id=None,
@@ -2104,10 +2114,17 @@ def _workflow_execute_local_tool(
             if isinstance(item, dict) and normalize_action_id(item.get("action"))
         ]
         interactive_actions = [action for action in normalized_browser_actions if action in _BROWSER_AUTH_ACTIONS]
-        if session_profile and interactive_actions:
-            raise RuntimeError(
-                "Session-backed interactive or privileged browser automation is not executable in local companion V1 without a reviewed higher-trust path."
-            )
+        browser_policy = _browser_automation_policy_from_operations(
+            [
+                {
+                    "tool": "browser_automation",
+                    "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
+                    "url": str(config.get("url") or "").strip(),
+                    "session_profile": session_profile,
+                    "browser_actions": browser_actions or [],
+                }
+            ]
+        )
         operation = {
             "tool": "browser_automation",
             "mode": str(config.get("mode") or "extract_text").strip() or "extract_text",
@@ -2131,6 +2148,16 @@ def _workflow_execute_local_tool(
         label=label,
         operation=operation,
         summary=str(config.get("summary") or f"Execute {variant} tool node {label}").strip(),
+        metadata_overrides=(
+            {
+                "browser_session_profile": session_profile or None,
+                "browser_interactive_actions": interactive_actions or None,
+                "browser_immutable_plan_hash": browser_policy.get("immutable_plan_hash") if variant == "browser" else None,
+                "browser_reviewed_approval_required": bool(browser_policy.get("reviewed_approval_required")) if variant == "browser" else False,
+            }
+            if variant == "browser"
+            else None
+        ),
     )
     child_run = _workflow_wait_for_child_run(
         child_run_id,
@@ -2602,6 +2629,31 @@ def _execute_workflow_graph(
                             summary=f"Executing approved tool: {label}",
                             waiting_for_approval=False,
                         )
+
+                tool_signature_payload = {
+                    "variant": variant,
+                    "tool_id": tool_id or variant,
+                    "config": _json_safe(config),
+                    "current_text": current_text,
+                }
+                if record_run_tool_signature(run_id, str(tool_id or label or variant), tool_signature_payload):
+                    emit_log(
+                        log_queue,
+                        "error",
+                        RUN_TOOL_LOOP_REPLY,
+                        event="workflow_tool_loop_detected",
+                        data={"node_id": node_id, "tool_id": tool_id or variant, "variant": variant},
+                    )
+                    _update_run_node_state(
+                        run_id,
+                        node_id,
+                        status="failed",
+                        finalize=True,
+                        output_preview=RUN_TOOL_LOOP_REPLY,
+                        summary="Tool loop detected",
+                        detail={"tool_id": tool_id or variant, "variant": variant},
+                    )
+                    raise RuntimeError(RUN_TOOL_LOOP_REPLY)
 
                 if variant == "http":
                     method = str(config.get("method") or "GET").strip().upper() or "GET"
@@ -3304,6 +3356,7 @@ def run_orion_mission(run_id: str):
     run["thread_id"] = threading.get_ident()
     log_queue = run["logs"]
     context = run.get("context", {}) if isinstance(run.get("context"), dict) else {}
+    clear_run_tool_signature_state(run_id)
 
     set_run_status(run_id, "running")
     emit_log(log_queue, "info", "Empyralis run started.", event="run_start", data={"run_id": run_id})
@@ -3330,6 +3383,7 @@ def run_orion_mission(run_id: str):
             run["active_provider"] = result.get("active_provider")
             run["active_model"] = result.get("active_model")
             run["active_adapter"] = result.get("active_adapter")
+            clear_run_tool_signature_state(run_id)
             set_run_status(run_id, "completed")
             run["logs"].put(None)
             return
@@ -3341,12 +3395,14 @@ def run_orion_mission(run_id: str):
 
             if "timeout" in raw_message.lower() or "timeout" in message.lower():
                 emit_log(log_queue, "error", message, event="timeout")
+                clear_run_tool_signature_state(run_id)
                 set_run_status(run_id, "timeout")
                 run["logs"].put(None)
                 return
 
             if "stopped by human decision" in raw_message.lower() or "stopped by human decision" in message.lower():
                 emit_log(log_queue, "warn", message, event="run_stopped")
+                clear_run_tool_signature_state(run_id)
                 set_run_status(run_id, "failed")
                 run["logs"].put(None)
                 return
@@ -3359,6 +3415,7 @@ def run_orion_mission(run_id: str):
                     event="run_error",
                     data={"attempt": attempt + 1, "retryable": False, "raw_error": raw_message},
                 )
+                clear_run_tool_signature_state(run_id)
                 set_run_status(run_id, "failed")
                 run["logs"].put(None)
                 return
@@ -3375,6 +3432,7 @@ def run_orion_mission(run_id: str):
                 time.sleep(backoff)
 
     emit_log(log_queue, "error", friendly_runtime_error_message(last_error or Exception("Unknown runtime failure")), event="run_error")
+    clear_run_tool_signature_state(run_id)
     set_run_status(run_id, "failed")
     run["logs"].put(None)
 

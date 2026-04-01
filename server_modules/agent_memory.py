@@ -8,11 +8,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from server_modules.workspace_context import write_workspace_context_file
+from server_modules.workspace_context import read_workspace_context_file, write_workspace_context_file
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MEMORY_DIR = _REPO_ROOT / ".orion-stack" / "memory"
+_SEMANTIC_MODEL: Any = None
 
 
 def _normalize_workspace_token(workspace_id: str) -> str:
@@ -57,6 +58,39 @@ def _connect_memory_db(workspace_id: str):
         connection.close()
 
 
+def _cosine_similarity(left: List[float], right: List[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    return float(sum(float(a) * float(b) for a, b in zip(left, right)))
+
+
+def _semantic_model():
+    global _SEMANTIC_MODEL
+    if _SEMANTIC_MODEL is False:
+        return None
+    if _SEMANTIC_MODEL is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            _SEMANTIC_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception:
+            _SEMANTIC_MODEL = False
+    return _SEMANTIC_MODEL
+
+
+def embed_text(text: str) -> List[float]:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip())
+    if not normalized:
+        return []
+    model = _semantic_model()
+    if model is None:
+        return []
+    vector = model.encode(normalized, normalize_embeddings=True)
+    if hasattr(vector, "tolist"):
+        return [float(item) for item in vector.tolist()]
+    return [float(item) for item in vector]
+
+
 def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
     with _connect_memory_db(workspace_id) as connection:
         rows = connection.execute(
@@ -77,7 +111,7 @@ def list_memory_entries(workspace_id: str) -> List[Dict[str, Any]]:
     ]
 
 
-def save_memory(workspace_id: str, key: str, content: str) -> None:
+def save_memory(workspace_id: str, key: str, content: str, *, sync_memory_md: bool = True) -> None:
     normalized_key = str(key or "").strip()
     normalized_content = str(content or "").strip()
     if not normalized_key or not normalized_content:
@@ -95,6 +129,11 @@ def save_memory(workspace_id: str, key: str, content: str) -> None:
             (normalized_key, normalized_content, now_ts, now_ts),
         )
         connection.commit()
+    if sync_memory_md:
+        try:
+            export_memory_md(workspace_id)
+        except Exception:
+            pass
 
 
 def get_memory(workspace_id: str) -> str:
@@ -134,6 +173,32 @@ def search_memory(workspace_id: str, query: str) -> List[Dict[str, Any]]:
     ]
 
 
+def semantic_search(workspace_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return []
+    entries = list_memory_entries(workspace_id)
+    if not entries:
+        return []
+    query_vector = embed_text(normalized_query)
+    if not query_vector:
+        return search_memory(workspace_id, normalized_query)[: max(1, min(int(top_k or 5), 20))]
+    scored: List[Dict[str, Any]] = []
+    for entry in entries:
+        combined_text = f"{entry.get('key')}: {entry.get('content')}"
+        memory_vector = embed_text(combined_text)
+        if not memory_vector:
+            continue
+        scored.append(
+            {
+                **entry,
+                "score": _cosine_similarity(query_vector, memory_vector),
+            }
+        )
+    scored.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    return scored[: max(1, min(int(top_k or 5), 20))]
+
+
 def delete_memory(workspace_id: str, key: str) -> bool:
     normalized_key = str(key or "").strip()
     if not normalized_key:
@@ -144,7 +209,13 @@ def delete_memory(workspace_id: str, key: str) -> bool:
             (normalized_key,),
         )
         connection.commit()
-        return bool(cursor.rowcount)
+        deleted = bool(cursor.rowcount)
+    if deleted:
+        try:
+            export_memory_md(workspace_id)
+        except Exception:
+            pass
+    return deleted
 
 
 def save_daily_log(workspace_id: str, content: str) -> None:
@@ -187,4 +258,37 @@ def update_memory_md(workspace_id: str, content: str) -> Dict[str, Any]:
     return {
         "workspace_id": _normalize_workspace_token(workspace_id),
         **saved,
+    }
+
+
+def export_memory_md(workspace_id: str) -> Dict[str, Any]:
+    entries = list_memory_entries(workspace_id)
+    lines = ["# Curated Memory", ""]
+    for entry in entries:
+        key = str(entry.get("key") or "").strip()
+        content = str(entry.get("content") or "").strip()
+        if not key or not content:
+            continue
+        lines.append(f"- {key}: {content}")
+    return update_memory_md(workspace_id, "\n".join(lines).strip() + "\n")
+
+
+def import_memory_md(workspace_id: str) -> Dict[str, Any]:
+    raw = read_workspace_context_file("MEMORY.md")
+    imported = 0
+    for raw_line in str(raw or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- ") or ":" not in line:
+            continue
+        key, content = line[2:].split(":", 1)
+        normalized_key = str(key or "").strip()
+        normalized_content = str(content or "").strip()
+        if not normalized_key or not normalized_content:
+            continue
+        save_memory(workspace_id, normalized_key, normalized_content, sync_memory_md=False)
+        imported += 1
+    export_memory_md(workspace_id)
+    return {
+        "workspace_id": _normalize_workspace_token(workspace_id),
+        "imported": imported,
     }

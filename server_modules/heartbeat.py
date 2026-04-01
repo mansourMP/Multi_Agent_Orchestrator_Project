@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules.config_loader import config_int
 from server_modules.workspace_context import workspace_context_dir
 
 
@@ -42,11 +43,19 @@ class HeartbeatScheduler:
         workspace_id: str = "default",
         run_callback: Optional[HeartbeatRunCallback] = None,
         notify_callback: Optional[HeartbeatNotifyCallback] = None,
+        active_hours: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.interval_seconds = max(60, int(interval_seconds or 1800))
         self.workspace_id = str(workspace_id or "default").strip() or "default"
         self.run_callback = run_callback
         self.notify_callback = notify_callback
+        configured_hours = active_hours if isinstance(active_hours, dict) else {}
+        start_hour = int(configured_hours.get("start") if configured_hours.get("start") is not None else config_int("heartbeat.active_hours.start", 8))
+        end_hour = int(configured_hours.get("end") if configured_hours.get("end") is not None else config_int("heartbeat.active_hours.end", 22))
+        self.active_hours = {
+            "start": max(0, min(start_hour, 23)),
+            "end": max(0, min(end_hour, 23)),
+        }
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._started = False
@@ -63,6 +72,7 @@ class HeartbeatScheduler:
             "last_run_id": None,
             "last_tasks": [],
             "last_notification": None,
+            "active_hours": dict(self.active_hours),
         }
 
     def start(self) -> None:
@@ -95,13 +105,30 @@ class HeartbeatScheduler:
     def _run_once(self, *, trigger: str) -> Dict[str, Any]:
         heartbeat_file = _heartbeat_file_path()
         checked_at = _utc_now_iso()
-        if not heartbeat_file.exists():
+        local_hour = datetime.now().astimezone().hour
+        start_hour = int(self.active_hours.get("start") or 0)
+        end_hour = int(self.active_hours.get("end") or 23)
+        if local_hour < start_hour or local_hour > end_hour:
             return self._update_status(
                 checked_at=checked_at,
-                status="no_file",
-                summary="No HEARTBEAT.md file found.",
+                status="inactive_hours",
+                summary=f"Heartbeat skipped outside active hours ({start_hour:02d}:00-{end_hour:02d}:59).",
                 tasks=[],
                 trigger=trigger,
+            )
+        callback_metadata = {
+            "workspace_id": self.workspace_id,
+            "trigger": trigger,
+            "heartbeat_file": str(heartbeat_file),
+        }
+        if not heartbeat_file.exists():
+            return self._run_callback_or_status(
+                checked_at=checked_at,
+                trigger=trigger,
+                tasks=[],
+                callback_metadata=callback_metadata,
+                fallback_status="no_file",
+                fallback_summary="No HEARTBEAT.md file found.",
             )
         try:
             content = heartbeat_file.read_text(encoding="utf-8")
@@ -116,22 +143,25 @@ class HeartbeatScheduler:
         tasks = parse_unchecked_heartbeat_tasks(content)
         if not tasks:
             self._last_acted_signature = ""
-            return self._update_status(
+            return self._run_callback_or_status(
                 checked_at=checked_at,
-                status="clear",
-                summary="No pending heartbeat tasks.",
-                tasks=[],
                 trigger=trigger,
+                tasks=[],
+                callback_metadata=callback_metadata,
+                fallback_status="clear",
+                fallback_summary="No pending heartbeat tasks.",
             )
 
         signature = hashlib.sha256("\n".join(tasks).encode("utf-8")).hexdigest()
         if signature == self._last_acted_signature:
-            return self._update_status(
+            return self._run_callback_or_status(
                 checked_at=checked_at,
-                status="unchanged",
-                summary="Pending heartbeat tasks already triggered. Waiting for checklist changes.",
-                tasks=tasks,
                 trigger=trigger,
+                tasks=[],
+                callback_metadata={**callback_metadata, "heartbeat_tasks": list(tasks)},
+                fallback_status="unchanged",
+                fallback_summary="Pending heartbeat tasks already triggered. Waiting for checklist changes.",
+                reported_tasks=tasks,
             )
 
         if self.run_callback is None:
@@ -146,11 +176,7 @@ class HeartbeatScheduler:
         try:
             result = self.run_callback(
                 tasks,
-                {
-                    "workspace_id": self.workspace_id,
-                    "trigger": trigger,
-                    "heartbeat_file": str(heartbeat_file),
-                },
+                callback_metadata,
             )
         except Exception as exc:
             return self._update_status(
@@ -180,6 +206,51 @@ class HeartbeatScheduler:
             + (f" Run: {run_id}." if run_id else "")
         )
         return status
+
+    def _run_callback_or_status(
+        self,
+        *,
+        checked_at: str,
+        trigger: str,
+        tasks: List[str],
+        callback_metadata: Dict[str, Any],
+        fallback_status: str,
+        fallback_summary: str,
+        reported_tasks: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if self.run_callback is not None:
+            try:
+                result = self.run_callback(tasks, callback_metadata)
+            except Exception as exc:
+                return self._update_status(
+                    checked_at=checked_at,
+                    status="error",
+                    summary=f"Heartbeat failed to start a run: {exc}",
+                    tasks=reported_tasks or tasks,
+                    trigger=trigger,
+                )
+            if bool((result or {}).get("acted")):
+                acted_at = checked_at
+                summary = str((result or {}).get("summary") or fallback_summary).strip() or fallback_summary
+                run_id = str((result or {}).get("run_id") or "").strip() or None
+                status = self._update_status(
+                    checked_at=checked_at,
+                    acted_at=acted_at,
+                    status="acted",
+                    summary=summary,
+                    run_id=run_id,
+                    tasks=reported_tasks or tasks,
+                    trigger=trigger,
+                )
+                self._notify(summary)
+                return status
+        return self._update_status(
+            checked_at=checked_at,
+            status=fallback_status,
+            summary=fallback_summary,
+            tasks=reported_tasks or tasks,
+            trigger=trigger,
+        )
 
     def _notify(self, message: str) -> None:
         if self.notify_callback is None:

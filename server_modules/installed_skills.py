@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from server_modules.config_loader import load_runtime_config
 
 try:
     import yaml
@@ -13,11 +16,34 @@ except Exception:  # pragma: no cover - optional during bootstrap
     yaml = None  # type: ignore[assignment]
 
 
-def skills_root() -> Path:
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def bundled_skills_root() -> Path:
+    return (_REPO_ROOT / "skills").resolve()
+
+
+def workspace_skills_root() -> Path:
+    return (_REPO_ROOT / ".orion-stack" / "skills").resolve()
+
+
+def global_skills_root() -> Path:
     explicit = str(os.getenv("ORION_INSTALLED_SKILLS_DIR", "")).strip()
     if explicit:
         return Path(explicit).expanduser().resolve()
-    return (Path(__file__).resolve().parent.parent / "skills").resolve()
+    return (Path.home() / ".orion-stack" / "skills").expanduser().resolve()
+
+
+def skills_root() -> Path:
+    return bundled_skills_root()
+
+
+def skill_roots() -> List[tuple[str, Path]]:
+    return [
+        ("workspace", workspace_skills_root()),
+        ("global", global_skills_root()),
+        ("bundled", bundled_skills_root()),
+    ]
 
 
 def _path_is_within(path: Path, root: Path) -> bool:
@@ -111,45 +137,102 @@ def _bool_from_any(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _list_from_any(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _runtime_skill_configs() -> Dict[str, Any]:
+    payload = load_runtime_config()
+    skills = payload.get("skills") if isinstance(payload, dict) else {}
+    return skills if isinstance(skills, dict) else {}
+
+
+def _runtime_skill_config(skill_id: str) -> Dict[str, Any]:
+    payload = _runtime_skill_configs()
+    item = payload.get(skill_id)
+    return dict(item) if isinstance(item, dict) else {}
+
+
+def _required_bins(frontmatter: Dict[str, Any], config: Dict[str, Any], runtime_config: Dict[str, Any]) -> List[str]:
+    required: List[str] = []
+    for candidate in (
+        runtime_config.get("required_bins"),
+        config.get("required_bins"),
+        frontmatter.get("required_bins"),
+    ):
+        for token in _list_from_any(candidate):
+            if token not in required:
+                required.append(token)
+    return required
+
+
+def _missing_bins(required_bins: List[str]) -> List[str]:
+    return [token for token in required_bins if not shutil.which(token)]
+
+
 def list_installed_skills() -> List[Dict[str, Any]]:
-    root = skills_root()
-    if not root.exists():
-        return []
     items: List[Dict[str, Any]] = []
-    skill_dirs: List[Path] = []
-    for path in root.iterdir():
-        safe_dir = _safe_skill_dir(root, path)
-        if safe_dir is not None:
-            skill_dirs.append(safe_dir)
-    for skill_dir in sorted(skill_dirs, key=lambda item: item.name.lower()):
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
+    seen_ids: set[str] = set()
+    for source, root in skill_roots():
+        if not root.exists():
             continue
-        skill_text = _read_text(skill_md)
-        frontmatter = _parse_skill_frontmatter(skill_text)
-        config = _load_yaml(skill_dir / "config.yaml")
-        skill_id = str(frontmatter.get("name") or skill_dir.name).strip().lower() or skill_dir.name.lower()
-        description = str(frontmatter.get("description") or "").strip()
-        enabled = _bool_from_any(config.get("enabled"), False)
-        items.append(
-            {
-                "id": skill_id[:120],
-                "name": str(frontmatter.get("name") or skill_dir.name).strip() or skill_dir.name,
-                "description": description[:500],
-                "enabled": enabled,
-                "path": str(skill_dir),
-                "config_path": str(skill_dir / "config.yaml"),
-                "has_query_handler": (skill_dir / "query_handler.py").exists(),
-                "has_snapshot_worker": (skill_dir / "worker.py").exists(),
-                "config": config,
-                "skill_body": _strip_skill_frontmatter(skill_text),
-            }
-        )
+        skill_dirs: List[Path] = []
+        for path in root.iterdir():
+            safe_dir = _safe_skill_dir(root, path)
+            if safe_dir is not None:
+                skill_dirs.append(safe_dir)
+        for skill_dir in sorted(skill_dirs, key=lambda item: item.name.lower()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            skill_text = _read_text(skill_md)
+            frontmatter = _parse_skill_frontmatter(skill_text)
+            config = _load_yaml(skill_dir / "config.yaml")
+            skill_id = str(frontmatter.get("name") or skill_dir.name).strip().lower() or skill_dir.name.lower()
+            if not skill_id or skill_id in seen_ids:
+                continue
+            seen_ids.add(skill_id)
+            description = str(frontmatter.get("description") or "").strip()
+            runtime_config = _runtime_skill_config(skill_id)
+            enabled_default = source == "bundled"
+            enabled = _bool_from_any(
+                runtime_config.get("enabled"),
+                _bool_from_any(config.get("enabled"), _bool_from_any(frontmatter.get("enabled"), enabled_default)),
+            )
+            required_bins = _required_bins(frontmatter, config, runtime_config)
+            missing_bins = _missing_bins(required_bins)
+            items.append(
+                {
+                    "id": skill_id[:120],
+                    "name": str(frontmatter.get("name") or skill_dir.name).strip() or skill_dir.name,
+                    "description": description[:500],
+                    "enabled": enabled,
+                    "available": not missing_bins,
+                    "missing_bins": missing_bins,
+                    "required_bins": required_bins,
+                    "source": source,
+                    "path": str(skill_dir),
+                    "config_path": str(skill_dir / "config.yaml"),
+                    "has_query_handler": (skill_dir / "query_handler.py").exists(),
+                    "has_snapshot_worker": (skill_dir / "worker.py").exists(),
+                    "config": config,
+                    "runtime_config": runtime_config,
+                    "skill_body": _strip_skill_frontmatter(skill_text),
+                }
+            )
     return items
 
 
 def active_installed_skills() -> List[Dict[str, Any]]:
-    return [item for item in list_installed_skills() if bool(item.get("enabled"))]
+    return [
+        item
+        for item in list_installed_skills()
+        if bool(item.get("enabled")) and bool(item.get("available"))
+    ]
 
 
 def merge_skill_prompt_append(existing: str, extra: str, *, max_chars: int = 12000) -> str:
@@ -172,12 +255,16 @@ def build_active_skill_prompt_append(*, max_chars: int = 12000) -> str:
         body = str(item.get("skill_body") or "").strip()
         name = str(item.get("name") or item.get("id") or "Skill").strip()
         description = str(item.get("description") or "").strip()
+        runtime_config = item.get("runtime_config") if isinstance(item.get("runtime_config"), dict) else {}
         if description:
             chunks.append(f"\n{name} — {description}")
         else:
             chunks.append(f"\n{name}")
         if body:
             chunks.append(body)
+        if runtime_config:
+            chunks.append("Runtime config:")
+            chunks.append(json.dumps(runtime_config, ensure_ascii=False, sort_keys=True, indent=2)[:1000])
     return "\n".join(chunks).strip()[:max_chars]
 
 
@@ -235,7 +322,7 @@ def query_active_installed_skills(
         "connector_id": str(connector_id or "").strip(),
         "chat_id": str(chat_id or "").strip(),
         "session_key": str(session_key or "").strip(),
-        "skills_root": str(skills_root()),
+        "skills_roots": [str(path) for _source, path in skill_roots()],
     }
     for skill in active:
         result = _run_skill_query_handler(skill, payload)

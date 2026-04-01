@@ -86,6 +86,11 @@ async def trigger_weekly_schedule_now(schedule_id: str, current_user=Depends(req
     return await core.trigger_weekly_schedule_now(schedule_id)
 
 
+async def get_schedule_logs(schedule_id: str, current_user=Depends(require_api_key)):
+    enforce_workspace_access(current_user, _schedule_workspace_or_404(schedule_id))
+    return await core.get_schedule_logs(schedule_id)
+
+
 async def get_local_run_queue(request: Request, current_user=Depends(require_api_key)):
     workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
     limit_raw = request.query_params.get("limit")
@@ -104,6 +109,7 @@ router.add_api_route("/schedules", list_schedules, methods=['GET'])
 router.add_api_route("/schedules", create_schedule, methods=['POST'])
 router.add_api_route("/schedules/{schedule_id}", update_schedule, methods=['PATCH'])
 router.add_api_route("/schedules/{schedule_id}", delete_schedule, methods=['DELETE'])
+router.add_api_route("/schedules/{schedule_id}/logs", get_schedule_logs, methods=['GET'])
 router.add_api_route("/schedules/{schedule_id}/run-now", trigger_schedule_now, methods=['POST'])
 router.add_api_route("/schedules/weekly", list_weekly_schedules, methods=['GET'])
 router.add_api_route("/schedules/weekly", create_weekly_schedule, methods=['POST'])

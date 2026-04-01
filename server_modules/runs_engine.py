@@ -16,6 +16,34 @@ configure_runtime_model_context(
     connector_catalog=CONNECTOR_CATALOG,
 )
 
+RUN_TOOL_LOOP_REPEAT_LIMIT = 3
+RUN_TOOL_LOOP_REPLY = "I appear to be stuck in a loop. Please clarify what you want me to do."
+_RUN_TOOL_LOOP_STATE: Dict[str, Dict[str, Any]] = {}
+
+
+def build_tool_call_signature(tool_name: str, arguments: Any) -> str:
+    normalized_name = str(tool_name or "").strip()
+    try:
+        normalized_arguments = json.dumps(arguments, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        normalized_arguments = str(arguments)
+    return f"{normalized_name}:{normalized_arguments}"
+
+
+def record_run_tool_signature(session_key: str, tool_name: str, arguments: Any) -> bool:
+    signature = build_tool_call_signature(tool_name, arguments)
+    state = _RUN_TOOL_LOOP_STATE.get(session_key) or {"signature": "", "count": 0}
+    if state.get("signature") == signature:
+        state["count"] = int(state.get("count") or 0) + 1
+    else:
+        state = {"signature": signature, "count": 1}
+    _RUN_TOOL_LOOP_STATE[session_key] = state
+    return int(state.get("count") or 0) >= RUN_TOOL_LOOP_REPEAT_LIMIT
+
+
+def clear_run_tool_signature_state(session_key: str) -> None:
+    _RUN_TOOL_LOOP_STATE.pop(session_key, None)
+
 
 def format_agent_summary(agents: Any) -> str:
     if not isinstance(agents, list) or not agents:

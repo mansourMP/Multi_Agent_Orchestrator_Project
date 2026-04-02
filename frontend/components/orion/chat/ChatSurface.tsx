@@ -27,7 +27,7 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { fmtTime } from '@/app/page.catalog';
-import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus, ChatStepRecord } from './chatSchema';
+import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus, ChatSessionRecord, ChatStepRecord } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
 import { normalizeAssembledAssistantText } from '@/lib/StreamAssembler';
@@ -81,6 +81,10 @@ type ChatPermissionPrompt = {
 
 type ChatSurfaceProps = {
   isMobile: boolean;
+  sessions: ChatSessionRecord[];
+  selectedSessionId: string | null;
+  onSelectSession: (sessionId: string) => void;
+  onNewChat: () => void;
   goal: string;
   setGoal: (value: string) => void;
   primaryGoalRef: RefObject<HTMLTextAreaElement | null>;
@@ -626,8 +630,28 @@ function renderChatStepIcon(step: ChatStepRecord) {
   return <FileText size={14} />;
 }
 
+function formatChatHistoryTimestamp(value: string): string {
+  const timestamp = String(value || '').trim();
+  if (!timestamp) return 'No activity yet';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'No activity yet';
+  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function buildChatHistoryPreview(session: ChatSessionRecord): string {
+  const firstUserMessage = session.messages.find((message) => message.role === 'user' && String(message.content || '').trim());
+  const lastMessage = [...session.messages].reverse().find((message) => String(message.content || '').trim());
+  const previewSource = String(firstUserMessage?.content || lastMessage?.content || '').replace(/\s+/g, ' ').trim();
+  if (!previewSource) return 'No messages yet.';
+  return previewSource.length > 88 ? `${previewSource.slice(0, 85).trimEnd()}...` : previewSource;
+}
+
 export function ChatSurface({
   isMobile,
+  sessions,
+  selectedSessionId,
+  onSelectSession,
+  onNewChat,
   goal,
   setGoal,
   primaryGoalRef,
@@ -1213,6 +1237,46 @@ export function ChatSurface({
       suppressHydrationWarning
     >
       <div className="orion-chat-v2-workspace" ref={workspaceRef}>
+        {!isMobile ? (
+          <aside className="orion-chat-v2-history" aria-label="Chat history">
+            <div className="orion-chat-v2-history-header">
+              <div>
+                <div className="orion-chat-v2-history-title">Chats</div>
+                <div className="orion-chat-v2-history-copy">Switch between stored conversations or start a fresh thread.</div>
+              </div>
+              <button type="button" className="orion-btn orion-btn-primary orion-chat-v2-history-new" onClick={onNewChat}>
+                New chat
+              </button>
+            </div>
+            <div className="orion-chat-v2-history-list">
+              {sessions.length === 0 ? (
+                <div className="orion-chat-v2-history-empty">No saved chats yet.</div>
+              ) : (
+                sessions.map((session) => {
+                  const active = session.id === selectedSessionId;
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className={`orion-chat-v2-history-item${active ? ' is-active' : ''}`}
+                      onClick={() => onSelectSession(session.id)}
+                      aria-current={active ? 'page' : undefined}
+                    >
+                      <div className="orion-chat-v2-history-item-head">
+                        <div className="orion-chat-v2-history-item-title">{session.title}</div>
+                        <div className="orion-chat-v2-history-item-time">{formatChatHistoryTimestamp(session.updatedAt)}</div>
+                      </div>
+                      <div className="orion-chat-v2-history-item-preview">{buildChatHistoryPreview(session)}</div>
+                      <div className="orion-chat-v2-history-item-meta">
+                        {session.messages.length} message{session.messages.length === 1 ? '' : 's'}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        ) : null}
         <div
           className="orion-chat-v2-main"
           style={artifactPanelVisible ? { width: `${100 - artifactPanelWidth}%` } : undefined}

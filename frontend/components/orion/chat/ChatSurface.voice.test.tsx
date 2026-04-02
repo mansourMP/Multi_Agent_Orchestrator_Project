@@ -8,6 +8,10 @@ test('chat composer includes the microphone button', () => {
   const html = renderToStaticMarkup(
     <ChatSurface
       isMobile={false}
+      sessions={[]}
+      selectedSessionId={null}
+      onSelectSession={() => undefined}
+      onNewChat={() => undefined}
       goal=""
       setGoal={() => undefined}
       primaryGoalRef={createRef<HTMLTextAreaElement>()}

@@ -1831,6 +1831,21 @@ export function AutopilotWorkspace() {
     return chatStore.sessions.find((session) => session.id === chatStore.selectedSessionId) || chatStore.sessions[0] || null;
   }, [chatStore]);
   const selectedChatMessages = useMemo(() => selectedChatSession?.messages || [], [selectedChatSession]);
+  const handleSelectChatSession = useCallback((sessionId: string) => {
+    setChatStore((current) => {
+      if (!current.sessions.some((session) => session.id === sessionId)) return current;
+      return {
+        ...current,
+        selectedSessionId: sessionId,
+      };
+    });
+    setGoal('');
+    setTopError(null);
+    setChatIdentityDrawerOpen(false);
+  }, [setGoal, setTopError]);
+  const handleStartNewChat = useCallback(() => {
+    window.dispatchEvent(new Event(EMPYRALIS_NEW_CHAT_EVENT));
+  }, []);
   const latestSessionRunCard = useMemo(() => {
     return [...selectedChatMessages].reverse().find((message) => message.runCard)?.runCard || null;
   }, [selectedChatMessages]);
@@ -2805,6 +2820,10 @@ export function AutopilotWorkspace() {
       <div className="orion-workbench-grid" suppressHydrationWarning>
         <ChatSurface
           isMobile={isMobile}
+          sessions={chatStore.sessions}
+          selectedSessionId={selectedChatSession?.id || null}
+          onSelectSession={handleSelectChatSession}
+          onNewChat={handleStartNewChat}
           goal={goal}
           setGoal={setGoal}
           primaryGoalRef={primaryGoalRef}

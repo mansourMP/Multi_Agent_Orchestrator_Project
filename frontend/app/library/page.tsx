@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
   BookOpen,
   CheckCircle2,
@@ -234,10 +233,6 @@ export default function LibraryPage() {
         }
         actions={
           <>
-            <Link href="/skills" className="orion-btn orion-btn-ghost">
-              <BookOpen size={14} />
-              Legacy Controls
-            </Link>
             <button className="orion-btn orion-btn-ghost" onClick={() => { void refreshInstalled(); void refreshRegistry(); }}>
               <RefreshCw size={14} />
               Refresh
@@ -438,6 +433,49 @@ export default function LibraryPage() {
             </div>
           </section>
         </article>
+      </section>
+
+      <section className="orion-panel orion-surface-lift" style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+        <div className="orion-panel-header" style={{ marginBottom: 0 }}>
+          <div>
+            <div className="orion-panel-title">Skills</div>
+            <div className="orion-panel-copy">
+              Installed skills now live here with the rest of the library. The legacy skills route redirects back to this page.
+            </div>
+          </div>
+        </div>
+
+        <div className="orion-list">
+          {loadingInstalled ? (
+            <div className="orion-list-row">
+              <div className="orion-list-row-subtitle">Loading skills…</div>
+            </div>
+          ) : installedSkills.length === 0 ? (
+            <div className="orion-list-row">
+              <div className="orion-list-row-subtitle">No installed skills found.</div>
+            </div>
+          ) : (
+            installedSkills.map((skill) => (
+              <article key={`library-skill-${skill.id}`} className="orion-list-row">
+                <div className="orion-list-row-main">
+                  <div className="orion-list-row-title">{skill.name}</div>
+                  <div className="orion-list-row-subtitle">{skill.description || 'No description provided.'}</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    <span className="orion-chip">
+                      <BookOpen size={12} />
+                      {skill.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    {skill.available ? <span className="orion-chip">Runtime ready</span> : <span className="orion-chip">Missing runtime deps</span>}
+                    {skill.author ? <span className="orion-chip">{skill.author}</span> : null}
+                  </div>
+                </div>
+                <div className="orion-list-row-subtitle" style={{ whiteSpace: 'nowrap' }}>
+                  v{skill.version || '1.0.0'}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
       </section>
 
       {detailSkill ? (

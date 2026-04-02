@@ -83,7 +83,7 @@ def embed_text(text: str) -> List[float]:
     if not normalized:
         return []
     model = _semantic_model()
-    if model is None:
+    if model is None or isinstance(model, bool) or not hasattr(model, "encode"):
         return []
     vector = model.encode(normalized, normalize_embeddings=True)
     if hasattr(vector, "tolist"):

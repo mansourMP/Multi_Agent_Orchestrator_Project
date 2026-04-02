@@ -43,7 +43,6 @@ import { API_BASE } from '@/lib/config';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { getLocalExecutionCapabilityTitle, inferLocalExecutionCapabilityFromCommand } from '@/lib/localExecutionCapabilities';
 import { buildRunStartedMessage, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
-import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import { StreamAssembler, extractDisplaySuffix } from '@/lib/StreamAssembler';
 
 export const ORION_API_URL = API_BASE;
@@ -2353,42 +2352,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       state.setRunId(nextRunId);
-      upsertSeededRuntimeRun({
-        run_id: nextRunId,
-        status: 'running',
-        workflow_name: 'Operator run',
-        user_goal: effectiveGoal,
-        created_at: new Date().toISOString(),
-        agent_role: effectiveAgentRole,
-        triggered_by: 'Chat',
-        active_profile_id: typeof runPayload?.active_profile_id === 'string' ? runPayload.active_profile_id : null,
-        active_profile_label: typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
-        active_profile_provider:
-          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : null,
-        active_profile_model:
-          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : null,
-        requested_provider:
-          typeof runPayload?.requested_provider === 'string' ? runPayload.requested_provider : null,
-        effective_provider:
-          typeof runPayload?.effective_provider === 'string'
-            ? runPayload.effective_provider
-            : null,
-        requested_model:
-          typeof runPayload?.requested_model === 'string' ? runPayload.requested_model : null,
-        effective_model:
-          typeof runPayload?.effective_model === 'string'
-            ? runPayload.effective_model
-            : null,
-        provider_overridden: typeof runPayload?.provider_overridden === 'boolean' ? runPayload.provider_overridden : undefined,
-        model_overridden: typeof runPayload?.model_overridden === 'boolean' ? runPayload.model_overridden : undefined,
-        fallback_used: typeof runPayload?.fallback_used === 'boolean' ? runPayload.fallback_used : undefined,
-        execution_target_selected:
-          route && typeof route.selected === 'string'
-            ? route.selected
-            : state.connectionMode === 'local_companion'
-              ? 'local_companion'
-              : 'auto',
-      });
       appendLog(
         buildRunStartedMessage(
           typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
@@ -2730,44 +2693,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       }
 
       state.setRunId(nextRunId);
-      upsertSeededRuntimeRun({
-        run_id: nextRunId,
-        status: 'running',
-        workflow_name: selectedPack.label,
-        user_goal: effectiveGoal.trim(),
-        created_at: new Date().toISOString(),
-        agent_role: effectiveAgentRole,
-        triggered_by: 'Direct',
-        active_profile_id: typeof runPayload?.active_profile_id === 'string' ? runPayload.active_profile_id : null,
-        active_profile_label: typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,
-        active_profile_provider:
-          typeof runPayload?.active_profile_provider === 'string' ? runPayload.active_profile_provider : null,
-        active_profile_model:
-          typeof runPayload?.active_profile_model === 'string' ? runPayload.active_profile_model : null,
-        requested_provider:
-          typeof runPayload?.requested_provider === 'string' ? runPayload.requested_provider : null,
-        effective_provider:
-          typeof runPayload?.effective_provider === 'string'
-            ? runPayload.effective_provider
-            : null,
-        requested_model:
-          typeof runPayload?.requested_model === 'string' ? runPayload.requested_model : null,
-        effective_model:
-          typeof runPayload?.effective_model === 'string'
-            ? runPayload.effective_model
-            : null,
-        provider_overridden: typeof runPayload?.provider_overridden === 'boolean' ? runPayload.provider_overridden : undefined,
-        model_overridden: typeof runPayload?.model_overridden === 'boolean' ? runPayload.model_overridden : undefined,
-        fallback_used: typeof runPayload?.fallback_used === 'boolean' ? runPayload.fallback_used : undefined,
-        execution_target_selected:
-          route && typeof route.selected === 'string'
-            ? route.selected
-            : selectedPack.id === 'local-execution-v1'
-              ? 'local_companion'
-              : state.connectionMode === 'local_companion'
-                ? 'local_companion'
-                : 'auto',
-      });
       appendLog(
         buildRunStartedMessage(
           typeof runPayload?.active_profile_label === 'string' ? runPayload.active_profile_label : null,

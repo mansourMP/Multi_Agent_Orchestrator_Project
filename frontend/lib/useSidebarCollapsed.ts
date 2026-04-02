@@ -23,7 +23,7 @@ function applySidebarCollapsedToRoot(next: boolean): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
   root.setAttribute('data-sidebar-collapsed', next ? '1' : '0');
-  root.style.setProperty('--sidebar-width', next ? '56px' : '200px');
+  root.style.setProperty('--shell-sidebar-width', next ? '64px' : '228px');
 }
 
 function persistSidebarCollapsed(next: boolean): void {

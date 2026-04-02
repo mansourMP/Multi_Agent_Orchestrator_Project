@@ -144,7 +144,7 @@ export default function AppsScreen() {
       >
         <View>
           <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Apps</Text>
-          <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>Focused tools your agents can use</Text>
+          <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>Focused tools KIN can open when structure helps</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <TouchableOpacity onPress={() => router.push("/apps/store")}>
@@ -173,7 +173,7 @@ export default function AppsScreen() {
             Connect your Mac Mini to install and open apps.
           </Text>
           <TouchableOpacity
-            onPress={() => router.push("/session")}
+            onPress={() => router.push("/profile")}
             style={{
               marginTop: 10,
               height: 42,

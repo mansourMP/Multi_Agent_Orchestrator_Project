@@ -13,7 +13,7 @@ from server_modules.runtime_common import require_api_key
 
 router = APIRouter()
 
-ALLOWED_NODE_TYPES = {"trigger", "agent", "tool", "decision", "human", "data", "subflow"}
+ALLOWED_NODE_TYPES = {"trigger", "agent", "tool", "decision", "human", "data", "subflow", "loop"}
 BUILDER_SYSTEM_PROMPT = """You are a workflow builder AI for Empyralist, an AI operations platform.
 Given a plain language description of a business outcome, return ONLY valid JSON.
 Structure:
@@ -55,17 +55,19 @@ Structure:
     {"source": "trigger_1", "target": "agent_1"}
   ]
 }
-Node types allowed: trigger, agent, tool, decision, human, data, subflow.
+Node types allowed: trigger, agent, tool, decision, human, data, subflow, loop.
 Trigger variants: connector_event, schedule, webhook, workflow, file_watch, manual.
 Tool variants: connector_action, http, browser, file, shell, document, spreadsheet, code.
 Decision variants: if_else, classifier, field_router.
 Human variants: approval, review, wait_for_reply.
 Data variants: transform, compose, validate.
 Subflow variants: call_workflow.
+Loop variants: for_each, while, repeat.
 Manual triggers are test-only.
 Published workflows require at least one non-manual trigger, but drafts may use manual.
 Code is a tool variant, never a top-level node family.
 Memory belongs inside agent config, never as a canvas node.
+Loop nodes must provide body.nodes and body.edges for the nested sub-workflow.
 Provide concise labels/subtitles and numeric x/y positions suitable for a left-to-right flow.
 Prefer a real trigger variant when the prompt clearly implies one.
 Use real connector ids, trigger ids, and action ids from the connector registry when possible.

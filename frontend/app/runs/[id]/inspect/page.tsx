@@ -373,7 +373,7 @@ function fmtMs(value?: number | null): string {
 function statusColor(status?: string): string {
   const value = String(status || '').toLowerCase();
   if (value === 'completed' || value === 'success') return 'var(--success-fg)';
-  if (value === 'running' || value === 'starting') return '#93c5fd';
+  if (value === 'running' || value === 'starting') return 'var(--primary-base)';
   if (value === 'waiting' || value === 'waiting_for_input') return 'var(--warning-fg)';
   if (value === 'failed' || value === 'error' || value === 'timeout') return 'var(--error-fg)';
   return 'var(--text-secondary)';
@@ -410,10 +410,10 @@ function workflowNodeTone(status?: string): { color: string; label: string; back
   }
   if (value === 'running' || value === 'starting') {
     return {
-      color: '#1d4ed8',
+      color: 'var(--primary-base)',
       label: 'Running',
-      background: 'rgba(147,197,253,0.14)',
-      border: 'rgba(147,197,253,0.32)',
+      background: 'var(--primary-soft)',
+      border: 'var(--primary-border-soft)',
     };
   }
   if (value === 'waiting_human' || value === 'waiting' || value === 'waiting_for_input') {
@@ -503,6 +503,12 @@ function formatWorkflowNodeKind(type?: string | null, variant?: string | null): 
     if (kind === 'compose') return 'Compose';
     if (kind === 'validate') return 'Validate';
     return 'Data step';
+  }
+  if (family === 'loop') {
+    if (kind === 'for_each') return 'For Each';
+    if (kind === 'while') return 'While';
+    if (kind === 'repeat') return 'Repeat';
+    return 'Loop';
   }
   if (family === 'subflow') return 'Subflow';
   return family || '--';
@@ -1310,7 +1316,7 @@ export default function RunInspectPage() {
       ? 'var(--error-fg)'
       : effectiveRunStatus === 'waiting_for_input' || effectiveRunStatus === 'waiting'
       ? 'var(--warning-fg)'
-      : '#c4b5fd';
+      : 'var(--primary-base)';
   const latestApproval = approvalAudit[0] ?? null;
   const latestArtifact = deliverableArtifacts[0] || screenshotArtifacts[0] || artifacts[0] || null;
   const runtimePolicyNotes = useMemo(() => {
@@ -1404,7 +1410,7 @@ export default function RunInspectPage() {
       : streamState === 'connected'
       ? 'var(--success-fg)'
       : streamState === 'connecting'
-      ? '#93c5fd'
+      ? 'var(--primary-base)'
       : streamState === 'disconnected'
       ? 'var(--warning-fg)'
       : streamState === 'closed'
@@ -1423,8 +1429,8 @@ export default function RunInspectPage() {
       ? 'closed'
       : 'idle';
   const focusedSectionStyle = {
-    borderColor: 'rgba(139,92,246,0.38)',
-    boxShadow: 'inset 0 0 0 1px rgba(139,92,246,0.08)',
+    borderColor: 'var(--primary-border-soft)',
+    boxShadow: 'inset 0 0 0 1px var(--primary-ring-soft)',
   } as const;
 
   useEffect(() => {
@@ -1548,12 +1554,12 @@ export default function RunInspectPage() {
                 className="orion-btn orion-btn-ghost"
                 onClick={() => focusSection(target)}
                 style={{
-                  minHeight: 30,
-                  padding: '0 10px',
+                  minHeight: 44,
+                  padding: '0 12px',
                   fontSize: 11,
-                  background: isActive ? 'rgba(139,92,246,0.12)' : 'transparent',
-                  borderColor: isActive ? 'rgba(139,92,246,0.36)' : 'var(--border-default)',
-                  color: isActive ? '#c4b5fd' : 'var(--text-secondary)',
+                  background: isActive ? 'var(--primary-soft)' : 'transparent',
+                  borderColor: isActive ? 'var(--primary-border-soft)' : 'var(--border-default)',
+                  color: isActive ? 'var(--primary-base)' : 'var(--text-secondary)',
                 }}
               >
                 {label}
@@ -1642,10 +1648,10 @@ export default function RunInspectPage() {
                   : 'This run finished without pausing for confirmation.'}
               </div>
               <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => focusSection('approvals')}>
+                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => focusSection('approvals')}>
                   Open confirmations
                 </button>
-                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/approvals">
+                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
                   Go to Confirmation Queue
                 </Link>
               </div>
@@ -1662,10 +1668,10 @@ export default function RunInspectPage() {
                 <div>Latest {latestArtifact ? formatArtifactLabel(latestArtifact) : '--'}</div>
               </div>
               <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => focusSection('artifacts')}>
+                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => focusSection('artifacts')}>
                   Open artifacts
                 </button>
-                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/artifacts">
+                <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/artifacts">
                   Open outputs
                 </Link>
               </div>
@@ -1939,7 +1945,7 @@ export default function RunInspectPage() {
                         padding: '10px 10px',
                         borderBottom: '1px solid var(--border-default)',
                         alignItems: 'start',
-                        background: isActiveNode ? 'rgba(139,92,246,0.06)' : 'transparent',
+                        background: isActiveNode ? 'var(--primary-soft)' : 'transparent',
                       }}
                     >
                       <div style={{ display: 'grid', gap: 4 }}>
@@ -2067,7 +2073,7 @@ export default function RunInspectPage() {
                       <Link
                         className="orion-btn orion-btn-ghost"
                         href={`/runs/${encodeURIComponent(String(parentRun.run_id || ''))}/inspect?focus=timeline`}
-                        style={{ minHeight: 30, paddingInline: 10 }}
+                        style={{ minHeight: 44, paddingInline: 12 }}
                       >
                         Inspect
                       </Link>
@@ -2126,7 +2132,7 @@ export default function RunInspectPage() {
                           <Link
                             className="orion-btn orion-btn-ghost"
                             href={`/runs/${encodeURIComponent(String(child.run_id || ''))}/inspect?focus=timeline`}
-                            style={{ minHeight: 30, paddingInline: 10 }}
+                            style={{ minHeight: 44, paddingInline: 12 }}
                           >
                             Inspect
                           </Link>
@@ -2349,7 +2355,7 @@ export default function RunInspectPage() {
                             <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
                               <button
                                 className="orion-btn orion-btn-primary"
-                                style={{ minHeight: 28, paddingInline: 10 }}
+                                style={{ minHeight: 44, paddingInline: 12 }}
                                 onClick={() => void openArtifactTarget(step.artifact_file_path!)}
                               >
                                 Open
@@ -2357,7 +2363,7 @@ export default function RunInspectPage() {
                               {desktopBridge?.desktop && isLocalFileTarget(step.artifact_file_path) ? (
                                 <button
                                   className="orion-btn orion-btn-ghost"
-                                  style={{ minHeight: 28, paddingInline: 10 }}
+                                  style={{ minHeight: 44, paddingInline: 12 }}
                                   onClick={() => void revealArtifactTarget(step.artifact_file_path!)}
                                 >
                                   {revealLabel}
@@ -2430,12 +2436,12 @@ export default function RunInspectPage() {
                     className="orion-btn orion-btn-ghost"
                     onClick={() => setInspectMode('timeline')}
                     style={{
-                      minHeight: 28,
+                      minHeight: 44,
                       fontSize: 11,
-                      padding: '0 9px',
-                      background: inspectMode === 'timeline' ? 'rgba(139,92,246,0.16)' : 'var(--bg-element)',
-                      borderColor: inspectMode === 'timeline' ? 'rgba(139,92,246,0.42)' : 'var(--border-default)',
-                      color: inspectMode === 'timeline' ? '#c4b5fd' : 'var(--text-secondary)',
+                      padding: '0 12px',
+                      background: inspectMode === 'timeline' ? 'var(--primary-soft)' : 'var(--bg-element)',
+                      borderColor: inspectMode === 'timeline' ? 'var(--primary-border-soft)' : 'var(--border-default)',
+                      color: inspectMode === 'timeline' ? 'var(--primary-base)' : 'var(--text-secondary)',
                     }}
                   >
                     Timeline
@@ -2444,12 +2450,12 @@ export default function RunInspectPage() {
                     className="orion-btn orion-btn-ghost"
                     onClick={() => setInspectMode('logs')}
                     style={{
-                      minHeight: 28,
+                      minHeight: 44,
                       fontSize: 11,
-                      padding: '0 9px',
-                      background: inspectMode === 'logs' ? 'rgba(139,92,246,0.16)' : 'var(--bg-element)',
-                      borderColor: inspectMode === 'logs' ? 'rgba(139,92,246,0.42)' : 'var(--border-default)',
-                      color: inspectMode === 'logs' ? '#c4b5fd' : 'var(--text-secondary)',
+                      padding: '0 12px',
+                      background: inspectMode === 'logs' ? 'var(--primary-soft)' : 'var(--bg-element)',
+                      borderColor: inspectMode === 'logs' ? 'var(--primary-border-soft)' : 'var(--border-default)',
+                      color: inspectMode === 'logs' ? 'var(--primary-base)' : 'var(--text-secondary)',
                     }}
                   >
                     Logs
@@ -2517,7 +2523,7 @@ export default function RunInspectPage() {
                         </span>
                         <span style={{ fontSize: 12, color: 'var(--text-primary)', fontWeight: 700 }}>{item.event}</span>
                         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.message}</span>
-                        <span style={{ fontSize: 12, color: '#c4b5fd' }}>{item.toolHint || '--'}</span>
+                        <span style={{ fontSize: 12, color: 'var(--primary-base)' }}>{item.toolHint || '--'}</span>
                       </div>
                     );
                   })}
@@ -2630,10 +2636,10 @@ export default function RunInspectPage() {
                     <div>{pendingConfirmation.consequence || 'This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.'}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} href="/approvals">
+                    <Link className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} href="/approvals">
                       Open confirmation queue
                     </Link>
-                    <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => focusSection('timeline')}>
+                    <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => focusSection('timeline')}>
                       Review timeline first
                     </button>
                   </div>
@@ -2772,7 +2778,7 @@ export default function RunInspectPage() {
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           className="orion-btn orion-btn-primary"
-                          style={{ minHeight: 30, paddingInline: 10 }}
+                          style={{ minHeight: 44, paddingInline: 12 }}
                           onClick={(event) => {
                             event.stopPropagation();
                             void openArtifactTarget(item);
@@ -2783,7 +2789,7 @@ export default function RunInspectPage() {
                         {desktopBridge?.desktop && isLocalFileTarget(item) ? (
                           <button
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 30, paddingInline: 10 }}
+                            style={{ minHeight: 44, paddingInline: 12 }}
                             onClick={(event) => {
                               event.stopPropagation();
                               void revealArtifactTarget(item);
@@ -2852,7 +2858,7 @@ export default function RunInspectPage() {
                           </div>
                           <div>
                           {/^https?:\/\//i.test(item) ? (
-                            <a href={item} target="_blank" rel="noreferrer" style={{ color: '#c4b5fd' }}>
+                            <a href={item} target="_blank" rel="noreferrer" style={{ color: 'var(--primary-base)' }}>
                               {item}
                             </a>
                           ) : (
@@ -2863,7 +2869,7 @@ export default function RunInspectPage() {
                         <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
                           <button
                             className="orion-btn orion-btn-primary"
-                            style={{ minHeight: 28, paddingInline: 10 }}
+                            style={{ minHeight: 44, paddingInline: 12 }}
                             onClick={() => void openArtifactTarget(item)}
                           >
                             Open
@@ -2871,7 +2877,7 @@ export default function RunInspectPage() {
                           {desktopBridge?.desktop && isLocalFileTarget(item) ? (
                             <button
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 28, paddingInline: 10 }}
+                              style={{ minHeight: 44, paddingInline: 12 }}
                               onClick={() => void revealArtifactTarget(item)}
                             >
                               {revealLabel}

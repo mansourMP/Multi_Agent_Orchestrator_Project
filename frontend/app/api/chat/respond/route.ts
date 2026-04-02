@@ -14,10 +14,18 @@ export async function POST(request: NextRequest) {
   const rawBody = await request.text();
 
   try {
+    const forwardedHeaders: Record<string, string> = {};
+    if (rawBody) {
+      forwardedHeaders['Content-Type'] = request.headers.get('content-type') || 'application/json';
+    }
+    const lastEventId = request.headers.get('last-event-id');
+    if (lastEventId) {
+      forwardedHeaders['Last-Event-ID'] = lastEventId;
+    }
     const runtimeResponse = await runtimeAuthorizedFetch('/chat/respond', {
       method: 'POST',
       body: rawBody || undefined,
-      headers: rawBody ? { 'Content-Type': request.headers.get('content-type') || 'application/json' } : undefined,
+      headers: Object.keys(forwardedHeaders).length > 0 ? forwardedHeaders : undefined,
     });
     const headers = new Headers();
     const contentType = runtimeResponse.headers.get('content-type');

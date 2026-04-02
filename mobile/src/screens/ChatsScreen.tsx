@@ -38,7 +38,7 @@ export default function ChatsScreen() {
           const lastMessage = session.messages[session.messages.length - 1];
           return {
             id: session.id,
-            title: session.title || "New chat",
+            title: session.title || "New thread",
             preview: lastMessage?.speech?.trim() || "",
             timestamp: session.updatedAt,
           };
@@ -48,7 +48,7 @@ export default function ChatsScreen() {
 
   const handleNewChat = () => {
     const sessionId = createSession(kin);
-    router.push(`/chats/${sessionId}`);
+    router.push(`/kin/${sessionId}`);
   };
 
   return (
@@ -65,7 +65,10 @@ export default function ChatsScreen() {
         }}
       >
         <View>
-          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Chats</Text>
+          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>KIN</Text>
+          <Text style={{ marginTop: 4, fontSize: 13, color: theme.colors.textSecondary }}>
+            One visible intelligence. Apps and workers stay behind the scenes.
+          </Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <HeaderSearchButton />
@@ -104,7 +107,7 @@ export default function ChatsScreen() {
               gap: 10,
             }}
           >
-            <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>No chats yet</Text>
+            <Text style={{ fontSize: 17, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>No threads yet</Text>
             <TouchableOpacity
               activeOpacity={0.88}
               onPress={handleNewChat}
@@ -118,14 +121,14 @@ export default function ChatsScreen() {
                 justifyContent: "center",
               }}
             >
-              <Text style={{ fontSize: 13, fontWeight: "700", color: "#FFFFFF" }}>New chat</Text>
+              <Text style={{ fontSize: 13, fontWeight: "700", color: "#FFFFFF" }}>New thread</Text>
             </TouchableOpacity>
           </View>
         }
         renderItem={({ item }) => (
           <TouchableOpacity
             activeOpacity={0.82}
-            onPress={() => router.push(`/chats/${item.id}`)}
+            onPress={() => router.push(`/kin/${item.id}`)}
             style={{
               flexDirection: "row",
               alignItems: "center",

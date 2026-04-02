@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Chrome, LockKeyhole, ShieldCheck, Smartphone } from 'lucide-react';
+import { ArrowLeft, Chrome, LockKeyhole, Smartphone } from 'lucide-react';
 import { getDesktopBridge } from '@/lib/desktopBridge';
 import { waitForDesktopControlPlaneSignIn } from '@/lib/controlPlaneSession';
 import { buildPostSignInSetupHref } from '@/lib/setupReadiness';
@@ -55,6 +55,13 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [error, setError] = useState(authErrorMessage(errorCode));
   const [inDesktopWindow, setInDesktopWindow] = useState(false);
+  const socialProvidersEnabled = providers.google.enabled || providers.apple.enabled;
+  const headline = authMode === 'signup' ? 'Create your account' : 'Welcome back';
+  const subheadline = inDesktopWindow
+    ? 'Sign in here — Google and Apple will open in your browser and return automatically'
+    : authMode === 'signup'
+      ? 'Start turning intent into execution'
+      : 'Sign in to continue to Empyralis';
 
   useEffect(() => {
     setInDesktopWindow(Boolean(desktopMode && getDesktopBridge()?.desktop));
@@ -235,33 +242,32 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
   return (
     <div className="orion-auth-page">
       <div className="orion-auth-card">
-        <div className="orion-auth-card__eyebrow">
-          <ShieldCheck size={14} />
-          {inDesktopWindow ? 'Secure sign-in' : 'Secure browser sign-in'}
+        <div className="orion-auth-header">
+          <div className="orion-auth-wordmark">Empyralis</div>
+          <h1 className="orion-auth-card__title">{headline}</h1>
+          <p className="orion-auth-card__copy">{subheadline}</p>
         </div>
-        <h1 className="orion-auth-card__title">Sign in to Empyralis</h1>
-        <p className="orion-auth-card__copy">
-          {inDesktopWindow
-            ? 'Sign in here. Google and Apple continue in your system browser and return to the app automatically.'
-            : 'Sign in with the fastest supported provider. Direct AI account connection comes after app sign-in.'}
-        </p>
 
-        {!loadingProviders && providers.google.enabled ? (
-          <button type="button" className="orion-auth-provider" onClick={continueWithGoogle} disabled={oauthSubmitting !== null}>
-            <span className="orion-auth-provider__icon">
-              <Chrome size={16} />
-            </span>
-            {oauthSubmitting === 'google' ? 'Waiting for Google…' : 'Continue with Google'}
-          </button>
-        ) : null}
+        {!loadingProviders && socialProvidersEnabled ? (
+          <div className="orion-auth-social">
+            {providers.google.enabled ? (
+              <button type="button" className="orion-auth-provider" onClick={continueWithGoogle} disabled={oauthSubmitting !== null}>
+                <span className="orion-auth-provider__icon">
+                  <Chrome size={16} />
+                </span>
+                {oauthSubmitting === 'google' ? 'Waiting for Google…' : 'Continue with Google'}
+              </button>
+            ) : null}
 
-        {!loadingProviders && providers.apple.enabled ? (
-          <button type="button" className="orion-auth-provider" onClick={continueWithApple} disabled={oauthSubmitting !== null}>
-            <span className="orion-auth-provider__icon">
-              <Smartphone size={16} />
-            </span>
-            {oauthSubmitting === 'apple' ? 'Waiting for Apple…' : 'Continue with Apple'}
-          </button>
+            {providers.apple.enabled ? (
+              <button type="button" className="orion-auth-provider" onClick={continueWithApple} disabled={oauthSubmitting !== null}>
+                <span className="orion-auth-provider__icon">
+                  <Smartphone size={16} />
+                </span>
+                {oauthSubmitting === 'apple' ? 'Waiting for Apple…' : 'Continue with Apple'}
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         {!loadingProviders && !providers.google.enabled && !providers.apple.enabled ? (
@@ -280,32 +286,11 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
 
         {providers.email.enabled ? (
           <>
-            <div className="orion-auth-divider">
-              <span>Email sign-in</span>
-            </div>
-
-            <div className="orion-auth-switch" role="tablist" aria-label="Authentication mode">
-              <button
-                type="button"
-                className={authMode === 'signup' ? 'orion-auth-switch__button active' : 'orion-auth-switch__button'}
-                onClick={() => {
-                  setAuthMode('signup');
-                  setError('');
-                }}
-              >
-                Create account
-              </button>
-              <button
-                type="button"
-                className={authMode === 'signin' ? 'orion-auth-switch__button active' : 'orion-auth-switch__button'}
-                onClick={() => {
-                  setAuthMode('signin');
-                  setError('');
-                }}
-              >
-                Sign in
-              </button>
-            </div>
+            {socialProvidersEnabled ? (
+              <div className="orion-auth-divider">
+                <span>or continue with email</span>
+              </div>
+            ) : null}
 
             <form className="orion-auth-form" onSubmit={handleSubmit}>
               {authMode === 'signup' ? (
@@ -352,6 +337,38 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
                   ? (authMode === 'signup' ? 'Creating account…' : 'Signing in…')
                   : (authMode === 'signup' ? 'Create account' : 'Continue')}
               </button>
+
+              <div className="orion-auth-mode-switch">
+                {authMode === 'signup' ? (
+                  <>
+                    <span>Already have an account?</span>
+                    <button
+                      type="button"
+                      className="orion-auth-mode-link"
+                      onClick={() => {
+                        setAuthMode('signin');
+                        setError('');
+                      }}
+                    >
+                      Sign in
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span>Don&apos;t have an account?</span>
+                    <button
+                      type="button"
+                      className="orion-auth-mode-link"
+                      onClick={() => {
+                        setAuthMode('signup');
+                        setError('');
+                      }}
+                    >
+                      Create one
+                    </button>
+                  </>
+                )}
+              </div>
             </form>
           </>
         ) : null}

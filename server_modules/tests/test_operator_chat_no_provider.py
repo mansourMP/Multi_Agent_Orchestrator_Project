@@ -1,0 +1,287 @@
+import importlib.util
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+MODULE_PATH = ROOT_DIR / "server_modules" / "operator_chat.py"
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+spec = importlib.util.spec_from_file_location("operator_chat_no_provider_under_test", MODULE_PATH)
+operator_chat = importlib.util.module_from_spec(spec)
+sys.modules["operator_chat_no_provider_under_test"] = operator_chat
+assert spec and spec.loader
+spec.loader.exec_module(operator_chat)
+
+
+class OperatorChatNoProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._workspace_context_patcher = patch(
+            "operator_chat_no_provider_under_test._direct_chat_workspace_context_text",
+            return_value="",
+        )
+        self._workspace_context_patcher.start()
+
+    def tearDown(self) -> None:
+        self._workspace_context_patcher.stop()
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_file_tool_runs_without_provider_configured(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        with tempfile.TemporaryDirectory(prefix="no-provider-files-") as tmpdir:
+            source_dir = Path(tmpdir) / "server_modules"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            (source_dir / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+            (source_dir / "b.py").write_text("async def b():\n    return 2\n", encoding="utf-8")
+            output_path = Path(tmpdir) / "fn_count.txt"
+
+            payload = operator_chat.collect_direct_operator_reply(
+                message=(
+                    f"Read all .py files in {source_dir} and count functions, "
+                    f"write a summary to {output_path}"
+                ),
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": False},
+            )
+
+            self.assertEqual(payload["mode"], "answer")
+            self.assertTrue(output_path.exists())
+            self.assertIn("Counted 2 functions", payload["reply"])
+            self.assertIn("Functions found: 2", output_path.read_text(encoding="utf-8"))
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_browser_request_reuses_session_browser_when_provided(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        class _DummyBrowser:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def run_sync(self, method_name, *args):
+                self.calls.append((method_name, args))
+                if method_name == "navigate":
+                    return {"url": "https://example.com", "title": "Example Domain", "status_code": 200}
+                if method_name == "observe":
+                    return {
+                        "url": "https://example.com",
+                        "title": "Example Domain",
+                        "text_preview": "Example Domain",
+                        "interactive_elements": [],
+                    }
+                if method_name == "extract_text":
+                    return "Example Domain"
+                raise AssertionError(f"Unexpected browser method: {method_name}")
+
+        runtime_handle = type("RuntimeHandle", (), {"browser": _DummyBrowser()})()
+
+        with patch("server_modules.browser_engine.BrowserEngine", side_effect=AssertionError("global browser should not be constructed")):
+            payload = operator_chat.collect_direct_operator_reply(
+                message="Go to https://example.com and tell me the page title and main heading",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                thread_id="thread-1",
+                availability={"ai_ready": False},
+                session_ctx={
+                    "runtime_handle": runtime_handle,
+                    "workspace_id": "default",
+                    "thread_id": "thread-1",
+                },
+            )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Page title: Example Domain", payload["reply"])
+        self.assertIn("Main heading: Example Domain", payload["reply"])
+        self.assertEqual(
+            runtime_handle.browser.calls,
+            [
+                ("navigate", ("https://example.com",)),
+                ("observe", ()),
+                ("extract_text", ("h1",)),
+            ],
+        )
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test._execute_single_direct_tool_call",
+        side_effect=[
+            '{"url":"https://example.com","title":"Example Domain","status_code":200}',
+            '{"url":"https://example.com","title":"Example Domain","text_preview":"Example Domain","interactive_elements":[]}',
+            "Example Domain",
+        ],
+    )
+    def test_browser_request_runs_without_provider_configured(
+        self,
+        _execute_single_direct_tool_call,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Go to https://example.com and tell me the page title and main heading",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Page title: Example Domain", payload["reply"])
+        self.assertIn("Main heading: Example Domain", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test._execute_single_direct_tool_call",
+        return_value='HTTP 200\n\n{"origin":"203.0.113.9"}',
+    )
+    def test_web_fetch_runs_without_provider_configured(
+        self,
+        _execute_single_direct_tool_call,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Fetch https://httpbin.org/get and tell me the origin IP",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["reply"], "Origin IP: 203.0.113.9")
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_directory_listing_skips_workspace_context_for_no_provider_tool_path(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        self._workspace_context_patcher.stop()
+        with patch(
+            "operator_chat_no_provider_under_test._direct_chat_workspace_context_text",
+            return_value="",
+        ) as workspace_context_mock:
+            with tempfile.TemporaryDirectory(prefix="no-provider-list-fast-") as tmpdir:
+                root = Path(tmpdir)
+                (root / "alpha.txt").write_text("a", encoding="utf-8")
+                (root / "beta.txt").write_text("b", encoding="utf-8")
+
+                payload = operator_chat.collect_direct_operator_reply(
+                    message=f"List the first 2 files in {root}",
+                    workspace_id="default",
+                    requested_model="gpt-5.4",
+                    requested_provider="openai",
+                    availability={"ai_ready": False},
+                )
+
+        self._workspace_context_patcher.start()
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("First 2 files in ", payload["reply"])
+        workspace_context_mock.assert_not_called()
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test._execute_single_direct_tool_call",
+        return_value='HTTP 200\n\n{"utc_datetime":"2026-04-02T00:00:00+00:00"}',
+    )
+    def test_combined_shell_and_web_request_runs_without_provider_configured(
+        self,
+        _execute_single_direct_tool_call,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        with tempfile.TemporaryDirectory(prefix="no-provider-list-") as tmpdir:
+            root = Path(tmpdir)
+            (root / "alpha.txt").write_text("a", encoding="utf-8")
+            (root / "beta.txt").write_text("b", encoding="utf-8")
+
+            payload = operator_chat.collect_direct_operator_reply(
+                message=f"List files in {root} and get current time from worldtimeapi.io/api/timezone/UTC",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": False},
+            )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Files in ", payload["reply"])
+        self.assertIn("alpha.txt\nbeta.txt", payload["reply"])
+        self.assertIn("Current UTC time: 2026-04-02T00:00:00+00:00", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_directory_listing_with_first_n_runs_without_provider(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        with tempfile.TemporaryDirectory(prefix="no-provider-list-limit-") as tmpdir:
+            root = Path(tmpdir)
+            (root / "alpha.txt").write_text("a", encoding="utf-8")
+            (root / "beta.txt").write_text("b", encoding="utf-8")
+            (root / "gamma.txt").write_text("c", encoding="utf-8")
+
+            payload = operator_chat.collect_direct_operator_reply(
+                message=f"List the first 2 files in {root}",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": False},
+            )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("First 2 files in ", payload["reply"])
+        self.assertIn("alpha.txt\nbeta.txt", payload["reply"])
+        self.assertNotIn("gamma.txt", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_llm_request_without_provider_returns_clear_error_not_gate(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Explain the tradeoffs between SQLite and Postgres for this app.",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["actions"], [])
+        self.assertEqual(payload["error"], "ai_provider_not_configured")
+        self.assertIn("needs model reasoning", payload["reply"])

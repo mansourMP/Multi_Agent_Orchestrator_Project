@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import { Appearance } from 'react-native';
 
-type ThemeMode = 'light' | 'dark' | 'system';
+type ThemeMode = 'light';
 
 interface ThemeState {
   mode: ThemeMode;

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI
 
+from server_modules.acp_manager import DEFAULT_ACP_MANAGER
 from server_modules.runtime_config import *
 
 
@@ -14,14 +15,57 @@ async def app_lifespan(_: FastAPI):
         await stack.enter_async_context(empyralist_mcp_lifespan())
         yield
 
-
 app = FastAPI(title="Empyralis Runtime API", lifespan=app_lifespan)
+ACP_MANAGER = DEFAULT_ACP_MANAGER
+
+
+def sync_acp_manager_paths(
+    *,
+    runtime_db_path=None,
+    setup_sessions_path=None,
+    provider_profiles_path=None,
+    idempotency_path=None,
+) -> None:
+    ACP_MANAGER.reconfigure_paths(
+        runtime_db_path=runtime_db_path,
+        setup_sessions_path=setup_sessions_path,
+        provider_profiles_path=provider_profiles_path,
+        idempotency_path=idempotency_path,
+    )
+
+# Inventory of shared mutable state and its current durable backing.
+# This makes the migration surface explicit and keeps active queue/session state
+# aligned with the persistence layer instead of treating these containers as
+# authoritative beyond the current process.
+SHARED_STATE_BACKING: Dict[str, str] = {
+    "runs": "runtime_state_store.live_runs",
+    "RUN_HISTORY": "runtime_state_store.run_history",
+    "CHANNEL_EVENTS": "runtime_state_store.channel_events",
+    "SETUP_SESSIONS": "setup_sessions.json",
+    "PROVIDER_PROFILES": "provider_profiles.json",
+    "IDEMPOTENCY_RECORDS": "idempotency.json",
+    "LOCAL_PENDING_RUN_IDS": "runtime_state_store.local_pending_queue",
+    "LOCAL_CLAIMED_RUNS": "runtime_state_store.local_claims",
+    "LOCAL_WORKER_REGISTRY": "runtime_state_store.runtime_registrations",
+}
+
+NON_DURABLE_SHARED_STATE: Dict[str, str] = {
+    "RUN_QUEUE_INDEX": "ephemeral queue-object index rebuilt from live runs on startup",
+    "APPROVAL_AUDIT": "history mirror loaded from durable approval audit store",
+    "CHANNEL_EVENTS": "runtime_events mirror loaded from durable channel event store",
+    "WEEKLY_SCHEDULES": "automation mirror loaded from schedules file",
+    "RUNTIME_SKILLS_STATE": "skills mirror loaded from runtime skills file",
+    "RATE_LIMIT_BUCKETS": "process-local throttle buckets",
+    "RUNTIME_METRICS": "process-local metrics aggregates",
+    "TELEGRAM_AUTOPILOT_STATE": "process-local autopilot state with durable checkpoints elsewhere",
+    "WHATSAPP_AUTOPILOT_STATE": "process-local autopilot state with durable checkpoints elsewhere",
+}
 
 # Global state
-runs: Dict[str, Dict[str, Any]] = {}
+runs = ACP_MANAGER.runs
 RUN_QUEUE_INDEX: Dict[int, str] = {}
 RUN_HISTORY_LOCK = threading.Lock()
-RUN_HISTORY: List[Dict[str, Any]] = []
+RUN_HISTORY = ACP_MANAGER.run_history
 APPROVAL_AUDIT_LOCK = threading.Lock()
 APPROVAL_AUDIT: List[Dict[str, Any]] = []
 CHANNEL_EVENTS_LOCK = threading.Lock()
@@ -29,9 +73,9 @@ CHANNEL_EVENTS: List[Dict[str, Any]] = []
 SCHEDULES_LOCK = threading.Lock()
 WEEKLY_SCHEDULES: Dict[str, Dict[str, Any]] = {}
 SETUP_SESSIONS_LOCK = threading.Lock()
-SETUP_SESSIONS: Dict[str, Dict[str, Any]] = {}
+SETUP_SESSIONS = ACP_MANAGER.setup_sessions
 PROFILES_LOCK = threading.Lock()
-PROVIDER_PROFILES: Dict[str, Dict[str, Any]] = {}
+PROVIDER_PROFILES = ACP_MANAGER.provider_profiles
 RUNTIME_SKILLS_LOCK = threading.Lock()
 RUNTIME_SKILLS_STATE: Dict[str, Any] = {
     "version": 1,
@@ -40,13 +84,13 @@ RUNTIME_SKILLS_STATE: Dict[str, Any] = {
     "updated_at": None,
 }
 IDEMPOTENCY_LOCK = threading.Lock()
-IDEMPOTENCY_RECORDS: Dict[str, Dict[str, Any]] = {}
+IDEMPOTENCY_RECORDS = ACP_MANAGER.idempotency_records
 RATE_LIMIT_LOCK = threading.Lock()
 RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
 LOCAL_QUEUE_LOCK = threading.Lock()
-LOCAL_PENDING_RUN_IDS: List[str] = []
-LOCAL_CLAIMED_RUNS: Dict[str, Dict[str, Any]] = {}
-LOCAL_WORKER_REGISTRY: Dict[str, Dict[str, Any]] = {}
+LOCAL_PENDING_RUN_IDS = ACP_MANAGER.local_pending_run_ids
+LOCAL_CLAIMED_RUNS = ACP_MANAGER.local_claimed_runs
+LOCAL_WORKER_REGISTRY = ACP_MANAGER.local_worker_registry
 TERMINAL_RUN_STATUSES: Set[str] = {
     "completed",
     "failed",
@@ -69,6 +113,9 @@ RUNTIME_METRICS: Dict[str, float] = {
     "first_value_count": 0,
     "hitl_wait_sum_ms": 0,
     "hitl_wait_count": 0,
+    "chat_stream_interrupted": 0,
+    "chat_stream_replayed_completed": 0,
+    "chat_stream_replayed_interrupted": 0,
 }
 TELEGRAM_AUTOPILOT_LOCK = threading.Lock()
 TELEGRAM_AUTOPILOT_STATE: Dict[str, Any] = {

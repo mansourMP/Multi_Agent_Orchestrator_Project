@@ -1214,15 +1214,23 @@ ensure_browser_session_server
 browser_auth_precheck_json="${TMP_DIR}/browser-auth-precheck.json"
 api_post "/runs/precheck" "${browser_auth_payload}" > "${browser_auth_precheck_json}"
 browser_auth_start_json="${TMP_DIR}/browser-auth-start.json"
-api_post_expect_status "/runs/start" "${browser_auth_payload}" 409 > "${browser_auth_start_json}"
+api_post "/runs/start" "${browser_auth_payload}" > "${browser_auth_start_json}"
 browser_auth_run_id="$(jq -r '.run_id // empty' "${browser_auth_start_json}")"
 browser_auth_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_start_json}")"
-if [[ -z "${browser_auth_run_id}" && -z "${browser_auth_approval_id}" ]] \
-  && [[ "$(jq -r '.tool_policy_precheck.blocked_count // 0' "${browser_auth_precheck_json}")" == "1" ]] \
-  && jq -e '.tool_policy_precheck.items[0].reason == "blocked_browser_authenticated_interactive_local_v1"' "${browser_auth_precheck_json}" >/dev/null; then
-  pass "A18 authenticated browser interactive block"
+browser_auth_run_json="${TMP_DIR}/browser-auth-run.json"
+if [[ -n "${browser_auth_run_id}" && -n "${browser_auth_approval_id}" ]] \
+  && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_auth_precheck_json}")" == "1" ]] \
+  && jq -e '.tool_policy_precheck.items[0].reason == "browser_authenticated_interactive_requires_reviewed_approval"' "${browser_auth_precheck_json}" >/dev/null \
+  && [[ "$(jq -r '.status // empty' "${browser_auth_start_json}")" == "waiting_for_input" ]]; then
+  api_post "/runs/${browser_auth_run_id}/approvals/${browser_auth_approval_id}/resolve" '{"decision":"proceed","note":"interactive browser approved"}' >/dev/null
+  if poll_run_terminal "${browser_auth_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_auth_run_json}" \
+    && [[ "$(jq -r '.status // empty' "${browser_auth_run_json}")" == "completed" ]]; then
+    pass "A18 authenticated browser interactive reviewed approval"
+  else
+    fail "A18 authenticated browser interactive reviewed approval"
+  fi
 else
-  fail "A18 authenticated browser interactive block"
+  fail "A18 authenticated browser interactive reviewed approval"
 fi
 
 browser_auth_priv_payload="$(jq -nc --arg url "${browser_session_url}" --arg upload_path "${browser_upload_file}" '{
@@ -1257,17 +1265,25 @@ ensure_browser_session_server
 browser_auth_priv_precheck_json="${TMP_DIR}/browser-auth-priv-precheck.json"
 api_post "/runs/precheck" "${browser_auth_priv_payload}" > "${browser_auth_priv_precheck_json}"
 browser_auth_priv_start_json="${TMP_DIR}/browser-auth-priv-start.json"
-api_post_expect_status "/runs/start" "${browser_auth_priv_payload}" 409 > "${browser_auth_priv_start_json}"
+api_post "/runs/start" "${browser_auth_priv_payload}" > "${browser_auth_priv_start_json}"
 browser_auth_priv_run_id="$(jq -r '.run_id // empty' "${browser_auth_priv_start_json}")"
 browser_auth_priv_approval_id="$(jq -r '.pending_approval.approval_id // empty' "${browser_auth_priv_start_json}")"
-if [[ -z "${browser_auth_priv_run_id}" && -z "${browser_auth_priv_approval_id}" ]] \
-  && [[ "$(jq -r '.tool_policy_precheck.blocked_count // 0' "${browser_auth_priv_precheck_json}")" == "1" ]] \
+browser_auth_priv_run_json="${TMP_DIR}/browser-auth-priv-run.json"
+if [[ -n "${browser_auth_priv_run_id}" && -n "${browser_auth_priv_approval_id}" ]] \
+  && [[ "$(jq -r '.tool_policy_precheck.approval_required_count // 0' "${browser_auth_priv_precheck_json}")" == "1" ]] \
   && [[ "$(jq -r '.tool_policy_precheck.browser_automation_policy.profile // empty' "${browser_auth_priv_precheck_json}")" == "authenticated_privileged" ]] \
   && jq -e '((.tool_policy_precheck.browser_automation_policy.privileged_actions // []) | index("upload")) != null' "${browser_auth_priv_precheck_json}" >/dev/null \
-  && jq -e '.tool_policy_precheck.items[0].reason == "blocked_browser_authenticated_privileged_local_v1"' "${browser_auth_priv_precheck_json}" >/dev/null; then
-  pass "A23 authenticated privileged browser block"
+  && jq -e '.tool_policy_precheck.items[0].reason == "browser_authenticated_privileged_requires_reviewed_approval"' "${browser_auth_priv_precheck_json}" >/dev/null \
+  && [[ "$(jq -r '.status // empty' "${browser_auth_priv_start_json}")" == "waiting_for_input" ]]; then
+  api_post "/runs/${browser_auth_priv_run_id}/approvals/${browser_auth_priv_approval_id}/resolve" '{"decision":"proceed","note":"privileged browser approved"}' >/dev/null
+  if poll_run_terminal "${browser_auth_priv_run_id}" "${SMOKE_POLL_ATTEMPTS}" "${SMOKE_POLL_SLEEP}" "${browser_auth_priv_run_json}" \
+    && [[ "$(jq -r '.status // empty' "${browser_auth_priv_run_json}")" == "completed" ]]; then
+    pass "A23 authenticated privileged browser reviewed approval"
+  else
+    fail "A23 authenticated privileged browser reviewed approval"
+  fi
 else
-  fail "A23 authenticated privileged browser block"
+  fail "A23 authenticated privileged browser reviewed approval"
 fi
 
 workflow_smoke_json="${TMP_DIR}/workflow-smoke.json"

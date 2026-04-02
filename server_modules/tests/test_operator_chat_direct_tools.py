@@ -17,6 +17,16 @@ spec.loader.exec_module(operator_chat)
 
 
 class OperatorChatDirectToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._workspace_context_patcher = patch(
+            "operator_chat_direct_tools_under_test._direct_chat_workspace_context_text",
+            return_value="",
+        )
+        self._workspace_context_patcher.start()
+
+    def tearDown(self) -> None:
+        self._workspace_context_patcher.stop()
+
     @patch(
         "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",
         return_value=[

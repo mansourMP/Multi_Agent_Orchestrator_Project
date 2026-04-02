@@ -68,6 +68,101 @@ stream_direct_operator_reply = operator_chat.build_direct_operator_reply
 
 
 class OperatorChatTests(unittest.TestCase):
+    def test_preferred_provider_maps_openai_oauth_to_codex_cli(self):
+        def fake_credentials(_workspace_id, provider):
+            if provider == "openai":
+                return {"auth_mode": "oauth_token", "oauth_token": "token"}
+            if provider == "codex_cli":
+                return {"auth_mode": "oauth_token", "oauth_token": "token"}
+            return {}
+
+        def fake_support(provider, credentials):
+            return provider == "codex_cli" and bool(credentials)
+
+        with patch("operator_chat_under_test._direct_chat_credentials", side_effect=fake_credentials):
+            with patch("operator_chat_under_test._supports_direct_message_native_chat", side_effect=fake_support):
+                provider, credentials = operator_chat._preferred_provider("default", "openai")
+
+        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials.get("auth_mode"), "oauth_token")
+
+    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch("operator_chat_under_test._persist_direct_chat_memory_best_effort", return_value=None)
+    @patch("operator_chat_under_test._preferred_provider", return_value=("openai", {"api_key": "sk-test"}))
+    def test_direct_chat_locks_model_call_to_resolved_provider(
+        self,
+        _preferred_provider,
+        _persist_memory,
+        _capabilities,
+        _handoff,
+    ):
+        def fake_stream(**kwargs):
+            self.assertTrue(kwargs["context"].get("disable_provider_fallback"))
+            self.assertTrue(kwargs["metadata"].get("disable_provider_fallback"))
+            self.assertEqual(kwargs["context"].get("provider"), "openai")
+            self.assertEqual(kwargs["metadata"].get("provider"), "openai")
+
+            def _iterator():
+                yield {
+                    "type": "result",
+                    "reply": "Hello",
+                    "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "attempted_providers": "openai",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            return _iterator()
+
+        with patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream):
+            payload = build_direct_operator_reply(
+                message="hello",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": True},
+            )
+
+        self.assertEqual(payload["reply"], "Hello")
+        self.assertEqual(payload["provider"], "openai")
+
+    @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
+    @patch("operator_chat_under_test.provider_has_key", return_value=True)
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_streaming_reply_does_not_duplicate_final_chunk(self, _capabilities, _provider_has_key, _handoff):
+        def fake_stream(**kwargs):
+            def _iterator():
+                yield {"type": "chunk", "delta": "Hel"}
+                yield {"type": "chunk", "delta": "lo"}
+                yield {
+                    "type": "result",
+                    "reply": "Hello",
+                    "usage_masked": {"provider": "openai", "model": "gpt-5.4"},
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                    "attempted_providers": "openai",
+                    "error": "",
+                    "tool_calls": [],
+                }
+            return _iterator()
+
+        with patch("operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback", side_effect=fake_stream):
+            events = list(stream_direct_operator_reply(
+                message="hello",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                availability={"ai_ready": True},
+            ))
+
+        chunk_deltas = [str(event.get("delta") or "") for event in events if str(event.get("type") or "") == "chunk"]
+        final_payloads = [event.get("payload") for event in events if str(event.get("type") or "") == "final"]
+        self.assertEqual(chunk_deltas, ["Hel", "lo"])
+        self.assertEqual(len(final_payloads), 1)
+        self.assertEqual(final_payloads[0]["reply"], "Hello")
+
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     def test_missing_google_workspace_returns_connect_action(self, _capabilities):
         payload = build_direct_operator_reply(
@@ -210,8 +305,8 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertTrue(payload["context_used"]["prior_messages_used"])
-        self.assertEqual(payload["context_used"]["history_mode"], "raw_messages")
+        self.assertFalse(payload["context_used"]["prior_messages_used"])
+        self.assertEqual(payload["context_used"]["history_mode"], "none")
 
     @patch.dict("operator_chat_under_test.os.environ", {"ORION_AUTH_MODE": "codex"}, clear=False)
     @patch("operator_chat_under_test._direct_chat_credentials", return_value={})
@@ -226,11 +321,11 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["mode"], "connect")
-        self.assertIn("OpenAI is selected for chat", payload["reply"])
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("No AI provider is configured for chat right now", payload["reply"])
         self.assertFalse(payload["context_used"]["provider_overridden"])
-        self.assertFalse(payload["context_used"]["fallback_used"])
-        self.assertIsNone(payload["context_used"].get("fallback_reason"))
+        self.assertTrue(payload["context_used"]["fallback_used"])
+        self.assertEqual(payload["context_used"].get("fallback_reason"), "provider_unavailable")
 
     @patch(
         "operator_chat_under_test.generate_chat_reply_with_provider_fallback",
@@ -402,12 +497,11 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(capability_payload["reply"], plain_payload["reply"])
-        self.assertIn("AI chat is not available right now", capability_payload["reply"])
-        self.assertIn("Usable now: Telegram Bot LIVE.", capability_payload["reply"])
-        self.assertEqual(capability_payload["mode"], "connect")
-        self.assertEqual(plain_payload["mode"], "connect")
-        self.assertEqual(capability_payload["actions"][0]["href"], "/connect-ai")
-        self.assertEqual(plain_payload["actions"][0]["href"], "/connect-ai")
+        self.assertIn("needs model reasoning", capability_payload["reply"])
+        self.assertEqual(capability_payload["mode"], "answer")
+        self.assertEqual(plain_payload["mode"], "answer")
+        self.assertEqual(capability_payload["actions"], [])
+        self.assertEqual(plain_payload["actions"], [])
         generate_reply.assert_not_called()
 
     @patch(

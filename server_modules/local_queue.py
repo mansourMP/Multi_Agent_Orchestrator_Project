@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field
 from server_modules.runtime_state_store import replace_local_runtime_state
 
 _server = None
+LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
+LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS = 30
+_COLD_BOOT_RECOVERY_DONE = False
 
 
 def _init():
@@ -50,6 +53,14 @@ class LocalRunCompletePayload(BaseModel):
     result_text: Optional[str] = None
     result_data: Optional[Dict[str, Any]] = None
     usage_masked: Optional[Dict[str, Any]] = None
+
+
+class LocalRunPausePayload(BaseModel):
+    worker_id: Optional[str] = None
+    result_text: Optional[str] = None
+    result_data: Optional[Dict[str, Any]] = None
+    browser_checkpoint: Optional[Dict[str, Any]] = None
+    wait_reason: Optional[str] = None
 
 
 class LocalRunFailPayload(BaseModel):
@@ -91,6 +102,31 @@ def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], statu
             next_record["note"] = str(note)[:280]
         _server.LOCAL_WORKER_REGISTRY[worker] = next_record
     _persist_local_runtime_state()
+
+
+def _maybe_emit_local_still_working(
+    run_id: str,
+    run: Dict[str, Any],
+    claim: Dict[str, Any],
+    *,
+    note: Optional[str] = None,
+) -> bool:
+    _init()
+    now = _server._utc_now()
+    last_progress = _server._parse_utc_ts(claim.get("last_progress_event_at")) or _server._parse_utc_ts(claim.get("claimed_at"))
+    if last_progress is not None and (now - last_progress).total_seconds() < LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS:
+        return False
+    now_iso = _server._utc_now_iso()
+    claim["last_progress_event_at"] = now_iso
+    run["local_last_progress_at"] = now_iso
+    _server.emit_log(
+        run["logs"],
+        "info",
+        str(note or "Still working on your laptop.").strip()[:400],
+        event="local_still_working",
+        data={"run_id": run_id, "last_progress_at": now_iso},
+    )
+    return True
 
 
 def _capability_digest(capabilities: Optional[List[str]]) -> Optional[str]:
@@ -190,6 +226,12 @@ def _queue_pressure_for_runtime_group(
     *,
     stop_before_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    _init()
+    if _server is None or getattr(_server, "runs", None) is None:
+        return {
+            "queued_ahead_count": 0,
+            "contender_run_ids": [],
+        }
     matching_set = set(_normalize_runtime_ids(matching_runtime_ids))
     preferred_token = str(preferred_runtime_id or "").strip()
     queued_ahead_count = 0
@@ -382,15 +424,12 @@ def _cleanup_stale_local_claims() -> List[str]:
             last_heartbeat = _server._parse_utc_ts(claim.get("last_heartbeat_at")) or _server._parse_utc_ts(claim.get("claimed_at"))
             if last_heartbeat is None:
                 last_heartbeat = now
-            if (now - last_heartbeat).total_seconds() <= lease_seconds:
+            if (now - last_heartbeat).total_seconds() <= LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS:
                 continue
 
             worker_id = str(claim.get("worker_id") or "").strip() or None
             _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
             changed = True
-            if run_id not in _server.LOCAL_PENDING_RUN_IDS:
-                _server.LOCAL_PENDING_RUN_IDS.append(run_id)
-                changed = True
             if worker_id:
                 worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
                 worker_state["worker_id"] = worker_id
@@ -422,14 +461,20 @@ def _cleanup_stale_local_claims() -> List[str]:
         run["local_worker_id"] = None
         run["local_claimed_at"] = None
         run["local_last_heartbeat_at"] = None
-        _server.set_run_status(run_id, "queued_local")
+        run["result"] = "Worker lost connection."
+        run["result_data"] = {
+            "summary": "Worker lost connection.",
+            "error": "local_worker_lost_connection",
+            "worker_id": item.get("worker_id"),
+            "last_heartbeat_at": item.get("last_heartbeat_at"),
+        }
         log_queue = run.get("logs")
         if log_queue is not None:
             _server.emit_log(
                 log_queue,
-                "warn",
-                "Local companion lease expired. Run returned to local queue.",
-                event="local_lease_expired",
+                "error",
+                "Worker lost connection. Run failed.",
+                event="local_worker_lost",
                 data={
                     "run_id": run_id,
                     "worker_id": item.get("worker_id"),
@@ -437,8 +482,102 @@ def _cleanup_stale_local_claims() -> List[str]:
                     "last_heartbeat_at": item.get("last_heartbeat_at"),
                 },
             )
+        _server.set_run_status(run_id, "failed")
+        if log_queue is not None:
+            log_queue.put(None)
 
     return [str(item.get("run_id") or "") for item in stale]
+
+
+def recover_orphaned_local_runs_on_startup() -> List[str]:
+    global _COLD_BOOT_RECOVERY_DONE
+    _init()
+    if _COLD_BOOT_RECOVERY_DONE:
+        return []
+    recovered: List[str] = []
+    now = _server._utc_now()
+    with _server.LOCAL_QUEUE_LOCK:
+        active_claims = {
+            run_id: dict(claim)
+            for run_id, claim in _server.LOCAL_CLAIMED_RUNS.items()
+            if isinstance(claim, dict)
+        }
+        online_workers = {
+            worker_id
+            for worker_id, record in _server.LOCAL_WORKER_REGISTRY.items()
+            if isinstance(record, dict) and _is_worker_online(record, now)
+        }
+        pending_ids = set(str(run_id) for run_id in _server.LOCAL_PENDING_RUN_IDS)
+
+    for run_id, run in list(_server.runs.items()):
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "").strip().lower()
+        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        selected_target = str(
+            metadata.get("execution_target_selected")
+            or metadata.get("execution_target")
+            or ""
+        ).strip().lower()
+        if selected_target not in {"local", "local_companion"} and status not in {"running_local", "queued_local", "starting", "waiting_for_input"}:
+            continue
+        claim = active_claims.get(run_id) if isinstance(active_claims.get(run_id), dict) else {}
+        worker_id = str(claim.get("worker_id") or run.get("local_worker_id") or "").strip()
+        has_live_worker = bool(worker_id and worker_id in online_workers)
+        if status == "waiting_for_input":
+            if checkpoint:
+                recovered.append(run_id)
+            continue
+        if has_live_worker or run_id in pending_ids:
+            continue
+        if not checkpoint:
+            continue
+        run["status"] = "waiting_for_input"
+        run["local_worker_id"] = None
+        run["local_claimed_at"] = None
+        run["local_last_heartbeat_at"] = None
+        run["result"] = "Local operator paused at saved checkpoint after runtime restart."
+        run["result_data"] = {
+            "summary": "Local operator paused at saved checkpoint after runtime restart.",
+            "resume_available": True,
+            "error": "local_worker_orphaned_recovered",
+            "next_action_index": checkpoint.get("next_action_index"),
+            "session_profile": checkpoint.get("session_profile"),
+        }
+        metadata["resume_ready"] = True
+        metadata["cold_boot_recovered"] = True
+        context["metadata"] = metadata
+        run["context"] = context
+        log_queue = run.get("logs")
+        if log_queue is not None:
+            _server.emit_log(
+                log_queue,
+                "warn",
+                "Recovered local run from durable checkpoint after runtime restart.",
+                event="local_cold_boot_recovered",
+                data={
+                    "run_id": run_id,
+                    "next_action_index": checkpoint.get("next_action_index"),
+                    "session_profile": checkpoint.get("session_profile"),
+                },
+            )
+        recovered.append(run_id)
+        _server._persist_live_run_state(run_id, run)
+
+    if recovered:
+        with _server.LOCAL_QUEUE_LOCK:
+            _server.LOCAL_PENDING_RUN_IDS[:] = [
+                run_id
+                for run_id in _server.LOCAL_PENDING_RUN_IDS
+                if run_id not in set(recovered)
+            ]
+            for run_id in recovered:
+                _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
+        _persist_local_runtime_state()
+    _COLD_BOOT_RECOVERY_DONE = True
+    return recovered
 
 
 def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] = None) -> Optional[str]:
@@ -483,6 +622,7 @@ def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] 
                 "worker_id": worker_id,
                 "claimed_at": datetime.utcnow().isoformat() + "Z",
                 "last_heartbeat_at": datetime.utcnow().isoformat() + "Z",
+                "last_progress_event_at": datetime.utcnow().isoformat() + "Z",
                 "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
             }
             state_changed = True
@@ -783,6 +923,7 @@ def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerH
 
     if current_run_id:
         run = _server.runs.get(current_run_id)
+        should_emit_progress = False
         if isinstance(run, dict):
             with _server.LOCAL_QUEUE_LOCK:
                 claim = _server.LOCAL_CLAIMED_RUNS.get(current_run_id)
@@ -791,7 +932,10 @@ def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerH
                     claim["last_heartbeat_at"] = now_iso
                     _server.LOCAL_CLAIMED_RUNS[current_run_id] = claim
                     run["local_last_heartbeat_at"] = now_iso
+                    should_emit_progress = _maybe_emit_local_still_working(current_run_id, run, claim, note=note or None)
             _persist_local_runtime_state()
+            if should_emit_progress:
+                _persist_local_runtime_state()
 
     return {"status": "ok", "worker_id": worker, "current_run_id": current_run_id or None, "last_seen_at": _server._utc_now_iso()}
 
@@ -829,6 +973,7 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
     run["local_worker_id"] = worker_id
     run["local_claimed_at"] = now
     run["local_last_heartbeat_at"] = now
+    run.pop("_resume_after_confirmation_scheduled", None)
     _server.set_run_status(run_id, "running_local")
     _server.emit_log(
         run["logs"],
@@ -847,6 +992,11 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
             "status": run.get("status"),
             "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
             "context": _server.redact_sensitive(run.get("context", {})),
+            "browser_checkpoint": (
+                run.get("browser_checkpoint")
+                if isinstance(run.get("browser_checkpoint"), dict)
+                else None
+            ),
             "created_at": run.get("created_at"),
         },
     }
@@ -869,6 +1019,7 @@ def handle_heartbeat_local_run(run_id: uuid.UUID, payload: Optional[LocalRunHear
         resolved_worker = incoming_worker or str(claim.get("worker_id") or "").strip()
         now = datetime.utcnow().isoformat() + "Z"
         claim["last_heartbeat_at"] = now
+        _maybe_emit_local_still_working(run_id_str, run, claim, note=(payload.note if payload else None))
         _server.LOCAL_CLAIMED_RUNS[run_id_str] = claim
 
     run["local_last_heartbeat_at"] = now
@@ -921,6 +1072,71 @@ def handle_complete_local_run(run_id: uuid.UUID, payload: LocalRunCompletePayloa
         pass
     run["logs"].put(None)
     return {"status": "ok", "run_id": run_id_str}
+
+
+def handle_pause_local_run(run_id: uuid.UUID, payload: LocalRunPausePayload) -> Dict[str, Any]:
+    _init()
+    run_id_str = str(run_id)
+    run = _server.runs.get(run_id_str)
+    if not isinstance(run, dict):
+        raise HTTPException(status_code=404, detail="Run ID not found")
+
+    with _server.LOCAL_QUEUE_LOCK:
+        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id_str)
+        incoming_worker = str(payload.worker_id or "").strip()
+        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
+            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
+        resolved_worker = incoming_worker or (str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else "")
+        _server.LOCAL_CLAIMED_RUNS.pop(run_id_str, None)
+    _persist_local_runtime_state()
+
+    if isinstance(payload.result_data, dict):
+        run["result_data"] = payload.result_data
+    if isinstance(payload.browser_checkpoint, dict):
+        run["browser_checkpoint"] = payload.browser_checkpoint
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        metadata["browser_checkpoint"] = payload.browser_checkpoint
+        metadata["browser_resume_supported"] = True
+        context["metadata"] = metadata
+        run["context"] = context
+
+    result_text = str(payload.result_text or "").strip()
+    if not result_text and isinstance(payload.result_data, dict):
+        result_text = str(payload.result_data.get("summary") or "").strip()
+    if not result_text:
+        result_text = "Local companion paused and is waiting for human input."
+    run["result"] = result_text
+    run["local_worker_id"] = None
+    run["local_claimed_at"] = None
+    run["local_last_heartbeat_at"] = None
+    run.pop("_resume_after_confirmation_scheduled", None)
+
+    wait_reason = str(payload.wait_reason or "").strip() or "human_unblock_required"
+    _server.emit_log(
+        run["logs"],
+        "warn",
+        result_text,
+        event="local_pause_required",
+        data={
+            "run_id": run_id_str,
+            "wait_reason": wait_reason,
+            "session_profile": (
+                payload.browser_checkpoint.get("session_profile")
+                if isinstance(payload.browser_checkpoint, dict)
+                else None
+            ),
+            "next_action_index": (
+                payload.browser_checkpoint.get("next_action_index")
+                if isinstance(payload.browser_checkpoint, dict)
+                else None
+            ),
+        },
+    )
+    if resolved_worker:
+        _mark_local_worker_seen(resolved_worker, None, "idle", note="paused_waiting_for_input")
+    _server.set_run_status(run_id_str, "waiting_for_input")
+    return {"status": "ok", "run_id": run_id_str, "waiting_for_input": True}
 
 
 def handle_fail_local_run(run_id: uuid.UUID, payload: LocalRunFailPayload) -> Dict[str, Any]:

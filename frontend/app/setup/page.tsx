@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Bot, CheckCircle2, KeyRound, PlugZap, RefreshCw } from 'lucide-react';
+import { CheckCircle2, RefreshCw } from 'lucide-react';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import {
   buildSetupCompleteHomeHref,
   buildSetupConnectAiHref,
@@ -47,10 +46,11 @@ function WizardStepCard({
     <article
       style={{
         display: 'grid',
-        gap: 12,
+        gap: 14,
         border: `1px solid ${active ? 'var(--primary-base)' : 'var(--border-subtle)'}`,
         background: 'var(--bg-surface)',
-        padding: 16,
+        borderRadius: 8,
+        padding: 18,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -76,6 +76,7 @@ function WizardStepCard({
             border: '1px solid var(--border-subtle)',
             background: 'var(--bg-element)',
             padding: '10px 12px',
+            borderRadius: 6,
             fontSize: 12.5,
             lineHeight: 1.5,
             color: 'var(--text-primary)',
@@ -91,13 +92,13 @@ function WizardStepCard({
             <button
               type="button"
               className="orion-btn orion-btn-secondary"
-              style={{ minHeight: 36, paddingInline: 14 }}
+              style={{ minHeight: 44, paddingInline: 14 }}
               disabled
             >
               {actionLabel}
             </button>
           ) : (
-            <Link href={actionHref} className="orion-btn orion-btn-primary" style={{ minHeight: 36, paddingInline: 14 }}>
+            <Link href={actionHref} className="orion-btn orion-btn-primary" style={{ minHeight: 44, paddingInline: 14 }}>
               {actionLabel}
             </Link>
           )}
@@ -158,113 +159,73 @@ export default function SetupPage() {
   const activeStep = !aiReady ? 1 : !integrationReady ? 2 : 0;
 
   return (
-    <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<Bot size={18} />}
-        title="Finish setup"
-        subtitle="Connect your AI model first, then connect one integration before you start running work."
-        actions={
-          <Link href={returnTo === '/setup' ? '/home' : returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
-            <ArrowLeft size={13} />
-            Back
-          </Link>
-        }
-      />
+    <div
+      className="orion-page-shell narrow is-setup-flow orion-animate-in"
+      style={{ width: 'min(560px, 100%)', margin: '0 auto', gap: 18 }}
+    >
+      <div className="orion-auth-header" style={{ gap: 12 }}>
+        <div className="orion-auth-wordmark">Empyralis</div>
+        <h1 className="orion-auth-card__title">You&apos;re almost in.</h1>
+        <p className="orion-auth-card__copy">Two quick steps and your workspace is ready.</p>
+      </div>
 
       {loading ? (
-        <PageStatePanel variant="loading" title="Checking setup…" />
+        <PageStatePanel variant="loading" title="Checking setup…" copy="Setting up your workspace…" />
       ) : error ? (
-        <section className="orion-panel" style={{ display: 'grid', gap: 16 }}>
-          <div style={{ display: 'grid', gap: 6 }}>
-            <div className="orion-panel-title">Setup needs attention</div>
-            <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{error}</div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-            <button type="button" className="orion-btn orion-btn-primary" style={{ minHeight: 36, paddingInline: 14 }} onClick={() => void loadReadiness()}>
+        <PageStatePanel
+          variant="error"
+          title="Something went wrong"
+          copy={error}
+          actions={(
+            <button type="button" className="orion-btn orion-btn-primary" style={{ minHeight: 44, paddingInline: 14 }} onClick={() => void loadReadiness()}>
               <RefreshCw size={14} />
-              Retry
+              Try again
             </button>
-          </div>
-        </section>
+          )}
+        />
       ) : readiness?.complete ? (
-        <PageStatePanel variant="loading" title="Finishing setup…" copy="You&apos;re ready. Sending you back into Empyralis now." />
+        <PageStatePanel variant="loading" title="Finishing setup…" copy="You&apos;re in. Taking you home." />
       ) : !readiness ? (
-        <PageStatePanel variant="loading" title="Checking setup…" />
+        <PageStatePanel variant="loading" title="Checking setup…" copy="Setting up your workspace…" />
       ) : (
-        <section className="orion-panel" style={{ display: 'grid', gap: 18 }}>
-          <div style={{ display: 'grid', gap: 6 }}>
-            <div className="orion-panel-title">Two steps to get live</div>
-            <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-              Complete both steps once. Empyralis will bring you back to Home when the workspace is ready.
-            </div>
-          </div>
-
+        <section className="orion-panel" style={{ display: 'grid', gap: 14, padding: 22 }}>
           <div style={{ display: 'grid', gap: 12 }}>
             <WizardStepCard
               stepNumber={1}
-              title="Connect your AI model"
-              description="Choose the model account Empyralis should use for planning, replies, and live runs."
+              title="Connect your AI"
+              description="This is the brain behind everything. Pick the model Empyralis will use."
               complete={aiReady}
               active={activeStep === 1}
-              detail={aiReady ? `Connected: ${readiness.activeProfileLabel || 'Runtime model ready'}` : 'No AI model is connected yet.'}
-              actionLabel={aiReady ? 'Review AI model' : 'Connect AI model'}
+              detail={aiReady ? `Connected: ${readiness.activeProfileLabel || 'Active model ready'}` : ''}
+              actionLabel={aiReady ? 'Change AI' : 'Connect AI'}
               actionHref={connectAiHref}
             />
 
             <WizardStepCard
               stepNumber={2}
-              title="Connect one integration"
-              description="Add one connector so your first task can actually reach the tools you use."
+              title="Connect a tool"
+              description="Give Empyralis access to one app you use — Gmail, Slack, Notion, anything."
               complete={integrationReady}
               active={activeStep === 2}
-              detail={
-                integrationReady
-                  ? `${readiness.connectorCount} integration${readiness.connectorCount === 1 ? '' : 's'} connected.`
-                  : aiReady
-                    ? 'No integrations connected yet.'
-                    : 'Connect your AI model first, then come back for integrations.'
-              }
-              actionLabel={integrationReady ? 'Manage connectors' : aiReady ? 'Connect an integration' : 'Connect AI model first'}
+              detail={integrationReady ? `${readiness.connectorCount} tool${readiness.connectorCount === 1 ? '' : 's'} connected` : ''}
+              actionLabel={integrationReady ? 'Add more tools' : aiReady ? 'Connect a tool' : 'Do step 1 first'}
               actionHref={aiReady ? connectIntegrationHref : connectAiHref}
               disabled={!aiReady}
             />
           </div>
 
-          <div
-            style={{
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--bg-element)',
-              padding: '12px 14px',
-              fontSize: 12.5,
-              lineHeight: 1.6,
-              color: 'var(--text-secondary)',
-              display: 'grid',
-              gap: 6,
-            }}
-          >
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)', fontWeight: 700 }}>
-              <KeyRound size={14} />
-              Step 1 unlocks the assistant
-            </div>
-            <div>Step 2 makes the assistant useful in the real world. When both are done, Empyralis sends you to Home with a ready-to-start state.</div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
-            <Link href={connectAiHref} className="orion-btn orion-btn-secondary" style={{ minHeight: 36, paddingInline: 14 }}>
-              <KeyRound size={14} />
-              AI model
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <Link
+              href="/home"
+              style={{
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                color: 'var(--text-secondary)',
+                textDecoration: 'none',
+              }}
+            >
+              Skip for now
             </Link>
-            {aiReady ? (
-              <Link href={connectIntegrationHref} className="orion-btn orion-btn-primary" style={{ minHeight: 36, paddingInline: 14 }}>
-                <PlugZap size={14} />
-                Connectors
-              </Link>
-            ) : (
-              <button type="button" className="orion-btn orion-btn-secondary" style={{ minHeight: 36, paddingInline: 14 }} disabled>
-                <PlugZap size={14} />
-                Connectors
-              </button>
-            )}
           </div>
         </section>
       )}

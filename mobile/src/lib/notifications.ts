@@ -117,16 +117,21 @@ export function getNotificationHref(data: NotificationRouteData | undefined | nu
   if (!data) return null;
   if (typeof data.url === "string" && data.url.trim()) return data.url.trim();
   if (typeof data.path === "string" && data.path.trim()) return data.path.trim().startsWith("/") ? data.path.trim() : `/${data.path.trim()}`;
-  if (typeof data.agentId === "string" && data.agentId.trim()) return `/chats/${data.agentId.trim()}`;
+  if (typeof data.agentId === "string" && data.agentId.trim()) return "/kin";
   if (typeof data.screen === "string" && data.screen.trim()) {
     const screen = data.screen.trim().toLowerCase();
-    if (screen === "today") return "/today";
-    if (screen === "spaces") return "/spaces";
+    if (screen === "today" || screen === "home") return "/home";
+    if (screen === "spaces" || screen === "inbox") return "/inbox";
     if (screen === "apps") return "/apps";
-    if (screen === "chats") return "/chats";
+    if (screen === "chats" || screen === "kin") return "/kin";
+    if (screen === "profile" || screen === "settings") return "/profile";
   }
   if (typeof data.tab === "string" && data.tab.trim()) {
-    return `/${data.tab.trim().toLowerCase()}`;
+    const normalized = data.tab.trim().toLowerCase();
+    if (normalized === "today") return "/home";
+    if (normalized === "spaces") return "/inbox";
+    if (normalized === "chats") return "/kin";
+    return `/${normalized}`;
   }
   return null;
 }
@@ -141,10 +146,10 @@ export async function scheduleAgentTestNotification(options?: {
 
   return Notifications.scheduleNotificationAsync({
     content: {
-      title: options?.title || "Personal Assistant",
+      title: options?.title || "KIN",
       body: options?.body || "Test notification from KIN. Tap to open the conversation.",
       data: {
-        url: options?.path || (options?.agentId ? `/chats/${options.agentId}` : "/today"),
+        url: options?.path || (options?.agentId ? "/kin" : "/home"),
         agentId: options?.agentId,
       },
     },

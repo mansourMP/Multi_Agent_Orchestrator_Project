@@ -8,10 +8,9 @@ import { PageHero } from '@/components/orion/page/PageHero';
 import { PageHeroCard } from '@/components/orion/page/PageHeroCard';
 import { PageSection } from '@/components/orion/page/PageSection';
 import { PageStatePanel } from '@/components/orion/page/PageStatePanel';
+import { displayNameFromEmail } from '@/lib/accountProfile';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { RUNTIME_KEY_STORAGE_CANDIDATES } from '@/lib/runtimeKey';
-
-const ACCOUNT_STORAGE_KEY = 'empyralis_account_profile_v1';
 
 type ConnectorRow = {
   id: string;
@@ -19,34 +18,6 @@ type ConnectorRow = {
   connector: string;
   metadata: Record<string, unknown>;
 };
-
-type AccountProfile = {
-  displayName: string;
-  email?: string;
-  photoUrl?: string;
-};
-
-const DEFAULT_PROFILE: AccountProfile = {
-  displayName: 'Account owner',
-  email: '',
-  photoUrl: '',
-};
-
-function loadStoredProfile(): AccountProfile {
-  if (typeof window === 'undefined') return DEFAULT_PROFILE;
-  try {
-    const raw = window.localStorage.getItem(ACCOUNT_STORAGE_KEY);
-    if (!raw) return DEFAULT_PROFILE;
-    const saved = JSON.parse(raw) as Partial<AccountProfile>;
-    return {
-      displayName: typeof saved.displayName === 'string' && saved.displayName.trim() ? saved.displayName.trim() : DEFAULT_PROFILE.displayName,
-      email: typeof saved.email === 'string' && saved.email.trim() ? saved.email.trim() : '',
-      photoUrl: typeof saved.photoUrl === 'string' && saved.photoUrl.trim() ? saved.photoUrl.trim() : '',
-    };
-  } catch {
-    return DEFAULT_PROFILE;
-  }
-}
 
 function connectorIdentity(metadata: Record<string, unknown>): string {
   return String(
@@ -67,22 +38,27 @@ function connectorDisplayStatus(metadata: Record<string, unknown>): string {
 export default function SettingsPage() {
   const router = useRouter();
   const [connectors, setConnectors] = useState<ConnectorRow[]>([]);
+  const [profileEmail, setProfileEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
-  const profile = useMemo(() => loadStoredProfile(), []);
+  const profileName = useMemo(() => displayNameFromEmail(profileEmail), [profileEmail]);
 
   const loadConnectors = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       await ensureControlPlaneSession();
-      const res = await fetch('/api/control-plane/connectors?workspace_id=default', { cache: 'no-store' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(String(body?.detail || body?.message || 'Failed to load connectors.'));
+      const [connectorsRes, authRes] = await Promise.all([
+        fetch('/api/control-plane/connectors?workspace_id=default', { cache: 'no-store' }),
+        fetch('/api/control-plane/auth/me', { cache: 'no-store' }),
+      ]);
+      const connectorsBody = await connectorsRes.json().catch(() => ({}));
+      const authBody = await authRes.json().catch(() => ({}));
+      if (!connectorsRes.ok) {
+        throw new Error(String(connectorsBody?.detail || connectorsBody?.message || 'Failed to load connectors.'));
       }
-      const items: unknown[] = Array.isArray(body?.items) ? body.items : [];
+      const items: unknown[] = Array.isArray(connectorsBody?.items) ? connectorsBody.items : [];
       const next = items
         .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
         .map((item) => ({
@@ -93,6 +69,7 @@ export default function SettingsPage() {
         }))
         .filter((item) => item.id && item.connector);
       setConnectors(next);
+      setProfileEmail(String(authBody?.user?.email || '').trim());
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : 'Failed to load connectors.');
     } finally {
@@ -113,7 +90,6 @@ export default function SettingsPage() {
         window.sessionStorage.removeItem(key);
         window.localStorage.removeItem(key);
       }
-      window.localStorage.removeItem(ACCOUNT_STORAGE_KEY);
       router.replace('/setup');
     } finally {
       setSigningOut(false);
@@ -135,7 +111,7 @@ export default function SettingsPage() {
                   <div className="orion-home-side-note">Connected tools</div>
                 </div>
                 <div>
-                  <div className="orion-home-side-value">{profile.displayName}</div>
+                  <div className="orion-home-side-value">{profileName}</div>
                   <div className="orion-home-side-note">Profile</div>
                 </div>
               </div>
@@ -149,13 +125,13 @@ export default function SettingsPage() {
           <div className="orion-list-row-main">
             <div className="orion-list-row-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <UserRound size={14} />
-              {profile.displayName}
+              {profileName}
             </div>
             <div className="orion-list-row-subtitle">
-              {profile.email?.trim() || 'No signed-in email available'}
+              {profileEmail || 'No signed-in email available'}
             </div>
           </div>
-          <Link href="/account" className="orion-btn orion-btn-secondary" style={{ minHeight: 34, paddingInline: 14 }}>
+          <Link href="/account" className="orion-btn orion-btn-secondary" style={{ minHeight: 44, paddingInline: 14 }}>
             Open profile
           </Link>
         </div>
@@ -172,7 +148,7 @@ export default function SettingsPage() {
               Inspect availability, queue pressure, and runtime capability state.
             </div>
           </div>
-          <Link href="/machines" className="orion-btn orion-btn-secondary" style={{ minHeight: 34, paddingInline: 14 }}>
+          <Link href="/machines" className="orion-btn orion-btn-secondary" style={{ minHeight: 44, paddingInline: 14 }}>
             Open machines
           </Link>
         </div>

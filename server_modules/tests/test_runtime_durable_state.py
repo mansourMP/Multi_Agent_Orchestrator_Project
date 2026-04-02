@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from server_modules import runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api
+from server_modules import runs_core, runs_engine, runs_execution, runs_output, runtime_runs_api, shared
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     list_live_run_states,
@@ -24,6 +24,8 @@ class RuntimeDurableStateTests(unittest.TestCase):
         ]
         for patcher in self.patchers:
             patcher.start()
+        shared.sync_acp_manager_paths(runtime_db_path=self.db_path)
+        runs_core.ACP_MANAGER.reload_runtime_state()
         runs_core.runs.clear()
         runs_engine.runs.clear()
         runs_execution.runs.clear()
@@ -52,6 +54,8 @@ class RuntimeDurableStateTests(unittest.TestCase):
         runs_execution.LOCAL_WORKER_REGISTRY.clear()
         for patcher in reversed(self.patchers):
             patcher.stop()
+        shared.sync_acp_manager_paths(runtime_db_path=runs_core.ORION_RUNTIME_STATE_DB)
+        runs_core.ACP_MANAGER.reload_runtime_state()
         self.tmpdir.cleanup()
 
     def test_create_run_persists_live_run_and_local_queue_state(self):
@@ -168,6 +172,7 @@ class RuntimeDurableStateTests(unittest.TestCase):
         runs_core.runs[run_id] = run
         runs_engine.runs[run_id] = run
         runs_execution.runs[run_id] = run
+        stored_run = runs_core.runs[run_id]
         runs_core.RUN_QUEUE_INDEX[id(log_queue)] = run_id
         runs_engine.RUN_QUEUE_INDEX[id(log_queue)] = run_id
         runs_execution.RUN_QUEUE_INDEX[id(log_queue)] = run_id
@@ -175,10 +180,10 @@ class RuntimeDurableStateTests(unittest.TestCase):
         response = runs_engine.wait_for_human_response(run_id, "Confirm send")
 
         self.assertTrue(response["approved"])
-        self.assertEqual(run["status"], "running")
-        self.assertIsNone(run["pending_confirmation"])
-        self.assertIsNone(run["pending_approval"])
-        self.assertFalse(run.get("_resume_after_confirmation_scheduled"))
+        self.assertEqual(stored_run["status"], "running")
+        self.assertIsNone(stored_run["pending_confirmation"])
+        self.assertIsNone(stored_run["pending_approval"])
+        self.assertFalse(stored_run.get("_resume_after_confirmation_scheduled"))
         self.assertGreaterEqual(audit_mock.call_count, 2)
 
     @patch("server_modules.runtime_runs_api.threading.Thread")
@@ -225,7 +230,23 @@ class RuntimeDurableStateTests(unittest.TestCase):
             "completed_at": None,
             "duration_ms": None,
             "result": None,
-            "result_data": None,
+            "result_data": {
+                "outputs": {
+                    "actions": [
+                        {
+                            "tool": "browser_automation",
+                            "tabs": [
+                                {"tabId": "main", "url": "https://example.com/login", "active": True},
+                                {"tabId": "tab-2", "url": "https://example.com/help", "active": False},
+                            ],
+                            "console_entries": [{"tab": "main", "message": "warn"}],
+                            "network_failures": [{"tab": "main", "url": "https://example.com/api", "error": "net::ERR_ABORTED"}],
+                            "role_snapshot": [{"tag": "button", "role": "button", "name": "Sign in"}],
+                            "accessibility_snapshot": {"nodes": [{"role": "RootWebArea", "name": "Example"}]},
+                        }
+                    ]
+                }
+            },
             "events": [],
             "tool_policy_audit": [],
             "usage_masked": {},
@@ -241,12 +262,58 @@ class RuntimeDurableStateTests(unittest.TestCase):
                 "prompt": "Confirm local execution",
                 "status": "waiting",
             },
+            "browser_checkpoint": {
+                "current_url": "https://example.com/login",
+                "next_action_index": 2,
+                "session_profile": "qa-browser",
+            },
         }
 
         snapshot = runs_output._serialize_run_snapshot("run-serialize-1", run)
 
         self.assertEqual(snapshot["pending_confirmation"]["approval_id"], "approval-serialize-1")
         self.assertEqual(snapshot["pending_approval"]["approval_id"], "approval-serialize-1")
+        self.assertEqual(snapshot["browser_checkpoint"]["next_action_index"], 2)
+        self.assertEqual(len(snapshot["browser_introspection"]["tabs"]), 2)
+        self.assertEqual(snapshot["browser_introspection"]["console_entries"][0]["message"], "warn")
+
+    @patch("server_modules.runtime_runs_api._late_server_export")
+    def test_schedule_restored_run_resume_requeues_local_checkpoint_run(self, late_export_mock):
+        persisted = []
+        enqueued = []
+
+        def late_export(name: str):
+            if name == "_persist_live_run_state":
+                return lambda run_id, run: persisted.append((run_id, run.get("status")))
+            if name == "_enqueue_local_companion_run":
+                return lambda run_id, message="Run queued for Local Companion execution.", event="local_queued": enqueued.append((run_id, message, event))
+            if name == "run_mission":
+                return Mock()
+            raise AssertionError(name)
+
+        late_export_mock.side_effect = late_export
+        run = {
+            "run_id": "run-local-resume-1",
+            "status": "waiting_for_input",
+            "thread_id": None,
+            "context": {
+                "metadata": {
+                    "execution_target_selected": "local_companion",
+                }
+            },
+            "browser_checkpoint": {
+                "current_url": "https://example.com/private",
+                "next_action_index": 3,
+                "session_profile": "qa-browser",
+            },
+        }
+
+        resumed = runtime_runs_api._schedule_restored_run_resume("run-local-resume-1", run)
+
+        self.assertTrue(resumed)
+        self.assertTrue(run["_resume_after_confirmation_scheduled"])
+        self.assertEqual(enqueued[0][0], "run-local-resume-1")
+        self.assertEqual(enqueued[0][2], "local_resumed_from_checkpoint")
 
 
 if __name__ == "__main__":

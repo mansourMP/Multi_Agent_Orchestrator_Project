@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import quote_plus
 
+from server_modules.usage_reporting import build_usage_record
+
 # ---------------------------------------------------------------------------
 # Imports from server.py globals – these must be supplied by the caller or
 # looked-up at import time through the parent module.
@@ -502,11 +504,19 @@ class OpenAIAdapter(ProviderAdapter):
             raise RuntimeError(OPENAI_CODEX_DIRECT_AUTH_ERROR)
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        if self._uses_oauth_token(credentials):
+            return {
+                "ok": True,
+                "status": 200,
+                "message": "ChatGPT / Codex OAuth session imported.",
+            }
         self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         return _validation_result("OpenAI", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
+        if self._uses_oauth_token(credentials):
+            return list(OPENAI_CODEX_MODEL_CATALOG)
         self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         data = res.get("json", {}) or {}
@@ -993,18 +1003,21 @@ def masked_cost_band(cost_usd: float) -> str:
 def build_masked_usage(provider: str, model: str, input_text: str, output_text: str) -> Dict[str, Any]:
     input_tokens = estimate_tokens(input_text)
     output_tokens = estimate_tokens(output_text)
-    rates = PROVIDER_COST_PER_1K.get(provider, {"input": 0.0030, "output": 0.0100})
-    cost_est = ((input_tokens / 1000.0) * rates["input"]) + ((output_tokens / 1000.0) * rates["output"])
-    cost_est = round(cost_est, 6)
-    return {
-        "provider": provider,
-        "model": model,
-        "input_tokens_est": input_tokens,
-        "output_tokens_est": output_tokens,
-        "total_tokens_est": input_tokens + output_tokens,
-        "cost_est_usd": cost_est,
-        "cost_band": masked_cost_band(cost_est),
-    }
+    usage = build_usage_record(
+        provider,
+        model,
+        input_tokens,
+        output_tokens,
+        input_tokens + output_tokens,
+    )
+    if usage.get("estimated_cost_usd") is None:
+        rates = PROVIDER_COST_PER_1K.get(provider, {"input": 0.0030, "output": 0.0100})
+        cost_est = ((input_tokens / 1000.0) * rates["input"]) + ((output_tokens / 1000.0) * rates["output"])
+        cost_est = round(cost_est, 6)
+        usage["estimated_cost_usd"] = cost_est
+        usage["cost_est_usd"] = cost_est
+        usage["cost_band"] = masked_cost_band(cost_est)
+    return usage
 
 
 # ---------------------------------------------------------------------------
@@ -1013,26 +1026,15 @@ def build_masked_usage(provider: str, model: str, input_text: str, output_text: 
 
 def _persist_provider_profiles():
     _init()
-    with _server.PROFILES_LOCK:
-        payload = {
-            "version": 1,
-            "updated_at": _utc_now_iso(),
-            "items": _server.PROVIDER_PROFILES,
-        }
-    _safe_write_json(_server.ORION_PROVIDER_PROFILES_FILE, payload)
+    _server.sync_acp_manager_paths(provider_profiles_path=_server.ORION_PROVIDER_PROFILES_FILE)
+    _server.ACP_MANAGER._persist_provider_profiles()
 
 
 def _load_provider_profiles():
     _init()
-    payload = _safe_read_json(_server.ORION_PROVIDER_PROFILES_FILE, {"version": 1, "items": {}})
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        return
     with _server.PROFILES_LOCK:
-        _server.PROVIDER_PROFILES.clear()
-        for key, item in items.items():
-            if isinstance(key, str) and isinstance(item, dict):
-                _server.PROVIDER_PROFILES[key] = item
+        _server.sync_acp_manager_paths(provider_profiles_path=_server.ORION_PROVIDER_PROFILES_FILE)
+        _server.ACP_MANAGER.reload_secondary_state()
 
 
 def _profile_cooldown_seconds_for_error(raw_error: str) -> int:

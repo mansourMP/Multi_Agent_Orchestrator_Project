@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from server_modules import model_router, provider_profiles
@@ -7,6 +9,18 @@ from server_modules import model_router, provider_profiles
 class CredentialResolutionTests(unittest.TestCase):
     def setUp(self):
         provider_profiles._init()
+        self._profiles_tmpdir = tempfile.TemporaryDirectory()
+        self._temp_profiles_path = Path(self._profiles_tmpdir.name) / "profiles.json"
+        self._original_profiles_path = provider_profiles._server.ORION_PROVIDER_PROFILES_FILE
+        provider_profiles._server.ORION_PROVIDER_PROFILES_FILE = self._temp_profiles_path
+        provider_profiles._server.sync_acp_manager_paths(provider_profiles_path=self._temp_profiles_path)
+        provider_profiles._server.ACP_MANAGER.reload_secondary_state()
+
+    def tearDown(self):
+        provider_profiles._server.ORION_PROVIDER_PROFILES_FILE = self._original_profiles_path
+        provider_profiles._server.sync_acp_manager_paths(provider_profiles_path=self._original_profiles_path)
+        provider_profiles._server.ACP_MANAGER.reload_secondary_state()
+        self._profiles_tmpdir.cleanup()
 
     @staticmethod
     def _profile(
@@ -149,7 +163,10 @@ class CredentialResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolution["candidate"]["label"], "vault-default")
         self.assertEqual(resolution["credentials"]["access_token"], "token-vault-default")
-        self.assertEqual(resolution["model"], "gpt-4o-mini")
+        self.assertEqual(
+            resolution["model"],
+            str(provider_profiles.PROVIDER_CATALOG["openai"]["default_model"]),
+        )
 
 
 if __name__ == "__main__":

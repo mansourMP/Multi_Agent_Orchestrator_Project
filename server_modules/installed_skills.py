@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,10 @@ except Exception:  # pragma: no cover - optional during bootstrap
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def installed_skill_registry_file() -> Path:
+    return (workspace_skills_root() / ".registry.json").resolve()
 
 
 def bundled_skills_root() -> Path:
@@ -79,6 +84,19 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except Exception:
         return ""
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -145,6 +163,73 @@ def _list_from_any(value: Any) -> List[str]:
     return []
 
 
+def normalize_skill_id(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw)
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-_")
+
+
+def _default_installed_skill_registry() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "items": {},
+        "updated_at": None,
+    }
+
+
+def load_installed_skill_registry() -> Dict[str, Any]:
+    payload = _read_json(installed_skill_registry_file())
+    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    return {
+        "version": int(payload.get("version") or 1),
+        "items": items,
+        "updated_at": payload.get("updated_at"),
+    }
+
+
+def save_installed_skill_registry(payload: Dict[str, Any]) -> Dict[str, Any]:
+    data = _default_installed_skill_registry()
+    data["items"] = payload.get("items") if isinstance(payload.get("items"), dict) else {}
+    data["updated_at"] = payload.get("updated_at")
+    _write_json(installed_skill_registry_file(), data)
+    return data
+
+
+def get_installed_skill_registry_entry(skill_id: str) -> Dict[str, Any]:
+    registry = load_installed_skill_registry()
+    item = registry["items"].get(skill_id)
+    return dict(item) if isinstance(item, dict) else {}
+
+
+def upsert_installed_skill_registry_entry(skill_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_skill_id(skill_id)
+    if not normalized:
+        return {}
+    registry = load_installed_skill_registry()
+    current = registry["items"].get(normalized)
+    entry = dict(current) if isinstance(current, dict) else {}
+    entry.update(patch)
+    registry["items"][normalized] = entry
+    registry["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    save_installed_skill_registry(registry)
+    return entry
+
+
+def remove_installed_skill_registry_entry(skill_id: str) -> None:
+    normalized = normalize_skill_id(skill_id)
+    if not normalized:
+        return
+    registry = load_installed_skill_registry()
+    if normalized in registry["items"]:
+        registry["items"].pop(normalized, None)
+        registry["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        save_installed_skill_registry(registry)
+
+
 def _runtime_skill_configs() -> Dict[str, Any]:
     payload = load_runtime_config()
     skills = payload.get("skills") if isinstance(payload, dict) else {}
@@ -155,6 +240,63 @@ def _runtime_skill_config(skill_id: str) -> Dict[str, Any]:
     payload = _runtime_skill_configs()
     item = payload.get(skill_id)
     return dict(item) if isinstance(item, dict) else {}
+
+
+def _manifest_description(value: Any, readme_text: str) -> str:
+    explicit = str(value or "").strip()
+    if explicit:
+        return explicit
+    for line in str(readme_text or "").splitlines():
+        token = line.strip()
+        if not token or token.startswith("#") or token.startswith("---"):
+            continue
+        return token[:500]
+    return ""
+
+
+def _standardize_manifest(payload: Dict[str, Any], *, fallback_name: str, readme_text: str) -> Dict[str, Any]:
+    name = str(payload.get("name") or fallback_name).strip() or fallback_name
+    skill_id = normalize_skill_id(name) or normalize_skill_id(fallback_name) or fallback_name.lower()
+    tools = _list_from_any(payload.get("tools"))
+    slash_commands = _list_from_any(payload.get("slash_commands"))
+    requires = _list_from_any(payload.get("requires"))
+    description = _manifest_description(payload.get("description"), readme_text)
+    return {
+        "name": name[:160],
+        "id": skill_id[:120],
+        "version": str(payload.get("version") or "1.0.0").strip()[:40] or "1.0.0",
+        "description": description[:500],
+        "author": str(payload.get("author") or "").strip()[:120],
+        "tools": tools[:60],
+        "slash_commands": slash_commands[:30],
+        "requires": requires[:60],
+        "homepage": str(payload.get("homepage") or "").strip()[:500],
+        "source": str(payload.get("source") or "").strip()[:1000],
+    }
+
+
+def _load_skill_manifest(skill_dir: Path) -> Dict[str, Any]:
+    skill_json = _safe_skill_file(skill_dir, "skill.json")
+    if skill_json is not None:
+        payload = _read_json(skill_json)
+        if payload:
+            return _standardize_manifest(payload, fallback_name=skill_dir.name, readme_text=_read_text(skill_dir / "README.md"))
+    skill_md = _safe_skill_file(skill_dir, "SKILL.md")
+    skill_text = _read_text(skill_md) if skill_md is not None else ""
+    frontmatter = _parse_skill_frontmatter(skill_text)
+    readme_text = _read_text(skill_dir / "README.md") or skill_text
+    payload: Dict[str, Any] = {
+        "name": frontmatter.get("name") or skill_dir.name,
+        "version": frontmatter.get("version") or "1.0.0",
+        "description": frontmatter.get("description") or "",
+        "author": frontmatter.get("author") or "Empyralis",
+        "tools": frontmatter.get("tools") or [],
+        "slash_commands": frontmatter.get("slash_commands") or [],
+        "requires": frontmatter.get("requires") or frontmatter.get("required_bins") or [],
+        "homepage": frontmatter.get("homepage") or "",
+        "source": frontmatter.get("source") or "",
+    }
+    return _standardize_manifest(payload, fallback_name=skill_dir.name, readme_text=readme_text)
 
 
 def _required_bins(frontmatter: Dict[str, Any], config: Dict[str, Any], runtime_config: Dict[str, Any]) -> List[str]:
@@ -177,6 +319,8 @@ def _missing_bins(required_bins: List[str]) -> List[str]:
 def list_installed_skills() -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
+    registry = load_installed_skill_registry()
+    registry_items = registry.get("items") if isinstance(registry.get("items"), dict) else {}
     for source, root in skill_roots():
         if not root.exists():
             continue
@@ -186,42 +330,60 @@ def list_installed_skills() -> List[Dict[str, Any]]:
             if safe_dir is not None:
                 skill_dirs.append(safe_dir)
         for skill_dir in sorted(skill_dirs, key=lambda item: item.name.lower()):
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.exists():
+            has_skill_md = (skill_dir / "SKILL.md").exists()
+            has_skill_json = (skill_dir / "skill.json").exists()
+            if not has_skill_md and not has_skill_json:
                 continue
-            skill_text = _read_text(skill_md)
+            manifest = _load_skill_manifest(skill_dir)
+            skill_text = _read_text(skill_dir / "SKILL.md")
             frontmatter = _parse_skill_frontmatter(skill_text)
             config = _load_yaml(skill_dir / "config.yaml")
-            skill_id = str(frontmatter.get("name") or skill_dir.name).strip().lower() or skill_dir.name.lower()
+            skill_id = normalize_skill_id(manifest.get("id") or frontmatter.get("name") or skill_dir.name) or skill_dir.name.lower()
             if not skill_id or skill_id in seen_ids:
                 continue
             seen_ids.add(skill_id)
-            description = str(frontmatter.get("description") or "").strip()
+            registry_entry = registry_items.get(skill_id) if isinstance(registry_items.get(skill_id), dict) else {}
+            description = str(manifest.get("description") or frontmatter.get("description") or "").strip()
             runtime_config = _runtime_skill_config(skill_id)
-            enabled_default = source == "bundled"
-            enabled = _bool_from_any(
+            enabled_default = True if has_skill_json else source == "bundled"
+            enabled_fallback = _bool_from_any(
                 runtime_config.get("enabled"),
                 _bool_from_any(config.get("enabled"), _bool_from_any(frontmatter.get("enabled"), enabled_default)),
             )
+            enabled = _bool_from_any(
+                registry_entry.get("enabled") if isinstance(registry_entry, dict) else None,
+                enabled_fallback,
+            )
             required_bins = _required_bins(frontmatter, config, runtime_config)
             missing_bins = _missing_bins(required_bins)
+            readme_text = _read_text(skill_dir / "README.md")
             items.append(
                 {
                     "id": skill_id[:120],
-                    "name": str(frontmatter.get("name") or skill_dir.name).strip() or skill_dir.name,
+                    "name": str(manifest.get("name") or frontmatter.get("name") or skill_dir.name).strip() or skill_dir.name,
+                    "version": str(manifest.get("version") or "1.0.0").strip()[:40] or "1.0.0",
                     "description": description[:500],
+                    "author": str(manifest.get("author") or "").strip()[:120],
+                    "tools": _list_from_any(manifest.get("tools")),
+                    "slash_commands": _list_from_any(manifest.get("slash_commands")),
+                    "requires": _list_from_any(manifest.get("requires")),
+                    "homepage": str(manifest.get("homepage") or "").strip()[:500],
+                    "source_url": str(manifest.get("source") or "").strip()[:1000],
                     "enabled": enabled,
                     "available": not missing_bins,
                     "missing_bins": missing_bins,
                     "required_bins": required_bins,
                     "source": source,
+                    "format": "skill_json" if has_skill_json else "legacy",
                     "path": str(skill_dir),
                     "config_path": str(skill_dir / "config.yaml"),
-                    "has_query_handler": (skill_dir / "query_handler.py").exists(),
+                    "has_query_handler": (skill_dir / "query_handler.py").exists() or (skill_dir / "handler.py").exists(),
                     "has_snapshot_worker": (skill_dir / "worker.py").exists(),
                     "config": config,
                     "runtime_config": runtime_config,
-                    "skill_body": _strip_skill_frontmatter(skill_text),
+                    "skill_body": _strip_skill_frontmatter(skill_text) or readme_text.strip(),
+                    "readme": readme_text.strip() or _strip_skill_frontmatter(skill_text),
+                    "registry": registry_entry if isinstance(registry_entry, dict) else {},
                 }
             )
     return items
@@ -274,7 +436,7 @@ def active_installed_skill_ids() -> List[str]:
 
 def _run_skill_query_handler(skill: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     skill_path = Path(str(skill.get("path") or "")).expanduser().resolve()
-    handler_path = _safe_skill_file(skill_path, "query_handler.py")
+    handler_path = _safe_skill_file(skill_path, "handler.py") or _safe_skill_file(skill_path, "query_handler.py")
     if handler_path is None:
         return {}
     try:

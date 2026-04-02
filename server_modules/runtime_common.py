@@ -10,8 +10,8 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 
 EMPYRALIST_WORKFLOW_API_URL = (
-    str(os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:4000/api/v1")).strip().rstrip("/")
-    or "http://127.0.0.1:4000/api/v1"
+    str(os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:8080/api/v1")).strip().rstrip("/")
+    or "http://127.0.0.1:8080/api/v1"
 )
 
 def metrics_inc(key: str, amount: float = 1):
@@ -99,13 +99,24 @@ def _check_control_plane_origin(request: Request) -> Optional[JSONResponse]:
     return None
 
 
+def _is_control_plane_rate_limited_path(request_path: str) -> bool:
+    path = str(request_path or "").strip()
+    if not path:
+        return False
+    if path == "/chat/respond" or path == "/api/chat/respond":
+        return False
+    if path.startswith("/runtime/runtimes/") or path.startswith("/runtime/tasks/"):
+        return False
+    return True
+
+
 def _control_plane_rate_limit(request: Request) -> Optional[JSONResponse]:
     if not _is_control_plane_mutation(request):
         return None
     request_path = str(request.url.path or "")
-    if request_path.startswith("/runtime/runtimes/") or request_path.startswith("/runtime/tasks/"):
-        # Runtime registration, claims, heartbeats, and task completion are chatty by design.
-        # Keep control-plane limits focused on user-facing mutation APIs.
+    if not _is_control_plane_rate_limited_path(request_path):
+        # Runtime claims/heartbeats and direct chat are chatty by design.
+        # Keep control-plane limits focused on configuration-style mutation APIs.
         return None
     now = time.time()
     client_host = request.client.host if request.client else "unknown"
@@ -226,6 +237,11 @@ def http_json_request(
     if payload is not None:
         if isinstance(payload, (bytes, bytearray)):
             body = bytes(payload)
+        elif request_headers.get("Content-Type") == "application/x-www-form-urlencoded":
+            if isinstance(payload, str):
+                body = payload.encode("utf-8")
+            else:
+                body = urlencode(payload, doseq=True).encode("utf-8")
         else:
             body = json.dumps(payload).encode("utf-8")
             request_headers.setdefault("Content-Type", "application/json")
@@ -308,10 +324,17 @@ _codex_token_from_vault = lambda: _codex_token_from_vault_impl(CODEX_AUTH_FILE, 
 
 validate_google_workspace_connector = lambda credentials: _validate_google_workspace_connector(credentials, http_json_request)
 validate_microsoft_365_connector = lambda credentials: _validate_microsoft_365_connector(credentials, http_json_request)
+validate_smtp_connector = lambda credentials: _validate_smtp_connector(credentials, http_json_request)
 validate_telegram_connector = lambda credentials: _validate_telegram_connector(credentials, http_json_request)
 validate_wechat_work_connector = lambda credentials, send_test=False: _validate_wechat_work_connector(credentials, http_json_request, send_test=send_test)
 validate_whatsapp_twilio_connector = lambda credentials: _validate_whatsapp_twilio_connector(credentials, http_json_request)
 validate_discord_bot_connector = lambda credentials: _validate_discord_bot_connector(credentials, http_json_request)
+validate_slack_connector = lambda credentials: _validate_slack_connector(credentials, http_json_request)
+validate_github_connector = lambda credentials: _validate_github_connector(credentials, http_json_request)
+validate_dropbox_connector = lambda credentials: _validate_dropbox_connector(credentials, http_json_request)
+validate_s3_connector = lambda credentials: _validate_s3_connector(credentials, http_json_request)
+validate_notion_connector = lambda credentials: _validate_notion_connector(credentials, http_json_request)
+validate_linear_connector = lambda credentials: _validate_linear_connector(credentials, http_json_request)
 validate_instagram_business_connector = lambda credentials: _validate_instagram_business_connector(credentials, http_json_request)
 validate_irc_connector = lambda credentials: _validate_irc_connector(credentials)
 

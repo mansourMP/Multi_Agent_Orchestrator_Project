@@ -1,6 +1,25 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules.connectors.github_connector import (
+    parse_inbound_event as github_parse_inbound_event,
+    verify_request_signature as github_verify_request_signature,
+)
+from server_modules.connectors.discord_connector import (
+    dispatch_inbound_event as discord_dispatch_inbound_event,
+    event_matches_connector as discord_event_matches_connector,
+    parse_inbound_event as discord_parse_inbound_event,
+    verify_interaction_signature as discord_verify_interaction_signature,
+)
+from server_modules.connectors.slack_connector import (
+    exchange_oauth_code as slack_exchange_oauth_code,
+    get_channel_history as slack_get_channel_history,
+    list_channels as slack_list_channels,
+    parse_inbound_event as slack_parse_inbound_event,
+    send_dm as slack_send_dm_message,
+    send_message as slack_send_channel_message,
+    verify_request_signature as slack_verify_request_signature,
+)
 from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
 from server_modules.tool_availability_truth import capability_verification_metadata
 
@@ -166,6 +185,358 @@ async def telegram_autopilot_test_message(body: TelegramAutopilotTestRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+
+def _upsert_slack_oauth_connector_entry(
+    *,
+    workspace_id: Optional[str],
+    label: str,
+    credentials: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]],
+    test_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    now = datetime.utcnow().isoformat() + "Z"
+    connector = "slack"
+    safe_metadata = dict(metadata or {})
+    team = test_result.get("team") if isinstance(test_result.get("team"), dict) else {}
+    bot = test_result.get("bot") if isinstance(test_result.get("bot"), dict) else {}
+    authed_user = test_result.get("authed_user") if isinstance(test_result.get("authed_user"), dict) else {}
+    connector_metadata = {
+        **_connector_public_metadata(connector, credentials),
+        **safe_metadata,
+    }
+    connector_metadata["capability_verification"] = capability_verification_metadata(connector, test_result)
+    if str(team.get("id") or "").strip():
+        connector_metadata["team_id"] = str(team.get("id")).strip()
+    if str(team.get("name") or "").strip():
+        connector_metadata["team_name"] = str(team.get("name")).strip()
+    if str(bot.get("user_id") or "").strip():
+        connector_metadata["bot_user_id"] = str(bot.get("user_id")).strip()
+    if str(bot.get("bot_status") or "").strip():
+        connector_metadata["bot_status"] = str(bot.get("bot_status")).strip()
+    if str(authed_user.get("id") or "").strip():
+        connector_metadata["authed_user_id"] = str(authed_user.get("id")).strip()
+
+    vault = load_vault()
+    items = vault.get("credentials", [])
+    if not isinstance(items, list):
+        items = []
+    duplicate = _find_duplicate_connector_entry(connector, credentials, workspace_id)
+    entry_id = str((duplicate or {}).get("id") or uuid.uuid4()).strip()
+    created_at = str((duplicate or {}).get("created_at") or now).strip() or now
+    found = False
+    next_items: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            next_items.append(item)
+            continue
+        if str(item.get("id") or "").strip() != entry_id:
+            next_items.append(item)
+            continue
+        found = True
+        next_items.append(
+            {
+                **item,
+                "label": label.strip() or str(item.get("label") or "Slack").strip() or "Slack",
+                "provider": connector,
+                "workspace_id": _normalize_workspace_id(workspace_id),
+                "mode": "connector",
+                "metadata": _sanitize_connector_metadata(connector_metadata),
+                "created_at": created_at,
+                "updated_at": now,
+                "encrypted_secret": _openssl_encrypt(json.dumps(credentials, separators=(",", ":"))),
+            }
+        )
+    if not found:
+        next_items.append(
+            {
+                "id": entry_id,
+                "label": label.strip() or str(team.get("name") or "Slack").strip() or "Slack",
+                "provider": connector,
+                "workspace_id": _normalize_workspace_id(workspace_id),
+                "mode": "connector",
+                "metadata": _sanitize_connector_metadata(connector_metadata),
+                "created_at": created_at,
+                "updated_at": now,
+                "encrypted_secret": _openssl_encrypt(json.dumps(credentials, separators=(",", ":"))),
+            }
+        )
+    vault["credentials"] = next_items
+    save_vault(vault)
+
+    return {
+        "id": entry_id,
+        "label": label.strip() or str(team.get("name") or "Slack").strip() or "Slack",
+        "connector": connector,
+        "workspace_id": _normalize_workspace_id(workspace_id),
+        "metadata": _sanitize_connector_metadata(connector_metadata),
+        "created_at": created_at,
+        "updated_at": now,
+        "test": test_result,
+    }
+
+
+async def slack_oauth_callback(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    code = str(payload.get("code") or "").strip()
+    redirect_uri = str(payload.get("redirect_uri") or "").strip()
+    workspace_id = _normalize_workspace_id(payload.get("workspace_id"))
+    label = str(payload.get("label") or "Slack").strip() or "Slack"
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    if not code:
+        raise HTTPException(status_code=400, detail="Slack OAuth code is required.")
+    if not redirect_uri:
+        raise HTTPException(status_code=400, detail="Slack redirect_uri is required.")
+
+    try:
+        exchange = slack_exchange_oauth_code(code, redirect_uri, http_json_request=http_json_request)
+        credentials = exchange.get("credentials") if isinstance(exchange.get("credentials"), dict) else {}
+        test = validate_slack_connector(credentials)
+        persisted_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        result = _upsert_slack_oauth_connector_entry(
+            workspace_id=workspace_id,
+            label=label,
+            credentials=persisted_credentials,
+            metadata=metadata,
+            test_result=test,
+        )
+        return {"ok": True, **result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def slack_events_webhook(request: Request):
+    raw_body = await request.body()
+    headers = dict(request.headers.items())
+    try:
+        if not slack_verify_request_signature(headers, raw_body):
+            raise HTTPException(status_code=401, detail="Slack request signature is invalid.")
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        parsed = slack_parse_inbound_event(payload if isinstance(payload, dict) else {})
+        if parsed.get("kind") == "url_verification":
+            return {"challenge": str(parsed.get("challenge") or "").strip()}
+
+        if parsed.get("kind") == "event":
+            append_fn = globals().get("_append_channel_event")
+            if callable(append_fn):
+                team_id = str(parsed.get("team_id") or "").strip().lower()
+                channel_id = str(parsed.get("channel") or "").strip() or "slack"
+                vault = load_vault()
+                items = vault.get("credentials", [])
+                if not isinstance(items, list):
+                    items = []
+                matched_workspaces: List[str] = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("provider") or "").strip().lower() != "slack":
+                        continue
+                    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                    item_team_id = str(metadata.get("team_id") or "").strip().lower()
+                    if team_id and item_team_id and item_team_id != team_id:
+                        continue
+                    workspace_id = _normalize_workspace_id(item.get("workspace_id"))
+                    if workspace_id in matched_workspaces:
+                        continue
+                    matched_workspaces.append(workspace_id)
+                    append_fn(
+                        channel="slack",
+                        direction="inbound",
+                        event_type=str(parsed.get("event_type") or parsed.get("message_type") or "event"),
+                        text=str(parsed.get("text") or parsed.get("reaction") or "").strip() or None,
+                        workspace_id=workspace_id,
+                        session_key=channel_id,
+                        message_id=str(parsed.get("message_ts") or parsed.get("ts") or parsed.get("event_id") or "").strip() or None,
+                        trace_id=f"slack:{str(parsed.get('event_id') or parsed.get('ts') or uuid.uuid4()).strip()}",
+                        metadata=parsed,
+                    )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _discord_candidate_public_keys(rows: List[Dict[str, Any]]) -> List[str]:
+    candidates: List[str] = []
+    env_public_key = str(os.getenv("DISCORD_APP_PUBLIC_KEY") or "").strip()
+    if env_public_key:
+        candidates.append(env_public_key)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            secret = resolve_vault_credential(str(row.get("id") or "").strip(), _normalize_workspace_id(row.get("workspace_id")))
+        except Exception:
+            continue
+        for key in (
+            str(secret.get("public_key") or "").strip(),
+            str(secret.get("application_public_key") or "").strip(),
+        ):
+            if key and key not in candidates:
+                candidates.append(key)
+    return candidates
+
+
+async def discord_webhook(request: Request):
+    raw_body = await request.body()
+    headers = dict(request.headers.items())
+    try:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        vault = load_vault()
+        items = vault.get("credentials", [])
+        if not isinstance(items, list):
+            items = []
+        discord_rows = [
+            item
+            for item in items
+            if isinstance(item, dict) and str(item.get("provider") or "").strip().lower() == "discord_bot"
+        ]
+        signature = str(headers.get("x-signature-ed25519") or headers.get("X-Signature-Ed25519") or "").strip()
+        if signature:
+            public_keys = _discord_candidate_public_keys(discord_rows)
+            if not public_keys:
+                raise HTTPException(status_code=400, detail="Discord interaction public key is not configured.")
+            if not any(discord_verify_interaction_signature(headers, raw_body, key) for key in public_keys):
+                raise HTTPException(status_code=401, detail="Discord request signature is invalid.")
+
+        parsed = discord_parse_inbound_event(payload, event_type=str(headers.get("x-discord-event") or "").strip())
+        if parsed.get("kind") == "ping":
+            return {"type": 1}
+
+        append_fn = globals().get("_append_channel_event")
+        from server_modules.runs_execution import create_run as create_run_fn
+
+        handled = 0
+        triggered = 0
+        triggered_run_id = ""
+        for row in discord_rows:
+            row_id = str(row.get("id") or "").strip()
+            if not row_id:
+                continue
+            workspace_id = _normalize_workspace_id(row.get("workspace_id"))
+            try:
+                secret = resolve_vault_credential(row_id, workspace_id)
+            except Exception:
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            if not discord_event_matches_connector(parsed, secret, metadata):
+                continue
+            outcome = discord_dispatch_inbound_event(
+                parsed,
+                connector_entry=row,
+                credentials=secret,
+                append_event_fn=append_fn if callable(append_fn) else None,
+                create_run_fn=lambda *, context: create_run_fn(engine="orion", context=context),
+            )
+            handled += 1
+            if outcome.get("triggered"):
+                triggered += 1
+                if not triggered_run_id:
+                    triggered_run_id = str(outcome.get("run_id") or "").strip()
+
+        if parsed.get("kind") == "interaction":
+            if triggered_run_id:
+                return {
+                    "type": 4,
+                    "data": {
+                        "content": f"Started run {triggered_run_id}.",
+                        "flags": 64,
+                    },
+                }
+            return {
+                "type": 4,
+                "data": {
+                    "content": "Received.",
+                    "flags": 64,
+                },
+            }
+        return {"ok": True, "handled": handled, "triggered": triggered}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+async def github_events_webhook(request: Request):
+    raw_body = await request.body()
+    headers = dict(request.headers.items())
+    try:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        vault = load_vault()
+        items = vault.get("credentials", [])
+        if not isinstance(items, list):
+            items = []
+        github_rows = [
+            item
+            for item in items
+            if isinstance(item, dict) and str(item.get("provider") or "").strip().lower() == "github"
+        ]
+        secrets: List[str] = []
+        for item in github_rows:
+            item_id = str(item.get("id") or "").strip()
+            if not item_id:
+                continue
+            try:
+                secret = resolve_vault_credential(item_id, _normalize_workspace_id(item.get("workspace_id")))
+            except Exception:
+                continue
+            webhook_secret = str(secret.get("webhook_secret") or "").strip()
+            if webhook_secret:
+                secrets.append(webhook_secret)
+        if secrets and not any(github_verify_request_signature(headers, raw_body, secret) for secret in secrets):
+            raise HTTPException(status_code=401, detail="GitHub webhook signature is invalid.")
+
+        parsed = github_parse_inbound_event(
+            payload,
+            event_type=str(headers.get("x-github-event") or headers.get("X-GitHub-Event") or "").strip(),
+            delivery_id=str(headers.get("x-github-delivery") or headers.get("X-GitHub-Delivery") or "").strip(),
+        )
+        append_fn = globals().get("_append_channel_event")
+        if callable(append_fn):
+            matched_workspaces: List[str] = []
+            owner = str(parsed.get("owner") or "").strip().lower()
+            repository = str(parsed.get("repository") or "").strip() or "github"
+            for item in github_rows:
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                item_username = str(metadata.get("username") or "").strip().lower()
+                if owner and item_username and item_username != owner:
+                    continue
+                workspace_id = _normalize_workspace_id(item.get("workspace_id"))
+                if workspace_id in matched_workspaces:
+                    continue
+                matched_workspaces.append(workspace_id)
+                append_fn(
+                    channel="github",
+                    direction="inbound",
+                    event_type=str(parsed.get("event_type") or "event"),
+                    text=(
+                        str(parsed.get("head_commit") or parsed.get("title") or parsed.get("action") or "").strip()
+                        or None
+                    ),
+                    workspace_id=workspace_id,
+                    session_key=repository,
+                    message_id=str(parsed.get("delivery_id") or parsed.get("after") or "").strip() or None,
+                    trace_id=f"github:{str(parsed.get('delivery_id') or parsed.get('after') or uuid.uuid4()).strip()}",
+                    metadata=parsed,
+                )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 async def create_connector_vault(body: ConnectorCreate):
     body.validate_fields()
     connector = body.connector.lower().strip()
@@ -176,6 +547,8 @@ async def create_connector_vault(body: ConnectorCreate):
             test = validate_google_workspace_connector(credentials)
         elif connector == "microsoft_365":
             test = validate_microsoft_365_connector(credentials)
+        elif connector == "smtp":
+            test = validate_smtp_connector(credentials)
         elif connector == "telegram_bot":
             test = validate_telegram_connector(credentials)
         elif connector == "wechat_work":
@@ -184,6 +557,24 @@ async def create_connector_vault(body: ConnectorCreate):
             test = validate_whatsapp_twilio_connector(credentials)
         elif connector == "discord_bot":
             test = validate_discord_bot_connector(credentials)
+        elif connector == "slack":
+            test = validate_slack_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "github":
+            test = validate_github_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "dropbox":
+            test = validate_dropbox_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "s3":
+            test = validate_s3_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "notion":
+            test = validate_notion_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
+        elif connector == "linear":
+            test = validate_linear_connector(credentials)
+            credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else credentials
         elif connector == "instagram_business":
             test = validate_instagram_business_connector(credentials)
         elif connector == "irc":
@@ -237,6 +628,147 @@ async def create_connector_vault(body: ConnectorCreate):
             credentials = {**credentials, "userPrincipalName": user_principal_name}
         if drive_id and not credentials.get("drive_id"):
             credentials = {**credentials, "drive_id": drive_id}
+    if connector == "slack" and isinstance(test, dict):
+        team = test.get("team") if isinstance(test.get("team"), dict) else {}
+        bot = test.get("bot") if isinstance(test.get("bot"), dict) else {}
+        authed_user = test.get("authed_user") if isinstance(test.get("authed_user"), dict) else {}
+        team_id = str(team.get("id") or "").strip()
+        team_name = str(team.get("name") or "").strip()
+        bot_user_id = str(bot.get("user_id") or "").strip()
+        bot_status = str(bot.get("bot_status") or "").strip()
+        authed_user_id = str(authed_user.get("id") or "").strip()
+        if team_id:
+            connector_metadata["team_id"] = team_id
+        if team_name:
+            connector_metadata["team_name"] = team_name
+        if bot_user_id:
+            connector_metadata["bot_user_id"] = bot_user_id
+        if bot_status:
+            connector_metadata["bot_status"] = bot_status
+        if authed_user_id:
+            connector_metadata["authed_user_id"] = authed_user_id
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "discord_bot" and isinstance(test, dict):
+        bot = test.get("bot") if isinstance(test.get("bot"), dict) else {}
+        guild = test.get("guild") if isinstance(test.get("guild"), dict) else {}
+        channel = test.get("channel") if isinstance(test.get("channel"), dict) else {}
+        application = test.get("application") if isinstance(test.get("application"), dict) else {}
+        bot_id = str(bot.get("id") or "").strip()
+        bot_username = str(bot.get("username") or "").strip()
+        bot_status = str(bot.get("bot_status") or "active").strip()
+        guild_id = str(guild.get("id") or test.get("guild_id") or credentials.get("guild_id") or "").strip()
+        guild_name = str(guild.get("name") or "").strip()
+        channel_id = str(channel.get("id") or test.get("channel_id") or credentials.get("channel_id") or "").strip()
+        channel_name = str(channel.get("name") or "").strip()
+        application_id = str(application.get("id") or credentials.get("application_id") or "").strip()
+        if bot_id:
+            connector_metadata["bot_id"] = bot_id
+        if bot_username:
+            connector_metadata["bot_username"] = bot_username
+        if bot_status:
+            connector_metadata["bot_status"] = bot_status
+        if guild_id:
+            connector_metadata["guild_id"] = guild_id
+        if guild_name:
+            connector_metadata["guild_name"] = guild_name
+        if channel_id:
+            connector_metadata["channel_id"] = channel_id
+        if channel_name:
+            connector_metadata["channel_name"] = channel_name
+        if application_id:
+            connector_metadata["application_id"] = application_id
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "github" and isinstance(test, dict):
+        profile = test.get("profile") if isinstance(test.get("profile"), dict) else {}
+        username = str(test.get("username") or profile.get("login") or "").strip()
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        profile_type = str(profile.get("type") or "").strip()
+        if username:
+            connector_metadata["username"] = username
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        if profile_type:
+            connector_metadata["profile_type"] = profile_type
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "dropbox" and isinstance(test, dict):
+        display_name = str(test.get("display_name") or "").strip()
+        email = str(test.get("email") or "").strip()
+        account_id = str(test.get("account_id") or "").strip()
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        if display_name:
+            connector_metadata["display_name"] = display_name
+        if email:
+            connector_metadata["email"] = email
+        if account_id:
+            connector_metadata["account_id"] = account_id
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "s3" and isinstance(test, dict):
+        region = str(test.get("region") or "").strip()
+        access_key_hint = str(test.get("access_key_hint") or "").strip()
+        bucket_count = test.get("bucket_count")
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        if region:
+            connector_metadata["region"] = region
+        if access_key_hint:
+            connector_metadata["access_key_hint"] = access_key_hint
+        if bucket_count not in {None, ""}:
+            connector_metadata["bucket_count"] = bucket_count
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "notion" and isinstance(test, dict):
+        workspace_name = str(test.get("workspace_name") or "").strip()
+        workspace_id = str(test.get("workspace_id") or "").strip()
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        if workspace_name:
+            connector_metadata["workspace_name"] = workspace_name
+        if workspace_id:
+            connector_metadata["workspace_id"] = workspace_id
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "linear" and isinstance(test, dict):
+        organization_name = str(test.get("organization_name") or "").strip()
+        organization_id = str(test.get("organization_id") or "").strip()
+        username = str(test.get("username") or "").strip()
+        auth_mode = str(test.get("auth_mode") or credentials.get("auth_mode") or "").strip().lower()
+        if organization_name:
+            connector_metadata["organization_name"] = organization_name
+        if organization_id:
+            connector_metadata["organization_id"] = organization_id
+        if username:
+            connector_metadata["username"] = username
+        if auth_mode:
+            connector_metadata["auth_mode"] = auth_mode
+        merged_credentials = test.get("credentials") if isinstance(test.get("credentials"), dict) else {}
+        if merged_credentials:
+            credentials = {**credentials, **merged_credentials}
+    if connector == "smtp" and isinstance(test, dict):
+        profile = test.get("profile") if isinstance(test.get("profile"), dict) else {}
+        host = str(profile.get("host") or credentials.get("host") or "").strip()
+        username = str(profile.get("username") or credentials.get("username") or "").strip()
+        port = str(profile.get("port") or credentials.get("port") or "").strip()
+        if host:
+            connector_metadata["host"] = host
+        if username:
+            connector_metadata["username"] = username
+        if port:
+            connector_metadata["port"] = port
+        connector_metadata["use_tls"] = bool(credentials.get("use_tls"))
 
     duplicate = _find_duplicate_connector_entry(connector, credentials, body.workspace_id)
     if isinstance(duplicate, dict):
@@ -370,6 +902,12 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
         except Exception as exc:
             _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
             raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "smtp":
+        try:
+            test_result = validate_smtp_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
     elif connector == "microsoft_365":
         try:
             test_result = validate_microsoft_365_connector(credentials)
@@ -397,6 +935,42 @@ async def test_connector_vault(credential_id: str, workspace_id: Optional[str] =
     elif connector == "discord_bot":
         try:
             test_result = validate_discord_bot_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "slack":
+        try:
+            test_result = validate_slack_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "github":
+        try:
+            test_result = validate_github_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "dropbox":
+        try:
+            test_result = validate_dropbox_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "s3":
+        try:
+            test_result = validate_s3_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "notion":
+        try:
+            test_result = validate_notion_connector(credentials)
+        except Exception as exc:
+            _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc))
+    elif connector == "linear":
+        try:
+            test_result = validate_linear_connector(credentials)
         except Exception as exc:
             _persist_capability_verification({"ok": False, "status": 400, "message": str(exc)})
             raise HTTPException(status_code=400, detail=str(exc))

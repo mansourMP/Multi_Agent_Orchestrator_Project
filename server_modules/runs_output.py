@@ -72,6 +72,26 @@ def _active_profile_snapshot(run: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _browser_introspection_snapshot(run: Dict[str, Any], result_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    browser_action: Optional[Dict[str, Any]] = None
+    outputs = result_data.get("outputs") if isinstance(result_data, dict) and isinstance(result_data.get("outputs"), dict) else {}
+    actions = outputs.get("actions") if isinstance(outputs.get("actions"), list) else []
+    for item in reversed(actions):
+        if isinstance(item, dict) and str(item.get("tool") or "").strip().lower() == "browser_automation":
+            browser_action = item
+            break
+    checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
+    if not browser_action and not checkpoint:
+        return None
+    return {
+        "tabs": browser_action.get("tabs") if isinstance(browser_action, dict) and isinstance(browser_action.get("tabs"), list) else checkpoint.get("tabs") if isinstance(checkpoint.get("tabs"), list) else [],
+        "console_entries": browser_action.get("console_entries") if isinstance(browser_action, dict) and isinstance(browser_action.get("console_entries"), list) else [],
+        "network_failures": browser_action.get("network_failures") if isinstance(browser_action, dict) and isinstance(browser_action.get("network_failures"), list) else [],
+        "role_snapshot": browser_action.get("role_snapshot") if isinstance(browser_action, dict) and isinstance(browser_action.get("role_snapshot"), list) else checkpoint.get("role_snapshot") if isinstance(checkpoint.get("role_snapshot"), list) else [],
+        "accessibility_snapshot": browser_action.get("accessibility_snapshot") if isinstance(browser_action, dict) and isinstance(browser_action.get("accessibility_snapshot"), dict) else checkpoint.get("accessibility_snapshot") if isinstance(checkpoint.get("accessibility_snapshot"), dict) else {},
+    }
+
+
 def _serialize_provider_model_truth(
     *,
     context: Dict[str, Any],
@@ -306,6 +326,7 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         events=trimmed_events,
         connector_binding=connector_binding,
     )
+    browser_introspection = _browser_introspection_snapshot(run, result_data)
     provider_model_truth = _serialize_provider_model_truth(
         context=context,
         metadata=metadata,
@@ -370,6 +391,8 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "retry_of_run_id": metadata.get("retry_of_run_id"),
         "retry_root_run_id": metadata.get("retry_root_run_id"),
         "retry_sequence": metadata.get("retry_sequence"),
+        "retry_count": metadata.get("retry_count"),
+        "max_iterations": metadata.get("max_iterations"),
         "trust_mode": metadata.get("trust_mode"),
         "execution_target_requested": metadata.get("execution_target_requested"),
         "execution_target_selected": metadata.get("execution_target_selected"),
@@ -397,8 +420,13 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "usage_masked": usage_masked,
         "usage_provider": usage_masked.get("provider"),
         "usage_model": usage_masked.get("model"),
+        "usage_prompt_tokens": usage_masked.get("prompt_tokens", usage_masked.get("input_tokens_est")),
+        "usage_completion_tokens": usage_masked.get("completion_tokens", usage_masked.get("output_tokens_est")),
+        "usage_total_tokens": usage_masked.get("total_tokens", usage_masked.get("total_tokens_est")),
         "usage_total_tokens_est": usage_masked.get("total_tokens_est"),
+        "usage_estimated_cost_usd": usage_masked.get("estimated_cost_usd", usage_masked.get("cost_est_usd")),
         "usage_cost_band": usage_masked.get("cost_band"),
+        "usage_timestamp": usage_masked.get("timestamp"),
         "result_data": result_data,
         "node_states": node_states,
         "tool_policy_precheck": metadata.get("tool_policy_precheck"),
@@ -412,6 +440,9 @@ def _serialize_run_snapshot(run_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
         "pending_approval": run.get("pending_confirmation") if isinstance(run.get("pending_confirmation"), dict)
         else run.get("pending_approval") if isinstance(run.get("pending_approval"), dict)
         else None,
+        "browser_checkpoint": run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else None,
+        "browser_introspection": browser_introspection,
+        "browser_execution_binding": metadata.get("browser_execution_binding") if isinstance(metadata.get("browser_execution_binding"), dict) else None,
         "events": trimmed_events,
     }
     if provider_model_truth.get("fallback_reason"):
@@ -423,6 +454,7 @@ def _archive_run_if_terminal(run_id: str, run: Dict[str, Any]):
     if run.get("_archived"):
         return
     snapshot = _serialize_run_snapshot(run_id, run)
+    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
     try:
         upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
     except Exception:
@@ -437,6 +469,7 @@ def _refresh_archived_run_snapshot(run_id: str, run: Dict[str, Any]) -> None:
     if not run.get("_archived"):
         return
     snapshot = _serialize_run_snapshot(run_id, run)
+    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
     try:
         upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
     except Exception:
@@ -452,6 +485,7 @@ def _upsert_run_history_snapshot(snapshot: Dict[str, Any]) -> None:
     run_id = str(snapshot.get("run_id") or "").strip()
     if not run_id:
         return
+    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
     try:
         upsert_run_history_item(ORION_RUNTIME_STATE_DB, snapshot, ORION_HISTORY_LIMIT)
     except Exception:
@@ -467,6 +501,7 @@ def _upsert_run_history_snapshot(snapshot: Dict[str, Any]) -> None:
 
 
 def _load_run_history():
+    ACP_MANAGER.reconfigure_paths(runtime_db_path=ORION_RUNTIME_STATE_DB)
     items: List[Dict[str, Any]] = []
     try:
         items = list_run_history(ORION_RUNTIME_STATE_DB, ORION_HISTORY_LIMIT)
@@ -486,9 +521,7 @@ def _load_run_history():
             except Exception:
                 pass
     with RUN_HISTORY_LOCK:
-        RUN_HISTORY.clear()
-        for item in items[:ORION_HISTORY_LIMIT]:
-            RUN_HISTORY.append(item)
+        ACP_MANAGER.run_history.reload(items[:ORION_HISTORY_LIMIT])
 
 def _json_safe(value: Any) -> Any:
     try:
@@ -980,8 +1013,13 @@ def _summarize_history_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "tool_capabilities": tool_capabilities,
         "usage_provider": item.get("usage_provider"),
         "usage_model": item.get("usage_model"),
+        "usage_prompt_tokens": item.get("usage_prompt_tokens"),
+        "usage_completion_tokens": item.get("usage_completion_tokens"),
+        "usage_total_tokens": item.get("usage_total_tokens"),
         "usage_total_tokens_est": item.get("usage_total_tokens_est"),
+        "usage_estimated_cost_usd": item.get("usage_estimated_cost_usd"),
         "usage_cost_band": item.get("usage_cost_band"),
+        "usage_timestamp": item.get("usage_timestamp"),
         "graph_kind": node_states.get("graph_kind"),
         "active_node_id": node_states.get("active_node_id"),
         "final_node_id": node_states.get("final_node_id"),

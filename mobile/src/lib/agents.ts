@@ -12,12 +12,12 @@ export type AgentThread = {
 
 export const PRIMARY_AGENT: AgentThread = {
   id: "assistant",
-  label: "Assistant",
+  label: "KIN",
   runtimeRole: "private-assistant",
-  subtitle: "",
+  subtitle: "One visible intelligence with hidden specialist workers.",
   icon: "sparkles",
-  avatarColor: "#6D28D9",
-  intro: "",
+  avatarColor: "#111827",
+  intro: "I can coordinate work across apps, runs, and approvals without exposing a visible bot roster.",
 };
 
 const BUILT_IN_AGENTS: AgentThread[] = [
@@ -69,23 +69,23 @@ const BUILT_IN_AGENTS: AgentThread[] = [
   },
 ];
 
-const AGENT_COLORS = ["#0EA5E9", "#14B8A6", "#F59E0B", "#EC4899", "#8B5CF6", "#22C55E"];
-
 function normalize(value: string) {
   return value.trim().toLowerCase();
-}
-
-function hashColor(value: string) {
-  let total = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    total += value.charCodeAt(i);
-  }
-  return AGENT_COLORS[total % AGENT_COLORS.length];
 }
 
 function builtInMatches(agent: Pick<AgentSummary, "id" | "label">, target: AgentThread) {
   const id = normalize(agent.id);
   const label = normalize(agent.label);
+
+  if (target.id === PRIMARY_AGENT.id) {
+    return (
+      id === "assistant" ||
+      id === "private-assistant" ||
+      label.includes("kin") ||
+      label.includes("personal assistant") ||
+      label.includes("private assistant")
+    );
+  }
 
   if (target.id === "personal-assistant") {
     return (
@@ -129,29 +129,16 @@ export function getPrimaryAgent() {
 }
 
 export function buildAgentDirectory(discovered: AgentSummary[] = []) {
-  const merged = BUILT_IN_AGENTS.map((agent) => {
-    const matched = discovered.find((item) => builtInMatches(item, agent));
-    if (!matched) return agent;
-    return {
-      ...agent,
-      runtimeRole: matched.id || agent.runtimeRole,
-      subtitle: matched.subtitle || agent.subtitle,
-    };
-  });
+  const matchedPrimary = discovered.find((item) => builtInMatches(item, PRIMARY_AGENT));
+  const visiblePrimary = matchedPrimary
+    ? {
+        ...PRIMARY_AGENT,
+        runtimeRole: matchedPrimary.id || PRIMARY_AGENT.runtimeRole,
+        subtitle: matchedPrimary.subtitle || PRIMARY_AGENT.subtitle,
+      }
+    : PRIMARY_AGENT;
 
-  const customAgents = discovered
-    .filter((agent) => !merged.some((item) => builtInMatches(agent, item)))
-    .map((agent) => ({
-      id: agent.id,
-      label: agent.label,
-      runtimeRole: agent.id,
-      subtitle: agent.subtitle || "User-created agent",
-      icon: "person",
-      avatarColor: hashColor(agent.id),
-      intro: `${agent.label} is ready.`,
-    }));
-
-  return [...merged, ...customAgents];
+  return [visiblePrimary];
 }
 
 export function getAgentById(id: string, discovered: AgentSummary[] = []) {

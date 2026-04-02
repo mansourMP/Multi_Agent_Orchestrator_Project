@@ -107,25 +107,15 @@ def _persist_setup_sessions():
     _init()
     with SETUP_SESSIONS_LOCK:
         _cleanup_setup_sessions_locked()
-        payload = {
-            "version": 1,
-            "updated_at": _utc_now_iso(),
-            "items": SETUP_SESSIONS,
-        }
-    _safe_write_json(ORION_SETUP_SESSIONS_FILE, payload)
+    _server.sync_acp_manager_paths(setup_sessions_path=_server.ORION_SETUP_SESSIONS_FILE)
+    _server.ACP_MANAGER._persist_setup_sessions()
 
 
 def _load_setup_sessions():
     _init()
-    payload = _safe_read_json(ORION_SETUP_SESSIONS_FILE, {"version": 1, "items": {}})
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        return
     with SETUP_SESSIONS_LOCK:
-        SETUP_SESSIONS.clear()
-        for key, item in items.items():
-            if isinstance(key, str) and isinstance(item, dict):
-                SETUP_SESSIONS[key] = item
+        _server.sync_acp_manager_paths(setup_sessions_path=_server.ORION_SETUP_SESSIONS_FILE)
+        _server.ACP_MANAGER.reload_secondary_state()
         _cleanup_setup_sessions_locked()
 
 

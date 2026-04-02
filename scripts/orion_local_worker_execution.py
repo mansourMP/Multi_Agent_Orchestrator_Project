@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -26,13 +27,27 @@ except ImportError:
     from server_modules.file_mount_security import assert_file_mount_access  # type: ignore[no-redef]
 
 try:
+    from runtime_policy import (
+        browser_automation_plan_hash,
+        build_local_operator_execution_binding,
+        local_operator_approval_env_snapshot,
+        local_operator_execution_binding_matches,
+    )
+except ImportError:
+    from server_modules.runtime_policy import (  # type: ignore[no-redef]
+        browser_automation_plan_hash,
+        build_local_operator_execution_binding,
+        local_operator_approval_env_snapshot,
+        local_operator_execution_binding_matches,
+    )
+
+try:
     from scripts.platform_execution import (
         capability_command,
         capability_metadata,
         capability_tool_id,
         command_spec_from_operation,
         default_local_companion_allow_prefixes,
-        electron_command,
         match_allowed_argv,
         screenshot_command,
         supports_capability,
@@ -44,7 +59,6 @@ except ImportError:
         capability_tool_id,
         command_spec_from_operation,
         default_local_companion_allow_prefixes,
-        electron_command,
         match_allowed_argv,
         screenshot_command,
         supports_capability,
@@ -52,6 +66,8 @@ except ImportError:
 
 
 LOCAL_EXECUTION_PACK_ID = "local-execution-v1"
+LOCAL_EXECUTION_MAX_OPS_DEFAULT = 50
+LOCAL_EXECUTION_MAX_OPS_CEILING = 200
 LOCAL_EXECUTION_TEXT_EXTENSIONS = {
     ".txt",
     ".md",
@@ -72,6 +88,43 @@ LOCAL_EXECUTION_TEXT_EXTENSIONS = {
     ".toml",
 }
 BROWSER_CAPTURE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _resolved_local_operation_limit(metadata: Optional[Dict[str, Any]] = None) -> int:
+    payload = metadata if isinstance(metadata, dict) else {}
+    configured = _safe_int(
+        payload.get("max_iterations"),
+        _safe_int(os.getenv("ORION_MAX_LOCAL_OPS", LOCAL_EXECUTION_MAX_OPS_DEFAULT), LOCAL_EXECUTION_MAX_OPS_DEFAULT),
+    )
+    return max(1, min(configured, LOCAL_EXECUTION_MAX_OPS_CEILING))
+
+
+def _local_operation_limit_message(limit: int) -> str:
+    return (
+        f"Reached maximum steps ({limit}). "
+        "To continue, start a new run or increase ORION_MAX_LOCAL_OPS."
+    )
+
+
+class LocalExecutionPauseRequired(RuntimeError):
+    def __init__(
+        self,
+        summary: str,
+        result_data: Dict[str, Any],
+        *,
+        browser_checkpoint: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.result_data = result_data
+        self.browser_checkpoint = browser_checkpoint if isinstance(browser_checkpoint, dict) else {}
 
 
 class _LinkCollector(HTMLParser):
@@ -200,6 +253,42 @@ def _browser_download_dir(run_id: str, op_index: int, artifacts_root: Path) -> P
     return target
 
 
+def _browser_execution_binding(project_root: Path, browser_plan_hash: str, session_profile: str) -> Dict[str, Any]:
+    argv = [sys.executable, "-m", "server_modules.browser_engine"]
+    cwd = str(project_root.resolve())
+    return build_local_operator_execution_binding(
+        argv=argv,
+        cwd=cwd,
+        env_vars=local_operator_approval_env_snapshot(os.environ),
+        browser_plan_hash=browser_plan_hash,
+        session_profile=session_profile,
+    )
+
+
+def _run_async_value(coro: Any) -> Any:
+    try:
+        return asyncio.run(coro)
+    except RuntimeError as exc:
+        if "asyncio.run() cannot be called from a running event loop" not in str(exc):
+            raise
+        import threading
+
+        result: Dict[str, Any] = {}
+
+        def _runner():
+            try:
+                result["value"] = asyncio.run(coro)
+            except Exception as thread_exc:
+                result["error"] = thread_exc
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
+
 def _run_browser_capture_task(
     url: str,
     screenshot_target: Path,
@@ -207,66 +296,142 @@ def _run_browser_capture_task(
     session_profile: str = "",
     download_dir: Optional[Path] = None,
     browser_actions: Optional[List[Dict[str, Any]]] = None,
+    browser_checkpoint: Optional[Dict[str, Any]] = None,
+    expected_execution_binding: Optional[Dict[str, Any]] = None,
+    browser_plan_hash: str = "",
+    resume_from_action_index: int = 0,
     wait_for_selector: str = "",
     click_selector: str = "",
     type_selector: str = "",
     type_text: str = "",
     timeout_seconds: int = 45,
 ) -> Dict[str, Any]:
-    project_root = _project_root()
-    desktop_root = project_root / "desktop"
-    task_script = desktop_root / "browser_task.js"
-    if not task_script.exists():
-        raise RuntimeError("Missing desktop/browser_task.js for browser capture.")
+    from server_modules.browser_engine import BrowserEngine
 
-    task_id = uuid.uuid4().hex
-    payload_path = desktop_root / f".browser-task-payload-{task_id}.json"
-    output_path = desktop_root / f".browser-task-output-{task_id}.json"
-    payload = {
-        "mode": "capture_page",
-        "url": url,
-        "screenshotPath": str(screenshot_target),
-        "downloadDir": str(download_dir) if download_dir else "",
-        "sessionProfile": session_profile,
-        "browserActions": browser_actions or [],
-        "waitForSelector": wait_for_selector,
-        "clickSelector": click_selector,
-        "typeSelector": type_selector,
-        "typeText": type_text,
-        "timeoutMs": timeout_seconds * 1000,
-        "settleMs": 1200,
-    }
-    payload_path.write_text(json.dumps(payload), encoding="utf-8")
-    if output_path.exists():
-        output_path.unlink()
-    command = electron_command(project_root) + [str(task_script), "--payload", str(payload_path), "--output", str(output_path)]
-    completed = subprocess.run(
-        command,
-        cwd=str(desktop_root),
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds + 10,
-        check=False,
-    )
-    try:
-        if completed.returncode != 0:
-            message = _bounded_text(completed.stderr or completed.stdout or "Browser capture failed.", 1000)
-            raise RuntimeError(message)
-        if not output_path.exists():
-            raise RuntimeError("Browser capture did not produce output metadata.")
-        result = json.loads(output_path.read_text(encoding="utf-8"))
-        if not isinstance(result, dict) or not result.get("ok"):
-            raise RuntimeError("Browser capture returned an invalid result.")
-        return result
-    finally:
-        try:
-            payload_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        try:
-            output_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+    project_root = _project_root()
+    if expected_execution_binding:
+        current_execution_binding = _browser_execution_binding(project_root, browser_plan_hash, session_profile)
+        if not local_operator_execution_binding_matches(expected_execution_binding, current_execution_binding):
+            raise RuntimeError("Browser execution binding drifted after approval.")
+
+    normalized_actions = list(browser_actions or [])
+    if wait_for_selector:
+        normalized_actions.insert(0, {"action": "wait", "selector": wait_for_selector})
+    if type_selector or type_text.strip():
+        normalized_actions.append({"action": "type", "selector": type_selector, "text": type_text})
+    if click_selector:
+        normalized_actions.append({"action": "click", "selector": click_selector})
+
+    async def _capture() -> Dict[str, Any]:
+        engine = BrowserEngine()
+        final_url = str(url or "").strip()
+        if browser_checkpoint and str(browser_checkpoint.get("current_url") or "").strip():
+            final_url = str(browser_checkpoint.get("current_url") or "").strip()
+        await engine.navigate(final_url)
+
+        action_results: List[Dict[str, Any]] = []
+        paused = False
+        pause_reason = ""
+        pause_label = ""
+        next_action_index = max(0, int(resume_from_action_index or 0))
+
+        for index, action in enumerate(normalized_actions[next_action_index:], start=next_action_index):
+            action_name = _normalize_action_id(action.get("action"))
+            selector = str(action.get("selector") or "").strip()
+            frame = str(action.get("frame") or "").strip()
+            label = str(action.get("label") or "").strip()
+            tab_value = str(action.get("tab") or "").strip()
+            if action_name == "wait":
+                page = await engine._active_page()
+                await page.wait_for_selector(selector, timeout=max(1000, int(action.get("ms") or timeout_seconds * 1000)))
+                action_results.append({"action": "wait", "selector": selector, "frame": frame, "tab": tab_value, "label": label})
+            elif action_name == "type":
+                result = await engine.fill(selector, str(action.get("text") or ""))
+                action_results.append({"action": "type", "selector": selector, "frame": frame, "tab": tab_value, "text": result.get("value")})
+            elif action_name == "click":
+                result = await engine.click(selector)
+                action_results.append({"action": "click", "selector": selector, "frame": frame, "tab": tab_value, "text": result.get("element_text")})
+            elif action_name == "navigate":
+                nav = await engine.navigate(str(action.get("url") or "").strip())
+                action_results.append({"action": "navigate", "url": nav.get("url"), "tab": tab_value})
+            elif action_name == "sleep":
+                await asyncio.sleep(max(0, min(int(action.get("ms") or 0), 10000)) / 1000.0)
+                action_results.append({"action": "sleep", "ms": int(action.get("ms") or 0)})
+            elif action_name == "select":
+                result = await engine.select(selector, str(action.get("value") or ""))
+                action_results.append({"action": "select", "selector": selector, "value": result.get("value"), "tab": tab_value})
+            elif action_name == "upload":
+                upload_paths = [str(item).strip() for item in action.get("paths", []) if str(item).strip()]
+                if not upload_paths and str(action.get("path") or "").strip():
+                    upload_paths = [str(action.get("path") or "").strip()]
+                result = await engine.upload_files(selector, upload_paths)
+                action_results.append({"action": "upload", "selector": selector, "paths": result.get("paths"), "tab": tab_value})
+            elif action_name == "extract":
+                extracted = await engine.extract_text(selector or None)
+                action_results.append({"action": "extract", "selector": selector, "text": _bounded_text(extracted, 500), "tab": tab_value})
+            elif action_name == "open_tab":
+                tab_id = await engine.new_tab(str(action.get("url") or "").strip() or None)
+                action_results.append({"action": "open_tab", "tab": str(tab_id), "url": str(action.get("url") or "").strip()})
+            elif action_name == "switch_tab":
+                await engine.switch_tab(int(tab_value))
+                action_results.append({"action": "switch_tab", "tab": tab_value})
+            elif action_name == "close_tab":
+                await engine.close_tab(int(tab_value))
+                action_results.append({"action": "close_tab", "tab": tab_value})
+            elif action_name == "pause_for_human":
+                paused = True
+                pause_reason = str(action.get("prompt") or "human_unblock_required").strip() or "human_unblock_required"
+                pause_label = label or "Continue browser task"
+                next_action_index = index
+                break
+            next_action_index = index + 1
+
+        state = await engine.get_page_state()
+        links = await engine.list_links()
+        shot_path = await engine.screenshot()
+        screenshot_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(shot_path, screenshot_target)
+        tab_snapshots: List[Dict[str, Any]] = []
+        for tab_id, page in list(engine._tabs.items()):
+            if page is None or page.is_closed():
+                continue
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            tab_snapshots.append(
+                {
+                    "tabId": str(tab_id),
+                    "url": str(page.url or "").strip(),
+                    "title": title,
+                    "active": tab_id == engine._active_tab_id,
+                }
+            )
+        checkpoint_payload = {
+            "current_url": state.get("url"),
+            "next_action_index": next_action_index,
+            "tabs": tab_snapshots,
+        }
+        return {
+            "ok": True,
+            "finalUrl": state.get("url"),
+            "title": state.get("title"),
+            "textPreview": state.get("text_preview"),
+            "links": links,
+            "downloads": [],
+            "tabs": tab_snapshots,
+            "consoleEntries": [],
+            "networkFailures": [],
+            "roleSnapshot": state.get("interactive_elements"),
+            "accessibilitySnapshot": {"interactive_elements": state.get("interactive_elements")},
+            "paused": paused,
+            "pauseReason": pause_reason,
+            "pauseLabel": pause_label,
+            "browserCheckpoint": checkpoint_payload,
+            "actionResults": action_results,
+        }
+
+    return _run_async_value(_capture())
 
 
 def _normalize_browser_actions(operation: Dict[str, Any], root: Path) -> List[Dict[str, Any]]:
@@ -279,7 +444,7 @@ def _normalize_browser_actions(operation: Dict[str, Any], root: Path) -> List[Di
             if not isinstance(item, dict):
                 raise RuntimeError(f"Browser action {index + 1} must be an object.")
             action = _normalize_action_id(item.get("action"))
-            if action not in {"wait", "type", "click", "navigate", "sleep", "select", "upload", "extract", "open_tab", "switch_tab", "close_tab", "download", "open_popup"}:
+            if action not in {"wait", "type", "click", "navigate", "sleep", "select", "upload", "extract", "open_tab", "switch_tab", "close_tab", "download", "open_popup", "pause_for_human"}:
                 raise RuntimeError(f"Browser action {index + 1} is not supported.")
             selector = str(item.get("selector") or "").strip()
             text = str(item.get("text") or "")
@@ -290,6 +455,8 @@ def _normalize_browser_actions(operation: Dict[str, Any], root: Path) -> List[Di
             frame = str(item.get("frame") or item.get("frameSelector") or "").strip()
             tab = str(item.get("tab") or item.get("tabId") or "").strip()
             path = str(item.get("path") or item.get("file_path") or "").strip()
+            label = str(item.get("label") or "").strip()
+            prompt = str(item.get("prompt") or item.get("reason") or "").strip()
             paths_raw = item.get("paths")
             paths = [str(entry or "").strip() for entry in paths_raw] if isinstance(paths_raw, list) else []
             paths = [entry for entry in paths if entry]
@@ -330,6 +497,8 @@ def _normalize_browser_actions(operation: Dict[str, Any], root: Path) -> List[Di
                 "tab": tab,
                 "path": path,
                 "paths": paths,
+                "label": label,
+                "prompt": prompt,
             })
     if actions:
         return actions
@@ -373,13 +542,30 @@ def _browser_security_profile(session_profile: str, browser_actions: List[Dict[s
 
 def _browser_policy_gate(operation: Dict[str, Any], session_profile: str, browser_actions: List[Dict[str, Any]], browser_security_profile: str) -> None:
     permissions = operation.get("browser_permissions") if isinstance(operation.get("browser_permissions"), dict) else {}
+    metadata = operation.get("__metadata__") if isinstance(operation.get("__metadata__"), dict) else {}
     browser_allowed = bool(permissions.get("allow"))
     if (session_profile or browser_actions) and not browser_allowed:
         raise RuntimeError("Browser automation with session_profile or browser_actions requires browser_permissions.allow = true.")
     if browser_security_profile in {"authenticated_interactive", "authenticated_privileged"}:
-        raise RuntimeError(
-            "Session-backed interactive or privileged browser automation is not executable in local companion V1 without a reviewed higher-trust path."
+        expected_plan_hash = str(metadata.get("browser_immutable_plan_hash") or "").strip()
+        reviewed_approved = bool(metadata.get("browser_reviewed_approved"))
+        current_plan_hash = browser_automation_plan_hash(
+            [
+                {
+                    "tool": "browser_automation",
+                    "mode": str(operation.get("mode") or "capture_page").strip() or "capture_page",
+                    "url": str(operation.get("url") or "").strip(),
+                    "session_profile": session_profile,
+                    "browser_actions": browser_actions,
+                }
+            ]
         )
+        if not reviewed_approved or not expected_plan_hash:
+            raise RuntimeError(
+                "Session-backed interactive or privileged browser automation requires reviewed approval before local execution."
+            )
+        if current_plan_hash != expected_plan_hash:
+            raise RuntimeError("Browser execution plan drifted after approval.")
 
 
 def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any], root: Path, artifacts_root: Path) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -391,28 +577,89 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
         screenshot_target, report_target = _browser_capture_artifact_paths(run_id, op_index, operation, root, artifacts_root)
         download_dir = _browser_download_dir(run_id, op_index, artifacts_root)
         session_profile = str(operation.get("session_profile") or operation.get("sessionProfile") or "").strip()
+        checkpoint = operation.get("__browser_checkpoint__") if isinstance(operation.get("__browser_checkpoint__"), dict) else {}
+        metadata = operation.get("__metadata__") if isinstance(operation.get("__metadata__"), dict) else {}
         browser_actions = _normalize_browser_actions(operation, root)
         browser_security_profile = _browser_security_profile(session_profile, browser_actions)
         _browser_policy_gate(operation, session_profile, browser_actions, browser_security_profile)
+        resume_from_action_index = int(checkpoint.get("next_action_index") or 0) if checkpoint else 0
+        target_url = str(checkpoint.get("current_url") or url).strip() if checkpoint else url
+        current_plan_hash = browser_automation_plan_hash(
+            [
+                {
+                    "tool": "browser_automation",
+                    "mode": mode,
+                    "url": url,
+                    "session_profile": session_profile,
+                    "browser_actions": browser_actions,
+                }
+            ]
+        )
+        if browser_security_profile in {"authenticated_interactive", "authenticated_privileged"}:
+            expected_plan_hash = str(metadata.get("browser_immutable_plan_hash") or "").strip()
+            if not expected_plan_hash or current_plan_hash != expected_plan_hash:
+                raise RuntimeError("Browser execution plan drifted after approval.")
+        expected_execution_binding = (
+            metadata.get("browser_execution_binding")
+            if isinstance(metadata.get("browser_execution_binding"), dict)
+            else {}
+        )
+        current_execution_binding = _browser_execution_binding(_project_root(), current_plan_hash, session_profile)
+        if expected_execution_binding and not local_operator_execution_binding_matches(expected_execution_binding, current_execution_binding):
+            raise RuntimeError("Browser execution binding drifted after approval.")
         capture_result = _run_browser_capture_task(
-            url,
+            target_url,
             screenshot_target,
             session_profile=session_profile,
             download_dir=download_dir,
             browser_actions=browser_actions,
+            browser_checkpoint=checkpoint,
+            expected_execution_binding=expected_execution_binding,
+            browser_plan_hash=current_plan_hash,
+            resume_from_action_index=resume_from_action_index,
         )
         links = capture_result.get("links") if isinstance(capture_result.get("links"), list) else []
         downloads = capture_result.get("downloads") if isinstance(capture_result.get("downloads"), list) else []
+        tab_snapshots = capture_result.get("tabs") if isinstance(capture_result.get("tabs"), list) else []
+        console_entries = capture_result.get("consoleEntries") if isinstance(capture_result.get("consoleEntries"), list) else []
+        network_failures = capture_result.get("networkFailures") if isinstance(capture_result.get("networkFailures"), list) else []
+        role_snapshot = capture_result.get("roleSnapshot") if isinstance(capture_result.get("roleSnapshot"), list) else []
+        accessibility_snapshot = capture_result.get("accessibilitySnapshot") if isinstance(capture_result.get("accessibilitySnapshot"), dict) else {}
+        paused = bool(capture_result.get("paused"))
+        browser_checkpoint = capture_result.get("browserCheckpoint") if isinstance(capture_result.get("browserCheckpoint"), dict) else {}
+        pause_reason = str(capture_result.get("pauseReason") or "").strip()
+        pause_label = str(capture_result.get("pauseLabel") or "").strip()
         report_lines = [
-            f"URL: {capture_result.get('finalUrl') or url}",
+            f"URL: {capture_result.get('finalUrl') or target_url}",
             f"Title: {capture_result.get('title') or '-'}",
             f"Session profile: {session_profile or '-'}",
             f"Security profile: {browser_security_profile}",
             f"Screenshot: {_relative_to_root(screenshot_target, root)}",
-            "",
-            "Text preview:",
-            _bounded_text(capture_result.get("textPreview") or "", 2000),
         ]
+        if paused:
+            report_lines.extend(
+                [
+                    f"Pause reason: {pause_reason or 'human_unblock_required'}",
+                    f"Resume from action index: {browser_checkpoint.get('next_action_index')}",
+                ]
+            )
+        if tab_snapshots:
+            report_lines.extend(["", "Tabs:"])
+            for item in tab_snapshots[:20]:
+                if not isinstance(item, dict):
+                    continue
+                report_lines.append(
+                    f"- {str(item.get('tabId') or item.get('tab_id') or '').strip() or 'tab'}"
+                    f"{' [active]' if bool(item.get('active')) else ''}"
+                    f" -> {_bounded_text(str(item.get('url') or '').strip(), 240)}"
+                )
+        report_lines.extend(
+            [
+                "",
+                "Text preview:",
+                _bounded_text(capture_result.get("textPreview") or "", 2000),
+            ]
+        )
         action_results = capture_result.get("actionResults") if isinstance(capture_result.get("actionResults"), list) else []
         if action_results:
             report_lines.extend(["", "Action results:"])
@@ -461,16 +708,34 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
                 href = str(item.get("href") or "").strip()
                 text = str(item.get("text") or "").strip()
                 report_lines.append(f"- {href}{f' | {text}' if text else ''}")
+        if network_failures:
+            report_lines.extend(["", "Network failures:"])
+            for item in network_failures[:20]:
+                if not isinstance(item, dict):
+                    continue
+                report_lines.append(
+                    f"- {str(item.get('tab') or '').strip() or 'tab'}"
+                    f" -> {_bounded_text(str(item.get('url') or item.get('errorDescription') or item.get('error') or '').strip(), 240)}"
+                )
+        if console_entries:
+            report_lines.extend(["", "Console events:"])
+            for item in console_entries[:20]:
+                if not isinstance(item, dict):
+                    continue
+                report_lines.append(
+                    f"- {str(item.get('tab') or '').strip() or 'tab'}"
+                    f" -> {_bounded_text(str(item.get('message') or '').strip(), 240)}"
+                )
         report_target.write_text("\n".join(report_lines).strip(), encoding="utf-8")
         action = {
             "step_index": op_index,
             "step_number": op_index + 1,
             "tool": "browser_automation",
-            "status": "completed",
+            "status": "waiting_for_input" if paused else "completed",
             "summary": _operation_summary(operation, op_index),
             "action": "browser_automation",
             "mode": mode,
-            "url": str(capture_result.get("finalUrl") or url),
+            "url": str(capture_result.get("finalUrl") or target_url),
             "title": str(capture_result.get("title") or ""),
             "text_preview": _bounded_text(capture_result.get("textPreview") or "", 2000),
             "links_count": len(links),
@@ -480,6 +745,15 @@ def _run_browser_operation(run_id: str, op_index: int, operation: Dict[str, Any]
             "browser_security_profile": browser_security_profile,
             "browser_actions": browser_actions,
             "action_results": action_results,
+            "pause_reason": pause_reason or None,
+            "pause_label": pause_label or None,
+            "browser_checkpoint": browser_checkpoint if paused else None,
+            "tabs": tab_snapshots,
+            "console_entries": console_entries,
+            "network_failures": network_failures,
+            "role_snapshot": role_snapshot,
+            "accessibility_snapshot": accessibility_snapshot,
+            "browser_execution_binding": current_execution_binding,
             "downloads": [
                 {
                     "tab": str(item.get("tab") or "").strip(),
@@ -728,7 +1002,7 @@ def _is_text_file(path: Path) -> bool:
     return suffix in LOCAL_EXECUTION_TEXT_EXTENSIONS or not suffix
 
 
-def _parse_operations(pack_inputs: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], bool]:
+def _parse_operations(pack_inputs: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict[str, Any]], bool]:
     raw_ops = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
     continue_on_error = bool(pack_inputs.get("continue_on_error"))
     operations: List[Dict[str, Any]] = []
@@ -753,8 +1027,9 @@ def _parse_operations(pack_inputs: Dict[str, Any]) -> Tuple[List[Dict[str, Any]]
             operations.append(candidate)
     if not operations:
         raise RuntimeError("local-execution-v1 requires at least one operation.")
-    if len(operations) > 12:
-        raise RuntimeError("local-execution-v1 supports at most 12 operations per run.")
+    operation_limit = _resolved_local_operation_limit(metadata)
+    if len(operations) > operation_limit:
+        raise RuntimeError(_local_operation_limit_message(operation_limit))
     return operations, continue_on_error
 
 
@@ -1038,7 +1313,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
     run_id = str(run.get("run_id") or uuid.uuid4()).strip()
     root = _local_execution_root()
     artifacts_root = _artifact_root(root)
-    operations, continue_on_error = _parse_operations(pack_inputs)
+    operations, continue_on_error = _parse_operations(pack_inputs, metadata)
     requested_tools = [_normalize_action_id(item.get("tool") or item.get("action")) for item in operations]
     requested_tools = [tool for tool in requested_tools if tool]
     _policy_gate(metadata, requested_tools)
@@ -1052,6 +1327,14 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         operation_row = dict(operation)
         operation_row["__step_index__"] = index
         operation_row["__execution_target__"] = metadata.get("execution_target") or "local_companion"
+        operation_row["__metadata__"] = metadata
+        operation_row["__browser_checkpoint__"] = (
+            run.get("browser_checkpoint")
+            if isinstance(run.get("browser_checkpoint"), dict)
+            else metadata.get("browser_checkpoint")
+            if isinstance(metadata.get("browser_checkpoint"), dict)
+            else {}
+        )
         tool_id = _normalize_action_id(operation_row.get("tool") or operation_row.get("action"))
         summary_label = _operation_summary(operation_row, index)
         try:
@@ -1080,7 +1363,42 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     "browser_security_profile": action.get("browser_security_profile"),
                 }
             )
+            if tool_id == "browser_automation" and str(action.get("status") or "").strip().lower() == "waiting_for_input":
+                summary = str(action.get("pause_label") or "Browser operator paused for human unblock.").strip()
+                data = {
+                    "pack_id": LOCAL_EXECUTION_PACK_ID,
+                    "status": "waiting_for_input",
+                    "summary": summary,
+                    "pause_reason": action.get("pause_reason") or "human_unblock_required",
+                    "browser_checkpoint": action.get("browser_checkpoint") if isinstance(action.get("browser_checkpoint"), dict) else None,
+                    "inputs": {
+                        "operations_requested": len(operations),
+                        "local_root": str(root),
+                        "continue_on_error": continue_on_error,
+                    },
+                    "outputs": {
+                        "operations_requested": len(operations),
+                        "operations_executed": len(outputs_actions),
+                        "outbound_actions": 0,
+                        "urgent_count": 1,
+                        "steps": steps,
+                        "actions": outputs_actions,
+                        "artifacts": outputs_artifacts,
+                        "errors": errors,
+                    },
+                    "next_steps": [
+                        "Complete the required login or CAPTCHA on the laptop.",
+                        "Resume the same run from the saved browser checkpoint.",
+                    ],
+                }
+                raise LocalExecutionPauseRequired(
+                    summary,
+                    data,
+                    browser_checkpoint=(action.get("browser_checkpoint") if isinstance(action.get("browser_checkpoint"), dict) else None),
+                )
         except Exception as exc:
+            if isinstance(exc, LocalExecutionPauseRequired):
+                raise
             error_row = {
                 "tool": tool_id or "unknown",
                 "message": str(exc),

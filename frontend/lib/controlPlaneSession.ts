@@ -32,7 +32,7 @@ function isSignInRoute(): boolean {
   return String(window.location.pathname || '').startsWith('/sign-in');
 }
 
-function controlPlaneSignInUrl(): string {
+export function controlPlaneSignInUrl(): string {
   if (typeof window === 'undefined') return '/sign-in';
   let returnTo = currentReturnPath();
   if (isSignInRoute()) {
@@ -119,6 +119,11 @@ async function openControlPlaneBrowserSignIn(): Promise<void> {
   }
 
   return controlPlaneBrowserSignInPromise;
+}
+
+export async function promptControlPlaneSignIn(): Promise<void> {
+  clearControlPlaneFailure();
+  return openControlPlaneBrowserSignIn();
 }
 
 export function readControlPlaneFailure(): { message: string; at: number } | null {

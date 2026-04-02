@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
 import { ensureControlPlaneSession, readControlPlaneFailure } from '@/lib/controlPlaneSession';
 
@@ -61,6 +61,14 @@ type PlatformShellStatus = {
   authMessage: string | null;
 };
 
+export type PlatformChatTopControls = {
+  assistantLabel: string;
+  onOpenContext: () => void;
+  artifactCount: number;
+  artifactsOpen: boolean;
+  onToggleArtifacts: () => void;
+} | null;
+
 type PlatformShellContextValue = {
   accessMode: PlatformAccessMode;
   setAccessMode: (mode: PlatformAccessMode) => void;
@@ -69,6 +77,8 @@ type PlatformShellContextValue = {
   setInspectPanelOpen: (open: boolean) => void;
   inspectState: PlatformInspectState;
   setInspectState: (state: PlatformInspectState) => void;
+  chatTopControls: PlatformChatTopControls;
+  setChatTopControls: (state: PlatformChatTopControls) => void;
 };
 
 const ACCESS_MODE_STORAGE_KEY = 'orion.platform.access.mode.v1';
@@ -125,6 +135,16 @@ function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStat
     && left.authMessage === right.authMessage;
 }
 
+function areChatTopControlsEqual(left: PlatformChatTopControls, right: PlatformChatTopControls): boolean {
+  if (left === right) return true;
+  if (!left || !right) return left === right;
+  return left.assistantLabel === right.assistantLabel
+    && left.artifactCount === right.artifactCount
+    && left.artifactsOpen === right.artifactsOpen
+    && left.onOpenContext === right.onOpenContext
+    && left.onToggleArtifacts === right.onToggleArtifacts;
+}
+
 function isAuthRequiredError(message: string): boolean {
   const lower = String(message || '').trim().toLowerCase();
   if (!lower) return false;
@@ -136,6 +156,11 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
   const [status, setStatus] = useState<PlatformShellStatus>(INITIAL_STATUS);
   const [inspectPanelOpen, setInspectPanelOpen] = useState(false);
   const [inspectState, setInspectState] = useState<PlatformInspectState>(null);
+  const [chatTopControls, setRawChatTopControls] = useState<PlatformChatTopControls>(null);
+
+  const setChatTopControls = useCallback((next: PlatformChatTopControls) => {
+    setRawChatTopControls((current) => (areChatTopControlsEqual(current, next) ? current : next));
+  }, []);
 
   useEffect(() => {
     try {
@@ -248,8 +273,10 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
       setInspectPanelOpen,
       inspectState,
       setInspectState,
+      chatTopControls,
+      setChatTopControls,
     }),
-    [accessMode, inspectPanelOpen, inspectState, status],
+    [accessMode, chatTopControls, inspectPanelOpen, inspectState, status],
   );
 
   return <PlatformShellContext.Provider value={value}>{children}</PlatformShellContext.Provider>;

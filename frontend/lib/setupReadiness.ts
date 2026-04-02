@@ -76,7 +76,7 @@ export function buildSetupConnectAiHref(returnTo = DEFAULT_RETURN_TO): string {
 }
 
 export function buildSetupConnectorsHref(returnTo = DEFAULT_RETURN_TO): string {
-  return `/credentials?onboarding=1&return_to=${encodeURIComponent(buildSetupRoute(returnTo, 'finish'))}`;
+  return `/connectors?onboarding=1&return_to=${encodeURIComponent(buildSetupRoute(returnTo, 'finish'))}`;
 }
 
 export function buildSetupCompleteHomeHref(): string {

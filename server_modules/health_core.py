@@ -94,6 +94,36 @@ async def memory_upsert(body: MemoryUpsertRequest):
         "expires_at": expires_at,
     }
 
+
+def _direct_chat_session_manager_snapshot() -> Dict[str, Any]:
+    enabled = bool(globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER"))
+    base = {
+        "enabled": enabled,
+        "runtime_cache": {
+            "active_sessions": 0,
+            "idle_ttl_ms": 0,
+            "evicted_total": 0,
+        },
+        "turns": {
+            "active": 0,
+            "queue_depth": 0,
+        },
+        "interrupted_stale_sessions": 0,
+        "errors_by_code": {},
+    }
+    if not enabled:
+        return base
+    try:
+        from server_modules.session_manager.manager import get_default_session_manager
+
+        snapshot = get_default_session_manager(db_path=Path(ORION_RUNTIME_STATE_DB)).get_observability_snapshot(enabled=True)
+        return snapshot if isinstance(snapshot, dict) else base
+    except Exception as exc:
+        return {
+            **base,
+            "error": str(exc).strip() or "session_manager_unavailable",
+        }
+
 async def health():
     runtime_contract = _runtime_contract_payload()
     openai_key, openai_env_source = _openai_env_bearer_with_source()
@@ -126,6 +156,7 @@ async def health():
     default_tool_policy = tool_policy_snapshot()
     memory_snapshot = _memory_health_snapshot()
     runtime_skills = _runtime_skills_snapshot()
+    direct_chat_session_manager = _direct_chat_session_manager_snapshot()
     ok = bool(openai_probe["openai_key_valid"]) and runtime_valid
     return {
         "ok": ok,
@@ -242,6 +273,15 @@ async def health():
         "runtime_skills_automation_defaults_count": len(((runtime_skills.get("bindings") or {}).get("automation_defaults") or [])),
         "runtime_skills_updated_at": runtime_skills.get("updated_at"),
         "idempotency_file": str(ORION_IDEMPOTENCY_FILE),
+        "direct_chat_session_manager_enabled": bool(direct_chat_session_manager.get("enabled")),
+        "direct_chat_session_manager_active_sessions": int(((direct_chat_session_manager.get("runtime_cache") or {}).get("active_sessions") or 0)),
+        "direct_chat_session_manager_idle_ttl_ms": int(((direct_chat_session_manager.get("runtime_cache") or {}).get("idle_ttl_ms") or 0)),
+        "direct_chat_session_manager_evicted_total": int(((direct_chat_session_manager.get("runtime_cache") or {}).get("evicted_total") or 0)),
+        "direct_chat_session_manager_active_turns": int(((direct_chat_session_manager.get("turns") or {}).get("active") or 0)),
+        "direct_chat_session_manager_queue_depth": int(((direct_chat_session_manager.get("turns") or {}).get("queue_depth") or 0)),
+        "direct_chat_session_manager_interrupted_stale_sessions": int(direct_chat_session_manager.get("interrupted_stale_sessions") or 0),
+        "direct_chat_session_manager_errors_by_code": direct_chat_session_manager.get("errors_by_code") if isinstance(direct_chat_session_manager.get("errors_by_code"), dict) else {},
+        "direct_chat_session_manager": direct_chat_session_manager,
         "vault_file": str(VAULT_FILE),
         "vault_key_file": str(VAULT_KEY_FILE),
         "vault_cipher_prefix": ORION_VAULT_CIPHER_PREFIX,

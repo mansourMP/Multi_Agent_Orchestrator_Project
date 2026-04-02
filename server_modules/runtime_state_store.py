@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 import sqlite3
 
 
@@ -28,14 +29,19 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     conn.execute("PRAGMA foreign_keys=ON;")
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_runtime_state_db(db_path: Path) -> None:
@@ -128,6 +134,59 @@ def init_runtime_state_db(db_path: Path) -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_stream_state (
+                session_id TEXT PRIMARY KEY,
+                thread_id TEXT,
+                request_id TEXT,
+                workspace_id TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_event_seq INTEGER NOT NULL DEFAULT 0,
+                partial_text TEXT NOT NULL DEFAULT '',
+                final_payload_json TEXT,
+                error_text TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_sessions (
+                session_id TEXT PRIMARY KEY,
+                actor_key TEXT NOT NULL,
+                workspace_id TEXT,
+                user_id TEXT,
+                status TEXT NOT NULL,
+                runtime_options_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_touched_at TEXT NOT NULL,
+                last_error TEXT,
+                meta_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_session_turns (
+                turn_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                input_json TEXT NOT NULL,
+                final_payload_json TEXT,
+                error_text TEXT,
+                metrics_json TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES runtime_sessions(session_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_runs_sort_ts ON live_runs(sort_ts DESC)"
         )
         conn.execute(
@@ -163,7 +222,461 @@ def init_runtime_state_db(db_path: Path) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_channel_events_run ON channel_events(run_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_stream_state_updated ON chat_stream_state(updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_stream_state_status ON chat_stream_state(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_sessions_actor_key ON runtime_sessions(actor_key)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_sessions_status ON runtime_sessions(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_sessions_touched ON runtime_sessions(last_touched_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_session_turns_session ON runtime_session_turns(session_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_session_turns_status ON runtime_session_turns(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runtime_session_turns_updated ON runtime_session_turns(updated_at DESC)"
+        )
         conn.commit()
+
+
+def _json_blob(value: Any, *, fallback: str = "{}") -> str:
+    if isinstance(value, str):
+        token = value.strip()
+        return token or fallback
+    try:
+        return json.dumps(value if value is not None else json.loads(fallback), ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return fallback
+
+
+def _parse_json_blob(raw: Any, fallback: Any) -> Any:
+    if not isinstance(raw, str) or not raw.strip():
+        return fallback
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return fallback
+    return parsed if parsed is not None else fallback
+
+
+def _normalize_chat_stream_state_row(row: sqlite3.Row) -> Dict[str, Any]:
+    final_payload = _parse_json_blob(row["final_payload_json"], None)
+    if not isinstance(final_payload, dict):
+        final_payload = None
+    metadata = _parse_json_blob(row["metadata_json"], {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return {
+        "session_id": str(row["session_id"] or "").strip(),
+        "thread_id": str(row["thread_id"] or "").strip(),
+        "request_id": str(row["request_id"] or "").strip(),
+        "workspace_id": str(row["workspace_id"] or "").strip(),
+        "status": str(row["status"] or "").strip(),
+        "created_at": str(row["created_at"] or "").strip(),
+        "updated_at": str(row["updated_at"] or "").strip(),
+        "last_event_seq": int(row["last_event_seq"] or 0),
+        "partial_text": str(row["partial_text"] or ""),
+        "final_payload": final_payload,
+        "error_text": str(row["error_text"] or "").strip(),
+        "metadata": metadata,
+    }
+
+
+def _normalize_runtime_session_row(row: sqlite3.Row) -> Dict[str, Any]:
+    runtime_options = _parse_json_blob(row["runtime_options_json"], {})
+    if not isinstance(runtime_options, dict):
+        runtime_options = {}
+    meta = _parse_json_blob(row["meta_json"], {})
+    if not isinstance(meta, dict):
+        meta = {}
+    return {
+        "session_id": str(row["session_id"] or "").strip(),
+        "actor_key": str(row["actor_key"] or "").strip(),
+        "workspace_id": str(row["workspace_id"] or "").strip(),
+        "user_id": str(row["user_id"] or "").strip(),
+        "status": str(row["status"] or "").strip(),
+        "runtime_options": runtime_options,
+        "created_at": str(row["created_at"] or "").strip(),
+        "updated_at": str(row["updated_at"] or "").strip(),
+        "last_touched_at": str(row["last_touched_at"] or "").strip(),
+        "last_error": str(row["last_error"] or "").strip(),
+        "meta": meta,
+    }
+
+
+def _normalize_runtime_session_turn_row(row: sqlite3.Row) -> Dict[str, Any]:
+    input_payload = _parse_json_blob(row["input_json"], {})
+    if not isinstance(input_payload, dict):
+        input_payload = {}
+    final_payload = _parse_json_blob(row["final_payload_json"], None)
+    if not isinstance(final_payload, dict):
+        final_payload = None
+    metrics = _parse_json_blob(row["metrics_json"], {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+    return {
+        "turn_id": str(row["turn_id"] or "").strip(),
+        "session_id": str(row["session_id"] or "").strip(),
+        "request_id": str(row["request_id"] or "").strip(),
+        "status": str(row["status"] or "").strip(),
+        "started_at": str(row["started_at"] or "").strip(),
+        "updated_at": str(row["updated_at"] or "").strip(),
+        "completed_at": str(row["completed_at"] or "").strip(),
+        "input": input_payload,
+        "final_payload": final_payload,
+        "error_text": str(row["error_text"] or "").strip(),
+        "metrics": metrics,
+    }
+
+
+def upsert_runtime_session(db_path: Path, item: Dict[str, Any]) -> None:
+    session_id = str(item.get("session_id") or "").strip()
+    if not session_id:
+        return
+    created_at = str(item.get("created_at") or "").strip() or _utc_now_iso()
+    updated_at = str(item.get("updated_at") or "").strip() or created_at
+    last_touched_at = str(item.get("last_touched_at") or "").strip() or updated_at
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_sessions (
+                session_id, actor_key, workspace_id, user_id, status,
+                runtime_options_json, created_at, updated_at, last_touched_at,
+                last_error, meta_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                actor_key = excluded.actor_key,
+                workspace_id = excluded.workspace_id,
+                user_id = excluded.user_id,
+                status = excluded.status,
+                runtime_options_json = excluded.runtime_options_json,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                last_touched_at = excluded.last_touched_at,
+                last_error = excluded.last_error,
+                meta_json = excluded.meta_json
+            """,
+            (
+                session_id,
+                str(item.get("actor_key") or "").strip() or session_id,
+                str(item.get("workspace_id") or "").strip(),
+                str(item.get("user_id") or "").strip(),
+                str(item.get("status") or "ready").strip() or "ready",
+                _json_blob(item.get("runtime_options") if isinstance(item.get("runtime_options"), dict) else {}, fallback="{}"),
+                created_at,
+                updated_at,
+                last_touched_at,
+                str(item.get("last_error") or "").strip() or None,
+                _json_blob(item.get("meta") if isinstance(item.get("meta"), dict) else {}, fallback="{}"),
+            ),
+        )
+        conn.commit()
+
+
+def get_runtime_session(db_path: Path, session_id: str) -> Optional[Dict[str, Any]]:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT session_id, actor_key, workspace_id, user_id, status,
+                   runtime_options_json, created_at, updated_at, last_touched_at,
+                   last_error, meta_json
+            FROM runtime_sessions
+            WHERE session_id = ?
+            """,
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _normalize_runtime_session_row(row)
+
+
+def list_runtime_sessions(
+    db_path: Path,
+    *,
+    statuses: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    params: List[Any] = []
+    query = """
+        SELECT session_id, actor_key, workspace_id, user_id, status,
+               runtime_options_json, created_at, updated_at, last_touched_at,
+               last_error, meta_json
+        FROM runtime_sessions
+    """
+    normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+    if normalized_statuses:
+        placeholders = ", ".join("?" for _ in normalized_statuses)
+        query += f"\nWHERE status IN ({placeholders})"
+        params.extend(normalized_statuses)
+    query += "\nORDER BY last_touched_at DESC"
+    if isinstance(limit, int) and limit > 0:
+        query += "\nLIMIT ?"
+        params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_runtime_session_row(row) for row in rows]
+
+
+def delete_runtime_session(db_path: Path, session_id: str) -> None:
+    token = str(session_id or "").strip()
+    if not token:
+        return
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM runtime_sessions WHERE session_id = ?", (token,))
+        conn.commit()
+
+
+def upsert_runtime_session_turn(db_path: Path, item: Dict[str, Any]) -> None:
+    turn_id = str(item.get("turn_id") or "").strip()
+    session_id = str(item.get("session_id") or "").strip()
+    request_id = str(item.get("request_id") or "").strip()
+    if not turn_id or not session_id or not request_id:
+        return
+    started_at = str(item.get("started_at") or "").strip() or _utc_now_iso()
+    updated_at = str(item.get("updated_at") or "").strip() or started_at
+    completed_at = str(item.get("completed_at") or "").strip() or None
+    final_payload = item.get("final_payload")
+    final_payload_json = (
+        _json_blob(final_payload, fallback="{}")
+        if isinstance(final_payload, dict)
+        else (str(item.get("final_payload_json") or "").strip() or None)
+    )
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_session_turns (
+                turn_id, session_id, request_id, status, started_at,
+                updated_at, completed_at, input_json, final_payload_json,
+                error_text, metrics_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(turn_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                request_id = excluded.request_id,
+                status = excluded.status,
+                started_at = excluded.started_at,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
+                input_json = excluded.input_json,
+                final_payload_json = excluded.final_payload_json,
+                error_text = excluded.error_text,
+                metrics_json = excluded.metrics_json
+            """,
+            (
+                turn_id,
+                session_id,
+                request_id,
+                str(item.get("status") or "running").strip() or "running",
+                started_at,
+                updated_at,
+                completed_at,
+                _json_blob(item.get("input") if isinstance(item.get("input"), dict) else {}, fallback="{}"),
+                final_payload_json,
+                str(item.get("error_text") or "").strip() or None,
+                _json_blob(item.get("metrics") if isinstance(item.get("metrics"), dict) else {}, fallback="{}"),
+            ),
+        )
+        conn.commit()
+
+
+def get_runtime_session_turn(db_path: Path, turn_id: str) -> Optional[Dict[str, Any]]:
+    token = str(turn_id or "").strip()
+    if not token:
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT turn_id, session_id, request_id, status, started_at,
+                   updated_at, completed_at, input_json, final_payload_json,
+                   error_text, metrics_json
+            FROM runtime_session_turns
+            WHERE turn_id = ?
+            """,
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _normalize_runtime_session_turn_row(row)
+
+
+def list_runtime_session_turns(
+    db_path: Path,
+    *,
+    session_id: str = "",
+    statuses: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    params: List[Any] = []
+    clauses: List[str] = []
+    session_token = str(session_id or "").strip()
+    if session_token:
+        clauses.append("session_id = ?")
+        params.append(session_token)
+    normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
+    if normalized_statuses:
+        placeholders = ", ".join("?" for _ in normalized_statuses)
+        clauses.append(f"status IN ({placeholders})")
+        params.extend(normalized_statuses)
+    query = """
+        SELECT turn_id, session_id, request_id, status, started_at,
+               updated_at, completed_at, input_json, final_payload_json,
+               error_text, metrics_json
+        FROM runtime_session_turns
+    """
+    if clauses:
+        query += "\nWHERE " + " AND ".join(clauses)
+    query += "\nORDER BY updated_at DESC"
+    if isinstance(limit, int) and limit > 0:
+        query += "\nLIMIT ?"
+        params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_runtime_session_turn_row(row) for row in rows]
+
+
+def delete_runtime_session_turn(db_path: Path, turn_id: str) -> None:
+    token = str(turn_id or "").strip()
+    if not token:
+        return
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM runtime_session_turns WHERE turn_id = ?", (token,))
+        conn.commit()
+
+
+def upsert_chat_stream_state(db_path: Path, item: Dict[str, Any]) -> None:
+    session_id = str(item.get("session_id") or "").strip()
+    if not session_id:
+        return
+    created_at = str(item.get("created_at") or "").strip() or _utc_now_iso()
+    updated_at = str(item.get("updated_at") or "").strip() or created_at
+    final_payload = item.get("final_payload")
+    final_payload_json = None
+    if isinstance(final_payload, dict):
+        final_payload_json = _json_blob(final_payload, fallback="{}")
+    else:
+        raw_payload = str(item.get("final_payload_json") or "").strip()
+        final_payload_json = raw_payload or None
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_stream_state (
+                session_id, thread_id, request_id, workspace_id, status,
+                created_at, updated_at, last_event_seq, partial_text,
+                final_payload_json, error_text, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                thread_id = excluded.thread_id,
+                request_id = excluded.request_id,
+                workspace_id = excluded.workspace_id,
+                status = excluded.status,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                last_event_seq = excluded.last_event_seq,
+                partial_text = excluded.partial_text,
+                final_payload_json = excluded.final_payload_json,
+                error_text = excluded.error_text,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                session_id,
+                str(item.get("thread_id") or "").strip(),
+                str(item.get("request_id") or "").strip(),
+                str(item.get("workspace_id") or "").strip(),
+                str(item.get("status") or "active").strip() or "active",
+                created_at,
+                updated_at,
+                max(0, int(item.get("last_event_seq") or 0)),
+                str(item.get("partial_text") or ""),
+                final_payload_json,
+                str(item.get("error_text") or "").strip() or None,
+                _json_blob(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}, fallback="{}"),
+            ),
+        )
+        conn.commit()
+
+
+def get_chat_stream_state(db_path: Path, session_id: str) -> Optional[Dict[str, Any]]:
+    token = str(session_id or "").strip()
+    if not token:
+        return None
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT session_id, thread_id, request_id, workspace_id, status,
+                   created_at, updated_at, last_event_seq, partial_text,
+                   final_payload_json, error_text, metadata_json
+            FROM chat_stream_state
+            WHERE session_id = ?
+            """,
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _normalize_chat_stream_state_row(row)
+
+
+def list_chat_stream_states(
+    db_path: Path,
+    *,
+    statuses: Optional[List[str]] = None,
+    limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    params: List[Any] = []
+    query = """
+        SELECT session_id, thread_id, request_id, workspace_id, status,
+               created_at, updated_at, last_event_seq, partial_text,
+               final_payload_json, error_text, metadata_json
+        FROM chat_stream_state
+    """
+    normalized_statuses = [
+        str(item).strip()
+        for item in (statuses or [])
+        if str(item).strip()
+    ]
+    if normalized_statuses:
+        placeholders = ", ".join("?" for _ in normalized_statuses)
+        query += f"\nWHERE status IN ({placeholders})"
+        params.extend(normalized_statuses)
+    query += "\nORDER BY updated_at DESC"
+    if isinstance(limit, int) and limit > 0:
+        query += "\nLIMIT ?"
+        params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_normalize_chat_stream_state_row(row) for row in rows]
+
+
+def delete_expired_chat_stream_states(
+    db_path: Path,
+    *,
+    older_than_seconds: int,
+    now_ts: Optional[float] = None,
+) -> int:
+    ttl_seconds = max(1, int(older_than_seconds or 0))
+    cutoff = datetime.fromtimestamp(float(now_ts if now_ts is not None else time.time()) - ttl_seconds, timezone.utc)
+    cutoff_iso = cutoff.isoformat().replace("+00:00", "Z")
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM chat_stream_state WHERE updated_at < ?",
+            (cutoff_iso,),
+        )
+        conn.commit()
+        return int(cursor.rowcount or 0)
 
 
 def upsert_live_run_state(db_path: Path, item: Dict[str, Any]) -> None:
@@ -251,6 +764,48 @@ def list_live_run_states(db_path: Path, limit: Optional[int] = None) -> List[Dic
         except Exception:
             continue
     return out
+
+
+def mark_stale_chat_stream_sessions_interrupted(
+    db_path: Path,
+    *,
+    stale_before_ts: float,
+    error_text: str,
+) -> int:
+    interrupted = 0
+    for item in list_chat_stream_states(db_path, statuses=["active"]):
+        updated_ts = _parse_ts(item.get("updated_at"))
+        if updated_ts > float(stale_before_ts):
+            continue
+        item["status"] = "interrupted"
+        item["updated_at"] = _utc_now_iso()
+        item["error_text"] = str(error_text or "").strip()
+        item["last_event_seq"] = max(1, int(item.get("last_event_seq") or 0) + 1)
+        upsert_chat_stream_state(db_path, item)
+        interrupted += 1
+    return interrupted
+
+
+def delete_chat_stream_sessions_older_than(db_path: Path, *, older_than_ts: float) -> int:
+    deleted = 0
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT session_id, updated_at, created_at
+            FROM chat_stream_state
+            """
+        ).fetchall()
+        for row in rows:
+            reference = _parse_ts(row["updated_at"] or row["created_at"])
+            if reference > float(older_than_ts):
+                continue
+            session_id = str(row["session_id"] or "").strip()
+            if not session_id:
+                continue
+            conn.execute("DELETE FROM chat_stream_state WHERE session_id = ?", (session_id,))
+            deleted += 1
+        conn.commit()
+    return deleted
 
 
 def replace_local_runtime_state(

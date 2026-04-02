@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { API_BASE } from '@/lib/config';
 import { createWorkflow, deleteWorkflow, fetchWorkflows, getWorkflow, updateWorkflow } from '@/lib/api';
 import { useAsyncPageResource } from '@/hooks/pages/useAsyncPageResource';
@@ -19,34 +19,7 @@ export type WorkflowRecord = {
   };
 };
 
-const WORKFLOW_LIBRARY_CACHE_KEY = 'hekor.workflow-library.cache.v1';
-let workflowLibraryCache: WorkflowRecord[] | null = null;
 let workflowLibraryInFlight: Promise<WorkflowRecord[]> | null = null;
-
-function readWorkflowLibraryCache(): WorkflowRecord[] {
-  if (workflowLibraryCache) return workflowLibraryCache;
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.sessionStorage.getItem(WORKFLOW_LIBRARY_CACHE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    workflowLibraryCache = parsed as WorkflowRecord[];
-    return workflowLibraryCache;
-  } catch {
-    return [];
-  }
-}
-
-function persistWorkflowLibraryCache(next: WorkflowRecord[]) {
-  workflowLibraryCache = next;
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(WORKFLOW_LIBRARY_CACHE_KEY, JSON.stringify(next));
-  } catch {
-    // Ignore cache errors.
-  }
-}
 
 function formatApiError(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : '';
@@ -62,13 +35,11 @@ async function loadWorkflowLibrary(): Promise<WorkflowRecord[]> {
 
   workflowLibraryInFlight = (async () => {
     const data = await fetchWorkflows();
-    const next = Array.isArray(data)
+    return Array.isArray(data)
       ? (data as WorkflowRecord[])
       : Array.isArray((data as { items?: unknown[] } | null | undefined)?.items)
         ? (data as { items: WorkflowRecord[] }).items
         : [];
-    persistWorkflowLibraryCache(next);
-    return next;
   })();
 
   try {
@@ -95,12 +66,6 @@ export function useWorkflowLibrary() {
     formatError: formatLoadError,
     hasInitialData: false,
   });
-
-  useEffect(() => {
-    const cached = readWorkflowLibraryCache();
-    if (cached.length === 0) return;
-    setWorkflows((current) => (current.length > 0 ? current : cached));
-  }, [setWorkflows]);
 
   const search = usePageSearch<WorkflowRecord>({
     items: workflows,
@@ -158,11 +123,7 @@ export function useWorkflowLibrary() {
     try {
       setIsDeleting(true);
       await deleteWorkflow(deleteTarget.id);
-      setWorkflows((current) => {
-        const next = current.filter((workflow) => workflow.id !== deleteTarget.id);
-        persistWorkflowLibraryCache(next);
-        return next;
-      });
+      setWorkflows((current) => current.filter((workflow) => workflow.id !== deleteTarget.id));
       setDeleteTarget(null);
     } finally {
       setIsDeleting(false);

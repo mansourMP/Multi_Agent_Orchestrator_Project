@@ -17,7 +17,7 @@ from server_modules.url_security import obvious_private_url_reason
 
 EMPYRALIST_WORKFLOW_SCHEMA_VERSION = "empyralist.workflow.v2"
 
-WORKFLOW_NODE_TYPES: Set[str] = {"trigger", "agent", "tool", "decision", "human", "data", "subflow"}
+WORKFLOW_NODE_TYPES: Set[str] = {"trigger", "agent", "tool", "decision", "human", "data", "subflow", "loop"}
 TRIGGER_VARIANTS: Set[str] = {
     "connector_event",
     "schedule",
@@ -40,6 +40,7 @@ DECISION_VARIANTS: Set[str] = {"if_else", "classifier", "field_router"}
 HUMAN_VARIANTS: Set[str] = {"approval", "review", "wait_for_reply"}
 DATA_VARIANTS: Set[str] = {"transform", "compose", "validate"}
 SUBFLOW_VARIANTS: Set[str] = {"call_workflow"}
+LOOP_VARIANTS: Set[str] = {"for_each", "while", "repeat"}
 _BROWSER_INTERACTIVE_ACTIONS: Set[str] = {
     "type",
     "click",
@@ -375,6 +376,35 @@ def _default_node_config(node_type: str, variant: str, raw_node: Dict[str, Any],
             "mode": _clean_text(raw_node.get("config", {}).get("mode") if _is_record(raw_node.get("config")) else "sync", 40) or "sync",
             "input_mapping": raw_node.get("config", {}).get("input_mapping") if _is_record(raw_node.get("config")) and _is_record(raw_node.get("config", {}).get("input_mapping")) else {},
         }
+    if node_type == "loop":
+        raw_config = raw_node.get("config") if _is_record(raw_node.get("config")) else {}
+        body = raw_config.get("body") if _is_record(raw_config.get("body")) else {}
+        return {
+            "array_source": _clean_text(raw_config.get("array_source"), 600),
+            "item_variable_name": _clean_text(raw_config.get("item_variable_name"), 80) or "item",
+            "parallel": bool(raw_config.get("parallel")),
+            "max_iterations": raw_config.get("max_iterations"),
+            "continue_on_error": bool(raw_config.get("continue_on_error")),
+            "condition": raw_config.get("condition") if _is_record(raw_config.get("condition")) else {},
+            "expression": _clean_text(raw_config.get("expression"), 1000),
+            "count": raw_config.get("count"),
+            "count_source": _clean_text(raw_config.get("count_source"), 600),
+            "body": {
+                "version": str(body.get("version") or EMPYRALIST_WORKFLOW_SCHEMA_VERSION).strip() or EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+                "nodes": body.get("nodes") if isinstance(body.get("nodes"), list) else [
+                    {
+                        "id": "loop_body_data_1",
+                        "type": "data",
+                        "variant": "transform",
+                        "config": {
+                            "mapping": "Transform the current loop input into the next step payload.",
+                            "template": "",
+                        },
+                    }
+                ],
+                "edges": body.get("edges") if isinstance(body.get("edges"), list) else [],
+            },
+        }
     return {}
 
 
@@ -390,6 +420,9 @@ def _compatibility_fields(node_type: str, variant: str, config: Dict[str, Any], 
     elif node_type == "trigger":
         label = label or ("Manual trigger" if variant == "manual" else variant.replace("_", " ").title())
         subtitle = subtitle or ("Test only" if variant == "manual" else "Workflow trigger")
+    elif node_type == "loop":
+        label = label or variant.replace("_", " ").title() or "Loop"
+        subtitle = subtitle or "Repeat a sub-workflow"
     else:
         label = label or node_type.replace("_", " ").title()
     return {
@@ -494,7 +527,7 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
                 if _clean_text(item.get("action"), 80)
             } & _BROWSER_INTERACTIVE_ACTIONS
             if session_profile and interactive:
-                issues.append({"code": "browser_authenticated_interactive_not_supported", "message": "Session-backed interactive browser automation is not executable in local companion V1."})
+                issues.append({"code": "browser_reviewed_approval_required", "message": "Session-backed interactive browser automation requires reviewed approval and a resumable browser checkpoint path."})
         if variant == "http":
             http_url = _clean_text(config.get("url"), 1200)
             if not http_url:
@@ -539,6 +572,30 @@ def _validate_node(node: Dict[str, Any], *, for_publish: bool) -> List[Dict[str,
             issues.append({"code": "subflow_variant_invalid", "message": f"Subflow variant '{variant or 'unknown'}' is not supported."})
         if not _clean_text(config.get("workflow_id"), 160):
             issues.append({"code": "subflow_target_missing", "message": "Subflow nodes require a target workflow_id."})
+    elif node_type == "loop":
+        if variant not in LOOP_VARIANTS:
+            issues.append({"code": "loop_variant_invalid", "message": f"Loop variant '{variant or 'unknown'}' is not supported."})
+        body = config.get("body") if isinstance(config.get("body"), dict) else {}
+        body_nodes = body.get("nodes") if isinstance(body.get("nodes"), list) else []
+        if not body_nodes:
+            issues.append({"code": "loop_body_missing", "message": "Loop nodes require a non-empty body workflow."})
+        max_iterations = config.get("max_iterations")
+        if max_iterations is not None:
+            try:
+                if int(max_iterations) <= 0:
+                    issues.append({"code": "loop_max_iterations_invalid", "message": "Loop nodes require max_iterations greater than zero."})
+            except (TypeError, ValueError):
+                issues.append({"code": "loop_max_iterations_invalid", "message": "Loop nodes require a numeric max_iterations value."})
+        if variant == "for_each" and not _clean_text(config.get("array_source"), 600):
+            issues.append({"code": "loop_array_source_missing", "message": "FOR_EACH loop nodes require array_source."})
+        if variant == "while":
+            has_expression = bool(_clean_text(config.get("expression"), 1000))
+            has_condition = isinstance(config.get("condition"), dict) and bool(config.get("condition"))
+            if not has_expression and not has_condition:
+                issues.append({"code": "loop_condition_missing", "message": "WHILE loop nodes require expression or condition."})
+        if variant == "repeat":
+            if config.get("count") in {None, ""} and not _clean_text(config.get("count_source"), 600):
+                issues.append({"code": "loop_count_missing", "message": "REPEAT loop nodes require count or count_source."})
     elif node_type == "decision" and variant not in DECISION_VARIANTS:
         issues.append({"code": "decision_variant_invalid", "message": f"Decision variant '{variant or 'unknown'}' is not supported."})
     elif node_type == "data" and variant not in DATA_VARIANTS:
@@ -577,6 +634,8 @@ def normalize_builder_generated_workflow(payload: Dict[str, Any], *, prompt: str
             variant = "transform"
         elif node_type == "subflow" and variant not in SUBFLOW_VARIANTS:
             variant = "call_workflow"
+        elif node_type == "loop" and variant not in LOOP_VARIANTS:
+            variant = "for_each"
 
         config = _default_node_config(node_type, variant, item, prompt)
         compatibility = _compatibility_fields(node_type, variant, config, item, index)
@@ -638,6 +697,12 @@ def normalize_builder_generated_workflow(payload: Dict[str, Any], *, prompt: str
         "data_variant_invalid",
         "subflow_variant_invalid",
         "subflow_target_missing",
+        "loop_variant_invalid",
+        "loop_body_missing",
+        "loop_max_iterations_invalid",
+        "loop_array_source_missing",
+        "loop_condition_missing",
+        "loop_count_missing",
         "approval_options_missing",
         "local_root_requires_local_companion",
         "shell_requires_local_companion",

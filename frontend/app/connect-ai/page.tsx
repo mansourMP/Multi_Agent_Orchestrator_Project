@@ -27,7 +27,7 @@ export default async function ConnectAiPage({ searchParams }: ConnectAiPageProps
             : 'Choose one provider, connect it, and return to chat. Keep app sign-in and provider access separate.'
         }
         actions={
-          <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
+          <Link href={returnTo} className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }}>
             <ArrowLeft size={13} />
             {returnToSetup ? 'Back to setup' : 'Back to chat'}
           </Link>

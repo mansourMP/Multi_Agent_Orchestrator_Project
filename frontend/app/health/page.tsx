@@ -1212,7 +1212,7 @@ export default function HealthPage() {
             <button
               onClick={() => setShowPassChecks((prev) => !prev)}
               className="orion-btn orion-btn-ghost"
-              style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+              style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
             >
               {showPassChecks ? 'Hide pass' : 'Show pass'}
             </button>
@@ -1274,12 +1274,12 @@ export default function HealthPage() {
           <button
             onClick={checkAll}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 32, fontSize: 12 }}
+            style={{ minHeight: 44, fontSize: 12 }}
           >
             <RefreshCw size={13} />
             Run check
           </button>
-          <Link href="/setup" className="orion-btn orion-btn-ghost" style={{ minHeight: 32, fontSize: 12 }}>
+          <Link href="/setup" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, fontSize: 12 }}>
             Open Setup
           </Link>
         </div>
@@ -1293,7 +1293,7 @@ export default function HealthPage() {
             onClick={() => void runOps('start_services')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'start_services' ? 'Starting...' : 'Start'}
           </button>
@@ -1301,7 +1301,7 @@ export default function HealthPage() {
             onClick={() => void runOps('restart_services')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'restart_services' ? 'Restarting...' : 'Restart'}
           </button>
@@ -1309,7 +1309,7 @@ export default function HealthPage() {
             onClick={() => void runOps('readiness')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'readiness' ? 'Checking...' : 'Readiness'}
           </button>
@@ -1317,7 +1317,7 @@ export default function HealthPage() {
             onClick={() => void runOps('release_status')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'release_status' ? 'Checking...' : 'Release'}
           </button>
@@ -1325,7 +1325,7 @@ export default function HealthPage() {
             onClick={() => void runOps('ops_daemon_status')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'ops_daemon_status' ? 'Checking...' : 'Daemon'}
           </button>
@@ -1333,7 +1333,7 @@ export default function HealthPage() {
             onClick={() => void runOps('ops_daemon_restart')}
             disabled={Boolean(opsBusy)}
             className="orion-btn orion-btn-primary"
-            style={{ minHeight: 34, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
+            style={{ minHeight: 44, fontSize: 12, opacity: opsBusy ? 0.75 : 1 }}
           >
             {opsBusy === 'ops_daemon_restart' ? 'Restarting...' : 'Daemon restart'}
           </button>
@@ -1570,7 +1570,7 @@ export default function HealthPage() {
                       <Link
                         href={`/runs/${encodeURIComponent(desktopIssue.runId)}/inspect`}
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+                        style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                       >
                         Open failing run
                       </Link>
@@ -1586,7 +1586,7 @@ export default function HealthPage() {
                     setDesktopStatus(payload);
                   }}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, fontSize: 12 }}
+                  style={{ minHeight: 44, fontSize: 12 }}
                 >
                   Refresh shell
                 </button>
@@ -1598,7 +1598,7 @@ export default function HealthPage() {
                     await checkAll();
                   }}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, fontSize: 12 }}
+                  style={{ minHeight: 44, fontSize: 12 }}
                 >
                   Restart stack
                 </button>
@@ -1608,7 +1608,7 @@ export default function HealthPage() {
                     await desktopBridge.openLogsDir();
                   }}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, fontSize: 12 }}
+                  style={{ minHeight: 44, fontSize: 12 }}
                 >
                   Open logs
                 </button>
@@ -1619,7 +1619,7 @@ export default function HealthPage() {
                       await desktopBridge.openExternal(desktopStatus.frontendUrl);
                     }}
                     className="orion-btn orion-btn-ghost"
-                    style={{ minHeight: 32, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   >
                     Open frontend
                   </button>

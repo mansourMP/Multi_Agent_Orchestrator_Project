@@ -3,6 +3,17 @@ from __future__ import annotations
 import base64
 from typing import Any, Callable, Dict, List
 from urllib.parse import quote_plus
+from server_modules.connectors.github_connector import validate_github_credentials
+from server_modules.connectors.linear_connector import validate_linear_credentials
+from server_modules.connectors.notion_connector import validate_notion_credentials
+from server_modules.connectors.dropbox_connector import validate_dropbox_credentials
+from server_modules.connectors.discord_connector import validate_discord_bot_credentials
+from server_modules.connectors.s3_connector import validate_s3_credentials
+from server_modules.connectors.slack_connector import validate_slack_oauth_credentials
+from server_modules.connectors.smtp_connector import (
+    validate_imap_credentials,
+    validate_smtp_credentials,
+)
 from server_modules.google_workspace_cli import (
     google_workspace_uses_local_cli,
     validate_google_workspace_local_connector,
@@ -14,6 +25,64 @@ from server_modules.microsoft_365_graph import (
 
 
 HttpJsonRequest = Callable[..., Dict[str, Any]]
+
+
+def validate_github_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_github_credentials(credentials, http_json_request=http_json_request)
+
+
+def validate_notion_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_notion_credentials(credentials, http_json_request=http_json_request)
+
+
+def validate_linear_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_linear_credentials(credentials, http_json_request=http_json_request)
+
+
+def validate_dropbox_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_dropbox_credentials(credentials)
+
+
+def validate_s3_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_s3_credentials(credentials)
+
+
+def validate_smtp_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    smtp_result = validate_smtp_credentials(credentials)
+    imap_access = False
+    imap_warning: str | None = None
+    try:
+        validate_imap_credentials(credentials)
+        imap_access = True
+    except Exception as exc:
+        detail = str(exc).strip()
+        if len(detail) > 220:
+            detail = detail[:220] + "..."
+        imap_warning = (
+            "SMTP send is ready, but inbound IMAP fetch is not reachable with the current settings."
+            + (f" ({detail})" if detail else "")
+        )
+
+    warnings = [warning for warning in (imap_warning,) if warning]
+    profile = smtp_result.get("profile") if isinstance(smtp_result.get("profile"), dict) else {}
+    return {
+        "ok": True,
+        "status": 200,
+        "message": (
+            "SMTP connector is valid."
+            if imap_access
+            else "SMTP connector is valid, but IMAP fetch is not enabled yet."
+        ),
+        "profile": profile,
+        "smtp_access": True,
+        "imap_access": imap_access,
+        "warning": " ".join(warnings) if warnings else None,
+        "warnings": warnings,
+    }
+
+
+def validate_discord_bot_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest | None = None) -> Dict[str, Any]:
+    return validate_discord_bot_credentials(credentials, http_json_request=http_json_request)
 
 
 def validate_google_workspace_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
@@ -306,42 +375,30 @@ def validate_whatsapp_twilio_connector(credentials: Dict[str, Any], http_json_re
     }
 
 
-def validate_discord_bot_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
+def validate_slack_connector(credentials: Dict[str, Any], http_json_request: HttpJsonRequest) -> Dict[str, Any]:
     bot_token = str(credentials.get("bot_token") or "").strip()
-    channel_id = str(credentials.get("channel_id") or "").strip()
-    guild_id = str(credentials.get("guild_id") or "").strip()
-
+    team_id = str(credentials.get("team_id") or "").strip()
     if not bot_token:
-        raise RuntimeError("Discord bot_token is required.")
-    if any(ch.isspace() for ch in bot_token):
-        raise RuntimeError("Discord bot_token is invalid.")
-    if not channel_id:
-        raise RuntimeError("Discord channel_id is required.")
-    if not channel_id.isdigit():
-        raise RuntimeError("Discord channel_id must be numeric.")
-    if guild_id and not guild_id.isdigit():
-        raise RuntimeError("Discord guild_id must be numeric when provided.")
+        raise RuntimeError("Slack bot_token is required.")
 
-    headers = {"Authorization": f"Bot {bot_token}"}
-    res = http_json_request("https://discord.com/api/v10/users/@me", headers=headers)
-    body = res.get("json") if isinstance(res.get("json"), dict) else {}
-    if res.get("status") != 200:
-        detail = ""
-        if isinstance(body, dict):
-            detail = str(body.get("message") or "").strip()
-        raise RuntimeError(detail or "Discord bot token is invalid.")
+    result = validate_slack_oauth_credentials(credentials, http_json_request=http_json_request)
+    team = result.get("team") if isinstance(result.get("team"), dict) else {}
+    resolved_team_id = str(team.get("id") or team_id or "").strip()
+    if team_id and resolved_team_id and team_id != resolved_team_id:
+        raise RuntimeError("Slack workspace mismatch for bot token.")
 
     return {
         "ok": True,
         "status": 200,
-        "message": "Discord connector is valid.",
-        "bot": {
-            "id": body.get("id") if isinstance(body, dict) else None,
-            "username": body.get("username") if isinstance(body, dict) else None,
-            "global_name": body.get("global_name") if isinstance(body, dict) else None,
+        "message": "Slack connector is valid.",
+        "team": {
+            "id": resolved_team_id or None,
+            "name": str(team.get("name") or "").strip() or None,
+            "url": str(team.get("url") or "").strip() or None,
         },
-        "channel_id": channel_id,
-        "guild_id": guild_id or None,
+        "bot": result.get("bot") if isinstance(result.get("bot"), dict) else {},
+        "authed_user": result.get("authed_user") if isinstance(result.get("authed_user"), dict) else {},
+        "credentials": result.get("credentials") if isinstance(result.get("credentials"), dict) else dict(credentials),
     }
 
 

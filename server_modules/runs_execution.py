@@ -1,12 +1,88 @@
+import concurrent.futures
 import logging
 import base64
 import asyncio
 import ast
 import hashlib
 import hmac
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 from server_modules.builder_runtime_mapping import map_builder_permissions_to_runtime_metadata
+from server_modules.connectors.slack_connector import (
+    get_channel_history as slack_get_channel_history,
+    list_channels as slack_list_channels,
+    post_reply as slack_post_reply,
+    send_dm as slack_send_dm_message,
+    send_message as slack_send_channel_message,
+    upload_file as slack_upload_file,
+)
+from server_modules.connectors.discord_connector import (
+    add_reaction as discord_add_reaction,
+    create_thread as discord_create_thread,
+    delete_message as discord_delete_message,
+    edit_message as discord_edit_message,
+    get_message_history as discord_get_message_history,
+    list_channels as discord_list_channels,
+    list_guilds as discord_list_guilds,
+    list_members as discord_list_members,
+    send_dm as discord_send_dm_message,
+    send_embed as discord_send_embed,
+    send_message as discord_send_channel_message,
+)
+from server_modules.connectors.github_connector import (
+    comment_on_issue as github_comment_on_issue,
+    create_issue as github_create_issue,
+    create_or_update_file as github_create_or_update_file,
+    create_pull_request as github_create_pull_request,
+    get_file_content as github_get_file_content,
+    get_repo as github_get_repo,
+    list_commits as github_list_commits,
+    list_issues as github_list_issues,
+    list_pull_requests as github_list_pull_requests,
+    list_repos as github_list_repos,
+)
+from server_modules.connectors.dropbox_connector import (
+    delete as dropbox_delete,
+    download_file as dropbox_download_file,
+    get_shared_link as dropbox_get_shared_link,
+    list_folder as dropbox_list_folder,
+    move as dropbox_move,
+    search as dropbox_search,
+    upload_file as dropbox_upload_file,
+)
+from server_modules.connectors.linear_connector import (
+    add_comment as linear_add_comment,
+    create_issue as linear_create_issue,
+    get_issue as linear_get_issue,
+    list_issues as linear_list_issues,
+    list_projects as linear_list_projects,
+    list_teams as linear_list_teams,
+    update_issue as linear_update_issue,
+)
+from server_modules.connectors.notion_connector import (
+    append_blocks as notion_append_blocks,
+    create_database_item as notion_create_database_item,
+    create_page as notion_create_page,
+    get_page as notion_get_page,
+    query_database as notion_query_database,
+    search as notion_search,
+    update_page as notion_update_page,
+)
+from server_modules.connectors.smtp_connector import (
+    fetch_emails as smtp_fetch_emails,
+    send_email as smtp_send_email,
+)
+from server_modules.connectors.s3_connector import (
+    create_bucket as s3_create_bucket,
+    delete_object as s3_delete_object,
+    download_file as s3_download_file,
+    get_presigned_url as s3_get_presigned_url,
+    list_buckets as s3_list_buckets,
+    list_objects as s3_list_objects,
+    upload_file as s3_upload_file,
+)
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -326,14 +402,26 @@ def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
         return ""
     if clean_variant == "connector_action":
         action_id = normalize_action_id(config.get("action_id"))
+        connector_id = str(config.get("connector") or "").strip().lower()
         action_mapping = {
             "send_email": "send_message",
             "send_message": "send_message",
             "send_embed": "send_message",
             "send_dm": "send_message",
+            "post_reply": "send_message",
             "publish_reply": "send_message",
             "send_media": "send_message",
             "update_message": "send_message",
+            "upload_file": "send_message",
+            "create_issue": "issue_write",
+            "comment_on_issue": "issue_write",
+            "create_pull_request": "pr_write",
+            "create_or_update_file": "repo_write",
+            "create_page": "notion_write",
+            "update_page": "notion_write",
+            "create_database_item": "notion_write",
+            "update_issue": "issue_write",
+            "add_comment": "issue_write",
             "draft_email": "draft_email",
             "create_calendar_event": "create_calendar_event",
             "create_doc": "document_create",
@@ -344,6 +432,10 @@ def _workflow_tool_policy_tool_id(variant: str, config: Dict[str, Any]) -> str:
             "http_request": "http_request",
             "signed_webhook": "http_request",
         }
+        if connector_id in {"dropbox", "s3"} and action_id == "upload_file":
+            return "storage_write"
+        if action_id in {"delete", "move", "delete_object", "create_bucket"}:
+            return "storage_write"
         return action_mapping.get(action_id, action_id)
     if clean_variant == "spreadsheet":
         operation = normalize_action_id(config.get("operation") or "read")
@@ -948,13 +1040,30 @@ def _resolve_agent_generation_state(base_context: Dict[str, Any], config: Dict[s
     }
 
 
-def _workflow_decision_value(current_text: str, state: Dict[str, Any], expression: str) -> bool:
+def _workflow_expression_scope(current_text: str, state: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    loop_vars = state.get("loop_vars") if isinstance(state.get("loop_vars"), dict) else {}
     scope = {
         "context_text": current_text,
         "result_text": current_text,
         "result_data": state.get("last_data") if isinstance(state.get("last_data"), dict) else {},
         "state": state,
+        "loop_vars": loop_vars,
+        "context": context if isinstance(context, dict) else {},
     }
+    for key, value in loop_vars.items():
+        if isinstance(key, str) and key.strip():
+            scope[key] = value
+    return scope
+
+
+def _workflow_evaluate_expression_value(
+    current_text: str,
+    state: Dict[str, Any],
+    expression: str,
+    *,
+    context: Optional[Dict[str, Any]] = None,
+) -> Any:
+    scope = _workflow_expression_scope(current_text, state, context)
     parsed = ast.parse(expression, mode="eval")
 
     def _resolve_name(name: str) -> Any:
@@ -1048,7 +1157,418 @@ def _workflow_decision_value(current_text: str, state: Dict[str, Any], expressio
             return {_evaluate(key): _evaluate(value) for key, value in zip(node.keys, node.values)}
         raise ValueError(f"Unsupported decision expression node '{type(node).__name__}'.")
 
-    return bool(_evaluate(parsed))
+    return _evaluate(parsed)
+
+
+def _workflow_decision_value(current_text: str, state: Dict[str, Any], expression: str) -> bool:
+    return bool(_workflow_evaluate_expression_value(current_text, state, expression))
+
+
+def _workflow_noop_node_state_update(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
+def _workflow_raise_if_cancelled(run_id: str) -> None:
+    run = runs.get(run_id)
+    if not isinstance(run, dict):
+        return
+    status = str(run.get("status") or "").strip().lower()
+    if status in {"cancelled", "stopped"}:
+        raise RuntimeError(f"Workflow run {run_id} was {status}.")
+
+
+def _workflow_loop_body_definition(config: Dict[str, Any]) -> Dict[str, Any]:
+    body = config.get("body") if isinstance(config.get("body"), dict) else {}
+    return {
+        "version": str(body.get("version") or EMPYRALIST_WORKFLOW_SCHEMA_VERSION).strip() or EMPYRALIST_WORKFLOW_SCHEMA_VERSION,
+        "nodes": body.get("nodes") if isinstance(body.get("nodes"), list) else [],
+        "edges": body.get("edges") if isinstance(body.get("edges"), list) else [],
+    }
+
+
+def _workflow_loop_cap(variant: str, requested: Any) -> int:
+    normalized_variant = str(variant or "").strip().lower()
+    default_limit = 100 if normalized_variant == "for_each" else 50
+    hard_cap = 1000 if normalized_variant == "for_each" else 500
+    try:
+        resolved = int(requested if requested is not None else default_limit)
+    except (TypeError, ValueError):
+        resolved = default_limit
+    resolved = max(0, resolved)
+    return min(resolved, hard_cap)
+
+
+def _workflow_resolve_reference_value(
+    reference: Any,
+    *,
+    current_text: str,
+    state: Dict[str, Any],
+    context: Dict[str, Any],
+) -> Any:
+    if reference is None:
+        return None
+    if isinstance(reference, (dict, list, int, float, bool)):
+        return reference
+    token = str(reference).strip()
+    if not token:
+        return None
+    if token.startswith("$."):
+        token = token[2:]
+    if token in {"context_text", "result_text"}:
+        return current_text
+    if token.startswith("state.") or token.startswith("result_data.") or token.startswith("loop_vars.") or token.startswith("context."):
+        parts = token.split(".")
+        root = parts[0]
+        if root == "state":
+            value: Any = state
+        elif root == "result_data":
+            value = state.get("last_data") if isinstance(state.get("last_data"), dict) else {}
+        elif root == "loop_vars":
+            value = state.get("loop_vars") if isinstance(state.get("loop_vars"), dict) else {}
+        else:
+            value = context
+        for part in parts[1:]:
+            if isinstance(value, dict):
+                value = value.get(part)
+            elif isinstance(value, list):
+                try:
+                    value = value[int(part)]
+                except (TypeError, ValueError, IndexError):
+                    return None
+            else:
+                value = getattr(value, part, None)
+            if value is None:
+                return None
+        return value
+    return _workflow_evaluate_expression_value(current_text, state, token, context=context)
+
+
+def _workflow_loop_condition_met(
+    config: Dict[str, Any],
+    *,
+    current_text: str,
+    state: Dict[str, Any],
+    context: Dict[str, Any],
+) -> bool:
+    expression = str(config.get("expression") or "").strip()
+    if expression:
+        return bool(_workflow_evaluate_expression_value(current_text, state, expression, context=context))
+    condition = config.get("condition") if isinstance(config.get("condition"), dict) else {}
+    left = _workflow_resolve_reference_value(
+        condition.get("left") or condition.get("field"),
+        current_text=current_text,
+        state=state,
+        context=context,
+    )
+    operator = str(condition.get("operator") or condition.get("op") or "==").strip()
+    right = condition.get("value")
+    if isinstance(right, str):
+        stripped = right.strip()
+        if stripped.startswith(("state.", "result_data.", "loop_vars.", "context.", "$.")):
+            right = _workflow_resolve_reference_value(stripped, current_text=current_text, state=state, context=context)
+    if operator == "==":
+        return left == right
+    if operator == "!=":
+        return left != right
+    if operator == ">":
+        return left > right
+    if operator == ">=":
+        return left >= right
+    if operator == "<":
+        return left < right
+    if operator == "<=":
+        return left <= right
+    if operator == "in":
+        return left in right
+    if operator == "not_in":
+        return left not in right
+    raise RuntimeError(f"Unsupported WHILE operator '{operator}'.")
+
+
+def _workflow_loop_result_payload(body_result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "result_text": _workflow_text_payload(body_result.get("result_text") or ""),
+        "result_data": _json_safe(body_result.get("result_data")) if body_result.get("result_data") is not None else None,
+        "final_node_id": str(body_result.get("final_node_id") or "").strip() or None,
+    }
+
+
+def _workflow_execute_loop_node(
+    run_id: str,
+    node_id: str,
+    label: str,
+    variant: str,
+    config: Dict[str, Any],
+    *,
+    context: Dict[str, Any],
+    log_queue: queue.Queue,
+    state: Dict[str, Any],
+    update_node_state: Callable[..., Any],
+    loop_depth: int,
+) -> Dict[str, Any]:
+    if loop_depth >= 3:
+        raise RuntimeError("Workflow loop depth exceeds the maximum nested depth of 3.")
+
+    body_definition = _workflow_loop_body_definition(config)
+    if not body_definition["nodes"]:
+        raise RuntimeError(f"Loop node '{label}' requires a non-empty body workflow.")
+
+    continue_on_error = bool(config.get("continue_on_error"))
+    detail: Dict[str, Any] = {
+        "variant": variant,
+        "continue_on_error": continue_on_error,
+        "parallel": bool(config.get("parallel")),
+        "iterations": [],
+    }
+
+    def _emit_iteration_progress(summary: str) -> None:
+        update_node_state(
+            run_id,
+            node_id,
+            status="running",
+            activate=True,
+            summary=summary,
+            detail=detail,
+        )
+
+    def _run_iteration(iteration_index: int, item_value: Any, base_state: Dict[str, Any]) -> Dict[str, Any]:
+        _workflow_raise_if_cancelled(run_id)
+        loop_vars = dict(base_state.get("loop_vars") if isinstance(base_state.get("loop_vars"), dict) else {})
+        variable_name = str(config.get("item_variable_name") or "item").strip() or "item"
+        if variant == "for_each":
+            loop_vars[variable_name] = _json_safe(item_value)
+            loop_vars["item_index"] = iteration_index
+        loop_vars["iteration_index"] = iteration_index
+        iteration_context = dict(context)
+        metadata = dict(iteration_context.get("metadata") if isinstance(iteration_context.get("metadata"), dict) else {})
+        metadata["loop_iteration"] = {
+            "node_id": node_id,
+            "label": label,
+            "variant": variant,
+            "index": iteration_index,
+        }
+        iteration_context["metadata"] = metadata
+        iteration_text = _workflow_text_payload(item_value) if item_value is not None else _workflow_text_payload(base_state.get("last_text") or "")
+        iteration_state = {
+            "last_text": iteration_text or _workflow_text_payload(base_state.get("last_text") or ""),
+            "last_data": {"item": _json_safe(item_value), "index": iteration_index} if item_value is not None else _json_safe(base_state.get("last_data")) or {},
+            "active_provider": str(base_state.get("active_provider") or context.get("provider") or "openai"),
+            "active_model": str(base_state.get("active_model") or context.get("model") or CODEX_MODEL),
+            "loop_vars": loop_vars,
+        }
+        emit_log(
+            log_queue,
+            "info",
+            f"Loop iteration {iteration_index + 1} started for {label}",
+            event="workflow_loop_iteration_start",
+            data={"node_id": node_id, "variant": variant, "index": iteration_index},
+        )
+        result = _execute_workflow_graph(
+            run_id,
+            iteration_context,
+            log_queue,
+            body_definition,
+            _state=iteration_state,
+            _track_node_states=False,
+            _loop_depth=loop_depth + 1,
+        )
+        emit_log(
+            log_queue,
+            "info",
+            f"Loop iteration {iteration_index + 1} completed for {label}",
+            event="workflow_loop_iteration_complete",
+            data={"node_id": node_id, "variant": variant, "index": iteration_index},
+        )
+        return result
+
+    if variant == "for_each":
+        raw_items = _workflow_resolve_reference_value(
+            config.get("array_source"),
+            current_text=_workflow_text_payload(state.get("last_text") or ""),
+            state=state,
+            context=context,
+        )
+        if not isinstance(raw_items, list):
+            raise RuntimeError(f"FOR_EACH node '{label}' resolved a non-array array_source.")
+        max_iterations = _workflow_loop_cap("for_each", config.get("max_iterations"))
+        items = list(raw_items[:max_iterations])
+        detail["requested_iterations"] = len(raw_items)
+        detail["capped_iterations"] = len(items)
+        detail["parallel"] = bool(config.get("parallel"))
+        results: List[Optional[Dict[str, Any]]] = [None] * len(items)
+        iteration_entries: List[Dict[str, Any]] = []
+        last_state = state
+
+        if bool(config.get("parallel")) and len(items) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(items), 8)) as executor:
+                future_map = {
+                    executor.submit(_run_iteration, index, item_value, state): index
+                    for index, item_value in enumerate(items)
+                }
+                for future in concurrent.futures.as_completed(future_map):
+                    index = future_map[future]
+                    item_value = items[index]
+                    try:
+                        iteration_result = future.result()
+                        last_state = iteration_result.get("state") if isinstance(iteration_result.get("state"), dict) else last_state
+                        results[index] = _workflow_loop_result_payload(iteration_result)
+                        iteration_entries.append(
+                            {
+                                "index": index,
+                                "status": "succeeded",
+                                "item_preview": _node_preview_text(item_value),
+                                "summary": _node_preview_text(results[index]),
+                            }
+                        )
+                    except Exception as exc:
+                        iteration_entries.append(
+                            {
+                                "index": index,
+                                "status": "failed",
+                                "item_preview": _node_preview_text(item_value),
+                                "error": _node_preview_text(friendly_runtime_error_message(exc), limit=400),
+                            }
+                        )
+                        if not continue_on_error:
+                            for pending in future_map:
+                                pending.cancel()
+                            raise RuntimeError(f"FOR_EACH iteration {index + 1} failed: {friendly_runtime_error_message(exc)}") from exc
+                    detail["iterations"] = sorted(iteration_entries, key=lambda item: int(item.get("index") or 0))
+                    _emit_iteration_progress(f"{label}: {len(iteration_entries)}/{len(items)} iterations completed")
+                    _workflow_raise_if_cancelled(run_id)
+        else:
+            for index, item_value in enumerate(items):
+                try:
+                    iteration_result = _run_iteration(index, item_value, last_state)
+                    last_state = iteration_result.get("state") if isinstance(iteration_result.get("state"), dict) else last_state
+                    results[index] = _workflow_loop_result_payload(iteration_result)
+                    iteration_entries.append(
+                        {
+                            "index": index,
+                            "status": "succeeded",
+                            "item_preview": _node_preview_text(item_value),
+                            "summary": _node_preview_text(results[index]),
+                        }
+                    )
+                except Exception as exc:
+                    iteration_entries.append(
+                        {
+                            "index": index,
+                            "status": "failed",
+                            "item_preview": _node_preview_text(item_value),
+                            "error": _node_preview_text(friendly_runtime_error_message(exc), limit=400),
+                        }
+                    )
+                    if not continue_on_error:
+                        detail["iterations"] = iteration_entries
+                        raise RuntimeError(f"FOR_EACH iteration {index + 1} failed: {friendly_runtime_error_message(exc)}") from exc
+                detail["iterations"] = list(iteration_entries)
+                _emit_iteration_progress(f"{label}: {index + 1}/{len(items)} iterations completed")
+                _workflow_raise_if_cancelled(run_id)
+
+        resolved_results = [item for item in results if item is not None]
+        return {
+            "current_text": _workflow_text_payload(resolved_results),
+            "last_data": {
+                "node_id": node_id,
+                "node_type": "loop",
+                "variant": variant,
+                "results": resolved_results,
+            },
+            "summary": f"{label}: completed {len(detail['iterations'])} iterations",
+            "detail": detail,
+            "active_provider": str(last_state.get("active_provider") or state.get("active_provider") or context.get("provider") or "openai"),
+            "active_model": str(last_state.get("active_model") or state.get("active_model") or context.get("model") or CODEX_MODEL),
+        }
+
+    if variant == "repeat":
+        count_value = config.get("count")
+        if count_value in {None, ""}:
+            count_value = _workflow_resolve_reference_value(
+                config.get("count_source"),
+                current_text=_workflow_text_payload(state.get("last_text") or ""),
+                state=state,
+                context=context,
+            )
+        try:
+            requested_count = int(count_value or 0)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"REPEAT node '{label}' could not resolve count.") from exc
+        iteration_total = min(max(requested_count, 0), _workflow_loop_cap("repeat", config.get("max_iterations")))
+        detail["requested_iterations"] = requested_count
+        detail["capped_iterations"] = iteration_total
+        results: List[Dict[str, Any]] = []
+        last_state = state
+        for index in range(iteration_total):
+            try:
+                iteration_result = _run_iteration(index, {"iteration": index}, last_state)
+                last_state = iteration_result.get("state") if isinstance(iteration_result.get("state"), dict) else last_state
+                payload = _workflow_loop_result_payload(iteration_result)
+                results.append(payload)
+                detail["iterations"].append({"index": index, "status": "succeeded", "summary": _node_preview_text(payload)})
+            except Exception as exc:
+                detail["iterations"].append({"index": index, "status": "failed", "error": _node_preview_text(friendly_runtime_error_message(exc), limit=400)})
+                if not continue_on_error:
+                    raise RuntimeError(f"REPEAT iteration {index + 1} failed: {friendly_runtime_error_message(exc)}") from exc
+            _emit_iteration_progress(f"{label}: {index + 1}/{iteration_total} iterations completed")
+            _workflow_raise_if_cancelled(run_id)
+        return {
+            "current_text": _workflow_text_payload(results),
+            "last_data": {
+                "node_id": node_id,
+                "node_type": "loop",
+                "variant": variant,
+                "results": results,
+            },
+            "summary": f"{label}: completed {len(detail['iterations'])} iterations",
+            "detail": detail,
+            "active_provider": str(last_state.get("active_provider") or state.get("active_provider") or context.get("provider") or "openai"),
+            "active_model": str(last_state.get("active_model") or state.get("active_model") or context.get("model") or CODEX_MODEL),
+        }
+
+    max_iterations = _workflow_loop_cap("while", config.get("max_iterations"))
+    detail["capped_iterations"] = max_iterations
+    iteration_index = 0
+    last_result: Optional[Dict[str, Any]] = None
+    current_state = dict(state)
+    current_text = _workflow_text_payload(state.get("last_text") or "")
+    while iteration_index < max_iterations and _workflow_loop_condition_met(config, current_text=current_text, state=current_state, context=context):
+        try:
+            iteration_result = _run_iteration(iteration_index, None, current_state)
+            current_state = iteration_result.get("state") if isinstance(iteration_result.get("state"), dict) else current_state
+            current_text = _workflow_text_payload(iteration_result.get("result_text") or current_text)
+            last_result = iteration_result
+            detail["iterations"].append(
+                {
+                    "index": iteration_index,
+                    "status": "succeeded",
+                    "summary": _node_preview_text(_workflow_loop_result_payload(iteration_result)),
+                }
+            )
+        except Exception as exc:
+            detail["iterations"].append(
+                {
+                    "index": iteration_index,
+                    "status": "failed",
+                    "error": _node_preview_text(friendly_runtime_error_message(exc), limit=400),
+                }
+            )
+            if not continue_on_error:
+                raise RuntimeError(f"WHILE iteration {iteration_index + 1} failed: {friendly_runtime_error_message(exc)}") from exc
+        iteration_index += 1
+        _emit_iteration_progress(f"{label}: iteration {iteration_index}")
+        _workflow_raise_if_cancelled(run_id)
+
+    detail["iterations_run"] = iteration_index
+    payload = _workflow_loop_result_payload(last_result or {"result_text": current_text, "result_data": current_state.get("last_data")})
+    return {
+        "current_text": payload.get("result_text") or current_text,
+        "last_data": payload.get("result_data") if isinstance(payload.get("result_data"), dict) else current_state.get("last_data"),
+        "summary": f"{label}: {iteration_index} iterations",
+        "detail": detail,
+        "active_provider": str(current_state.get("active_provider") or state.get("active_provider") or context.get("provider") or "openai"),
+        "active_model": str(current_state.get("active_model") or state.get("active_model") or context.get("model") or CODEX_MODEL),
+    }
 
 
 def _workflow_tool_text_input(config: Dict[str, Any], current_text: str) -> str:
@@ -1402,49 +1922,89 @@ def _workflow_execute_connector_action(
             execute=_perform_telegram,
         )
 
-    if connector_id == "discord_bot" and action_id in {"send_message", "send_embed"}:
+    if connector_id == "discord_bot" and action_id in {
+        "send_message",
+        "send_embed",
+        "send_dm",
+        "edit_message",
+        "delete_message",
+        "list_guilds",
+        "list_channels",
+        "list_members",
+        "get_message_history",
+        "create_thread",
+        "add_reaction",
+    }:
         bot_token = str(secret.get("bot_token") or "").strip()
         channel_id = str(config.get("channel_id") or secret.get("channel_id") or "").strip()
+        guild_id = str(config.get("guild_id") or secret.get("guild_id") or "").strip()
+        user_id = str(config.get("user_id") or config.get("recipient_id") or "").strip()
+        message_id = str(config.get("message_id") or "").strip()
+        emoji = str(config.get("emoji") or "").strip()
+        thread_name = str(config.get("name") or config.get("title") or "").strip()
+        raw_files = config.get("files") if isinstance(config.get("files"), list) else None
+        file_path = str(config.get("file_path") or config.get("path") or "").strip()
+        files = raw_files if raw_files else ([file_path] if file_path else [])
+        embeds = config.get("embeds") if isinstance(config.get("embeds"), list) else None
+        try:
+            limit = int(config.get("limit") or 20)
+        except Exception:
+            limit = 20
+        safe_limit = max(1, min(limit, 100))
         if not bot_token:
             raise RuntimeError("Discord connector action requires bot_token.")
-        if not channel_id:
-            raise RuntimeError("Discord connector action requires channel_id.")
         body_text = _workflow_tool_text_input(config, current_text)
-        if action_id == "send_embed":
-            embeds = config.get("embeds") if isinstance(config.get("embeds"), list) else None
-            if embeds:
-                payload = {"embeds": embeds}
-            else:
-                payload = {
-                    "embeds": [
-                        {
-                            "title": str(
-                                config.get("title")
-                                or context.get("workflow_name")
-                                or context.get("workflow_id")
-                                or "Empyralist"
-                            ).strip() or "Empyralist",
-                            "description": body_text,
-                        }
-                    ]
-                }
-        else:
-            payload = {"content": body_text}
-        def _perform_discord() -> Dict[str, Any]:
-            response = http_json_request(
-                f"https://discord.com/api/v10/channels/{quote_plus(channel_id)}/messages",
-                method="POST",
-                headers={"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"},
-                payload=payload,
-            )
-            status_code = int(response.get("status") or 500)
-            if status_code not in {200, 201}:
-                body = response.get("json") if isinstance(response.get("json"), dict) else {}
-                detail = str(body.get("message") or response.get("text") or "").strip()
-                raise RuntimeError(detail or f"Discord send failed with status {status_code}.")
-            result = response.get("json") if isinstance(response.get("json"), dict) else response
+        if action_id == "list_guilds":
+            result = discord_list_guilds(secret, limit=safe_limit, http_json_request=http_json_request)
             return {
-                "summary": f"Connector action completed: discord_bot.{action_id}.",
+                "summary": "Connector action completed: discord_bot.list_guilds.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+        if action_id == "list_channels":
+            if not guild_id:
+                raise RuntimeError("Discord list_channels requires guild_id.")
+            result = discord_list_channels(secret, guild_id, http_json_request=http_json_request)
+            return {
+                "summary": "Connector action completed: discord_bot.list_channels.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "guild_id": guild_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+        if action_id == "list_members":
+            if not guild_id:
+                raise RuntimeError("Discord list_members requires guild_id.")
+            result = discord_list_members(secret, guild_id, limit=safe_limit, http_json_request=http_json_request)
+            return {
+                "summary": "Connector action completed: discord_bot.list_members.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "guild_id": guild_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+        if action_id == "get_message_history":
+            if not channel_id:
+                raise RuntimeError("Discord get_message_history requires channel_id.")
+            result = discord_get_message_history(secret, channel_id, limit=safe_limit, http_json_request=http_json_request)
+            return {
+                "summary": "Connector action completed: discord_bot.get_message_history.",
                 "result_data": {
                     "connector_action": {
                         "connector": connector_id,
@@ -1456,17 +2016,1110 @@ def _workflow_execute_connector_action(
                 },
             }
 
+        def _perform_discord() -> Dict[str, Any]:
+            if action_id == "send_message":
+                if not channel_id:
+                    raise RuntimeError("Discord send_message requires channel_id.")
+                result = discord_send_channel_message(
+                    secret,
+                    channel_id,
+                    body_text,
+                    embeds=embeds,
+                    files=files,
+                    http_json_request=http_json_request,
+                )
+            elif action_id == "send_embed":
+                if not channel_id:
+                    raise RuntimeError("Discord send_embed requires channel_id.")
+                normalized_embeds = embeds if embeds else [
+                    {
+                        "title": str(
+                            config.get("title")
+                            or context.get("workflow_name")
+                            or context.get("workflow_id")
+                            or "Empyralist"
+                        ).strip() or "Empyralist",
+                        "description": body_text,
+                    }
+                ]
+                result = discord_send_embed(
+                    secret,
+                    channel_id,
+                    title=str(config.get("title") or "").strip(),
+                    description=body_text,
+                    embeds=normalized_embeds,
+                    http_json_request=http_json_request,
+                )
+            elif action_id == "send_dm":
+                if not user_id:
+                    raise RuntimeError("Discord send_dm requires user_id.")
+                result = discord_send_dm_message(secret, user_id, body_text, http_json_request=http_json_request)
+            elif action_id == "edit_message":
+                if not channel_id or not message_id:
+                    raise RuntimeError("Discord edit_message requires channel_id and message_id.")
+                result = discord_edit_message(secret, channel_id, message_id, body_text, http_json_request=http_json_request)
+            elif action_id == "delete_message":
+                if not channel_id or not message_id:
+                    raise RuntimeError("Discord delete_message requires channel_id and message_id.")
+                result = discord_delete_message(secret, channel_id, message_id, http_json_request=http_json_request)
+            elif action_id == "create_thread":
+                if not channel_id:
+                    raise RuntimeError("Discord create_thread requires channel_id.")
+                result = discord_create_thread(
+                    secret,
+                    channel_id,
+                    thread_name or "New thread",
+                    message_id=message_id or None,
+                    http_json_request=http_json_request,
+                )
+            elif action_id == "add_reaction":
+                if not channel_id or not message_id or not emoji:
+                    raise RuntimeError("Discord add_reaction requires channel_id, message_id, and emoji.")
+                result = discord_add_reaction(secret, channel_id, message_id, emoji, http_json_request=http_json_request)
+            else:
+                raise RuntimeError(f"Unsupported Discord action '{action_id}'.")
+            return {
+                "summary": f"Connector action completed: discord_bot.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "channel_id": channel_id or None,
+                        "guild_id": guild_id or None,
+                        "message_id": message_id or None,
+                        "user_id": user_id or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id in {"send_message", "send_embed", "send_dm", "delete_message"}:
+            operation_target = channel_id or user_id or guild_id
+            return execute_external_write_once(
+                run_id=run_id,
+                context=context,
+                step_key=f"workflow_node:{node_id}",
+                category="workflow_connector_action",
+                operation={"connector": connector_id, "action_id": action_id, "channel_id": channel_id, "user_id": user_id, "message_id": message_id},
+                target_system=connector_id,
+                account_identity=connector_account_identity,
+                target_identity=_workflow_target_identity(action_id, channel_id=operation_target, message_id=message_id),
+                payload={
+                    "connector": connector_id,
+                    "action_id": action_id,
+                    "channel_id": channel_id or None,
+                    "guild_id": guild_id or None,
+                    "user_id": user_id or None,
+                    "message_id": message_id or None,
+                    "text": body_text,
+                    "embeds": _json_safe(embeds) if embeds else None,
+                },
+                execute=_perform_discord,
+            )
+        return _perform_discord()
+
+    if connector_id == "slack" and action_id in {"send_message", "send_dm", "post_reply", "upload_file", "list_channels", "get_history"}:
+        channel_id = str(
+            config.get("channel_id")
+            or config.get("channel")
+            or secret.get("incoming_webhook_channel_id")
+            or secret.get("channel_id")
+            or ""
+        ).strip()
+        user_id = str(
+            config.get("user_id")
+            or config.get("recipient_id")
+            or config.get("recipient")
+            or ""
+        ).strip()
+        thread_ts = str(config.get("thread_ts") or config.get("parent_ts") or "").strip()
+        file_path = str(config.get("file_path") or config.get("path") or "").strip()
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        if action_id == "list_channels":
+            result = slack_list_channels(secret, limit=int(config.get("limit") or 20))
+            return {
+                "summary": "Connector action completed: slack.list_channels.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_history":
+            if not channel_id:
+                raise RuntimeError("Slack get_history requires channel or channel_id.")
+            result = slack_get_channel_history(secret, channel_id, limit=int(config.get("limit") or 20))
+            return {
+                "summary": "Connector action completed: slack.get_history.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "channel_id": channel_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        def _perform_slack() -> Dict[str, Any]:
+            if action_id == "send_message":
+                if not channel_id:
+                    raise RuntimeError("Slack send_message requires channel or channel_id.")
+                result = slack_send_channel_message(secret, channel_id, body_text)
+            elif action_id == "send_dm":
+                if not user_id:
+                    raise RuntimeError("Slack send_dm requires user_id.")
+                result = slack_send_dm_message(secret, user_id, body_text)
+            elif action_id == "post_reply":
+                if not channel_id:
+                    raise RuntimeError("Slack post_reply requires channel or channel_id.")
+                if not thread_ts:
+                    raise RuntimeError("Slack post_reply requires thread_ts.")
+                result = slack_post_reply(secret, channel_id, thread_ts, body_text)
+            else:
+                if not channel_id:
+                    raise RuntimeError("Slack upload_file requires channel or channel_id.")
+                if not file_path:
+                    raise RuntimeError("Slack upload_file requires file_path.")
+                result = slack_upload_file(
+                    secret,
+                    channel_id,
+                    file_path,
+                    str(config.get("title") or Path(file_path).name).strip() or Path(file_path).name,
+                )
+            return {
+                "summary": f"Connector action completed: slack.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "channel_id": channel_id or None,
+                        "user_id": user_id or None,
+                        "thread_ts": thread_ts or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        target_identity = _workflow_target_identity(
+            action_id,
+            channel_id=channel_id or None,
+            recipient=user_id or None,
+            thread_ts=thread_ts or None,
+            path=file_path or None,
+        )
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "channel_id": channel_id or None,
+            "user_id": user_id or None,
+            "thread_ts": thread_ts or None,
+            "text": body_text or None,
+            "file_path": file_path or None,
+        }
         return execute_external_write_once(
             run_id=run_id,
             context=context,
             step_key=f"workflow_node:{node_id}",
             category="workflow_connector_action",
-            operation={"connector": connector_id, "action_id": action_id, "channel_id": channel_id},
+            operation={"connector": connector_id, "action_id": action_id, "channel_id": channel_id or None, "user_id": user_id or None},
             target_system=connector_id,
             account_identity=connector_account_identity,
-            target_identity=_workflow_target_identity(action_id, channel_id=channel_id),
-            payload={"connector": connector_id, "action_id": action_id, "channel_id": channel_id, "payload": _json_safe(payload)},
-            execute=_perform_discord,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_slack,
+        )
+
+    if connector_id == "smtp" and action_id in {"send_email", "fetch_emails"}:
+        if action_id == "fetch_emails":
+            result = smtp_fetch_emails(
+                secret,
+                folder=str(config.get("folder") or "INBOX").strip() or "INBOX",
+                limit=int(config.get("limit") or 10),
+                unread_only=bool(config.get("unread_only", True)),
+            )
+            return {
+                "summary": "Connector action completed: smtp.fetch_emails.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        to_email = str(
+            config.get("to_email")
+            or config.get("to")
+            or config.get("email")
+            or config.get("recipient")
+            or ""
+        ).strip()
+        if not to_email:
+            raise RuntimeError("SMTP send_email requires a recipient email.")
+        subject = str(
+            config.get("subject")
+            or f"Empyralist workflow: {context.get('workflow_name') or context.get('workflow_id') or 'Untitled'}"
+        ).strip()
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        def _perform_smtp() -> Dict[str, Any]:
+            result = smtp_send_email(
+                secret,
+                to_email,
+                subject,
+                body_text,
+                html_body=str(config.get("html_body") or "").strip() or None,
+            )
+            return {
+                "summary": "Connector action completed: smtp.send_email.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "recipient": to_email,
+                        "subject": subject,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "recipient": to_email, "subject": subject},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=_workflow_target_identity(action_id, recipient=to_email, subject=subject),
+            payload={"connector": connector_id, "action_id": action_id, "recipient": to_email, "subject": subject, "body": body_text},
+            execute=_perform_smtp,
+        )
+
+    if connector_id == "github" and action_id in {
+        "list_repos",
+        "get_repo",
+        "list_issues",
+        "create_issue",
+        "comment_on_issue",
+        "list_pull_requests",
+        "create_pull_request",
+        "get_file_content",
+        "create_or_update_file",
+        "list_commits",
+    }:
+        owner = str(config.get("owner") or "").strip()
+        repo_name = str(config.get("repo") or config.get("repository") or "").strip()
+        if not owner and "/" in repo_name:
+            owner, repo_name = repo_name.split("/", 1)
+        org = str(config.get("org") or "").strip() or None
+        file_path = str(config.get("file_path") or config.get("path") or "").strip()
+        branch = str(config.get("branch") or "").strip() or None
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        if action_id == "list_repos":
+            result = github_list_repos(secret, org=org, limit=int(config.get("limit") or 50))
+            return {
+                "summary": "Connector action completed: github.list_repos.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "org": org,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if not owner or not repo_name:
+            raise RuntimeError(f"GitHub {action_id} requires owner and repo.")
+
+        if action_id == "get_repo":
+            result = github_get_repo(secret, owner, repo_name)
+            return {
+                "summary": "Connector action completed: github.get_repo.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_issues":
+            result = github_list_issues(
+                secret,
+                owner,
+                repo_name,
+                state=str(config.get("state") or "open").strip() or "open",
+                limit=int(config.get("limit") or 20),
+            )
+            return {
+                "summary": "Connector action completed: github.list_issues.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_pull_requests":
+            result = github_list_pull_requests(
+                secret,
+                owner,
+                repo_name,
+                state=str(config.get("state") or "open").strip() or "open",
+                limit=int(config.get("limit") or 20),
+            )
+            return {
+                "summary": "Connector action completed: github.list_pull_requests.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_file_content":
+            if not file_path:
+                raise RuntimeError("GitHub get_file_content requires file_path.")
+            result = github_get_file_content(
+                secret,
+                owner,
+                repo_name,
+                file_path,
+                ref=str(config.get("ref") or branch or "main").strip() or "main",
+            )
+            return {
+                "summary": "Connector action completed: github.get_file_content.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "path": file_path,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_commits":
+            result = github_list_commits(secret, owner, repo_name, limit=int(config.get("limit") or 10))
+            return {
+                "summary": "Connector action completed: github.list_commits.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        title = str(config.get("title") or "").strip()
+        target_identity = _workflow_target_identity(
+            action_id,
+            owner=owner,
+            repo=repo_name,
+            issue_number=config.get("issue_number"),
+            path=file_path or None,
+            branch=branch,
+            title=title or None,
+        )
+
+        def _perform_github() -> Dict[str, Any]:
+            if action_id == "create_issue":
+                if not title:
+                    raise RuntimeError("GitHub create_issue requires title.")
+                result = github_create_issue(
+                    secret,
+                    owner,
+                    repo_name,
+                    title,
+                    str(config.get("body") or body_text or ""),
+                    labels=[str(item).strip() for item in (config.get("labels") if isinstance(config.get("labels"), list) else []) if str(item).strip()] or None,
+                )
+            elif action_id == "comment_on_issue":
+                issue_number = int(config.get("issue_number") or 0)
+                if issue_number <= 0:
+                    raise RuntimeError("GitHub comment_on_issue requires issue_number.")
+                result = github_comment_on_issue(
+                    secret,
+                    owner,
+                    repo_name,
+                    issue_number,
+                    str(config.get("body") or body_text or ""),
+                )
+            elif action_id == "create_pull_request":
+                head = str(config.get("head") or "").strip()
+                base = str(config.get("base") or "").strip()
+                if not title or not head or not base:
+                    raise RuntimeError("GitHub create_pull_request requires title, head, and base.")
+                result = github_create_pull_request(
+                    secret,
+                    owner,
+                    repo_name,
+                    title,
+                    str(config.get("body") or body_text or ""),
+                    head,
+                    base,
+                )
+            else:
+                message = str(config.get("message") or title or "").strip()
+                content = str(config.get("content") or body_text or "")
+                if not file_path or not message:
+                    raise RuntimeError("GitHub create_or_update_file requires file_path and message.")
+                result = github_create_or_update_file(
+                    secret,
+                    owner,
+                    repo_name,
+                    file_path,
+                    message,
+                    content,
+                    sha=str(config.get("sha") or "").strip() or None,
+                    branch=branch,
+                )
+            return {
+                "summary": f"Connector action completed: github.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "owner": owner,
+                        "repo": repo_name,
+                        "path": file_path or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "owner": owner,
+            "repo": repo_name,
+            "title": title or None,
+            "body": str(config.get("body") or body_text or "") or None,
+            "issue_number": config.get("issue_number"),
+            "path": file_path or None,
+            "branch": branch,
+        }
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "owner": owner, "repo": repo_name},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_github,
+        )
+
+    if connector_id == "dropbox" and action_id in {
+        "list_folder",
+        "upload_file",
+        "download_file",
+        "delete",
+        "move",
+        "get_shared_link",
+        "search",
+    }:
+        local_path = str(config.get("local_path") or config.get("path") or config.get("file_path") or "").strip()
+        dropbox_path = str(config.get("dropbox_path") or config.get("remote_path") or "").strip()
+        from_path = str(config.get("from_path") or "").strip()
+        to_path = str(config.get("to_path") or "").strip()
+        folder_path = str(config.get("folder_path") or config.get("path") or "/").strip() or "/"
+        query = str(config.get("query") or _workflow_tool_text_input(config, current_text) or "").strip()
+
+        if action_id == "list_folder":
+            result = dropbox_list_folder(secret, folder_path)
+            return {
+                "summary": "Connector action completed: dropbox.list_folder.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "path": folder_path,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "search":
+            result = dropbox_search(secret, query)
+            return {
+                "summary": "Connector action completed: dropbox.search.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "query": query,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_shared_link":
+            target_path = dropbox_path or folder_path
+            if not target_path:
+                raise RuntimeError("Dropbox get_shared_link requires dropbox_path.")
+            result = dropbox_get_shared_link(secret, target_path)
+            return {
+                "summary": "Connector action completed: dropbox.get_shared_link.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "path": target_path,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        target_identity = _workflow_target_identity(
+            action_id,
+            path=dropbox_path or folder_path or from_path or None,
+            file_path=local_path or None,
+        )
+
+        def _perform_dropbox() -> Dict[str, Any]:
+            if action_id == "upload_file":
+                if not local_path or not dropbox_path:
+                    raise RuntimeError("Dropbox upload_file requires local_path and dropbox_path.")
+                result = dropbox_upload_file(
+                    secret,
+                    local_path,
+                    dropbox_path,
+                    overwrite=bool(config.get("overwrite", True)),
+                )
+            elif action_id == "download_file":
+                if not local_path or not dropbox_path:
+                    raise RuntimeError("Dropbox download_file requires dropbox_path and local_path.")
+                result = dropbox_download_file(secret, dropbox_path, local_path)
+            elif action_id == "delete":
+                target_path = dropbox_path or folder_path
+                if not target_path:
+                    raise RuntimeError("Dropbox delete requires path.")
+                result = dropbox_delete(secret, target_path)
+            else:
+                if not from_path or not to_path:
+                    raise RuntimeError("Dropbox move requires from_path and to_path.")
+                result = dropbox_move(secret, from_path, to_path)
+            return {
+                "summary": f"Connector action completed: dropbox.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "path": dropbox_path or folder_path or from_path or None,
+                        "local_path": local_path or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "dropbox_path": dropbox_path or folder_path or None,
+            "local_path": local_path or None,
+            "from_path": from_path or None,
+            "to_path": to_path or None,
+        }
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "path": dropbox_path or folder_path or None},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_dropbox,
+        )
+
+    if connector_id == "s3" and action_id in {
+        "list_buckets",
+        "list_objects",
+        "upload_file",
+        "download_file",
+        "delete_object",
+        "get_presigned_url",
+        "create_bucket",
+    }:
+        bucket = str(config.get("bucket") or "").strip()
+        key = str(config.get("key") or config.get("path") or "").strip()
+        local_path = str(config.get("local_path") or config.get("file_path") or "").strip()
+
+        if action_id == "list_buckets":
+            result = s3_list_buckets(secret)
+            return {
+                "summary": "Connector action completed: s3.list_buckets.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_objects":
+            if not bucket:
+                raise RuntimeError("S3 list_objects requires bucket.")
+            result = s3_list_objects(
+                secret,
+                bucket,
+                prefix=str(config.get("prefix") or "").strip(),
+                limit=int(config.get("limit") or 100),
+            )
+            return {
+                "summary": "Connector action completed: s3.list_objects.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "bucket": bucket,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_presigned_url":
+            if not bucket or not key:
+                raise RuntimeError("S3 get_presigned_url requires bucket and key.")
+            result = s3_get_presigned_url(
+                secret,
+                bucket,
+                key,
+                expires_in=int(config.get("expires_in") or 3600),
+            )
+            return {
+                "summary": "Connector action completed: s3.get_presigned_url.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "bucket": bucket,
+                        "key": key,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        target_identity = _workflow_target_identity(
+            action_id,
+            bucket=bucket or None,
+            key=key or None,
+            file_path=local_path or None,
+        )
+
+        def _perform_s3() -> Dict[str, Any]:
+            if action_id == "upload_file":
+                if not bucket or not key or not local_path:
+                    raise RuntimeError("S3 upload_file requires bucket, key, and local_path.")
+                result = s3_upload_file(secret, local_path, bucket, key)
+            elif action_id == "download_file":
+                if not bucket or not key or not local_path:
+                    raise RuntimeError("S3 download_file requires bucket, key, and local_path.")
+                result = s3_download_file(secret, bucket, key, local_path)
+            elif action_id == "delete_object":
+                if not bucket or not key:
+                    raise RuntimeError("S3 delete_object requires bucket and key.")
+                result = s3_delete_object(secret, bucket, key)
+            else:
+                if not bucket:
+                    raise RuntimeError("S3 create_bucket requires bucket.")
+                result = s3_create_bucket(
+                    secret,
+                    bucket,
+                    region=str(config.get("region") or "").strip() or None,
+                )
+            return {
+                "summary": f"Connector action completed: s3.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "bucket": bucket or None,
+                        "key": key or None,
+                        "local_path": local_path or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "bucket": bucket or None,
+            "key": key or None,
+            "local_path": local_path or None,
+        }
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "bucket": bucket or None, "key": key or None},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_s3,
+        )
+
+    if connector_id == "notion" and action_id in {
+        "search",
+        "get_page",
+        "create_page",
+        "update_page",
+        "append_blocks",
+        "query_database",
+        "create_database_item",
+    }:
+        page_id = str(config.get("page_id") or "").strip()
+        parent_id = str(config.get("parent_id") or config.get("database_id") or page_id or "").strip()
+        database_id = str(config.get("database_id") or "").strip()
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        if action_id == "search":
+            result = notion_search(
+                secret,
+                str(config.get("query") or body_text or "").strip(),
+                filter_type=str(config.get("filter_type") or "").strip() or None,
+            )
+            return {
+                "summary": "Connector action completed: notion.search.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_page":
+            if not page_id:
+                raise RuntimeError("Notion get_page requires page_id.")
+            result = notion_get_page(secret, page_id)
+            return {
+                "summary": "Connector action completed: notion.get_page.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "page_id": page_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "query_database":
+            if not database_id:
+                raise RuntimeError("Notion query_database requires database_id.")
+            result = notion_query_database(
+                secret,
+                database_id,
+                filter=config.get("filter") if isinstance(config.get("filter"), dict) else None,
+                sorts=config.get("sorts") if isinstance(config.get("sorts"), list) else None,
+            )
+            return {
+                "summary": "Connector action completed: notion.query_database.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "database_id": database_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        title = str(config.get("title") or "").strip()
+        target_identity = _workflow_target_identity(
+            action_id,
+            page_id=page_id or None,
+            parent_id=parent_id or None,
+            database_id=database_id or None,
+            title=title or None,
+        )
+
+        def _perform_notion() -> Dict[str, Any]:
+            if action_id == "create_page":
+                if not parent_id or not title:
+                    raise RuntimeError("Notion create_page requires parent_id and title.")
+                result = notion_create_page(
+                    secret,
+                    parent_id,
+                    title,
+                    [item for item in (config.get("content_blocks") if isinstance(config.get("content_blocks"), list) else []) if isinstance(item, dict)],
+                    parent_type=str(config.get("parent_type") or "page_id").strip() or "page_id",
+                    title_property_name=str(config.get("title_property_name") or "title").strip() or "title",
+                )
+            elif action_id == "update_page":
+                if not page_id:
+                    raise RuntimeError("Notion update_page requires page_id.")
+                result = notion_update_page(
+                    secret,
+                    page_id,
+                    config.get("properties") if isinstance(config.get("properties"), dict) else {},
+                    archived=config.get("archived") if isinstance(config.get("archived"), bool) else None,
+                )
+            elif action_id == "append_blocks":
+                if not page_id:
+                    raise RuntimeError("Notion append_blocks requires page_id.")
+                result = notion_append_blocks(
+                    secret,
+                    page_id,
+                    [item for item in (config.get("blocks") if isinstance(config.get("blocks"), list) else []) if isinstance(item, dict)],
+                )
+            else:
+                if not database_id:
+                    raise RuntimeError("Notion create_database_item requires database_id.")
+                result = notion_create_database_item(
+                    secret,
+                    database_id,
+                    config.get("properties") if isinstance(config.get("properties"), dict) else {},
+                    content_blocks=[item for item in (config.get("content_blocks") if isinstance(config.get("content_blocks"), list) else []) if isinstance(item, dict)] or None,
+                )
+            return {
+                "summary": f"Connector action completed: notion.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "page_id": page_id or None,
+                        "database_id": database_id or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "page_id": page_id or None,
+            "parent_id": parent_id or None,
+            "database_id": database_id or None,
+            "title": title or None,
+        }
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "page_id": page_id or None, "database_id": database_id or None},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_notion,
+        )
+
+    if connector_id == "linear" and action_id in {
+        "list_teams",
+        "list_issues",
+        "get_issue",
+        "create_issue",
+        "update_issue",
+        "list_projects",
+        "add_comment",
+    }:
+        team_id = str(config.get("team_id") or "").strip()
+        issue_id = str(config.get("issue_id") or "").strip()
+        body_text = _workflow_tool_text_input(config, current_text)
+
+        if action_id == "list_teams":
+            result = linear_list_teams(secret)
+            return {
+                "summary": "Connector action completed: linear.list_teams.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_issues":
+            if not team_id:
+                raise RuntimeError("Linear list_issues requires team_id.")
+            result = linear_list_issues(
+                secret,
+                team_id,
+                state=str(config.get("state") or "").strip() or None,
+                assignee=str(config.get("assignee") or config.get("assignee_id") or "").strip() or None,
+                limit=int(config.get("limit") or 20),
+            )
+            return {
+                "summary": "Connector action completed: linear.list_issues.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "team_id": team_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "get_issue":
+            if not issue_id:
+                raise RuntimeError("Linear get_issue requires issue_id.")
+            result = linear_get_issue(secret, issue_id)
+            return {
+                "summary": "Connector action completed: linear.get_issue.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "issue_id": issue_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        if action_id == "list_projects":
+            if not team_id:
+                raise RuntimeError("Linear list_projects requires team_id.")
+            result = linear_list_projects(secret, team_id)
+            return {
+                "summary": "Connector action completed: linear.list_projects.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "team_id": team_id,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        title = str(config.get("title") or "").strip()
+        target_identity = _workflow_target_identity(
+            action_id,
+            team_id=team_id or None,
+            issue_id=issue_id or None,
+            title=title or None,
+        )
+
+        def _perform_linear() -> Dict[str, Any]:
+            if action_id == "create_issue":
+                if not team_id or not title:
+                    raise RuntimeError("Linear create_issue requires team_id and title.")
+                result = linear_create_issue(
+                    secret,
+                    team_id,
+                    title,
+                    str(config.get("description") or body_text or ""),
+                    priority=int(config.get("priority")) if config.get("priority") not in {None, ""} else None,
+                    assignee_id=str(config.get("assignee_id") or "").strip() or None,
+                )
+            elif action_id == "update_issue":
+                if not issue_id:
+                    raise RuntimeError("Linear update_issue requires issue_id.")
+                result = linear_update_issue(
+                    secret,
+                    issue_id,
+                    state=str(config.get("state") or "").strip() or None,
+                    priority=int(config.get("priority")) if config.get("priority") not in {None, ""} else None,
+                    assignee_id=str(config.get("assignee_id") or "").strip() or None,
+                )
+            else:
+                if not issue_id:
+                    raise RuntimeError("Linear add_comment requires issue_id.")
+                result = linear_add_comment(
+                    secret,
+                    issue_id,
+                    str(config.get("body") or body_text or ""),
+                )
+            return {
+                "summary": f"Connector action completed: linear.{action_id}.",
+                "result_data": {
+                    "connector_action": {
+                        "connector": connector_id,
+                        "credential_id": credential_id,
+                        "action_id": action_id,
+                        "team_id": team_id or None,
+                        "issue_id": issue_id or None,
+                        "result": _json_safe(result),
+                    }
+                },
+            }
+
+        payload = {
+            "connector": connector_id,
+            "action_id": action_id,
+            "team_id": team_id or None,
+            "issue_id": issue_id or None,
+            "title": title or None,
+        }
+        return execute_external_write_once(
+            run_id=run_id,
+            context=context,
+            step_key=f"workflow_node:{node_id}",
+            category="workflow_connector_action",
+            operation={"connector": connector_id, "action_id": action_id, "team_id": team_id or None, "issue_id": issue_id or None},
+            target_system=connector_id,
+            account_identity=connector_account_identity,
+            target_identity=target_identity,
+            payload=payload,
+            execute=_perform_linear,
         )
 
     if connector_id == "whatsapp_twilio" and action_id == "send_message":
@@ -2205,6 +3858,10 @@ def _execute_workflow_graph(
     context: Dict[str, Any],
     log_queue: queue.Queue,
     workflow_definition: Dict[str, Any],
+    *,
+    _state: Optional[Dict[str, Any]] = None,
+    _track_node_states: bool = True,
+    _loop_depth: int = 0,
 ) -> Dict[str, Any]:
     nodes = workflow_definition.get("nodes") if isinstance(workflow_definition.get("nodes"), list) else []
     edges = workflow_definition.get("edges") if isinstance(workflow_definition.get("edges"), list) else []
@@ -2218,7 +3875,9 @@ def _execute_workflow_graph(
     }
     if not node_map:
         raise RuntimeError("Workflow definition has no usable node ids.")
-    _ensure_run_node_states(run_id, graph_kind="workflow", nodes=nodes)
+    if _track_node_states:
+        _ensure_run_node_states(run_id, graph_kind="workflow", nodes=nodes)
+    update_node_state = _update_run_node_state if _track_node_states else _workflow_noop_node_state_update
 
     trigger_nodes = [
         node for node in nodes if isinstance(node, dict) and str(node.get("type") or "").strip().lower() == "trigger"
@@ -2230,21 +3889,26 @@ def _execute_workflow_graph(
     else:
         current_node = nodes[0] if isinstance(nodes[0], dict) else None
 
-    current_text = (
-        _workflow_text_payload(context.get("business_plan"))
-        or _workflow_text_payload(context.get("user_goal"))
-        or "Workflow run started."
-    )
-    state: Dict[str, Any] = {
-        "last_text": current_text,
-        "last_data": None,
-        "active_provider": str(context.get("provider") or "openai").strip() or "openai",
-        "active_model": str(context.get("model") or CODEX_MODEL).strip() or CODEX_MODEL,
-    }
+    if isinstance(_state, dict):
+        state = _state
+        current_text = _workflow_text_payload(state.get("last_text") or "")
+    else:
+        current_text = (
+            _workflow_text_payload(context.get("business_plan"))
+            or _workflow_text_payload(context.get("user_goal"))
+            or "Workflow run started."
+        )
+        state = {
+            "last_text": current_text,
+            "last_data": None,
+            "active_provider": str(context.get("provider") or "openai").strip() or "openai",
+            "active_model": str(context.get("model") or CODEX_MODEL).strip() or CODEX_MODEL,
+        }
     final_node_id: Optional[str] = None
     safety_counter = 0
 
     while current_node and safety_counter < 100:
+        _workflow_raise_if_cancelled(run_id)
         safety_counter += 1
         node_id = str(current_node.get("id") or "").strip()
         node_type = str(current_node.get("type") or "").strip().lower()
@@ -2252,7 +3916,7 @@ def _execute_workflow_graph(
         config = current_node.get("config") if isinstance(current_node.get("config"), dict) else {}
         label = _workflow_label(current_node)
         final_node_id = node_id or final_node_id
-        _update_run_node_state(
+        update_node_state(
             run_id,
             node_id,
             status="running",
@@ -2270,7 +3934,7 @@ def _execute_workflow_graph(
         try:
             if node_type == "trigger":
                 emit_log(log_queue, "info", f"Trigger active: {label}", event="workflow_trigger", data={"variant": variant or "manual", "node_id": node_id})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2300,7 +3964,7 @@ def _execute_workflow_graph(
                 state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
                 state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
                 emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2330,7 +3994,7 @@ def _execute_workflow_graph(
                 current_text = f"{label}: {'true' if decision else 'false'}"
                 state["last_text"] = current_text
                 emit_log(log_queue, "info", current_text, event="workflow_decision", data={"node_id": node_id, "decision": bool(decision), "expression": expression})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2363,7 +4027,7 @@ def _execute_workflow_graph(
                         f"Current workflow context: {current_text or 'No current output.'} "
                         f"Reply with one of: {option_text}."
                     ).strip()
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="waiting_human",
@@ -2419,7 +4083,7 @@ def _execute_workflow_graph(
                     event="workflow_human_resolved",
                     data={"node_id": node_id, "variant": variant or "approval", "decision": response_decision or None},
                 )
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2448,7 +4112,7 @@ def _execute_workflow_graph(
                     "summary": summary,
                 }
                 emit_log(log_queue, "info", f"Data step: {summary}", event="workflow_data_step", data={"node_id": node_id, "variant": variant})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2491,7 +4155,7 @@ def _execute_workflow_graph(
                 if not child_run_id:
                     raise RuntimeError("Subflow execution did not return a child run id.")
                 emit_log(log_queue, "info", f"Subflow started: {child_workflow_id}", event="workflow_subflow_start", data={"node_id": node_id, "child_run_id": child_run_id, "workflow_id": child_workflow_id})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     summary=f"Waiting for subflow {child_workflow_id}",
@@ -2503,7 +4167,7 @@ def _execute_workflow_graph(
                 child_run = _workflow_wait_for_child_run(
                     child_run_id,
                     timeout_seconds=child_timeout,
-                    on_waiting_for_input=lambda active_child_run_id, child_run: _update_run_node_state(
+                    on_waiting_for_input=lambda active_child_run_id, child_run: update_node_state(
                         run_id,
                         node_id,
                         status="waiting_human",
@@ -2519,7 +4183,7 @@ def _execute_workflow_graph(
                         child_workflow_id=child_workflow_id,
                         waiting_for_approval=True,
                     ),
-                    on_resumed=lambda active_child_run_id, _child_run: _update_run_node_state(
+                    on_resumed=lambda active_child_run_id, _child_run: update_node_state(
                         run_id,
                         node_id,
                         status="running",
@@ -2545,7 +4209,7 @@ def _execute_workflow_graph(
                     "child_result_data": child_result_data,
                 }
                 emit_log(log_queue, "info", f"Subflow completed: {child_workflow_id}", event="workflow_subflow_complete", data={"node_id": node_id, "child_run_id": child_run_id})
-                _update_run_node_state(
+                update_node_state(
                     run_id,
                     node_id,
                     status="succeeded",
@@ -2555,6 +4219,35 @@ def _execute_workflow_graph(
                     detail={"child_status": child_status},
                     child_run_id=child_run_id,
                     child_workflow_id=child_workflow_id,
+                )
+
+            elif node_type == "loop":
+                loop_result = _workflow_execute_loop_node(
+                    run_id,
+                    node_id,
+                    label,
+                    variant or "for_each",
+                    config,
+                    context=context,
+                    log_queue=log_queue,
+                    state=state,
+                    update_node_state=update_node_state,
+                    loop_depth=_loop_depth,
+                )
+                current_text = _workflow_text_payload(loop_result.get("current_text") or current_text)
+                state["last_text"] = current_text
+                state["last_data"] = loop_result.get("last_data")
+                state["active_provider"] = str(loop_result.get("active_provider") or state.get("active_provider") or context.get("provider") or "openai")
+                state["active_model"] = str(loop_result.get("active_model") or state.get("active_model") or context.get("model") or CODEX_MODEL)
+                emit_log(log_queue, "info", current_text or f"Loop completed: {label}", event="workflow_loop_complete", data={"node_id": node_id, "variant": variant or "for_each"})
+                update_node_state(
+                    run_id,
+                    node_id,
+                    status="succeeded",
+                    finalize=True,
+                    output_preview=_node_preview_text(current_text),
+                    summary=str(loop_result.get("summary") or f"Loop completed: {label}"),
+                    detail=loop_result.get("detail"),
                 )
 
             elif node_type == "tool":
@@ -2607,7 +4300,7 @@ def _execute_workflow_graph(
                     if decision == "deny" or decision == "blocked":
                         raise RuntimeError(f"Tool node '{label}' is blocked by runtime policy.")
                     if decision == "require_confirmation" or decision == "approval_required":
-                        _update_run_node_state(
+                        update_node_state(
                             run_id,
                             node_id,
                             status="waiting_human",
@@ -2621,7 +4314,7 @@ def _execute_workflow_graph(
                         )
                         if not approved:
                             raise RuntimeError(f"Workflow stopped before tool node '{label}'.")
-                        _update_run_node_state(
+                        update_node_state(
                             run_id,
                             node_id,
                             status="running",
@@ -2644,7 +4337,7 @@ def _execute_workflow_graph(
                         event="workflow_tool_loop_detected",
                         data={"node_id": node_id, "tool_id": tool_id or variant, "variant": variant},
                     )
-                    _update_run_node_state(
+                    update_node_state(
                         run_id,
                         node_id,
                         status="failed",
@@ -2676,7 +4369,7 @@ def _execute_workflow_graph(
                         "output": _json_safe(tool_output),
                     }
                     emit_log(log_queue, "info", f"HTTP tool completed: {label}", event="workflow_tool_http", data={"node_id": node_id, "url": url, "method": method})
-                    _update_run_node_state(
+                    update_node_state(
                         run_id,
                         node_id,
                         status="succeeded",
@@ -2703,7 +4396,7 @@ def _execute_workflow_graph(
                         **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
                     }
                     emit_log(log_queue, "info", current_text, event="workflow_tool_connector_action", data={"node_id": node_id, "tool_id": tool_id})
-                    _update_run_node_state(
+                    update_node_state(
                         run_id,
                         node_id,
                         status="succeeded",
@@ -2728,7 +4421,7 @@ def _execute_workflow_graph(
                         **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
                     }
                     emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
-                    _update_run_node_state(
+                    update_node_state(
                         run_id,
                         node_id,
                         status="succeeded",
@@ -2745,7 +4438,7 @@ def _execute_workflow_graph(
                         label=label,
                         variant=variant,
                         current_text=current_text,
-                        on_waiting_for_input=lambda active_child_run_id, child_run: _update_run_node_state(
+                        on_waiting_for_input=lambda active_child_run_id, child_run: update_node_state(
                             run_id,
                             node_id,
                             status="waiting_human",
@@ -2761,7 +4454,7 @@ def _execute_workflow_graph(
                             child_run_id=active_child_run_id,
                             waiting_for_approval=True,
                         ),
-                        on_resumed=lambda active_child_run_id, _child_run: _update_run_node_state(
+                        on_resumed=lambda active_child_run_id, _child_run: update_node_state(
                             run_id,
                             node_id,
                             status="running",
@@ -2781,7 +4474,7 @@ def _execute_workflow_graph(
                         **(_json_safe(tool_result.get("result_data")) if isinstance(tool_result.get("result_data"), dict) else {}),
                     }
                     emit_log(log_queue, "info", current_text, event=f"workflow_tool_{variant}", data={"node_id": node_id, "tool_id": tool_id})
-                    _update_run_node_state(
+                    update_node_state(
                         run_id,
                         node_id,
                         status="succeeded",
@@ -2796,7 +4489,7 @@ def _execute_workflow_graph(
             else:
                 raise RuntimeError(f"Unsupported workflow node type '{node_type}'.")
         except Exception as exc:
-            _update_run_node_state(
+            update_node_state(
                 run_id,
                 node_id,
                 status="failed",
@@ -2816,6 +4509,18 @@ def _execute_workflow_graph(
 
     final_text = state.get("last_text") if isinstance(state.get("last_text"), str) else current_text
     final_data = state.get("last_data") if isinstance(state.get("last_data"), dict) else None
+    if not _track_node_states:
+        return {
+            "result_text": final_text,
+            "result_data": _json_safe(final_data) if final_data is not None else None,
+            "usage_masked": None,
+            "active_profile_id": None,
+            "active_provider": str(state.get("active_provider") or context.get("provider") or "openai"),
+            "active_model": str(state.get("active_model") or context.get("model") or CODEX_MODEL),
+            "active_adapter": None,
+            "final_node_id": final_node_id,
+            "state": state,
+        }
     usage = build_masked_usage(
         str(state.get("active_provider") or context.get("provider") or "openai"),
         str(state.get("active_model") or context.get("model") or CODEX_MODEL),

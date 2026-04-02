@@ -420,7 +420,7 @@ class BuilderRouteTests(unittest.IsolatedAsyncioTestCase):
             }
             """
         )
-        self.assertTrue(any(issue.get("code") == "browser_authenticated_interactive_not_supported" for issue in payload.get("issues", [])))
+        self.assertTrue(any(issue.get("code") == "browser_reviewed_approval_required" for issue in payload.get("issues", [])))
 
     def test_parse_workflow_payload_warns_on_session_backed_browser(self):
         payload = _parse_workflow_payload(

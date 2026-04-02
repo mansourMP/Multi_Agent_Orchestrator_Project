@@ -107,12 +107,19 @@ from server_modules.autopilot_connectors import (
     handle_telegram_autopilot_test_message,
 )
 from server_modules.connector_validators import (
+    validate_dropbox_connector as _validate_dropbox_connector,
+    validate_github_connector as _validate_github_connector,
+    validate_linear_connector as _validate_linear_connector,
+    validate_notion_connector as _validate_notion_connector,
     validate_google_workspace_connector as _validate_google_workspace_connector,
     validate_microsoft_365_connector as _validate_microsoft_365_connector,
+    validate_s3_connector as _validate_s3_connector,
+    validate_smtp_connector as _validate_smtp_connector,
     validate_telegram_connector as _validate_telegram_connector,
     validate_wechat_work_connector as _validate_wechat_work_connector,
     validate_whatsapp_twilio_connector as _validate_whatsapp_twilio_connector,
     validate_discord_bot_connector as _validate_discord_bot_connector,
+    validate_slack_connector as _validate_slack_connector,
     validate_instagram_business_connector as _validate_instagram_business_connector,
     validate_irc_connector as _validate_irc_connector,
 )
@@ -233,6 +240,10 @@ from server_modules.runtime_state_store import (
     upsert_live_run_state,
     delete_live_run_state,
     list_live_run_states,
+    upsert_chat_stream_state,
+    get_chat_stream_state,
+    list_chat_stream_states,
+    delete_expired_chat_stream_states,
     replace_local_runtime_state,
     load_local_runtime_state,
     upsert_run_history_item,
@@ -363,6 +374,7 @@ ORION_MAX_RETRIES = config_int("ORION_MAX_RETRIES", 2)
 ORION_RETRY_BACKOFF_SECONDS = config_float("ORION_RETRY_BACKOFF_SECONDS", 1.5)
 ORION_MAX_EVENT_BUFFER = config_int("ORION_MAX_EVENT_BUFFER", 2000)
 ORION_HISTORY_LIMIT = config_int("ORION_HISTORY_LIMIT", 800)
+ORION_DIRECT_CHAT_SESSION_MANAGER = config_bool("ORION_DIRECT_CHAT_SESSION_MANAGER", False)
 ORION_HISTORY_FILE = _resolve_state_file("ORION_HISTORY_FILE", "runtime/run_history.json", ".orion_run_history.json")
 ORION_RUNTIME_STATE_DB = _resolve_state_file("ORION_RUNTIME_STATE_DB", "runtime/state.db", ".orion_runtime_state.db")
 ORION_CHANNEL_EVENTS_LIMIT = config_int("ORION_CHANNEL_EVENTS_LIMIT", 2000)
@@ -564,6 +576,10 @@ CONNECTOR_CATALOG = {
         "label": "Microsoft 365",
         "auth": ["access_token"],
     },
+    "smtp": {
+        "label": "SMTP Email",
+        "auth": ["host", "port", "username", "password", "use_tls"],
+    },
     "telegram_bot": {
         "label": "Telegram Bot",
         "auth": ["bot_token", "chat_id"],
@@ -579,6 +595,30 @@ CONNECTOR_CATALOG = {
     "discord_bot": {
         "label": "Discord (Bot API)",
         "auth": ["bot_token", "channel_id", "guild_id"],
+    },
+    "slack": {
+        "label": "Slack",
+        "auth": ["bot_token", "user_token", "team_id", "team_name"],
+    },
+    "github": {
+        "label": "GitHub",
+        "auth": ["personal_access_token", "app_id", "installation_id", "private_key_pem"],
+    },
+    "dropbox": {
+        "label": "Dropbox",
+        "auth": ["access_token"],
+    },
+    "s3": {
+        "label": "Amazon S3",
+        "auth": ["aws_access_key_id", "aws_secret_access_key", "region"],
+    },
+    "notion": {
+        "label": "Notion",
+        "auth": ["integration_token", "access_token"],
+    },
+    "linear": {
+        "label": "Linear",
+        "auth": ["api_key", "access_token"],
     },
     "instagram_business": {
         "label": "Instagram Business",

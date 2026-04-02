@@ -239,6 +239,17 @@ export function ConnectorLogoMark({
     );
   }
 
+  if (id === 'smtp') {
+    return (
+      <LogoTile size={size} bg="#FFFFFF" border="#E2E2E2">
+        <SvgMark size={size}>
+          <rect x="4.5" y="7" width="15" height="10" rx="2" fill="#FFF7ED" stroke="#F97316" strokeWidth="1.4" />
+          <path d="M5.8 8.4L12 12.8L18.2 8.4" stroke="#F97316" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </SvgMark>
+      </LogoTile>
+    );
+  }
+
   if (id === 'discord_bot' || id === 'discord') {
     return (
       <LogoTile size={size} bg="#5865F2">

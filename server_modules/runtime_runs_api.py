@@ -3,9 +3,13 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
 
 from fastapi.responses import StreamingResponse
 
@@ -15,10 +19,19 @@ from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
     build_browser_execution_binding,
 )
+from server_modules.runtime_state_store import (
+    delete_chat_stream_sessions_older_than,
+    get_chat_stream_state,
+    mark_stale_chat_stream_sessions_interrupted,
+    upsert_chat_stream_state,
+)
+from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
 _CHAT_STREAM_BUFFER_LIMIT = 50
 _CHAT_STREAM_TTL_SECONDS = 15 * 60
+_CHAT_STREAM_STATE_STALE_AFTER_SECONDS = 10 * 60
+_CHAT_STREAM_STATE_TTL_SECONDS = 60 * 60
 _CHAT_STREAM_SESSIONS: dict[str, dict[str, Any]] = {}
 _HEARTBEAT_SCHEDULER_LOCK = threading.Lock()
 _HEARTBEAT_SCHEDULER: Optional[HeartbeatScheduler] = None
@@ -38,6 +51,29 @@ def _refresh_server_exports():
 
     globals().update(_server.__dict__)
     return _server
+
+
+def _chat_stream_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _chat_stream_now_iso()
+
+
+def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
+    try:
+        metrics_fn = _late_server_export("metrics_inc")
+    except Exception:
+        return
+    try:
+        metrics_fn(key, amount)
+    except Exception:
+        return
 
 
 def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
@@ -92,6 +128,45 @@ def _match_webhook_trigger(workspace_id: str, request_url: str) -> Optional[dict
     return None
 
 
+def _normalize_usage_period(period: Any) -> str:
+    value = str(period or "all").strip().lower()
+    return value if value in {"day", "week", "month", "all"} else "all"
+
+
+def _usage_snapshots_for_user(current_user: Any) -> list[dict[str, Any]]:
+    _refresh_server_exports()
+    with RUN_HISTORY_LOCK:
+        archived_items = list(RUN_HISTORY)
+    combined: dict[str, dict[str, Any]] = {}
+    for item in archived_items:
+        if isinstance(item, dict):
+            run_id = str(item.get("run_id") or "").strip()
+            if run_id:
+                combined[run_id] = item
+
+    serialize_snapshot = _late_server_export("_serialize_run_snapshot")
+    for run_id, run in list(runs.items()):
+        if not isinstance(run, dict):
+            continue
+        if not isinstance(run.get("usage_masked"), dict):
+            continue
+        try:
+            snapshot = serialize_snapshot(str(run_id), run)
+        except Exception:
+            continue
+        snapshot_run_id = str(snapshot.get("run_id") or run_id).strip()
+        if snapshot_run_id:
+            combined[snapshot_run_id] = snapshot
+
+    items = list(combined.values())
+    if _current_user_is_privileged(current_user):
+        return items
+    request_user_id = str(current_user.get("user_id") or "").strip()
+    if not request_user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is required.")
+    return [item for item in items if _extract_run_owner_user_id(item) == request_user_id]
+
+
 def _normalize_chat_stream_cursor(value: Any) -> int:
     token = str(value or "").strip()
     if not token:
@@ -100,6 +175,227 @@ def _normalize_chat_stream_cursor(value: Any) -> int:
         return max(0, int(token))
     except Exception:
         return 0
+
+
+def _chat_stream_state_db_path() -> Path:
+    override = globals().get("_CHAT_STREAM_STATE_DB_OVERRIDE")
+    if override:
+        return Path(override)
+    try:
+        return Path(_late_server_export("ORION_RUNTIME_STATE_DB"))
+    except Exception:
+        from server_modules.runtime_config import ORION_RUNTIME_STATE_DB
+
+        return Path(ORION_RUNTIME_STATE_DB)
+
+
+def _configured_direct_chat_worker_count() -> int:
+    for env_name in ("ORION_RUNTIME_UVICORN_WORKERS", "UVICORN_WORKERS", "WEB_CONCURRENCY"):
+        raw_value = str(os.getenv(env_name) or "").strip()
+        if not raw_value:
+            continue
+        try:
+            parsed = int(raw_value)
+        except Exception:
+            continue
+        if parsed > 0:
+            return parsed
+    return 1
+
+
+def ensure_single_worker_direct_chat_stream_runtime() -> None:
+    worker_count = _configured_direct_chat_worker_count()
+    if worker_count <= 1:
+        return
+    raise RuntimeError(
+        "Direct chat streaming requires a single runtime worker because _CHAT_STREAM_SESSIONS "
+        "is process-local and not safe for multi-worker deployment."
+    )
+
+
+def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> None:
+    ensure_single_worker_direct_chat_stream_runtime()
+    reference = float(now_ts or time.time())
+    db_path = _chat_stream_state_db_path()
+    interrupted = mark_stale_chat_stream_sessions_interrupted(
+        db_path,
+        stale_before_ts=reference - _CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
+        error_text="Chat stream was interrupted while the runtime was unavailable.",
+    )
+    if interrupted:
+        _chat_stream_metrics_inc("chat_stream_interrupted", interrupted)
+    deleted = delete_chat_stream_sessions_older_than(
+        db_path,
+        older_than_ts=reference - _CHAT_STREAM_STATE_TTL_SECONDS,
+    )
+    if deleted:
+        _chat_stream_metrics_inc("chat_stream_state_cleanup_sessions", deleted)
+    if _direct_chat_session_manager_enabled():
+        try:
+            _direct_chat_session_manager().interrupt_stale_sessions(now_ts=reference)
+        except Exception:
+            return
+
+
+def _default_chat_stream_session(
+    key: str,
+    *,
+    thread_id: str,
+    request_id: str,
+    workspace_id: str,
+) -> dict[str, Any]:
+    now_ts = time.time()
+    return {
+        "key": key,
+        "thread_id": thread_id,
+        "request_id": request_id,
+        "workspace_id": workspace_id,
+        "condition": threading.Condition(),
+        "events": [],
+        "next_event_id": 1,
+        "producer_started": False,
+        "completed": False,
+        "last_accessed_at": now_ts,
+        "created_at": _chat_stream_now_iso(),
+        "status": "active",
+        "last_event_seq": 0,
+        "partial_text": "",
+        "final_payload": {},
+        "error_text": "",
+        "metadata": {},
+    }
+
+
+def _persist_chat_stream_session_state(session: dict[str, Any]) -> None:
+    upsert_chat_stream_state(
+        _chat_stream_state_db_path(),
+        {
+            "session_id": str(session.get("key") or "").strip(),
+            "thread_id": str(session.get("thread_id") or "").strip(),
+            "request_id": str(session.get("request_id") or "").strip(),
+            "workspace_id": str(session.get("workspace_id") or "").strip(),
+            "status": str(session.get("status") or "active").strip() or "active",
+            "created_at": str(session.get("created_at") or "").strip() or _chat_stream_now_iso(),
+            "updated_at": _chat_stream_now_iso(),
+            "last_event_seq": int(session.get("last_event_seq") or 0),
+            "partial_text": str(session.get("partial_text") or ""),
+            "final_payload": session.get("final_payload") if isinstance(session.get("final_payload"), dict) else {},
+            "error_text": str(session.get("error_text") or "").strip(),
+            "metadata": session.get("metadata") if isinstance(session.get("metadata"), dict) else {},
+        },
+    )
+
+
+def _chat_stream_interrupted_final_payload(partial_text: str, error_text: str) -> dict[str, Any]:
+    detail = str(error_text or "").strip() or "Chat stream was interrupted while the runtime was unavailable."
+    partial = str(partial_text or "").strip()
+    reply = f"{partial}\n\n{detail}" if partial else detail
+    return {
+        "reply": reply,
+        "actions": [],
+        "mode": "answer",
+        "error": detail,
+    }
+
+
+def _chat_stream_replay_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    status = str(state.get("status") or "").strip().lower()
+    if status == "completed":
+        final_payload = state.get("final_payload")
+        if isinstance(final_payload, dict) and final_payload:
+            return final_payload
+        fallback_reply = str(state.get("partial_text") or "").strip() or "Chat completed."
+        return {
+            "reply": fallback_reply,
+            "actions": [],
+            "mode": "answer",
+            "error": "",
+        }
+    return _chat_stream_interrupted_final_payload(
+        str(state.get("partial_text") or ""),
+        str(state.get("error_text") or ""),
+    )
+
+
+def _build_chat_stream_replay_session(
+    key: str,
+    *,
+    thread_id: str,
+    request_id: str,
+    workspace_id: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    session = _default_chat_stream_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+    )
+    seq = max(1, int(state.get("last_event_seq") or 1))
+    payload = _chat_stream_replay_payload_from_state(state)
+    session.update(
+        {
+            "producer_started": True,
+            "completed": True,
+            "next_event_id": seq + 1,
+            "events": [
+                {
+                    "id": str(seq),
+                    "seq": seq,
+                    "event": "final",
+                    "payload": payload,
+                }
+            ],
+            "last_event_seq": seq,
+            "partial_text": str(state.get("partial_text") or ""),
+            "status": str(state.get("status") or "completed").strip() or "completed",
+            "final_payload": payload,
+            "error_text": str(state.get("error_text") or "").strip(),
+            "created_at": str(state.get("created_at") or "").strip() or _chat_stream_now_iso(),
+        }
+    )
+    return session
+
+
+def _load_replayable_chat_stream_session(
+    key: str,
+    *,
+    thread_id: str,
+    request_id: str,
+    workspace_id: str,
+) -> Optional[dict[str, Any]]:
+    state = get_chat_stream_state(_chat_stream_state_db_path(), key)
+    if not isinstance(state, dict):
+        return None
+    status = str(state.get("status") or "").strip().lower()
+    if status == "active":
+        state["status"] = "interrupted"
+        state["error_text"] = (
+            str(state.get("error_text") or "").strip()
+            or "Chat stream was interrupted because the live producer is no longer running."
+        )
+        state["updated_at"] = _chat_stream_now_iso()
+        state["last_event_seq"] = max(1, int(state.get("last_event_seq") or 0) + 1)
+        state["final_payload"] = _chat_stream_interrupted_final_payload(
+            str(state.get("partial_text") or ""),
+            str(state.get("error_text") or ""),
+        )
+        upsert_chat_stream_state(_chat_stream_state_db_path(), state)
+        _chat_stream_metrics_inc("chat_stream_interrupted", 1)
+        status = "interrupted"
+    if status not in {"completed", "interrupted", "error"}:
+        return None
+    if status == "completed":
+        _chat_stream_metrics_inc("chat_stream_replayed_completed", 1)
+    else:
+        _chat_stream_metrics_inc("chat_stream_replayed_interrupted", 1)
+    return _build_chat_stream_replay_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+        state=state,
+    )
 
 
 def _chat_stream_request_signature(body: dict) -> str:
@@ -130,6 +426,112 @@ def _chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
     return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
 
 
+def _direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:
+    owner = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+        or "anonymous"
+    )
+    return f"{owner}:{str(workspace_id or 'default').strip() or 'default'}:{str(thread_id or 'direct-chat').strip() or 'direct-chat'}"
+
+
+def _direct_chat_session_manager_enabled() -> bool:
+    configured = globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER")
+    if isinstance(configured, bool):
+        return configured
+    return str(os.getenv("ORION_DIRECT_CHAT_SESSION_MANAGER") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _direct_chat_session_manager():
+    from server_modules.session_manager.manager import get_default_session_manager
+
+    return get_default_session_manager(db_path=_chat_stream_state_db_path())
+
+
+def _build_direct_chat_request_meta(
+    *,
+    body: dict,
+    workspace_id: str,
+    thread_id: str,
+    client_request_id: str,
+) -> dict[str, Any]:
+    return {
+        "request_id": client_request_id,
+        "client_request_id": client_request_id,
+        "workspace_id": workspace_id,
+        "thread_id": thread_id,
+        "provider": str(body.get("provider") or "").strip(),
+        "model": str(body.get("model") or "").strip(),
+        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
+        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+        "availability": body.get("availability") if isinstance(body.get("availability"), dict) else {},
+        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+        "max_iterations": body.get("max_iterations"),
+        "runtime_options": {
+            "cwd": str(body.get("cwd") or "").strip(),
+            "provider": str(body.get("provider") or "").strip(),
+            "model": str(body.get("model") or "").strip(),
+            "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
+            "thread_id": thread_id,
+        },
+    }
+
+
+def _build_direct_chat_event_producer(
+    *,
+    current_user: Any,
+    body: dict,
+    message: str,
+    workspace_id: str,
+    session_key: str,
+    thread_id: str,
+    client_request_id: str,
+):
+    from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
+    actor_key = _direct_chat_actor_key(current_user, workspace_id, thread_id)
+
+    if not _direct_chat_session_manager_enabled():
+        return build_direct_operator_reply(
+            message=message,
+            workspace_id=workspace_id,
+            requested_model=str(body.get("model") or "").strip(),
+            requested_provider=str(body.get("provider") or "").strip(),
+            thread_id=str(body.get("thread_id") or "").strip(),
+            prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+            reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
+            availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
+            approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+            max_iterations=body.get("max_iterations"),
+        )
+
+    manager = _direct_chat_session_manager()
+    try:
+        manager.evict_idle_handles()
+    except Exception:
+        pass
+    request_meta = _build_direct_chat_request_meta(
+        body=body,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+    )
+    user_id = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+    )
+    return manager.iter_turn_events(
+        session_id=actor_key,
+        actor_key=actor_key,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        message=message,
+        request_meta=request_meta,
+        turn_executor=build_chat_turn_event_stream,
+    )
+
+
 def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:
     reference = float(now_ts or time.time())
     stale_keys = [
@@ -141,25 +543,40 @@ def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:
         _CHAT_STREAM_SESSIONS.pop(key, None)
 
 
-def _get_or_create_chat_stream_session(key: str, *, thread_id: str, request_id: str) -> dict[str, Any]:
+def _get_or_create_chat_stream_session(
+    key: str,
+    *,
+    thread_id: str,
+    request_id: str,
+    workspace_id: str,
+) -> dict[str, Any]:
     with _CHAT_STREAM_LOCK:
         _prune_chat_stream_sessions_locked()
+        delete_chat_stream_sessions_older_than(
+            _chat_stream_state_db_path(),
+            older_than_ts=time.time() - _CHAT_STREAM_STATE_TTL_SECONDS,
+        )
         session = _CHAT_STREAM_SESSIONS.get(key)
         if isinstance(session, dict):
             session["last_accessed_at"] = time.time()
             return session
-        session = {
-            "key": key,
-            "thread_id": thread_id,
-            "request_id": request_id,
-            "condition": threading.Condition(),
-            "events": [],
-            "next_event_id": 1,
-            "producer_started": False,
-            "completed": False,
-            "last_accessed_at": time.time(),
-        }
+        replay_session = _load_replayable_chat_stream_session(
+            key,
+            thread_id=thread_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+        )
+        if isinstance(replay_session, dict):
+            _CHAT_STREAM_SESSIONS[key] = replay_session
+            return replay_session
+        session = _default_chat_stream_session(
+            key,
+            thread_id=thread_id,
+            request_id=request_id,
+            workspace_id=workspace_id,
+        )
         _CHAT_STREAM_SESSIONS[key] = session
+        _persist_chat_stream_session_state(session)
         return session
 
 
@@ -193,9 +610,21 @@ def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload:
             del events[:-_CHAT_STREAM_BUFFER_LIMIT]
         session["events"] = events
         session["last_accessed_at"] = time.time()
+        session["last_event_seq"] = next_event_id
+        if event_name == "chunk":
+            session["partial_text"] = str(session.get("partial_text") or "") + str(payload.get("delta") or "")
         if event_name == "final":
+            session["final_payload"] = dict(payload)
             session["completed"] = True
+            if str(payload.get("error") or "").strip():
+                session["status"] = "error"
+                session["error_text"] = str(payload.get("error") or "").strip()
+            else:
+                session["status"] = "completed"
+                if not str(session.get("partial_text") or "").strip():
+                    session["partial_text"] = str(payload.get("reply") or "")
         condition.notify_all()
+    _persist_chat_stream_session_state(session)
 
 
 def _complete_chat_stream_session(session: dict[str, Any]) -> None:
@@ -205,7 +634,10 @@ def _complete_chat_stream_session(session: dict[str, Any]) -> None:
     with condition:
         session["completed"] = True
         session["last_accessed_at"] = time.time()
+        if str(session.get("status") or "active").strip() == "active":
+            session["status"] = "completed"
         condition.notify_all()
+    _persist_chat_stream_session_state(session)
 
 
 def _chat_stream_error_payload(message: str) -> dict[str, Any]:
@@ -626,7 +1058,6 @@ def register_run_routes(app) -> None:
     import server as _server
     from server_modules.autopilot_connectors import handle_telegram_send_message
     from server_modules.agent_memory import delete_memory, get_memory, list_memory_entries
-    from server_modules.operator_chat import build_direct_operator_reply
     from server_modules.runtime_models import RunStartRequest
     from server_modules.workspace_context import (
         read_workspace_context_files,
@@ -740,25 +1171,25 @@ def register_run_routes(app) -> None:
         if not message:
             raise HTTPException(status_code=400, detail="Chat message is required.")
 
+        workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
         session_key, thread_id, client_request_id = _chat_stream_key(current_user, body)
         session = _get_or_create_chat_stream_session(
             session_key,
             thread_id=thread_id,
             request_id=client_request_id,
+            workspace_id=workspace_id,
         )
         replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
 
         def producer():
-            return build_direct_operator_reply(
+            return _build_direct_chat_event_producer(
+                current_user=current_user,
+                body=body,
                 message=message,
-                workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
-                requested_model=str(body.get("model") or "").strip(),
-                requested_provider=str(body.get("provider") or "").strip(),
-                thread_id=str(body.get("thread_id") or "").strip(),
-                prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-                reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
-                availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
-                approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+                workspace_id=workspace_id,
+                session_key=session_key,
+                thread_id=thread_id,
+                client_request_id=client_request_id,
             )
 
         _start_chat_stream_producer(session, producer)
@@ -999,6 +1430,11 @@ def register_run_routes(app) -> None:
         plan = _late_server_export("_build_auto_delegation_plan")(parent_snapshot, max_children=int(req.max_children or 3))
         if not plan:
             raise HTTPException(status_code=400, detail="No specialist delegation rules matched this run.")
+        routing_source = str((((plan[0].get("metadata") if isinstance(plan[0], dict) else {}) or {}).get("auto_delegation_source") or "keyword")).strip() if plan else "keyword"
+        routing_reason = str((((plan[0].get("metadata") if isinstance(plan[0], dict) else {}) or {}).get("auto_delegation_reason") or "")).strip()
+        emit_routing_log = _late_server_export("_emit_auto_delegation_routing_log")
+        if callable(emit_routing_log):
+            emit_routing_log(parent_run_id, plan, strategy=routing_source, reason=routing_reason)
 
         note = str(req.note or "").strip() or "Auto-planned by orchestrator rules."
         created: List[Dict[str, Any]] = []
@@ -1445,6 +1881,31 @@ def register_run_routes(app) -> None:
             "count": len(payload),
             "total": len(filtered),
         }
+
+    @app.get("/usage/summary", dependencies=[Depends(require_api_key)])
+    async def get_usage_summary(
+        period: str = "all",
+        current_user=Depends(require_api_key),
+    ):
+        _refresh_server_exports()
+        snapshots = _usage_snapshots_for_user(current_user)
+        return aggregate_usage_summary(snapshots, period=_normalize_usage_period(period))
+
+    @app.get("/usage/runs", dependencies=[Depends(require_api_key)])
+    async def get_usage_runs(
+        limit: int = 50,
+        offset: int = 0,
+        period: str = "all",
+        current_user=Depends(require_api_key),
+    ):
+        _refresh_server_exports()
+        snapshots = _usage_snapshots_for_user(current_user)
+        return list_usage_runs(
+            snapshots,
+            period=_normalize_usage_period(period),
+            limit=limit,
+            offset=offset,
+        )
 
     @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def get_run_replay(run_id: uuid.UUID):

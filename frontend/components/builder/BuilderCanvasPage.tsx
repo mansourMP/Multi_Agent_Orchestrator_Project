@@ -45,6 +45,7 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
+import LoopNode from '@/components/nodes/LoopNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 import {
@@ -70,7 +71,6 @@ import {
   normalizeExecutionTarget,
 } from '@/lib/executionTargets';
 import { OPEN_LIVE_RUN_LABEL, RUN_STARTED_STATUS_COPY } from '@/lib/runStartCopy';
-import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import { buildDefaultCanonicalConfig, resetCanonicalConfigForVariant } from '@/lib/workflowNodeDefaults';
 import {
   formatWorkflowRunCountsSummary,
@@ -80,9 +80,10 @@ import {
 } from '@/hooks/useWorkflowRunTelemetry';
 import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPanel';
 
-type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
-type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code' | 'loop';
+type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow' | 'loop';
 type TriggerKind = 'schedule' | 'webhook' | 'manual' | 'connector_event' | 'workflow' | 'file_watch';
+type LoopKind = 'for_each' | 'while' | 'repeat';
 type ActionKind =
   | 'send_wechat'
   | 'send_telegram'
@@ -131,6 +132,7 @@ type HttpRequestCanvasData = CanvasCompatibilityMeta & { label: string; method: 
 type ConditionCanvasData = CanvasCompatibilityMeta & { label: string; condition: string; status?: string; executionSummary?: string };
 type TransformCanvasData = CanvasCompatibilityMeta & { label: string; mapping: string; status?: string; executionSummary?: string };
 type CodeCanvasData = CanvasCompatibilityMeta & { label: string; summary: string; code: string; status?: string; executionSummary?: string };
+type LoopCanvasData = CanvasCompatibilityMeta & { label: string; loopType: LoopKind; summary: string; status?: string; executionSummary?: string };
 type CanvasNodeData =
   | TriggerCanvasData
   | AgentCanvasData
@@ -138,7 +140,8 @@ type CanvasNodeData =
   | HttpRequestCanvasData
   | ConditionCanvasData
   | TransformCanvasData
-  | CodeCanvasData;
+  | CodeCanvasData
+  | LoopCanvasData;
 
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
@@ -218,6 +221,7 @@ const CANVAS_NODE_TYPES: NodeTypes = {
   condition: ConditionNode,
   transform: TransformNode,
   code: CodeNode,
+  loop: LoopNode,
 };
 
 const CANVAS_EDGE_TYPES = {
@@ -362,6 +366,36 @@ const CANVAS_NODE_LIBRARY: CanvasLibraryItem[] = [
     defaultData: { label: 'Call workflow', actionType: 'call_workflow' },
   },
   {
+    id: 'loop_for_each',
+    type: 'loop',
+    label: 'For each',
+    accent: '#efe4ff',
+    icon: <Redo2 size={14} />,
+    canonicalType: 'loop',
+    canonicalVariant: 'for_each',
+    defaultData: { label: 'For each item', loopType: 'for_each', summary: 'Run once for every array item' },
+  },
+  {
+    id: 'loop_while',
+    type: 'loop',
+    label: 'While',
+    accent: '#efe4ff',
+    icon: <Redo2 size={14} />,
+    canonicalType: 'loop',
+    canonicalVariant: 'while',
+    defaultData: { label: 'While condition', loopType: 'while', summary: 'Repeat while the condition is true' },
+  },
+  {
+    id: 'loop_repeat',
+    type: 'loop',
+    label: 'Repeat',
+    accent: '#efe4ff',
+    icon: <Redo2 size={14} />,
+    canonicalType: 'loop',
+    canonicalVariant: 'repeat',
+    defaultData: { label: 'Repeat', loopType: 'repeat', summary: 'Run a fixed number of times' },
+  },
+  {
     id: 'code_tool',
     type: 'code',
     label: 'Code tool',
@@ -382,6 +416,7 @@ const CANVAS_NODE_GROUPS: Array<{
   { label: 'Tools', items: ['tool', 'http', 'code_tool'] },
   { label: 'Human', items: ['human'] },
   { label: 'Logic', items: ['decision'] },
+  { label: 'Loops', items: ['loop_for_each', 'loop_while', 'loop_repeat'] },
   { label: 'Data', items: ['data'] },
   { label: 'Subflows', items: ['subflow'] },
 ];
@@ -530,21 +565,23 @@ function formatCanonicalTypeLabel(type: CanonicalNodeType): string {
   if (type === 'decision') return 'Decision';
   if (type === 'human') return 'Human';
   if (type === 'data') return 'Data';
+  if (type === 'loop') return 'Loop';
   return 'Subflow';
 }
 
 function isCanvasNodeType(value: string): value is CanvasNodeType {
-  return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(value);
+  return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code', 'loop'].includes(value);
 }
 
 function isCanonicalNodeType(value: string): value is CanonicalNodeType {
-  return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow'].includes(value);
+  return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow', 'loop'].includes(value);
 }
 
 function canonicalTypeForCanvasType(type: CanvasNodeType): CanonicalNodeType {
   if (type === 'http_request' || type === 'code' || type === 'action') return 'tool';
   if (type === 'condition') return 'decision';
   if (type === 'transform') return 'data';
+  if (type === 'loop') return 'loop';
   return type;
 }
 
@@ -580,6 +617,11 @@ function normalizeActionKind(value: unknown): ActionKind {
     : 'write_file';
 }
 
+function normalizeLoopKind(value: unknown): LoopKind {
+  const token = String(value || '').trim().toLowerCase();
+  return token === 'while' || token === 'repeat' ? token : 'for_each';
+}
+
 function deriveCanvasType(rawNode: Record<string, unknown>): CanvasNodeType | null {
   const rawType = String(rawNode.type || '').trim().toLowerCase();
   if (isCanvasNodeType(rawType)) return rawType;
@@ -593,6 +635,7 @@ function deriveCanvasType(rawNode: Record<string, unknown>): CanvasNodeType | nu
   if (rawType === 'decision') return 'condition';
   if (rawType === 'data') return 'transform';
   if (rawType === 'human' || rawType === 'subflow') return 'action';
+  if (rawType === 'loop') return 'loop';
   return rawType;
 }
 
@@ -688,6 +731,24 @@ function deriveCanvasDataFromCanonicalNode(
     };
   }
 
+  if (canvasType === 'loop') {
+    const loopType = normalizeLoopKind(canonicalVariant || 'for_each');
+    let summary = 'Repeat a sub-workflow';
+    if (loopType === 'for_each') {
+      summary = compactText(String(config.array_source || subtitle || 'Iterate over array items'), 120) || 'Iterate over array items';
+    } else if (loopType === 'while') {
+      summary = compactText(String(config.expression || subtitle || 'Repeat while condition is true'), 120) || 'Repeat while condition is true';
+    } else {
+      summary = compactText(String(config.count_source || config.count || subtitle || 'Repeat a fixed number of times'), 120) || 'Repeat a fixed number of times';
+    }
+    return {
+      ...compatibility,
+      label: label || (loopType === 'for_each' ? 'For each item' : loopType === 'while' ? 'While condition' : 'Repeat'),
+      loopType,
+      summary,
+    };
+  }
+
   if (canvasType === 'condition') {
     return {
       ...compatibility,
@@ -746,6 +807,7 @@ function canonicalVariantForCanvasNode(type: CanvasNodeType, data: CanvasNodeDat
   if (type === 'code') return 'code';
   if (type === 'condition') return 'if_else';
   if (type === 'transform') return 'transform';
+  if (type === 'loop') return normalizeLoopKind((data as LoopCanvasData).loopType);
   if (type === 'action') {
     const actionType = normalizeActionKind((data as ActionCanvasData).actionType);
     if (actionType === 'approval' || actionType === 'review' || actionType === 'wait_for_reply' || actionType === 'call_workflow') {
@@ -817,6 +879,29 @@ function canonicalConfigFromCanvasNode(
     next.code = codeData.code;
     return next;
   }
+  if (type === 'loop') {
+    const loopData = data as LoopCanvasData;
+    if (loopData.loopType === 'for_each') {
+      next.item_variable_name = typeof next.item_variable_name === 'string' && String(next.item_variable_name).trim()
+        ? next.item_variable_name
+        : 'item';
+      next.parallel = Boolean(next.parallel);
+      next.max_iterations = next.max_iterations ?? 100;
+    } else if (loopData.loopType === 'while') {
+      next.expression = typeof next.expression === 'string' && String(next.expression).trim()
+        ? next.expression
+        : 'result_data["should_continue"] == True';
+      next.max_iterations = next.max_iterations ?? 50;
+    } else {
+      next.count = next.count ?? 3;
+      next.max_iterations = next.max_iterations ?? 50;
+    }
+    if (typeof next.continue_on_error !== 'boolean') next.continue_on_error = false;
+    if (!isRecord(next.body)) {
+      next.body = { version: 'empyralist.workflow.v2', nodes: [], edges: [] };
+    }
+    return next;
+  }
   const actionData = data as ActionCanvasData;
   if (actionData.actionType === 'approval' || actionData.actionType === 'review' || actionData.actionType === 'wait_for_reply') {
     next.title = actionData.label;
@@ -874,6 +959,7 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
   if (type === 'condition') return { label: 'Decision', condition: 'Continue only when the required condition is true' };
   if (type === 'transform') return { label: 'Transform', mapping: 'Map fields to output payload' };
   if (type === 'code') return { label: 'Code tool', summary: 'Run custom logic', code: 'return input;' };
+  if (type === 'loop') return { label: 'For each item', loopType: 'for_each', summary: 'Run once for every array item' };
   if (type === 'action') return { label: 'Tool action', actionType: 'connector_action' };
   return {
     label: 'Agent',
@@ -893,6 +979,7 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: Partial<CanvasNodeDa
   const next = { ...base, ...(raw as Record<string, unknown>) } as Record<string, unknown>;
   if (type === 'trigger') next.triggerType = normalizeTriggerKind(next.triggerType);
   if (type === 'action') next.actionType = normalizeActionKind(next.actionType);
+  if (type === 'loop') next.loopType = normalizeLoopKind(next.loopType);
   return next as CanvasNodeData;
 }
 
@@ -1120,6 +1207,7 @@ function describeDraftRailNode(node: CanvasWorkflowNode): string {
     return compactText(data.duty || data.description || '', 54) || 'AI reasoning step';
   }
   if (node.type === 'code') return compactText((node.data as CodeCanvasData).summary || '', 54) || 'Custom logic';
+  if (node.type === 'loop') return compactText((node.data as LoopCanvasData).summary || '', 54) || 'Repeat a sub-workflow';
   if (node.type === 'action') return formatActionKindLabel((node.data as ActionCanvasData).actionType);
   return 'Workflow step';
 }
@@ -2034,32 +2122,6 @@ export default function BuilderCanvasPage({ workflowId = null }: BuilderCanvasPa
             (payload && typeof payload.error === 'string' && payload.error) ||
             'Unable to start a test run.',
         );
-      }
-      if (payload?.run_id) {
-        upsertSeededRuntimeRun({
-          run_id: payload.run_id,
-          status: 'running',
-          workflow_name: workflowName.trim() || buildWorkflowName(draftGoal),
-          user_goal: draftGoal.trim() || workflowDescription.trim() || workflowName.trim() || 'Run builder workflow',
-          created_at: new Date().toISOString(),
-          agent_role: 'builder',
-          triggered_by: 'Direct',
-          active_profile_id: typeof payload.active_profile_id === 'string' ? payload.active_profile_id : null,
-          active_profile_label: typeof payload.active_profile_label === 'string' ? payload.active_profile_label : null,
-          active_profile_provider: typeof payload.active_profile_provider === 'string' ? payload.active_profile_provider : null,
-          active_profile_model: typeof payload.active_profile_model === 'string' ? payload.active_profile_model : null,
-          requested_provider: typeof payload.requested_provider === 'string' ? payload.requested_provider : null,
-          effective_provider: typeof payload.effective_provider === 'string' ? payload.effective_provider : null,
-          requested_model: typeof payload.requested_model === 'string' ? payload.requested_model : null,
-          effective_model: typeof payload.effective_model === 'string' ? payload.effective_model : null,
-          provider_overridden: typeof payload?.provider_overridden === 'boolean' ? payload.provider_overridden : undefined,
-          model_overridden: typeof payload?.model_overridden === 'boolean' ? payload.model_overridden : undefined,
-          fallback_used: typeof payload?.fallback_used === 'boolean' ? payload.fallback_used : undefined,
-          execution_target_selected:
-            (typeof payload.execution_target_selected === 'string' && payload.execution_target_selected)
-              ? payload.execution_target_selected
-              : executionTarget,
-        });
       }
       setMessageRunId(payload?.run_id || null);
       if (payload?.run_id) {

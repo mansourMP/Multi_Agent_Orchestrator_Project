@@ -1,7 +1,10 @@
 import json
 import hashlib
+import os
+import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -22,13 +25,131 @@ class ApiRequestError(RuntimeError):
 
 
 class RuntimeClient:
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: int = 20):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout_seconds: int = 20,
+        session_root: Optional[Any] = None,
+    ):
         self.base_url = ensure_trailing_slashless(base_url)
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
         self.runtime_session_token: Optional[str] = None
         self.runtime_instance_id: Optional[str] = None
         self._registration: Optional[Dict[str, Any]] = None
+        if session_root is None:
+            session_root = Path(__file__).resolve().parents[1] / ".orion-stack" / "runtime_sessions"
+        self.session_root = Path(session_root).expanduser()
+
+    def _session_store_path(self, runtime_id: str) -> Path:
+        safe_runtime_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(runtime_id or "").strip()).strip("-.") or "runtime"
+        return self.session_root / f"{safe_runtime_id}.json"
+
+    def _remember_registration(
+        self,
+        runtime_id: str,
+        *,
+        runtime_type: str = "local",
+        display_name: Optional[str] = None,
+        platform: Optional[str] = None,
+        policy_mode: str = "local_default",
+        capabilities: Optional[list[str]] = None,
+        execution_targets: Optional[list[str]] = None,
+        instance_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        effective_instance_id = str(instance_id or self.runtime_instance_id or runtime_id).strip() or runtime_id
+        registration = {
+            "runtime_id": runtime_id,
+            "runtime_type": runtime_type,
+            "display_name": display_name,
+            "platform": platform,
+            "policy_mode": policy_mode,
+            "capabilities": list(capabilities or []),
+            "execution_targets": list(execution_targets or ["local"]),
+            "instance_id": effective_instance_id,
+        }
+        self.runtime_instance_id = effective_instance_id
+        self._registration = registration
+        return registration
+
+    def _persist_runtime_session(self, runtime_id: str) -> None:
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            return
+        session_token = str(self.runtime_session_token or "").strip()
+        instance_id = str(self.runtime_instance_id or "").strip()
+        if not session_token or not instance_id:
+            self.clear_runtime_session(runtime_token)
+            return
+        payload: Dict[str, Any] = {
+            "runtime_id": runtime_token,
+            "session_token": session_token,
+            "instance_id": instance_id,
+        }
+        if isinstance(self._registration, dict):
+            payload["registration"] = dict(self._registration)
+        target = self._session_store_path(runtime_token)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        try:
+            os.chmod(tmp_path, 0o600)
+        except Exception:
+            pass
+        tmp_path.replace(target)
+
+    def load_runtime_session(self, runtime_id: str) -> bool:
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            return False
+        target = self._session_store_path(runtime_token)
+        if not target.exists():
+            return False
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("runtime_id") or runtime_token).strip() != runtime_token:
+            return False
+        session_token = str(payload.get("session_token") or "").strip()
+        instance_id = str(payload.get("instance_id") or "").strip()
+        if not session_token or not instance_id:
+            return False
+        self.runtime_session_token = session_token
+        self.runtime_instance_id = instance_id
+        registration = payload.get("registration") if isinstance(payload.get("registration"), dict) else None
+        if isinstance(registration, dict):
+            restored = dict(registration)
+            restored["runtime_id"] = runtime_token
+            restored["instance_id"] = str(restored.get("instance_id") or instance_id).strip() or instance_id
+            self._registration = restored
+        elif not isinstance(self._registration, dict):
+            self._registration = {
+                "runtime_id": runtime_token,
+                "runtime_type": "local",
+                "display_name": None,
+                "platform": None,
+                "policy_mode": "local_default",
+                "capabilities": [],
+                "execution_targets": ["local"],
+                "instance_id": instance_id,
+            }
+        return True
+
+    def clear_runtime_session(self, runtime_id: str) -> None:
+        runtime_token = str(runtime_id or "").strip()
+        if not runtime_token:
+            return
+        target = self._session_store_path(runtime_token)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            return
 
     def _capability_digest(self, capabilities: Optional[list[str]]) -> Optional[str]:
         items = [str(item).strip() for item in (capabilities or []) if str(item).strip()]
@@ -45,6 +166,8 @@ class RuntimeClient:
             registration = self._registration if isinstance(self._registration, dict) else None
             if not registration or str(registration.get("runtime_id") or "").strip() != runtime_id:
                 raise
+            self.runtime_session_token = None
+            self.clear_runtime_session(runtime_id)
             self.register_runtime(
                 runtime_id,
                 runtime_type=str(registration.get("runtime_type") or "local"),
@@ -125,7 +248,17 @@ class RuntimeClient:
         execution_targets: Optional[list[str]] = None,
         instance_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        effective_instance_id = str(instance_id or self.runtime_instance_id or runtime_id).strip() or runtime_id
+        registration = self._remember_registration(
+            runtime_id,
+            runtime_type=runtime_type,
+            display_name=display_name,
+            platform=platform,
+            policy_mode=policy_mode,
+            capabilities=capabilities,
+            execution_targets=execution_targets,
+            instance_id=instance_id,
+        )
+        effective_instance_id = str(registration.get("instance_id") or runtime_id).strip() or runtime_id
         payload: Dict[str, Any] = {
             "runtime_type": runtime_type,
             "display_name": display_name,
@@ -141,22 +274,68 @@ class RuntimeClient:
             result = self._request("POST", f"/runtime/runtimes/{runtime_id}/register", payload)
             self.runtime_session_token = str(result.get("session_token") or "").strip() or None
             self.runtime_instance_id = str(result.get("instance_id") or effective_instance_id).strip() or effective_instance_id
-            self._registration = {
-                "runtime_id": runtime_id,
-                "runtime_type": runtime_type,
-                "display_name": display_name,
-                "platform": platform,
-                "policy_mode": policy_mode,
-                "capabilities": list(capabilities or []),
-                "execution_targets": list(execution_targets or ["local"]),
-                "instance_id": self.runtime_instance_id,
-            }
+            registration["instance_id"] = self.runtime_instance_id
+            self._registration = registration
+            self._persist_runtime_session(runtime_id)
             return result
         except ApiRequestError as exc:
             if exc.status_code not in {404, 405}:
                 raise
             self.heartbeat_worker(runtime_id, None, "runtime_registered")
             return {"ok": True, "runtime_id": runtime_id, "legacy": True}
+
+    def bootstrap_runtime_session(
+        self,
+        runtime_id: str,
+        *,
+        runtime_type: str = "local",
+        display_name: Optional[str] = None,
+        platform: Optional[str] = None,
+        policy_mode: str = "local_default",
+        capabilities: Optional[list[str]] = None,
+        execution_targets: Optional[list[str]] = None,
+        instance_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        registration = self._remember_registration(
+            runtime_id,
+            runtime_type=runtime_type,
+            display_name=display_name,
+            platform=platform,
+            policy_mode=policy_mode,
+            capabilities=capabilities,
+            execution_targets=execution_targets,
+            instance_id=instance_id,
+        )
+        self.load_runtime_session(runtime_id)
+        if self.runtime_session_token:
+            try:
+                self.heartbeat_worker(runtime_id, None, "runtime_session_resume")
+                return {
+                    "ok": True,
+                    "runtime_id": runtime_id,
+                    "instance_id": self.runtime_instance_id,
+                    "session_token": self.runtime_session_token,
+                    "resumed": True,
+                }
+            except ApiRequestError as exc:
+                if exc.status_code not in {401, 404, 409}:
+                    raise
+                self.runtime_session_token = None
+                self.clear_runtime_session(runtime_id)
+        result = self.register_runtime(
+            runtime_id,
+            runtime_type=str(registration.get("runtime_type") or "local"),
+            display_name=str(registration.get("display_name") or "") or None,
+            platform=str(registration.get("platform") or "") or None,
+            policy_mode=str(registration.get("policy_mode") or "local_default"),
+            capabilities=list(registration.get("capabilities") or []),
+            execution_targets=list(registration.get("execution_targets") or ["local"]),
+            instance_id=str(registration.get("instance_id") or "") or None,
+        )
+        if self.runtime_session_token or bool(result.get("legacy")):
+            result["resumed"] = False
+            return result
+        raise RuntimeError("runtime session token missing after runtime registration")
 
     def claim_run(self, worker_id: str) -> Dict[str, Any]:
         response = self._retry_with_reregister(
@@ -221,6 +400,39 @@ class RuntimeClient:
                 "POST",
                 f"/runtime/tasks/{run_id}/complete",
                 f"/local/runs/{run_id}/complete",
+                _payload(),
+            ),
+        )
+
+    def pause_run(
+        self,
+        run_id: str,
+        worker_id: str,
+        result_text: str,
+        *,
+        result_data: Optional[Dict[str, Any]] = None,
+        browser_checkpoint: Optional[Dict[str, Any]] = None,
+        wait_reason: Optional[str] = None,
+    ):
+        def _payload() -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "runtime_id": worker_id,
+                "session_token": self.runtime_session_token,
+                "instance_id": self.runtime_instance_id,
+                "result_text": result_text,
+            }
+            if isinstance(result_data, dict):
+                payload["result_data"] = result_data
+            if isinstance(browser_checkpoint, dict):
+                payload["browser_checkpoint"] = browser_checkpoint
+            if str(wait_reason or "").strip():
+                payload["wait_reason"] = str(wait_reason).strip()
+            return payload
+        self._retry_with_reregister(
+            worker_id,
+            lambda: self._request(
+                "POST",
+                f"/runtime/tasks/{run_id}/pause",
                 _payload(),
             ),
         )

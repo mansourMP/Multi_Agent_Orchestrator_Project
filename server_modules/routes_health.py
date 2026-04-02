@@ -4,9 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from server_modules.auth import enforce_workspace_access, get_current_user
 from server_modules.runtime_common import require_api_key
-from server_modules.runtime_models import MemorySearchRequest, MemoryUpsertRequest, RuntimeSkillsStateUpsertRequest
+from server_modules.runtime_models import (
+    MemorySearchRequest,
+    MemoryUpsertRequest,
+    RuntimeSkillsStateUpsertRequest,
+    SkillInstallRequest,
+    SkillPublishRequest,
+    SkillUpdateRequest,
+)
 from server_modules import health_core as core
 from server_modules import health_diagnostics as diagnostics
+from server_modules import skills_registry
 
 router = APIRouter()
 
@@ -16,6 +24,64 @@ async def skills_state(request: Request, body: Optional[RuntimeSkillsStateUpsert
     if body is None:
         raise HTTPException(status_code=422, detail="Runtime skills state payload is required.")
     return await diagnostics.put_runtime_skills_state(body)
+
+
+async def skills_list():
+    return skills_registry.list_marketplace_skills()
+
+
+async def skills_install(body: SkillInstallRequest):
+    body.validate_fields()
+    try:
+        return skills_registry.install_marketplace_skill(
+            source_url=str(body.source_url or "").strip() or None,
+            zip_path=str(body.zip_path or "").strip() or None,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def skills_registry_index(request: Request):
+    source = str(request.query_params.get("url") or "").strip() or None
+    try:
+        return skills_registry.fetch_marketplace_registry(source)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def skills_publish(body: SkillPublishRequest):
+    body.validate_fields()
+    try:
+        return skills_registry.publish_marketplace_skill(
+            str(body.name or "").strip(),
+            str(body.output_path or "").strip() or None,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def skills_update(skill_name: str, body: SkillUpdateRequest):
+    try:
+        return skills_registry.set_marketplace_skill_enabled(skill_name, body.enabled)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def skills_delete(skill_name: str):
+    try:
+        return skills_registry.uninstall_marketplace_skill(skill_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def memory_search(body: MemorySearchRequest, current_user=Depends(require_api_key)):
@@ -39,7 +105,13 @@ router.add_api_route("/validation/history", core.validation_history, methods=['G
 router.add_api_route("/doctor", diagnostics.doctor, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/doctor/history", diagnostics.doctor_history, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/solutions/state", diagnostics.get_runtime_solutions_state, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills", skills_list, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills/install", skills_install, methods=['POST'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills/registry", skills_registry_index, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills/publish", skills_publish, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/skills/state", skills_state, methods=['GET', 'PUT'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills/{skill_name}", skills_update, methods=['PUT'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/skills/{skill_name}", skills_delete, methods=['DELETE'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/api/solutions/{solution_id}/{subpath:path}", diagnostics.dispatch_installed_solution_api, methods=["GET", "POST", "PUT"], dependencies=[Depends(require_api_key)])
 router.add_api_route("/probe", core.probe, methods=['GET'], dependencies=[Depends(get_current_user)])
 router.add_api_route("/setup/sessions", core.create_setup_session, methods=['POST'], dependencies=[Depends(require_api_key)])

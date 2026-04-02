@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, time, uuid, queue, re
+import os, json, time, uuid, queue, re, hashlib, sys
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
@@ -30,6 +30,147 @@ RISKY_ACTION_KEYWORDS = [
     "cancel",
     "refund",
 ]
+
+
+def _browser_action_plan_row(raw_action: Any) -> Dict[str, Any]:
+    item = raw_action if isinstance(raw_action, dict) else {}
+    return {
+        "action": str(item.get("action") or "").strip().lower(),
+        "selector": str(item.get("selector") or "").strip(),
+        "frame": str(item.get("frame") or item.get("frameSelector") or "").strip(),
+        "tab": str(item.get("tab") or item.get("tabId") or "").strip(),
+        "text": str(item.get("text") or ""),
+        "url": str(item.get("url") or "").strip(),
+        "ms": int(item.get("ms") or item.get("delayMs") or 0),
+        "value": str(item.get("value") or ""),
+        "attribute": str(item.get("attribute") or "").strip(),
+        "path": str(item.get("path") or item.get("file_path") or "").strip(),
+        "paths": [
+            str(entry or "").strip()
+            for entry in (item.get("paths") if isinstance(item.get("paths"), list) else [])
+            if str(entry or "").strip()
+        ],
+        "label": str(item.get("label") or "").strip(),
+        "prompt": str(item.get("prompt") or item.get("reason") or "").strip(),
+    }
+
+
+def _browser_operation_plan_row(raw_operation: Any) -> Dict[str, Any]:
+    item = raw_operation if isinstance(raw_operation, dict) else {}
+    raw_actions = item.get("browser_actions") if isinstance(item.get("browser_actions"), list) else item.get("browserActions")
+    actions = raw_actions if isinstance(raw_actions, list) else []
+    return {
+        "tool": str(item.get("tool") or item.get("action") or "browser_automation").strip().lower(),
+        "mode": str(item.get("mode") or "extract_text").strip().lower(),
+        "url": str(item.get("url") or "").strip(),
+        "path": str(item.get("path") or "").strip(),
+        "session_profile": str(item.get("session_profile") or item.get("sessionProfile") or "").strip(),
+        "browser_actions": [_browser_action_plan_row(entry) for entry in actions],
+    }
+
+
+def browser_automation_plan_hash(operations: Any) -> str:
+    items = operations if isinstance(operations, list) else [operations]
+    normalized = [
+        _browser_operation_plan_row(item)
+        for item in items
+        if isinstance(item, dict)
+    ]
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def browser_automation_plan_hash_from_pack_inputs(pack_inputs: Any) -> str:
+    payload = pack_inputs if isinstance(pack_inputs, dict) else {}
+    operations = payload.get("operations") if isinstance(payload.get("operations"), list) else []
+    browser_ops = [
+        item
+        for item in operations
+        if isinstance(item, dict) and str(item.get("tool") or item.get("action") or "").strip().lower() == "browser_automation"
+    ]
+    if not browser_ops and str(payload.get("url") or "").strip():
+        browser_ops = [payload]
+    if not browser_ops:
+        return ""
+    return browser_automation_plan_hash(browser_ops)
+
+
+LOCAL_OPERATOR_APPROVAL_ENV_KEYS = (
+    "EMPYRALIS_DESKTOP_ELECTRON_BIN",
+    "ORION_DESKTOP_ELECTRON_BIN",
+    "EMPYRALIS_DESKTOP_DISABLE_GPU",
+    "EMPYRALIS_DESKTOP_GL",
+    "EMPYRALIS_DESKTOP_DISABLE_METAL",
+    "EMPYRALIS_DESKTOP_DISABLE_VULKAN",
+)
+
+
+def local_operator_approval_env_snapshot(env: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    source = env if isinstance(env, dict) else os.environ
+    snapshot: Dict[str, str] = {}
+    for key in LOCAL_OPERATOR_APPROVAL_ENV_KEYS:
+        value = str(source.get(key) or "").strip()
+        if value:
+            snapshot[key] = value
+    return snapshot
+
+
+def build_local_operator_execution_binding(
+    *,
+    argv: Any,
+    cwd: Any,
+    env_vars: Optional[Dict[str, Any]] = None,
+    browser_plan_hash: str = "",
+    session_profile: str = "",
+) -> Dict[str, Any]:
+    normalized_argv = [
+        str(item).strip()
+        for item in (argv if isinstance(argv, list) else [argv])
+        if str(item).strip()
+    ]
+    normalized_env = {
+        key: str(value).strip()
+        for key, value in sorted((env_vars or {}).items())
+        if str(key).strip() and str(value).strip()
+    }
+    return {
+        "argv": normalized_argv,
+        "cwd": str(cwd or "").strip(),
+        "env_vars": normalized_env,
+        "browser_plan_hash": str(browser_plan_hash or "").strip(),
+        "session_profile": str(session_profile or "").strip(),
+    }
+
+
+def local_operator_execution_binding_hash(binding: Optional[Dict[str, Any]]) -> str:
+    payload = build_local_operator_execution_binding(
+        argv=(binding or {}).get("argv") if isinstance(binding, dict) else [],
+        cwd=(binding or {}).get("cwd") if isinstance(binding, dict) else "",
+        env_vars=(binding or {}).get("env_vars") if isinstance(binding, dict) else {},
+        browser_plan_hash=(binding or {}).get("browser_plan_hash") if isinstance(binding, dict) else "",
+        session_profile=(binding or {}).get("session_profile") if isinstance(binding, dict) else "",
+    )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+
+
+def local_operator_execution_binding_matches(expected: Optional[Dict[str, Any]], actual: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(expected, dict) or not expected:
+        return False
+    return local_operator_execution_binding_hash(expected) == local_operator_execution_binding_hash(actual)
+
+
+def build_browser_execution_binding(project_root: Path, browser_plan_hash: str, session_profile: str = "") -> Dict[str, Any]:
+    argv = [sys.executable, "-m", "server_modules.browser_engine"]
+    cwd = str(Path(project_root).resolve())
+    return build_local_operator_execution_binding(
+        argv=argv,
+        cwd=cwd,
+        env_vars=local_operator_approval_env_snapshot(),
+        browser_plan_hash=browser_plan_hash,
+        session_profile=session_profile,
+    )
 
 TRUST_MODE_AUTO = "auto"
 TRUST_MODE_GUARDED = "guarded"
@@ -2304,14 +2445,22 @@ def evaluate_tool_policy_decision(
         and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
         and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
     ):
-        execution_decision = "deny"
+        execution_decision = "require_confirmation"
         reason = (
-            "blocked_browser_authenticated_privileged_local_v1"
+            "browser_authenticated_privileged_requires_reviewed_approval"
             if browser_privileged_actions
-            else "blocked_browser_authenticated_interactive_local_v1"
+            else "browser_authenticated_interactive_requires_reviewed_approval"
         )
 
-    if execution_decision != "deny" and clean_tool_id == "browser_automation" and browser_requires_approval:
+    if (
+        execution_decision != "deny"
+        and clean_tool_id == "browser_automation"
+        and browser_requires_approval
+        and not (
+            effective_target == EXECUTION_TARGET_LOCAL_COMPANION
+            and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
+        )
+    ):
         if effective_policy_mode == POLICY_MODE_LOCAL_DEFAULT:
             execution_decision = "require_confirmation"
             reason = (
@@ -2339,6 +2488,11 @@ def evaluate_tool_policy_decision(
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,
         "browser_privileged_actions": browser_privileged_actions or None,
+        "reviewed_approval_required": bool(
+            clean_tool_id == "browser_automation"
+            and effective_target == EXECUTION_TARGET_LOCAL_COMPANION
+            and browser_profile in {"authenticated_interactive", "authenticated_privileged"}
+        ),
     }
 
 

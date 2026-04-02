@@ -1,12 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
   AlertCircle,
-  Download,
   Eye,
   PlayCircle,
   RefreshCw,
@@ -16,8 +15,7 @@ import { AGENT_ROLE_OPTIONS, isAgentRoleId } from '@/app/page.catalog';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { API_BASE } from '@/lib/config';
-import { fetchExecution, fetchExecutionHistory, fetchExecutions } from '@/lib/api';
-import { readSeededRuntimeRuns, RUNTIME_RUN_SEEDS_UPDATED_EVENT, type RuntimeRunSeed } from '@/lib/runtimeRunSeed';
+import { fetchExecutionHistory, fetchExecutions } from '@/lib/api';
 import { humanizeUiError, UI_ERROR_COPY } from '@/lib/uiError';
 
 type ExecutionRecord = {
@@ -99,37 +97,6 @@ type RuntimeRunMeta = {
   node_state_counts?: Record<string, unknown> | null;
 };
 
-function toSeededRunMeta(seed: RuntimeRunSeed): RuntimeRunMeta {
-  return {
-    run_id: seed.run_id,
-    status: String(seed.status || '').trim() || 'running',
-    user_goal: seed.user_goal || null,
-    created_at: seed.created_at || null,
-    duration_ms: null,
-    agent_role: seed.agent_role || null,
-    parent_run_id: null,
-    child_run_count: 0,
-    delegation_next_action: null,
-    delegation_ready: false,
-    delegation_summary: null,
-    connector_binding: null,
-    tool_capabilities: [],
-    approval_outcome: null,
-    evidence_items: [],
-    active_profile_id: seed.active_profile_id || null,
-    active_profile_label: seed.active_profile_label || null,
-    active_profile_provider: seed.active_profile_provider || null,
-    active_profile_model: seed.active_profile_model || null,
-    requested_provider: seed.requested_provider || null,
-    effective_provider: seed.effective_provider || null,
-    requested_model: seed.requested_model || null,
-    effective_model: seed.effective_model || null,
-    provider_overridden: typeof seed.provider_overridden === 'boolean' ? seed.provider_overridden : undefined,
-    model_overridden: typeof seed.model_overridden === 'boolean' ? seed.model_overridden : undefined,
-    fallback_used: typeof seed.fallback_used === 'boolean' ? seed.fallback_used : undefined,
-  };
-}
-
 function mergeRuntimeMeta(base: RuntimeRunMeta | undefined, incoming: RuntimeRunMeta): RuntimeRunMeta {
   if (!base) return incoming;
   return {
@@ -161,28 +128,6 @@ function mergeRuntimeMeta(base: RuntimeRunMeta | undefined, incoming: RuntimeRun
     provider_overridden: incoming.provider_overridden ?? base.provider_overridden,
     model_overridden: incoming.model_overridden ?? base.model_overridden,
     fallback_used: incoming.fallback_used ?? base.fallback_used,
-  };
-}
-
-function toSeedExecution(seed: RuntimeRunSeed): ExecutionRecord {
-  return {
-    id: seed.run_id,
-    source: 'runtime',
-    status: String(seed.status || '').trim() || 'running',
-    triggeredBy: String(seed.triggered_by || '').trim() || 'Direct',
-    createdAt: String(seed.created_at || '').trim() || undefined,
-    durationMs: null,
-    userGoal: String(seed.user_goal || '').trim() || null,
-    workflow: {
-      name: String(seed.workflow_name || seed.user_goal || `Run ${seed.run_id.slice(0, 8)}`).trim() || `Run ${seed.run_id.slice(0, 8)}`,
-      definition: {
-        meta: {
-          operator: {
-            agentRole: String(seed.agent_role || '').trim() || null,
-          },
-        },
-      },
-    },
   };
 }
 
@@ -232,35 +177,11 @@ type RuntimeHistoryItem = {
   node_state_counts?: unknown;
 };
 
-type ExecutionStep = {
-  id?: string;
-  nodeType?: string;
-  status?: string;
-  output?: unknown;
-  toolCalls?: Array<{ toolName?: string }>;
-};
-
-type ExecutionDetail = ExecutionRecord & {
-  steps?: ExecutionStep[];
-  output?: {
-    logs?: string[];
-  } | null;
-  logs?: string[];
-};
-
 type StatusMeta = {
   label: string;
   color: string;
   border: string;
   bg: string;
-};
-
-type ReplayStepRow = {
-  id: string;
-  title: string;
-  status: StatusMeta;
-  tools: string;
-  output: string;
 };
 
 function toDateLabel(value?: string): string {
@@ -332,19 +253,7 @@ function statusMeta(status?: string): StatusMeta {
   };
 }
 
-function toReplayOutputPreview(value: unknown): string {
-  const text =
-    typeof value === 'string'
-      ? value
-      : value == null
-      ? ''
-      : JSON.stringify(value, null, 2);
-  if (!text.trim()) return 'No output';
-  if (text.length <= 260) return text;
-  return `${text.slice(0, 257)}...`;
-}
-
-function executionAgentRoleLabel(execution?: ExecutionRecord | ExecutionDetail | null): string {
+function executionAgentRoleLabel(execution?: ExecutionRecord | null): string {
   const roleId = String(execution?.workflow?.definition?.meta?.operator?.agentRole || '').trim();
   if (!isAgentRoleId(roleId)) return '--';
   return AGENT_ROLE_OPTIONS.find((item) => item.id === roleId)?.label || roleId;
@@ -379,12 +288,6 @@ function runtimeProfileText(meta?: RuntimeRunMeta | null): string {
   if (effectiveProvider || effectiveModel) return `Effective ${effectiveProvider || 'Unknown'} · ${effectiveModel || 'Unknown'}`;
   if (requestedProvider || requestedModel) return `Requested ${requestedProvider || 'Unknown'} · ${requestedModel || 'Unknown'}`;
   return '';
-}
-
-function capabilityStateLabel(value: boolean | null | undefined): string {
-  if (value === true) return 'Usable';
-  if (value === false) return 'Unavailable';
-  return 'Not verified';
 }
 
 function executionTimestampValue(execution: ExecutionRecord): number {
@@ -455,8 +358,6 @@ function workflowProgressSummary(meta?: RuntimeRunMeta | null): string {
 
 export default function ExecutionsPage() {
   const router = useRouter();
-  const [focusedRunId, setFocusedRunId] = useState('');
-  const autoOpenedRunRef = useRef<string>('');
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [runtimeRunMeta, setRuntimeRunMeta] = useState<Record<string, RuntimeRunMeta>>({});
   const [loading, setLoading] = useState(true);
@@ -466,53 +367,14 @@ export default function ExecutionsPage() {
   const [agentFilter, setAgentFilter] = useState('all');
   const [channelFilter, setChannelFilter] = useState('all');
 
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [selectedExecution, setSelectedExecution] = useState<ExecutionDetail | null>(null);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const next = String(new URLSearchParams(window.location.search).get('focus') || '').trim();
-    setFocusedRunId(next);
-  }, []);
-
   useEffect(() => {
     void loadExecutions();
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const syncSeededRuns = () => {
-      const seeds = readSeededRuntimeRuns();
-      if (seeds.length === 0) return;
-      setRuntimeRunMeta((current) => {
-        const next = { ...current };
-        seeds.forEach((seed) => {
-          next[seed.run_id] = mergeRuntimeMeta(next[seed.run_id], toSeededRunMeta(seed));
-        });
-        return next;
-      });
-      setExecutions((current) => {
-        const known = new Set(current.map((item) => item.id));
-        const seeded = seeds.filter((seed) => !known.has(seed.run_id)).map((seed) => toSeedExecution(seed));
-        if (seeded.length === 0) return current;
-        return [...seeded, ...current];
-      });
-    };
-    syncSeededRuns();
-    window.addEventListener(RUNTIME_RUN_SEEDS_UPDATED_EVENT, syncSeededRuns);
-    return () => window.removeEventListener(RUNTIME_RUN_SEEDS_UPDATED_EVENT, syncSeededRuns);
-  }, []);
-
-  useEffect(() => {
-    if (!focusedRunId) return;
-    setQuery(focusedRunId);
-  }, [focusedRunId]);
 
   async function loadExecutions() {
     try {
       setLoading(true);
       setLoadError('');
-      const seededRuns = readSeededRuntimeRuns();
       const [data, runtimeHistory] = await Promise.all([
         fetchExecutions(),
         fetchExecutionHistory(200, 'default').catch(() => ({ items: [] })),
@@ -520,10 +382,7 @@ export default function ExecutionsPage() {
       const runtimeItems: RuntimeHistoryItem[] = Array.isArray(runtimeHistory?.items)
         ? (runtimeHistory.items as RuntimeHistoryItem[])
         : [];
-      const metaByRunId = seededRuns.reduce<Record<string, RuntimeRunMeta>>((acc, seed) => {
-        acc[seed.run_id] = toSeededRunMeta(seed);
-        return acc;
-      }, {});
+      const metaByRunId: Record<string, RuntimeRunMeta> = {};
       runtimeItems.forEach((item) => {
         const runId = String(item?.run_id || '').trim();
         if (!runId) return;
@@ -650,10 +509,7 @@ export default function ExecutionsPage() {
             },
           };
         });
-      const seededFallbacks = seededRuns
-        .filter((seed) => !backendById.has(seed.run_id) && !runtimeById.has(seed.run_id))
-        .map((seed) => toSeedExecution(seed));
-      setExecutions([...seededFallbacks, ...backendExecutions, ...runtimeFallbacks]);
+      setExecutions([...backendExecutions, ...runtimeFallbacks]);
     } catch (error) {
       setExecutions([]);
       setRuntimeRunMeta({});
@@ -662,30 +518,6 @@ export default function ExecutionsPage() {
       setLoading(false);
     }
   }
-
-  const openExecutionDetail = useCallback(async (executionId: string) => {
-    const record = executions.find((item) => item.id === executionId);
-    if (record?.source === 'runtime') {
-      router.push(`/runs/${encodeURIComponent(executionId)}/inspect?focus=timeline`);
-      return;
-    }
-    try {
-      setDetailLoading(true);
-      const detail = await fetchExecution(executionId);
-      setSelectedExecution(detail as ExecutionDetail);
-    } finally {
-      setDetailLoading(false);
-    }
-  }, [executions, router]);
-
-  useEffect(() => {
-    if (!focusedRunId || loading) return;
-    if (autoOpenedRunRef.current === focusedRunId) return;
-    const exists = executions.some((item) => item.id === focusedRunId);
-    if (!exists) return;
-    autoOpenedRunRef.current = focusedRunId;
-    void openExecutionDetail(focusedRunId);
-  }, [focusedRunId, loading, executions, openExecutionDetail]);
 
   const filteredExecutions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -768,56 +600,6 @@ export default function ExecutionsPage() {
   const executionLoadDetail = loadError ? humanizeUiError(loadError) : '';
   const showExecutionLoadDetail = Boolean(executionLoadDetail && executionLoadDetail !== UI_ERROR_COPY.backend);
 
-  const tokenSummary = useMemo(() => {
-    if (!selectedExecution) return 0;
-    const logs = selectedExecution.output?.logs || selectedExecution.logs || [];
-
-    return logs.reduce((sum, line) => {
-      const match = line.match(/TOKENS:.*total=(\d+)/);
-      if (!match) return sum;
-      return sum + Number(match[1]);
-    }, 0);
-  }, [selectedExecution]);
-
-  const replayRows = useMemo<ReplayStepRow[]>(() => {
-    if (!selectedExecution) return [];
-    const steps = Array.isArray(selectedExecution.steps) ? selectedExecution.steps : [];
-    return steps.map((step, index) => {
-      const tools = (step.toolCalls || [])
-        .map((tool) => String(tool.toolName || '').trim())
-        .filter(Boolean)
-        .join(', ');
-      return {
-        id: String(step.id || `step-${index}`),
-        title: String(step.nodeType || `Step ${index + 1}`),
-        status: statusMeta(step.status),
-        tools: tools || '--',
-        output: toReplayOutputPreview(step.output),
-      };
-    });
-  }, [selectedExecution]);
-  const selectedExecutionEvidence = useMemo(() => {
-    if (!selectedExecution) return [];
-    const meta = runtimeRunMeta[selectedExecution.id];
-    const items = Array.isArray(meta?.evidence_items) ? meta.evidence_items : [];
-    if (items.length > 0) return items;
-    return [{ id: 'evidence:none', label: 'Evidence', value: 'No evidence captured' }];
-  }, [runtimeRunMeta, selectedExecution]);
-
-  const exportExecution = () => {
-    if (!selectedExecution) return;
-
-    const payload = new Blob([JSON.stringify(selectedExecution, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(payload);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `run-${selectedExecution.id}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
   const clearFilters = () => {
     setQuery('');
     setStatusFilter('all');
@@ -829,8 +611,8 @@ export default function ExecutionsPage() {
     <div className="orion-page-shell orion-animate-in">
       <OsPageHeader
         icon={<Activity size={18} />}
-        title="Library"
-        subtitle="Everything that has run, been produced, or needs review"
+        title="History"
+        subtitle="Everything that has run and needs review"
         actions={
           <button className="orion-btn orion-btn-ghost" onClick={() => void loadExecutions()}>
             <RefreshCw size={14} />
@@ -840,8 +622,8 @@ export default function ExecutionsPage() {
       />
 
       <section className="orion-panel orion-runs-overview">
-        <div className="orion-runs-overview-main">
-          <div className="orion-home-overview-kicker">Library overview</div>
+          <div className="orion-runs-overview-main">
+          <div className="orion-home-overview-kicker">History overview</div>
           <div className="orion-runs-overview-title">{activeSummary.title}</div>
           <div className="orion-runs-overview-copy">{activeSummary.note}</div>
           <div className="orion-home-overview-actions">
@@ -891,9 +673,9 @@ export default function ExecutionsPage() {
       </section>
 
       <section className="orion-panel muted" style={{ display: 'grid', gap: 12 }}>
-        <div className="orion-panel-header" style={{ marginBottom: 0 }}>
+          <div className="orion-panel-header" style={{ marginBottom: 0 }}>
           <div>
-            <div className="orion-panel-title">Find in Library</div>
+            <div className="orion-panel-title">Find in History</div>
             <div className="orion-panel-copy">Search by task or run ID, then narrow by state, assistant, or tool.</div>
           </div>
         </div>
@@ -971,7 +753,7 @@ export default function ExecutionsPage() {
           <div className="orion-state-icon" aria-hidden="true">
             <AlertCircle size={18} />
           </div>
-          <div className="orion-panel-title">Library is unavailable</div>
+          <div className="orion-panel-title">History is unavailable</div>
           <div className="orion-panel-copy">{UI_ERROR_COPY.backend}</div>
           {showExecutionLoadDetail ? (
             <div className="orion-panel-copy" style={{ marginTop: -4 }}>{executionLoadDetail}</div>
@@ -1011,7 +793,7 @@ export default function ExecutionsPage() {
           <div className="orion-panel-header orion-panel-shell-header">
             <div>
               <div className="orion-panel-title">Recent runs</div>
-              <div className="orion-panel-copy">Open any run to review the result, inspect the timeline, and decide what to do next.</div>
+              <div className="orion-panel-copy">Open any run to review the result and decide what to do next.</div>
             </div>
           </div>
           {filteredExecutions.map((execution) => {
@@ -1148,162 +930,12 @@ export default function ExecutionsPage() {
                     >
                       Open run
                     </Link>
-                    {execution.source === 'runtime' ? null : (
-                      <button
-                        className="orion-btn orion-btn-ghost orion-run-action-btn"
-                        onClick={() => void openExecutionDetail(execution.id)}
-                      >
-                        <Eye size={12} />
-                        Quick view
-                      </button>
-                    )}
-                    <Link
-                      className="orion-btn orion-btn-ghost orion-run-action-btn"
-                      href={`/runs/${encodeURIComponent(execution.id)}/inspect?focus=${encodeURIComponent(workflowProgress ? 'workflow' : 'timeline')}`}
-                    >
-                      {workflowProgress ? 'Workflow inspect' : 'Full timeline'}
-                    </Link>
                   </div>
                 </div>
               </article>
             );
           })}
         </section>
-      )}
-
-      {selectedExecution && (
-        <div className="orion-modal-overlay" onClick={() => setSelectedExecution(null)}>
-          <section className="orion-modal orion-execution-modal" onClick={(event) => event.stopPropagation()}>
-            <header className="orion-panel-header orion-execution-modal-header" style={{ marginBottom: 0 }}>
-              <div className="orion-execution-modal-title-wrap">
-                <div className="orion-execution-modal-kicker">Run preview</div>
-                <h2 className="orion-execution-modal-title">{selectedExecution.workflow?.name || 'Untitled Workflow'}</h2>
-                <div className="orion-execution-modal-meta">
-                  <span>Assistant {executionAgentRoleLabel(selectedExecution)}</span>
-                  {connectorBindingText(runtimeRunMeta[selectedExecution.id]) ? (
-                    <span>Tool {connectorBindingText(runtimeRunMeta[selectedExecution.id])}</span>
-                  ) : null}
-                </div>
-                <p className="orion-execution-modal-copy">
-                  This is a technical preview of the recorded run steps. Open the full run for the user-facing result and current status.
-                </p>
-              </div>
-              <div className="orion-execution-modal-actions">
-                <Link className="orion-btn orion-btn-secondary" href={`/runs/${encodeURIComponent(selectedExecution.id)}`}>
-                  Open run
-                </Link>
-                <button className="orion-btn orion-btn-ghost" onClick={exportExecution}>
-                  <Download size={14} />
-                  Export
-                </button>
-                <Link className="orion-btn orion-btn-ghost" href={`/runs/${encodeURIComponent(selectedExecution.id)}/inspect?focus=timeline`}>
-                  Full timeline
-                </Link>
-                <button className="orion-btn orion-btn-secondary" onClick={() => setSelectedExecution(null)}>
-                  Close
-                </button>
-              </div>
-            </header>
-
-            {detailLoading ? (
-              <div className="orion-execution-modal-loading">Loading run detail…</div>
-            ) : (
-              <>
-                {tokenSummary > 0 && (
-                  <div className="orion-chip orion-execution-modal-token-chip">
-                    Token total: {tokenSummary}
-                  </div>
-                )}
-
-                <div className="orion-execution-modal-body">
-                  <div
-                    className="orion-panel"
-                    style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 16 }}
-                  >
-                    <div className="orion-home-overview-kicker">Evidence</div>
-                    {selectedExecutionEvidence.map((item, index) => (
-                      <div
-                        key={`${item.id || item.label || 'evidence'}:${index}`}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '160px minmax(0, 1fr)',
-                          gap: 8,
-                          alignItems: 'start',
-                        }}
-                      >
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{item.label || 'Evidence'}</div>
-                        <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>{item.value || 'No evidence captured'}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div
-                    className="orion-panel"
-                    style={{ padding: 16, display: 'grid', gap: 10, marginBottom: 16 }}
-                  >
-                    <div className="orion-home-overview-kicker">Tool availability</div>
-                    {(runtimeRunMeta[selectedExecution.id]?.tool_capabilities || []).length > 0 ? (
-                      (runtimeRunMeta[selectedExecution.id]?.tool_capabilities || []).map((item, index) => (
-                        <div
-                          key={`${item.id || item.label || 'capability'}:${index}`}
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: '160px minmax(0, 1fr)',
-                            gap: 8,
-                            alignItems: 'start',
-                          }}
-                        >
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>{item.label || item.id || 'Tool'}</div>
-                          <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                            {capabilityStateLabel(item.runtime_usable)} · Read: {(item.read_actions || []).join(', ') || 'Not verified'} · Write: {(item.write_actions || []).join(', ') || 'Not verified'} · Approval: {(item.approval_required_actions || []).join(', ') || 'Not verified'}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>No capability truth captured</div>
-                    )}
-                  </div>
-                  {replayRows.length === 0 ? (
-                    <div className="orion-empty" style={{ padding: 24 }}>
-                      <div className="orion-empty-title">No run steps recorded</div>
-                    </div>
-                  ) : (
-                    <div className="orion-execution-modal-table">
-                      <div className="orion-execution-modal-table-head">
-                        <span>Step</span>
-                        <span>Status</span>
-                        <span>Tools</span>
-                        <span>Output</span>
-                      </div>
-                      {replayRows.map((step, index) => (
-                        <div
-                          key={`${step.id}:${index}`}
-                          className="orion-log-entry orion-execution-modal-table-row"
-                        >
-                          <span className="orion-execution-modal-step-title">{step.title}</span>
-                          <span
-                            className="orion-chip"
-                            style={{
-                              width: 'fit-content',
-                              color: step.status.color,
-                              border: step.status.border,
-                              background: step.status.bg,
-                            }}
-                          >
-                            {step.status.label}
-                          </span>
-                          <span className="orion-execution-modal-step-meta">{step.tools}</span>
-                          <span className="orion-execution-modal-step-output">
-                            {step.output}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </section>
-        </div>
       )}
     </div>
   );

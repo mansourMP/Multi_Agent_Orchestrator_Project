@@ -71,13 +71,52 @@ def _connector_public_metadata(connector: str, credentials: Dict[str, Any]) -> D
             value = str(credentials.get(key) or "").strip()
             if value:
                 public[key] = value
+    elif connector_id == "smtp":
+        host = str(credentials.get("host") or "").strip()
+        username = str(credentials.get("username") or "").strip()
+        port = str(credentials.get("port") or "").strip()
+        if host:
+            public["host"] = host
+        if username:
+            public["username"] = username
+        if port:
+            public["port"] = port
+        public["use_tls"] = bool(credentials.get("use_tls"))
     elif connector_id == "discord_bot":
-        channel_id = str(credentials.get("channel_id") or "").strip()
-        guild_id = str(credentials.get("guild_id") or "").strip()
-        if channel_id:
-            public["channel_id"] = channel_id
-        if guild_id:
-            public["guild_id"] = guild_id
+        for key in ("channel_id", "guild_id", "channel_name", "guild_name", "bot_id", "bot_username", "bot_status", "application_id"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "slack":
+        for key in ("team_id", "team_name", "bot_user_id", "authed_user_id", "bot_status"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "github":
+        for key in ("auth_mode", "username", "installation_id"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "dropbox":
+        for key in ("auth_mode", "display_name", "email", "account_id"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "s3":
+        for key in ("auth_mode", "region", "access_key_hint", "bucket_count"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "notion":
+        for key in ("auth_mode", "workspace_name", "workspace_id"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
+    elif connector_id == "linear":
+        for key in ("auth_mode", "organization_name", "organization_id", "username"):
+            value = str(credentials.get(key) or "").strip()
+            if value:
+                public[key] = value
     elif connector_id == "instagram_business":
         instagram_account_id = str(
             credentials.get("instagram_account_id")
@@ -133,6 +172,84 @@ def _connector_identity_signature(connector: str, credentials: Dict[str, Any]) -
         guild_id = str(credentials.get("guild_id") or "").strip()
         if bot_token and channel_id:
             return f"discord_bot:{bot_token}:{guild_id}:{channel_id}"
+    if connector_id == "smtp":
+        host = str(credentials.get("host") or "").strip().lower()
+        username = str(credentials.get("username") or "").strip().lower()
+        port = str(credentials.get("port") or "").strip()
+        if host and username:
+            return f"smtp:{host}:{port}:{username}"
+    if connector_id == "slack":
+        team_id = str(credentials.get("team_id") or "").strip().lower()
+        bot_user_id = str(credentials.get("bot_user_id") or "").strip().lower()
+        app_id = str(credentials.get("app_id") or "").strip().lower()
+        bot_token = str(credentials.get("bot_token") or "").strip()
+        if team_id and (bot_user_id or app_id):
+            return f"slack:{team_id}:{app_id}:{bot_user_id}"
+        if bot_token and team_id:
+            return f"slack:{team_id}:{bot_token}"
+    if connector_id == "github":
+        auth_mode = str(credentials.get("auth_mode") or "").strip().lower()
+        username = str(credentials.get("username") or "").strip().lower()
+        app_id = str(credentials.get("app_id") or "").strip()
+        installation_id = str(credentials.get("installation_id") or "").strip()
+        token = str(
+            credentials.get("personal_access_token")
+            or credentials.get("pat")
+            or credentials.get("token")
+            or credentials.get("access_token")
+            or ""
+        ).strip()
+        if auth_mode == "app" and app_id and installation_id:
+            return f"github:app:{app_id}:{installation_id}"
+        if username:
+            return f"github:pat:{username}"
+        if token:
+            return f"github:pat:{token}"
+    if connector_id == "dropbox":
+        account_id = str(credentials.get("account_id") or "").strip()
+        token = str(credentials.get("access_token") or credentials.get("oauth_access_token") or credentials.get("token") or "").strip()
+        if account_id:
+            return f"dropbox:{account_id}"
+        if token:
+            return f"dropbox:{token}"
+    if connector_id == "s3":
+        access_key_id = str(
+            credentials.get("aws_access_key_id")
+            or credentials.get("access_key_id")
+            or credentials.get("access_key")
+            or ""
+        ).strip()
+        region = str(credentials.get("region") or credentials.get("aws_region") or credentials.get("region_name") or "").strip()
+        if access_key_id:
+            return f"s3:{region}:{access_key_id}"
+    if connector_id == "notion":
+        workspace_id = str(credentials.get("workspace_id") or "").strip()
+        token = str(
+            credentials.get("integration_token")
+            or credentials.get("access_token")
+            or credentials.get("oauth_access_token")
+            or credentials.get("token")
+            or ""
+        ).strip()
+        if workspace_id:
+            return f"notion:{workspace_id}"
+        if token:
+            return f"notion:{token}"
+    if connector_id == "linear":
+        organization_id = str(credentials.get("organization_id") or "").strip()
+        username = str(credentials.get("username") or "").strip().lower()
+        token = str(
+            credentials.get("api_key")
+            or credentials.get("personal_api_key")
+            or credentials.get("access_token")
+            or credentials.get("oauth_access_token")
+            or credentials.get("token")
+            or ""
+        ).strip()
+        if organization_id and username:
+            return f"linear:{organization_id}:{username}"
+        if token:
+            return f"linear:{token}"
     if connector_id == "google_workspace":
         auth_mode = str(credentials.get("auth_mode") or credentials.get("authMode") or "").strip().lower()
         calendar_id = str(credentials.get("calendar_id") or "").strip()

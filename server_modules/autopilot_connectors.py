@@ -1,7 +1,8 @@
 from __future__ import annotations
-import asyncio, os, json, time, threading, base64, certifi, html, ssl, re, uuid, mimetypes
+import asyncio, os, json, time, threading, base64, certifi, html, ssl, re, uuid, mimetypes, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
@@ -22,6 +23,10 @@ except Exception:  # pragma: no cover - test fallback when FastAPI is unavailabl
 
     class Response:  # type: ignore[override]
         pass
+try:
+    import fcntl
+except Exception:  # pragma: no cover - unavailable on some platforms
+    fcntl = None  # type: ignore[assignment]
 
 _server = None
 _SYNC_SERVER_GLOBALS = (
@@ -78,6 +83,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EMPYRALIST_MCP_URL = os.getenv("EMPYRALIST_MCP_URL", "http://127.0.0.1:8001/mcp").strip() or "http://127.0.0.1:8001/mcp"
 EMPYRALIST_RUNTIME_URL = os.getenv("EMPYRALIST_RUNTIME_URL", "http://127.0.0.1:8001").strip().rstrip("/") or "http://127.0.0.1:8001"
 EMPYRALIST_WORKFLOW_API_URL = os.getenv("EMPYRALIST_WORKFLOW_API_URL", "http://127.0.0.1:4000/api/v1").strip().rstrip("/") or "http://127.0.0.1:4000/api/v1"
+_TELEGRAM_POLL_LOCK_DIR = EMPYRALIS_STATE_HOME / "channels" / "telegram"
+
+
+@contextmanager
+def _telegram_get_updates_process_lock(bot_token: str):
+    if fcntl is None:
+        yield True
+        return
+    _TELEGRAM_POLL_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(bot_token or "").encode("utf-8")).hexdigest()[:16]
+    lock_path = _TELEGRAM_POLL_LOCK_DIR / f"getupdates-{digest}.lock"
+    handle = lock_path.open("a+", encoding="utf-8")
+    acquired = False
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        handle.close()
 EMPYRALIST_WEB_URL = os.getenv("EMPYRALIST_WEB_URL", "http://127.0.0.1:3000").strip().rstrip("/") or "http://127.0.0.1:3000"
 
 
@@ -4364,15 +4397,21 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
             connector_id=connector_id,
         )
 
-        updates_result = _telegram_api_request(
-            bot_token,
-            "getUpdates",
-            params={
-                "offset": last_update_id + 1,
-                "limit": max(1, min(ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES, 100)),
-                "timeout": 0,
-            },
-        )
+        with _telegram_get_updates_process_lock(bot_token) as acquired_poll_lock:
+            if not acquired_poll_lock:
+                _telegram_autopilot_log(
+                    f"skipping getUpdates for {label}: another poller currently holds the Telegram bot lock"
+                )
+                return
+            updates_result = _telegram_api_request(
+                bot_token,
+                "getUpdates",
+                params={
+                    "offset": last_update_id + 1,
+                    "limit": max(1, min(ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES, 100)),
+                    "timeout": 0,
+                },
+            )
         updates = updates_result.get("result")
         if not isinstance(updates, list):
             updates = []

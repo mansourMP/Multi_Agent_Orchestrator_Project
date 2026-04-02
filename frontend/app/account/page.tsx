@@ -4,8 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Settings, UserRound } from 'lucide-react';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-
-const STORAGE_KEY = 'empyralis_account_profile_v1';
+import {
+  displayNameFromEmail,
+  readAccountProfilePreferences,
+  writeAccountProfilePreferences,
+  type AccountProfilePreferences,
+} from '@/lib/accountProfile';
 
 type AccountProfile = {
   displayName: string;
@@ -18,24 +22,6 @@ const DEFAULT_PROFILE: AccountProfile = {
   email: '',
   photoUrl: '',
 };
-
-function loadStoredProfile(): AccountProfile {
-  if (typeof window === 'undefined') return DEFAULT_PROFILE;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_PROFILE;
-    const saved = JSON.parse(raw) as Partial<AccountProfile>;
-    return {
-      displayName: typeof saved.displayName === 'string' && saved.displayName.trim()
-        ? saved.displayName.trim()
-        : DEFAULT_PROFILE.displayName,
-      email: typeof saved.email === 'string' ? saved.email.trim() : '',
-      photoUrl: typeof saved.photoUrl === 'string' ? saved.photoUrl.trim() : '',
-    };
-  } catch {
-    return DEFAULT_PROFILE;
-  }
-}
 
 function initialsForName(name: string): string {
   const parts = String(name || '')
@@ -53,7 +39,12 @@ export default function AccountPage() {
   const [saveNotice, setSaveNotice] = useState('');
 
   useEffect(() => {
-    setDraft(loadStoredProfile());
+    const stored = readAccountProfilePreferences();
+    setDraft({
+      displayName: stored.displayName || DEFAULT_PROFILE.displayName,
+      email: '',
+      photoUrl: stored.photoUrl,
+    });
   }, []);
 
   useEffect(() => {
@@ -67,19 +58,16 @@ export default function AccountPage() {
         if (!email) return;
         setAuthEmail(email);
         setDraft((current) => {
-          if (current.email === email) return current;
-          return { ...current, email };
+          const nextDisplayName =
+            current.displayName === DEFAULT_PROFILE.displayName
+              ? displayNameFromEmail(email, DEFAULT_PROFILE.displayName)
+              : current.displayName;
+          return {
+            ...current,
+            email,
+            displayName: nextDisplayName,
+          };
         });
-        if (typeof window !== 'undefined') {
-          const current = loadStoredProfile();
-          window.localStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify({
-              ...current,
-              email,
-            }),
-          );
-        }
       } catch {
         // Ignore identity lookup failures on local-only sessions.
       }
@@ -91,18 +79,20 @@ export default function AccountPage() {
   }, []);
 
   const effectiveEmail = authEmail || draft.email || '';
-  const avatarLabel = useMemo(() => initialsForName(draft.displayName), [draft.displayName]);
+  const effectiveDisplayName = draft.displayName.trim() || displayNameFromEmail(effectiveEmail, DEFAULT_PROFILE.displayName);
+  const avatarLabel = useMemo(() => initialsForName(effectiveDisplayName), [effectiveDisplayName]);
 
   const persist = useCallback(() => {
-    const next = {
-      displayName: draft.displayName.trim() || DEFAULT_PROFILE.displayName,
+    const next: AccountProfile = {
+      displayName: draft.displayName.trim() || displayNameFromEmail(effectiveEmail, DEFAULT_PROFILE.displayName),
       email: effectiveEmail,
       photoUrl: draft.photoUrl?.trim() || '',
     };
     setDraft(next);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    }
+    writeAccountProfilePreferences({
+      displayName: next.displayName,
+      photoUrl: next.photoUrl || '',
+    } satisfies AccountProfilePreferences);
     setSaveNotice('Saved');
     window.setTimeout(() => setSaveNotice(''), 1600);
   }, [draft, effectiveEmail]);
@@ -114,7 +104,7 @@ export default function AccountPage() {
         title="Profile"
         subtitle="Manage your account details."
         actions={
-          <Link href="/settings" className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
+          <Link href="/settings" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }}>
             <Settings size={13} />
             Settings
           </Link>
@@ -175,7 +165,7 @@ export default function AccountPage() {
               )}
               <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
-                  {draft.displayName || DEFAULT_PROFILE.displayName}
+                  {effectiveDisplayName}
                 </div>
                 <div
                   className="orion-panel-copy"
@@ -204,7 +194,7 @@ export default function AccountPage() {
                 value={draft.displayName}
                 onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
                 placeholder="Account owner"
-                style={{ height: 42, borderRadius: 12 }}
+                style={{ height: 44, borderRadius: 12 }}
               />
             </div>
 
@@ -218,7 +208,7 @@ export default function AccountPage() {
                 value={effectiveEmail}
                 readOnly
                 placeholder="No signed-in email available"
-                style={{ height: 42, borderRadius: 12, opacity: 0.85 }}
+                style={{ height: 44, borderRadius: 12, opacity: 0.85 }}
               />
             </div>
 
@@ -232,7 +222,7 @@ export default function AccountPage() {
                 value={draft.photoUrl || ''}
                 onChange={(event) => setDraft((current) => ({ ...current, photoUrl: event.target.value }))}
                 placeholder="Optional image URL"
-                style={{ height: 42, borderRadius: 12 }}
+                style={{ height: 44, borderRadius: 12 }}
               />
               <div className="orion-panel-copy" style={{ margin: '6px 0 0' }}>
                 Add an image URL if you want a custom avatar.

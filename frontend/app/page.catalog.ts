@@ -31,10 +31,17 @@ export type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' |
 export type ConnectorId =
   | 'google_workspace'
   | 'microsoft_365'
+  | 'smtp'
   | 'telegram_bot'
   | 'wechat_work'
   | 'whatsapp_twilio'
   | 'discord_bot'
+  | 'slack'
+  | 'github'
+  | 'dropbox'
+  | 's3'
+  | 'notion'
+  | 'linear'
   | 'instagram_business';
 export type ConnectorCatalogId =
   | ConnectorId
@@ -1287,20 +1294,34 @@ export function getProviderAuthModes(option: ProviderOption | null | undefined):
 export const DEFAULT_CONNECTOR_OPTIONS: ConnectorOption[] = [
   { id: 'google_workspace', label: 'Google Workspace', note: 'Gmail + Calendar actions' },
   { id: 'microsoft_365', label: 'Microsoft 365', note: 'Outlook + Graph-backed docs and files' },
+  { id: 'smtp', label: 'SMTP Email', note: 'Generic mail server with approval-gated send' },
   { id: 'telegram_bot', label: 'Telegram Bot', note: 'Bot token + chat delivery' },
   { id: 'wechat_work', label: 'WeChat Work', note: 'Webhook alert delivery' },
   { id: 'whatsapp_twilio', label: 'WhatsApp (Twilio)', note: 'Twilio WhatsApp messaging' },
   { id: 'discord_bot', label: 'Discord Bot', note: 'Bot token + channel routing' },
+  { id: 'slack', label: 'Slack', note: 'OAuth workspace install + channel routing' },
+  { id: 'github', label: 'GitHub', note: 'PAT or GitHub App for repo and issue workflows' },
+  { id: 'dropbox', label: 'Dropbox', note: 'Folder browse, file sync, and shared links' },
+  { id: 's3', label: 'Amazon S3', note: 'Buckets, objects, uploads, downloads, and presigned URLs' },
+  { id: 'notion', label: 'Notion', note: 'Pages, databases, and search with approval-gated writes' },
+  { id: 'linear', label: 'Linear', note: 'Team issues, projects, and approval-gated issue updates' },
   { id: 'instagram_business', label: 'Instagram Business', note: 'Business token + account routing' },
 ];
 
 export const DEFAULT_CONNECTOR_LABELS: Record<ConnectorId, string> = {
   google_workspace: 'My Google Workspace',
   microsoft_365: 'My Microsoft 365',
+  smtp: 'My SMTP Mailbox',
   telegram_bot: 'My Telegram Bot',
   wechat_work: 'My WeChat Work',
   whatsapp_twilio: 'My WhatsApp Twilio',
   discord_bot: 'My Discord Bot',
+  slack: 'My Slack Workspace',
+  github: 'My GitHub',
+  dropbox: 'My Dropbox',
+  s3: 'My Amazon S3',
+  notion: 'My Notion Workspace',
+  linear: 'My Linear Workspace',
   instagram_business: 'My Instagram Business',
 };
 
@@ -1317,6 +1338,14 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         detail: 'Best for inbox triage, scheduling, and workflow execution.',
         status: 'native_now',
         connector: 'google_workspace',
+      },
+      {
+        id: 'smtp',
+        label: 'SMTP Email',
+        note: 'Generic SMTP server + approval-gated send',
+        detail: 'Use a standard mail server when you need reliable outbound email without relying on a Google or Microsoft suite connector.',
+        status: 'native_now',
+        connector: 'smtp',
       },
       {
         id: 'telegram_bot',
@@ -1341,6 +1370,54 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         detail: 'Best for operational messaging when you already run on Twilio.',
         status: 'native_now',
         connector: 'whatsapp_twilio',
+      },
+      {
+        id: 'slack',
+        label: 'Slack',
+        note: 'Workspace OAuth + channels + DMs',
+        detail: 'Good for approvals, team notifications, channel updates, and threaded agent handoffs inside Slack.',
+        status: 'native_now',
+        connector: 'slack',
+      },
+      {
+        id: 'github',
+        label: 'GitHub',
+        note: 'PAT or GitHub App for repo workflows',
+        detail: 'Use GitHub for repo reads, issue triage, pull request creation, comments, commit lookups, and controlled file updates with approval-gated writes.',
+        status: 'native_now',
+        connector: 'github',
+      },
+      {
+        id: 'dropbox',
+        label: 'Dropbox',
+        note: 'Folders, uploads, downloads, and shared links',
+        detail: 'Use Dropbox for folder browsing, search, shared links, and approval-gated file moves or uploads from local workflows.',
+        status: 'native_now',
+        connector: 'dropbox',
+      },
+      {
+        id: 's3',
+        label: 'Amazon S3',
+        note: 'Buckets, objects, and presigned URLs',
+        detail: 'Use S3 for bucket browsing, object sync, upload and delete workflows, and time-limited presigned download links.',
+        status: 'native_now',
+        connector: 's3',
+      },
+      {
+        id: 'notion',
+        label: 'Notion',
+        note: 'Search, pages, and databases',
+        detail: 'Use Notion for workspace search, page retrieval, database queries, and approval-gated page or database writes.',
+        status: 'native_now',
+        connector: 'notion',
+      },
+      {
+        id: 'linear',
+        label: 'Linear',
+        note: 'Teams, issues, and projects',
+        detail: 'Use Linear for team issue triage, project lookups, and approval-gated issue creation, updates, and comments.',
+        status: 'native_now',
+        connector: 'linear',
       },
       {
         id: 'discord',
@@ -1447,10 +1524,17 @@ export function isConnectorId(value: string): value is ConnectorId {
   return (
     value === 'google_workspace'
     || value === 'microsoft_365'
+    || value === 'smtp'
     || value === 'telegram_bot'
     || value === 'wechat_work'
     || value === 'whatsapp_twilio'
     || value === 'discord_bot'
+    || value === 'slack'
+    || value === 'github'
+    || value === 'dropbox'
+    || value === 's3'
+    || value === 'notion'
+    || value === 'linear'
     || value === 'instagram_business'
   );
 }

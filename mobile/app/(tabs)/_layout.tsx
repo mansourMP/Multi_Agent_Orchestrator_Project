@@ -1,18 +1,20 @@
 import { Tabs, useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-
 import { useAppTheme } from "@/src/theme/useAppTheme";
 
 export default function TabsLayout() {
   const theme = useAppTheme();
   const segments = useSegments();
-  const isChatThread = segments[0] === "(tabs)" && segments[1] === "chats" && segments[2] === "[id]";
+  const isChatThread =
+    segments[0] === "(tabs)" &&
+    (segments[1] === "kin" || segments[1] === "chats") &&
+    segments[2] === "[id]";
 
   return (
     <Tabs
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: theme.colors.accent,
+        tabBarActiveTintColor: theme.colors.text,
         tabBarInactiveTintColor: theme.colors.textSecondary,
         tabBarStyle: {
           display: isChatThread ? "none" : "flex",
@@ -22,44 +24,42 @@ export default function TabsLayout() {
           backgroundColor: theme.colors.surface,
           borderTopColor: theme.colors.border,
         },
+        tabBarItemStyle: {
+          paddingTop: 2,
+        },
         tabBarLabelStyle: {
           fontSize: 11,
           fontFamily: "DMSans_500Medium",
+          marginTop: -2,
+          paddingBottom: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: -2,
         },
         sceneStyle: {
           backgroundColor: theme.colors.background,
         },
         tabBarIcon: ({ color, size, focused }) => {
-          const iconMap: Record<
-            string,
-            { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }
-          > = {
-            chats: {
-              active: "chatbubble-ellipses",
-              inactive: "chatbubble-ellipses-outline",
-            },
-            "apps/index": {
-              active: "grid",
-              inactive: "grid-outline",
-            },
-            "today/index": {
-              active: "sunny",
-              inactive: "sunny-outline",
-            },
-            "spaces/index": {
-              active: "folder",
-              inactive: "folder-outline",
-            },
+          const iconMap: Record<string, keyof typeof Ionicons.glyphMap> = {
+            kin: "chatbubble-ellipses",
+            "apps/index": "grid",
+            "home/index": "home",
+            "inbox/index": "mail",
+            "profile/index": "person-circle",
           };
-          const icon = iconMap[route.name];
-          return <Ionicons name={icon ? (focused ? icon.active : icon.inactive) : "ellipse-outline"} size={size} color={color} />;
+          const icon = iconMap[route.name] ?? "ellipse";
+          return <Ionicons name={icon} size={size} color={focused ? theme.colors.text : theme.colors.textSecondary} />;
         },
       })}
     >
-      <Tabs.Screen name="chats" options={{ title: "Chats" }} />
+      <Tabs.Screen name="home/index" options={{ title: "Home" }} />
+      <Tabs.Screen name="kin" options={{ title: "KIN" }} />
       <Tabs.Screen name="apps/index" options={{ title: "Apps" }} />
-      <Tabs.Screen name="today/index" options={{ title: "Today" }} />
-      <Tabs.Screen name="spaces/index" options={{ title: "Spaces" }} />
+      <Tabs.Screen name="inbox/index" options={{ title: "Inbox" }} />
+      <Tabs.Screen name="profile/index" options={{ title: "Profile" }} />
+      <Tabs.Screen name="chats" options={{ href: null }} />
+      <Tabs.Screen name="today/index" options={{ href: null }} />
+      <Tabs.Screen name="spaces/index" options={{ href: null }} />
     </Tabs>
   );
 }

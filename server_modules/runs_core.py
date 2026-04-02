@@ -675,6 +675,12 @@ def initialize_runtime_services() -> None:
         provider_profiles_path=ORION_PROVIDER_PROFILES_FILE,
         idempotency_path=ORION_IDEMPOTENCY_FILE,
     )
+    try:
+        from server_modules.runtime_runs_api import initialize_chat_stream_runtime_state
+
+        initialize_chat_stream_runtime_state()
+    except Exception:
+        raise
     _load_live_runtime_state()
     _load_run_history()
     _load_approval_audit()
@@ -1129,9 +1135,26 @@ def _bind_obvious_connector_write_intent(
     next_metadata["execution_target"] = EXECUTION_TARGET_CLOUD
     return next_metadata
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _normalize_requested_max_iterations(value: Any) -> Optional[int]:
+    if value in {None, ""}:
+        return None
+    parsed = _safe_int(value, 0)
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail="max_iterations must be greater than zero.")
+    return parsed
+
+
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     engine = (req.engine or "orion").lower().strip()
     metadata = dict(req.metadata) if isinstance(req.metadata, dict) else {}
+    normalized_max_iterations = _normalize_requested_max_iterations(getattr(req, "max_iterations", None))
     outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
     if engine not in ENGINE_REGISTRY:
         raise HTTPException(status_code=400, detail=f"Unsupported engine '{engine}'")
@@ -1169,6 +1192,11 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
                     detail="Unsupported execution_target. Use one of: auto, cloud, local_companion.",
                 )
             metadata["execution_target"] = normalized_target
+
+    if normalized_max_iterations is not None:
+        metadata["max_iterations"] = normalized_max_iterations
+    else:
+        metadata.pop("max_iterations", None)
 
     parent_run_id = _normalize_run_id_token(req.parent_run_id or metadata.get("parent_run_id"))
     if parent_run_id:
@@ -1380,6 +1408,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workspace_id": req.workspace_id,
         "user_goal": req.user_goal,
         "business_plan": req.business_plan,
+        "max_iterations": getattr(req, "max_iterations", None),
         "agent_role": req.agent_role,
         "provider": req.provider,
         "model": req.model,

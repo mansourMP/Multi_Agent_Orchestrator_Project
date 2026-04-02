@@ -1,3 +1,5 @@
+import threading
+
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
@@ -15,6 +17,14 @@ from server_modules.runs_output import (
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
+
+AUTO_RETRY_DELAY_SECONDS = 3.0
+AUTO_RETRY_MAX_RETRIES = 1
+STALE_CHILD_RUN_TIMEOUT_SECONDS = 300
+ROUTING_PROVIDER_ORDER: Tuple[str, ...] = ("openai", "anthropic", "gemini", "codex_cli", "ollama")
+_AUTO_RETRY_PENDING: Set[Tuple[str, str]] = set()
+_AUTO_RETRY_ATTEMPTS: Dict[Tuple[str, str], int] = {}
+_AUTO_RETRY_PENDING_LOCK = threading.Lock()
 
 VALID_AGENT_ROLES: Set[str] = {
     "orchestrator",
@@ -102,6 +112,60 @@ def normalize_agent_role(value: Any) -> str:
         return ""
     raw = AGENT_ROLE_ALIASES.get(raw, raw)
     return raw if raw in VALID_AGENT_ROLES else ""
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _normalize_requested_max_iterations(value: Any) -> Optional[int]:
+    if value in {None, ""}:
+        return None
+    parsed = _safe_int(value, 0)
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail="max_iterations must be greater than zero.")
+    return parsed
+
+
+def _failure_status(status: Any) -> bool:
+    return str(status or "").strip().lower() in {"failed", "error", "timeout", "cancelled", "stopped"}
+
+
+def _child_lineage_key(child: Dict[str, Any]) -> str:
+    return (
+        _normalize_run_id_token(child.get("retry_root_run_id"))
+        or _normalize_run_id_token(child.get("retry_of_run_id"))
+        or _normalize_run_id_token(child.get("run_id"))
+        or str(child.get("run_id") or "")
+    )
+
+
+def _child_metadata(child: Dict[str, Any]) -> Dict[str, Any]:
+    context = child.get("context") if isinstance(child.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _child_retry_count(child: Dict[str, Any]) -> int:
+    metadata = _child_metadata(child)
+    return max(
+        _safe_int(metadata.get("retry_count"), 0),
+        _safe_int(metadata.get("retry_sequence"), 0),
+        _safe_int(child.get("retry_sequence"), 0),
+    )
+
+
+def _parent_pending_retry_lineages(parent_run_id: str) -> Set[str]:
+    with _AUTO_RETRY_PENDING_LOCK:
+        return {lineage for parent, lineage in _AUTO_RETRY_PENDING if parent == str(parent_run_id or "").strip()}
+
+
+def _auto_retry_attempt_count(parent_run_id: str, lineage_key: str, fallback: int = 0) -> int:
+    with _AUTO_RETRY_PENDING_LOCK:
+        return max(_safe_int(_AUTO_RETRY_ATTEMPTS.get((parent_run_id, lineage_key)), 0), _safe_int(fallback, 0))
 
 
 def _detect_agent_role(req: RunStartRequest, metadata: Dict[str, Any]) -> Tuple[str, str]:
@@ -199,6 +263,7 @@ def _run_relation_summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         "retry_of_run_id": snapshot.get("retry_of_run_id"),
         "retry_root_run_id": snapshot.get("retry_root_run_id"),
         "retry_sequence": snapshot.get("retry_sequence"),
+        "retry_count": snapshot.get("retry_count"),
     }
 
 
@@ -255,6 +320,8 @@ def _find_run_relationships(target_run_id: str, snapshot: Dict[str, Any]) -> Tup
 def _build_delegation_summary(
     snapshot: Dict[str, Any],
     child_runs: List[Dict[str, Any]],
+    *,
+    extra_retry_pending_lineages: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not isinstance(child_runs, list) or not child_runs:
         return None
@@ -291,18 +358,29 @@ def _build_delegation_summary(
     child_summaries: List[str] = []
     failed_run_ids: List[str] = []
 
+    pending_retry_lineages = _parent_pending_retry_lineages(str(snapshot.get("run_id") or ""))
+    if isinstance(extra_retry_pending_lineages, set):
+        pending_retry_lineages |= {str(item).strip() for item in extra_retry_pending_lineages if str(item).strip()}
+
     for child in effective_child_runs:
         status = str(child.get("status") or "").strip().lower()
         role = normalize_agent_role(child.get("agent_role")) or str(child.get("agent_role") or "").strip().lower()
+        lineage_key = _child_lineage_key(child)
+        retry_pending = bool(lineage_key and lineage_key in pending_retry_lineages and _failure_status(status))
         if role and role not in child_roles:
             child_roles.append(role)
-        if status in TERMINAL_RUN_STATUSES:
+        if retry_pending:
+            active_children += 1
+        elif status in TERMINAL_RUN_STATUSES:
             terminal_children += 1
         else:
             active_children += 1
         if status == "completed":
             completed_children += 1
-        elif status == "failed":
+        elif retry_pending:
+            child_summaries.append(f"{AGENT_WORKSPACE_LABELS.get(role, role or 'Agent')}: retrying")
+            continue
+        elif _failure_status(status):
             failed_children += 1
             child_run_id = _normalize_run_id_token(child.get("run_id"))
             if child_run_id:
@@ -314,7 +392,7 @@ def _build_delegation_summary(
         summary = str(child.get("result_summary") or child.get("user_goal") or "").strip()
         if status == "completed" and summary:
             child_summaries.append(f"{label}: {summary}")
-        elif status == "failed":
+        elif _failure_status(status):
             child_summaries.append(f"{label}: failed")
         elif status in {"waiting", "waiting_for_input"}:
             child_summaries.append(f"{label}: waiting")
@@ -358,6 +436,7 @@ def _build_delegation_summary(
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     engine = (req.engine or "orion").lower().strip()
     metadata = dict(req.metadata) if isinstance(req.metadata, dict) else {}
+    normalized_max_iterations = _normalize_requested_max_iterations(getattr(req, "max_iterations", None))
     outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
     if engine not in ENGINE_REGISTRY:
         raise HTTPException(status_code=400, detail=f"Unsupported engine '{engine}'")
@@ -395,6 +474,11 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
                     detail="Unsupported execution_target. Use one of: auto, cloud, local_companion.",
                 )
             metadata["execution_target"] = normalized_target
+
+    if normalized_max_iterations is not None:
+        metadata["max_iterations"] = normalized_max_iterations
+    else:
+        metadata.pop("max_iterations", None)
 
     parent_run_id = _normalize_run_id_token(req.parent_run_id or metadata.get("parent_run_id"))
     if parent_run_id:
@@ -557,6 +641,21 @@ def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
     metadata["tool_policy_precheck"] = precheck
 
 
+def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
+    precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
+    browser_policy = precheck.get("browser_automation_policy") if isinstance(precheck.get("browser_automation_policy"), dict) else {}
+    session_profiles = list(browser_policy.get("session_profiles") or []) if isinstance(browser_policy, dict) else []
+    immutable_plan_hash = str(browser_policy.get("immutable_plan_hash") or "").strip() if isinstance(browser_policy, dict) else ""
+    if session_profiles:
+        metadata["browser_session_profile"] = session_profiles[0]
+    if immutable_plan_hash:
+        metadata["browser_immutable_plan_hash"] = immutable_plan_hash
+    if bool(browser_policy.get("reviewed_approval_required")):
+        metadata["browser_reviewed_approval_required"] = True
+    elif "browser_reviewed_approval_required" in metadata:
+        metadata.pop("browser_reviewed_approval_required", None)
+
+
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
     precheck_fn = globals().get("_compute_tool_policy_precheck")
     create_run_fn = globals().get("create_run")
@@ -596,6 +695,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workspace_id": req.workspace_id,
         "user_goal": req.user_goal,
         "business_plan": req.business_plan,
+        "max_iterations": getattr(req, "max_iterations", None),
         "agent_role": req.agent_role,
         "provider": req.provider,
         "model": req.model,
@@ -607,6 +707,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
     metadata["tool_policy_precheck"] = precheck_fn(preview_context)
+    _apply_browser_execution_metadata(metadata)
     if metadata["tool_policy_precheck"].get("blocked_count"):
         raise HTTPException(
             status_code=409,
@@ -706,6 +807,12 @@ def _build_delegated_run_request(
         workspace_id=parent_context.get("workspace_id"),
         user_goal=str(child_payload.get("user_goal") or "").strip(),
         business_plan=str(child_payload.get("business_plan") or parent_context.get("business_plan") or "").strip() or None,
+        max_iterations=_normalize_requested_max_iterations(
+            child_payload.get("max_iterations")
+            or child_metadata.get("max_iterations")
+            or parent_context.get("max_iterations")
+            or parent_metadata.get("max_iterations")
+        ),
         agent_role=str(child_payload.get("agent_role") or "").strip(),
         provider=parent_context.get("provider"),
         model=parent_context.get("model"),
@@ -715,6 +822,184 @@ def _build_delegated_run_request(
     )
 
 
+def _timeout_stale_child_runs(parent_run_id: str, child_runs: List[Dict[str, Any]]) -> List[str]:
+    status_setter = globals().get("set_run_status")
+    if not callable(status_setter):
+        from server_modules.runs_core import set_run_status as status_setter  # type: ignore[assignment]
+    now = _utc_now()
+    timed_out: List[str] = []
+    for child in child_runs:
+        status = str(child.get("status") or "").strip().lower()
+        if not status or status in TERMINAL_RUN_STATUSES or status in {"waiting", "waiting_for_input"}:
+            continue
+        run_id = _normalize_run_id_token(child.get("run_id"))
+        if not run_id:
+            continue
+        last_progress = (
+            _parse_utc_ts(child.get("local_last_progress_at"))
+            or _parse_utc_ts(child.get("local_last_heartbeat_at"))
+            or _parse_utc_ts(child.get("updated_at"))
+            or _parse_utc_ts(child.get("created_at"))
+        )
+        if last_progress is None or (now - last_progress).total_seconds() <= STALE_CHILD_RUN_TIMEOUT_SECONDS:
+            continue
+        live_child = runs.get(run_id)
+        if not isinstance(live_child, dict):
+            continue
+        live_child["result"] = "Child run timed out after 5 minutes without progress."
+        result_data = live_child.get("result_data")
+        if not isinstance(result_data, dict):
+            result_data = {}
+        result_data.update(
+            {
+                "summary": "Child run timed out after 5 minutes without progress.",
+                "error": "delegated_child_timeout",
+                "parent_run_id": parent_run_id,
+            }
+        )
+        live_child["result_data"] = result_data
+        log_queue = live_child.get("logs")
+        if log_queue is not None:
+            emit_log(
+                log_queue,
+                "error",
+                "Child run timed out after 5 minutes without progress.",
+                event="delegated_child_timeout",
+                data={"run_id": run_id, "parent_run_id": parent_run_id},
+            )
+        status_setter(run_id, "failed")
+        timed_out.append(run_id)
+    return timed_out
+
+
+def _schedule_auto_retry_for_failed_children(
+    parent_snapshot: Dict[str, Any],
+    child_runs: List[Dict[str, Any]],
+    *,
+    triggering_run_id: Optional[str] = None,
+) -> Set[str]:
+    parent_run_id = str(parent_snapshot.get("run_id") or "").strip()
+    if not parent_run_id:
+        return []
+
+    latest_by_lineage: Dict[str, Dict[str, Any]] = {}
+    for child in child_runs:
+        lineage_key = _child_lineage_key(child)
+        previous = latest_by_lineage.get(lineage_key)
+        child_sort_key = (
+            _parse_utc_ts(child.get("updated_at")) or _parse_utc_ts(child.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            str(child.get("run_id") or ""),
+        )
+        previous_sort_key = (
+            _parse_utc_ts(previous.get("updated_at")) or _parse_utc_ts(previous.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            str(previous.get("run_id") or ""),
+        ) if isinstance(previous, dict) else None
+        if previous_sort_key is None or child_sort_key > previous_sort_key:
+            latest_by_lineage[lineage_key] = child
+
+    scheduled: Set[str] = set()
+    live_parent = runs.get(parent_run_id)
+    log_queue = live_parent.get("logs") if isinstance(live_parent, dict) else None
+
+    for lineage_key, child in latest_by_lineage.items():
+        status = str(child.get("status") or "").strip().lower()
+        if not _failure_status(status):
+            continue
+        if not lineage_key:
+            continue
+        with _AUTO_RETRY_PENDING_LOCK:
+            pending_key = (parent_run_id, lineage_key)
+            retry_count = max(
+                _child_retry_count(child),
+                _safe_int(_AUTO_RETRY_ATTEMPTS.get(pending_key), 0),
+            )
+            if retry_count >= AUTO_RETRY_MAX_RETRIES:
+                continue
+            if pending_key in _AUTO_RETRY_PENDING:
+                continue
+            _AUTO_RETRY_PENDING.add(pending_key)
+            _AUTO_RETRY_ATTEMPTS[pending_key] = retry_count + 1
+        child_run_id = str(child.get("run_id") or "").strip()
+        scheduled.add(lineage_key)
+        if log_queue is not None:
+            emit_log(
+                log_queue,
+                "info",
+                f"Child run {child_run_id} failed, retrying (attempt {retry_count + 2}/{AUTO_RETRY_MAX_RETRIES + 1})...",
+                event="delegation_retry",
+                data={
+                    "parent_run_id": parent_run_id,
+                    "triggering_run_id": triggering_run_id,
+                    "child_run_id": child_run_id,
+                    "retry_count": retry_count + 1,
+                },
+            )
+
+        def _retry_job(parent_id: str = parent_run_id, failed_child: Dict[str, Any] = dict(child), pending: Tuple[str, str] = pending_key) -> None:
+            try:
+                current_parent_snapshot = _lookup_run_snapshot(parent_id)
+                _, current_children = _find_run_relationships(parent_id, current_parent_snapshot)
+                latest_for_lineage = None
+                for current_child in current_children:
+                    if _child_lineage_key(current_child) != pending[1]:
+                        continue
+                    if latest_for_lineage is None:
+                        latest_for_lineage = current_child
+                        continue
+                    current_sort_key = (
+                        _parse_utc_ts(current_child.get("updated_at")) or _parse_utc_ts(current_child.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                        str(current_child.get("run_id") or ""),
+                    )
+                    latest_sort_key = (
+                        _parse_utc_ts(latest_for_lineage.get("updated_at")) or _parse_utc_ts(latest_for_lineage.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+                        str(latest_for_lineage.get("run_id") or ""),
+                    )
+                    if current_sort_key > latest_sort_key:
+                        latest_for_lineage = current_child
+                if not isinstance(latest_for_lineage, dict):
+                    return
+                if str(latest_for_lineage.get("run_id") or "").strip() != str(failed_child.get("run_id") or "").strip():
+                    return
+                if not _failure_status(latest_for_lineage.get("status")):
+                    return
+                retry_payload = _build_retry_child_payload(
+                    current_parent_snapshot,
+                    latest_for_lineage,
+                    note="Automatic retry after delegated child failure.",
+                )
+                retry_metadata = retry_payload.get("metadata") if isinstance(retry_payload.get("metadata"), dict) else {}
+                if isinstance(retry_metadata, dict):
+                    retry_metadata["auto_retry"] = True
+                    retry_payload["metadata"] = retry_metadata
+                delegated_req = _build_delegated_run_request(
+                    current_parent_snapshot,
+                    retry_payload,
+                    note="Automatic retry after delegated child failure.",
+                )
+                _create_run_from_request(delegated_req)
+            except Exception as exc:
+                current_parent = runs.get(parent_id)
+                current_log_queue = current_parent.get("logs") if isinstance(current_parent, dict) else None
+                if current_log_queue is not None:
+                    emit_log(
+                        current_log_queue,
+                        "error",
+                        f"Automatic child retry failed: {str(exc)[:280]}",
+                        event="delegation_retry_failed",
+                        data={"parent_run_id": parent_id, "child_run_id": str(failed_child.get('run_id') or '').strip()},
+                    )
+            finally:
+                with _AUTO_RETRY_PENDING_LOCK:
+                    _AUTO_RETRY_PENDING.discard(pending)
+                _refresh_parent_delegation_state(parent_id, triggering_run_id=str(failed_child.get("run_id") or "").strip() or None)
+
+        timer = threading.Timer(AUTO_RETRY_DELAY_SECONDS, _retry_job)
+        timer.daemon = True
+        timer.start()
+
+    return scheduled
+
+
 def _refresh_parent_delegation_state(parent_run_id: str, *, triggering_run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     try:
         snapshot = _lookup_run_snapshot(parent_run_id)
@@ -722,7 +1007,29 @@ def _refresh_parent_delegation_state(parent_run_id: str, *, triggering_run_id: O
         return None
 
     parent_run, child_runs = _find_run_relationships(parent_run_id, snapshot)
-    delegation_summary = _build_delegation_summary(snapshot, child_runs)
+    stale_timeouts = _timeout_stale_child_runs(parent_run_id, child_runs)
+    if stale_timeouts:
+        try:
+            snapshot = _lookup_run_snapshot(parent_run_id)
+            parent_run, child_runs = _find_run_relationships(parent_run_id, snapshot)
+        except HTTPException:
+            return None
+    scheduled_retries = _schedule_auto_retry_for_failed_children(
+        snapshot,
+        child_runs,
+        triggering_run_id=triggering_run_id or (stale_timeouts[0] if stale_timeouts else None),
+    )
+    if stale_timeouts or scheduled_retries:
+        try:
+            snapshot = _lookup_run_snapshot(parent_run_id)
+            parent_run, child_runs = _find_run_relationships(parent_run_id, snapshot)
+        except HTTPException:
+            return None
+    delegation_summary = _build_delegation_summary(
+        snapshot,
+        child_runs,
+        extra_retry_pending_lineages=scheduled_retries,
+    )
     if delegation_summary is None:
         return None
 
@@ -810,12 +1117,17 @@ def _build_retry_child_payload(parent_snapshot: Dict[str, Any], child_snapshot: 
     next_metadata["retry_of_run_id"] = str(child_snapshot.get("run_id") or "").strip()
     next_metadata["retry_root_run_id"] = retry_root_run_id
     next_metadata["retry_sequence"] = retry_sequence
+    next_metadata["retry_count"] = _child_retry_count(child_snapshot) + 1
     if note:
         next_metadata["delegation_retry_note"] = note
     return {
         "agent_role": normalize_agent_role(child_snapshot.get("agent_role") or child_metadata.get("agent_role")) or str(child_snapshot.get("agent_role") or "").strip(),
         "user_goal": str(child_context.get("user_goal") or child_snapshot.get("user_goal") or "").strip(),
         "business_plan": str(child_context.get("business_plan") or "").strip() or None,
+        "max_iterations": _normalize_requested_max_iterations(
+            child_context.get("max_iterations")
+            or child_metadata.get("max_iterations")
+        ),
         "metadata": next_metadata,
     }
 
@@ -872,6 +1184,103 @@ AUTO_DELEGATION_ROLE_RULES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _fastest_routing_context() -> Optional[Dict[str, str]]:
+    from scripts.orion_local_worker_llm import provider_has_key, resolve_requested_model
+
+    for provider in ROUTING_PROVIDER_ORDER:
+        if not provider_has_key(provider):
+            continue
+        model = str(resolve_requested_model({"provider": provider}, {"provider": provider}, provider)).strip() or None
+        return {"provider": provider, "model": model or ""}
+    return None
+
+
+def _llm_auto_delegate_role(
+    *,
+    objective: str,
+    business_plan: Optional[str],
+    parent_snapshot: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    from server_modules.llm_task import llm_task
+
+    routing_context = _fastest_routing_context()
+    if not isinstance(routing_context, dict):
+        return None
+
+    agent_list_lines = [
+        f"- {role}: {str(rule.get('reason') or '').strip() or str(rule.get('goal') or '').strip()}"
+        for role, rule in AUTO_DELEGATION_ROLE_RULES.items()
+    ]
+    prompt_parts = [
+        "You are routing a task to the most appropriate specialist agent.",
+        "",
+        "Available agents:",
+        *agent_list_lines,
+        "",
+        "Task to route:",
+        objective.strip() or "Coordinate the delegated work needed for this run.",
+    ]
+    if business_plan:
+        prompt_parts.extend(["", f"Business context: {business_plan.strip()}"])
+    result = llm_task(
+        "\n".join(prompt_parts).strip() + '\n\nRespond with JSON only: {"agent":"<agent_name>","reason":"<one sentence why>"}',
+        schema={
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["agent", "reason"],
+        },
+        context={
+            "provider": routing_context.get("provider"),
+            "model": routing_context.get("model"),
+        },
+        metadata={
+            "provider": routing_context.get("provider"),
+            "model": routing_context.get("model"),
+            "source": "delegation_routing",
+            "disable_provider_fallback": True,
+            "tools": [],
+            "workspace_id": parent_snapshot.get("workspace_id"),
+        },
+    )
+    if not isinstance(result, dict):
+        return None
+    agent_role = normalize_agent_role(result.get("agent"))
+    reason = str(result.get("reason") or "").strip()
+    if not agent_role or not reason:
+        return None
+    return {"agent_role": agent_role, "reason": reason}
+
+
+def _emit_auto_delegation_routing_log(
+    parent_run_id: str,
+    plan: List[Dict[str, Any]],
+    *,
+    strategy: str,
+    reason: str = "",
+) -> None:
+    run = runs.get(parent_run_id)
+    if not isinstance(run, dict):
+        return
+    log_queue = run.get("logs")
+    if log_queue is None:
+        return
+    emit_log(
+        log_queue,
+        "info",
+        "Delegation routing selected specialist agents.",
+        event="delegation_routing",
+        data={
+            "parent_run_id": parent_run_id,
+            "strategy": strategy,
+            "reason": str(reason or "").strip() or None,
+            "plan": plan,
+        },
+    )
+
+
 def _build_auto_delegation_plan(
     parent_snapshot: Dict[str, Any],
     *,
@@ -899,6 +1308,16 @@ def _build_auto_delegation_plan(
     if not objective:
         objective = "Coordinate the delegated work needed for this run."
 
+    llm_route = None
+    try:
+        llm_route = _llm_auto_delegate_role(
+            objective=objective,
+            business_plan=business_plan,
+            parent_snapshot=parent_snapshot,
+        )
+    except Exception:
+        llm_route = None
+
     scored: List[Tuple[int, str, Dict[str, Any]]] = []
     for role, rule in AUTO_DELEGATION_ROLE_RULES.items():
         keywords = [str(item).lower() for item in (rule.get("keywords") or []) if str(item).strip()]
@@ -912,6 +1331,12 @@ def _build_auto_delegation_plan(
     scored.sort(key=lambda item: (-item[0], item[1]))
     chosen: List[Tuple[str, Dict[str, Any]]] = []
     seen_roles: Set[str] = set()
+    if isinstance(llm_route, dict):
+        llm_role = normalize_agent_role(llm_route.get("agent_role"))
+        llm_rule = AUTO_DELEGATION_ROLE_RULES.get(llm_role or "")
+        if llm_role and isinstance(llm_rule, dict):
+            chosen.append((llm_role, llm_rule))
+            seen_roles.add(llm_role)
     for _, role, rule in scored:
         if role in seen_roles:
             continue
@@ -927,6 +1352,11 @@ def _build_auto_delegation_plan(
 
     plan: List[Dict[str, Any]] = []
     for role, rule in chosen[:max_children]:
+        route_reason = str(rule.get("reason") or "").strip() or None
+        route_source = "keyword"
+        if isinstance(llm_route, dict) and role == str(llm_route.get("agent_role") or "").strip():
+            route_reason = str(llm_route.get("reason") or "").strip() or route_reason
+            route_source = "llm"
         plan.append(
             {
                 "agent_role": role,
@@ -934,7 +1364,8 @@ def _build_auto_delegation_plan(
                 "business_plan": business_plan,
                 "metadata": {
                     "auto_delegation_rule": role,
-                    "auto_delegation_reason": str(rule.get("reason") or "").strip() or None,
+                    "auto_delegation_reason": route_reason,
+                    "auto_delegation_source": route_source,
                 },
             }
         )

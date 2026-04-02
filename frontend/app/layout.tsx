@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import type { Viewport } from "next";
+import type { CSSProperties } from "react";
 import { Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toast";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import GlobalCommandPalette from "@/components/orion/GlobalCommandPalette";
 import { PlatformShellProvider } from "@/components/orion/PlatformShellContext";
 import PlatformInspectPanel from "@/components/orion/PlatformInspectPanel";
 import PlatformTopBar from "@/components/orion/PlatformTopBar";
+import CommandPaletteProvider from "@/components/ui/CommandPalette";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BRAND } from "@/lib/brand";
 import "@xyflow/react/dist/style.css";
 import "../components/reactflow-override.css";
@@ -19,6 +22,10 @@ import "@fontsource/outfit/400.css";
 import "@fontsource/outfit/600.css";
 import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const metadata: Metadata = {
   title: `${BRAND.company} - Outcome Autopilot for Business`,
@@ -37,42 +44,24 @@ export const viewport: Viewport = {
 
 const CRITICAL_SHELL_CSS = `
 :root {
-  --sidebar-width: 56px;
+  --shell-sidebar-width: 64px;
   --topbar-height: 56px;
-  --critical-bg-shell: #f7f7f7;
-  --critical-bg-app: #f7f7f7;
-  --critical-bg-surface: #ffffff;
-  --critical-border: #e2e2e2;
-  --critical-text: #1a1c21;
-  --critical-text-secondary: #5d636e;
-  --critical-primary: #3d63dd;
-  --critical-primary-soft: rgba(61, 99, 221, 0.12);
-  --critical-success: #3f8a5f;
-  --critical-danger: #c06262;
-  --critical-success-soft: rgba(63, 138, 95, 0.12);
-  --critical-success-text: #2e6b49;
-  --critical-danger-soft: rgba(192, 98, 98, 0.12);
-  --critical-danger-text: #8a4343;
-  --critical-secondary-bg: #ffffff;
-  --critical-overlay: rgba(244, 244, 244, 0.22);
-}
-html[data-theme='dark'] {
-  --critical-bg-shell: #0f0f10;
-  --critical-bg-app: #141415;
-  --critical-bg-surface: #1c1c1e;
-  --critical-border: rgba(255, 255, 255, 0.07);
-  --critical-text: #f0f0f0;
-  --critical-text-secondary: #9a9a9f;
-  --critical-primary: #4f6ff7;
-  --critical-primary-soft: rgba(79, 111, 247, 0.18);
-  --critical-success: #3ecf8e;
-  --critical-danger: #f06060;
-  --critical-success-soft: rgba(62, 207, 142, 0.14);
-  --critical-success-text: #c7f2d7;
-  --critical-danger-soft: rgba(240, 96, 96, 0.14);
-  --critical-danger-text: #f5cdcd;
-  --critical-secondary-bg: #1c1c1e;
-  --critical-overlay: rgba(20, 20, 21, 0.22);
+  --critical-bg-shell: var(--bg-shell);
+  --critical-bg-app: var(--bg-app);
+  --critical-bg-surface: var(--bg-surface);
+  --critical-border: var(--border-subtle);
+  --critical-text: var(--text-primary);
+  --critical-text-secondary: var(--text-secondary);
+  --critical-primary: var(--primary-base);
+  --critical-primary-soft: var(--primary-soft);
+  --critical-success: var(--success-base);
+  --critical-danger: var(--error-base);
+  --critical-success-soft: var(--success-bg);
+  --critical-success-text: var(--success-fg);
+  --critical-danger-soft: var(--error-bg);
+  --critical-danger-text: var(--error-fg);
+  --critical-secondary-bg: var(--bg-surface);
+  --critical-overlay: var(--bg-hover);
 }
 *,
 *::before,
@@ -100,9 +89,9 @@ a {
   background: var(--critical-bg-app);
 }
 .orion-main-shell {
-  margin-left: var(--sidebar-width);
-  width: calc(100vw - var(--sidebar-width));
-  max-width: calc(100vw - var(--sidebar-width));
+  margin-left: var(--shell-sidebar-width);
+  width: calc(100vw - var(--shell-sidebar-width));
+  max-width: calc(100vw - var(--shell-sidebar-width));
   padding-top: var(--topbar-height);
   min-height: 100vh;
   overflow: hidden;
@@ -134,26 +123,18 @@ a {
 .orion-shellbar {
   position: fixed;
   top: 0;
-  left: var(--sidebar-width);
+  left: var(--shell-sidebar-width);
   right: 0;
   min-height: var(--topbar-height);
   z-index: 70;
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.05fr) auto;
+  display: flex;
+  justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 12px;
   background: var(--critical-bg-shell);
   border-bottom: 0;
   transition: left 180ms ease;
-}
-.sidebar,
-.sidebar-v2 {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: var(--sidebar-width);
-  background: var(--critical-bg-shell);
-  z-index: 80;
 }
 html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
   transform: none;
@@ -192,7 +173,7 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.style.colorScheme = resolved;
     const sidebarCollapsed = localStorage.getItem('empyralist:sidebar-collapsed') === '1';
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-    root.style.setProperty('--sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '200px');
+    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '64px' : '228px');
     root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
     document.body?.style?.setProperty('background', 'var(--critical-bg-app)');
   } catch {}
@@ -224,8 +205,21 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const sidebarStyle = {
+    "--sidebar-width": "228px",
+    "--sidebar-width-icon": "64px",
+    "--sidebar": "var(--bg-sidebar)",
+    "--sidebar-foreground": "var(--text-primary)",
+    "--sidebar-primary": "var(--text-primary)",
+    "--sidebar-primary-foreground": "var(--bg-surface)",
+    "--sidebar-accent": "var(--bg-element)",
+    "--sidebar-accent-foreground": "var(--text-primary)",
+    "--sidebar-border": "var(--border-subtle)",
+    "--sidebar-ring": "var(--primary-border-soft)",
+  } as CSSProperties;
+
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", geist.variable)}>
       <head>
         <style dangerouslySetInnerHTML={{ __html: CRITICAL_SHELL_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: LOCALHOST_CACHE_CLEANUP_SCRIPT }} />
@@ -233,21 +227,26 @@ export default function RootLayout({
       </head>
       <body>
         <ThemeProvider>
-          <PlatformShellProvider>
-            <ToastProvider>
-              <div className="orion-app-shell">
-                <Suspense fallback={null}>
-                  <Sidebar />
-                </Suspense>
-                <PlatformTopBar />
-                <GlobalCommandPalette />
-                <main className="orion-main-shell">
-                  <div className="orion-main-stage">{children}</div>
-                </main>
-                <PlatformInspectPanel />
-              </div>
-            </ToastProvider>
-          </PlatformShellProvider>
+          <TooltipProvider>
+            <CommandPaletteProvider>
+              <PlatformShellProvider>
+                <SidebarProvider style={sidebarStyle}>
+                  <ToastProvider>
+                    <div className="orion-app-shell">
+                      <Suspense fallback={null}>
+                        <Sidebar />
+                      </Suspense>
+                      <PlatformTopBar />
+                      <main className="orion-main-shell">
+                        <div className="orion-main-stage">{children}</div>
+                      </main>
+                      <PlatformInspectPanel />
+                    </div>
+                  </ToastProvider>
+                </SidebarProvider>
+              </PlatformShellProvider>
+            </CommandPaletteProvider>
+          </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

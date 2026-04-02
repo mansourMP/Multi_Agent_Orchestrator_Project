@@ -8,10 +8,17 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from server_modules.usage_reporting import build_usage_record, enrich_usage_record
+
 from orion_local_worker_content import normalize_content_plan_items
-from orion_local_worker_execution import build_local_execution_pack_result
+from orion_local_worker_execution import LocalExecutionPauseRequired, build_local_execution_pack_result
 from orion_local_worker_llm import (
     generate_chat_reply_with_provider_fallback,
     generate_pack_with_provider_fallback,
@@ -375,18 +382,36 @@ def process_run(client: RuntimeClient, worker_id: str, run: Dict[str, Any], step
         if step_delay_seconds > 0:
             time.sleep(step_delay_seconds)
 
-    summary, result_data, usage_override = build_pack_result(run, worker_id)
-    usage = {
-        "provider": "local_companion",
-        "model": "local-worker-v0",
-        "input_tokens_est": 0,
-        "output_tokens_est": 0,
-        "total_tokens_est": 0,
-        "cost_est_usd": 0.0,
-        "cost_band": "$0.00",
-    }
+    try:
+        summary, result_data, usage_override = build_pack_result(run, worker_id)
+    except LocalExecutionPauseRequired as pause:
+        client.pause_run(
+            run_id,
+            worker_id,
+            pause.summary,
+            result_data=pause.result_data,
+            browser_checkpoint=pause.browser_checkpoint,
+            wait_reason=str(pause.result_data.get("pause_reason") or "human_unblock_required") if isinstance(pause.result_data, dict) else "human_unblock_required",
+        )
+        if verbose:
+            print(f"[{run_id[:8]}] Paused for human unblock.")
+        return
+    usage_timestamp = utc_now_iso()
+    usage = build_usage_record(
+        "local_companion",
+        "local-worker-v0",
+        0,
+        0,
+        0,
+        run_id=run_id,
+        timestamp=usage_timestamp,
+    )
     if isinstance(usage_override, dict):
-        usage = usage_override
+        usage = enrich_usage_record(
+            usage_override,
+            run_id=run_id,
+            timestamp=usage_timestamp,
+        )
     client.complete_run(run_id, worker_id, summary, result_data=result_data, usage_masked=usage)
     if verbose:
         print(f"[{run_id[:8]}] Completed.")
@@ -421,9 +446,9 @@ def main() -> int:
     if not worker_id:
         host = socket.gethostname().split(".")[0]
         worker_id = f"empyralis-local-{host}-{uuid.uuid4().hex[:6]}"
-    runtime_instance_id = f"{socket.gethostname().split('.')[0]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-
     client = RuntimeClient(base_url=args.runtime_url, api_key=api_key)
+    client.load_runtime_session(worker_id)
+    runtime_instance_id = client.runtime_instance_id or f"{socket.gethostname().split('.')[0]}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     verbose = not args.quiet
 
     if verbose:
@@ -432,7 +457,7 @@ def main() -> int:
         print(f"Worker:  {worker_id}")
 
     try:
-        client.register_runtime(
+        registration = client.bootstrap_runtime_session(
             worker_id,
             runtime_type="local",
             display_name=f"Empyralis Local Worker ({socket.gethostname().split('.')[0]})",
@@ -442,9 +467,14 @@ def main() -> int:
             execution_targets=["local"],
             instance_id=runtime_instance_id,
         )
+        if verbose and bool(registration.get("resumed")):
+            print("[info] Restored persisted runtime session.")
+        if not bool(registration.get("legacy")) and not str(client.runtime_session_token or "").strip():
+            print("[error] Runtime session bootstrap did not yield a session token.", file=sys.stderr)
+            return 5
     except Exception as exc:
-        if verbose:
-            print(f"[warn] Runtime registration failed: {exc}")
+        print(f"[error] Runtime session bootstrap failed: {exc}", file=sys.stderr)
+        return 5
 
     deadline = time.time() + max(5.0, args.max_wait_seconds)
     next_idle_heartbeat_at = 0.0

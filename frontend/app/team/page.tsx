@@ -1,12 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Crown, Eye, Settings, ShieldCheck, UserCog, UserRound, Users } from 'lucide-react';
 import { MetricStrip } from '@/components/ui/MetricStrip';
 import { OsPageHeader } from '@/components/ui/OsPageHeader';
-
-const ACCOUNT_STORAGE_KEY = 'empyralis_account_profile_v1';
+import { displayNameFromEmail, readAccountProfilePreferences } from '@/lib/accountProfile';
 
 type AccountProfile = {
   displayName: string;
@@ -65,25 +64,38 @@ const ROLE_TONE: Record<TeamMember['role'], string> = {
 };
 
 function loadProfile(): AccountProfile {
-  if (typeof window === 'undefined') return DEFAULT_PROFILE;
-  try {
-    const raw = window.localStorage.getItem(ACCOUNT_STORAGE_KEY);
-    if (!raw) return DEFAULT_PROFILE;
-    const saved = JSON.parse(raw) as Partial<AccountProfile>;
-    return {
-      displayName: typeof saved.displayName === 'string' && saved.displayName.trim() ? saved.displayName.trim() : DEFAULT_PROFILE.displayName,
-      roleLabel: typeof saved.roleLabel === 'string' && saved.roleLabel.trim() ? saved.roleLabel.trim() : DEFAULT_PROFILE.roleLabel,
-    };
-  } catch {
-    return DEFAULT_PROFILE;
-  }
+  const saved = readAccountProfilePreferences();
+  return {
+    displayName: saved.displayName || DEFAULT_PROFILE.displayName,
+    roleLabel: DEFAULT_PROFILE.roleLabel,
+  };
 }
 
 export default function TeamPage() {
   const [profile] = useState<AccountProfile>(() => loadProfile());
+  const [authEmail, setAuthEmail] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadIdentity() {
+      try {
+        const response = await fetch('/api/control-plane/auth/me', { cache: 'no-store' });
+        const payload = (await response.json().catch(() => null)) as { user?: { email?: string | null } | null } | null;
+        if (cancelled) return;
+        setAuthEmail(String(payload?.user?.email || '').trim());
+      } catch {
+        // Ignore identity lookup failures on local-only sessions.
+      }
+    }
+    void loadIdentity();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const members = useMemo<TeamMember[]>(() => {
-    const ownerName = profile.displayName.trim() || DEFAULT_PROFILE.displayName;
+    const ownerName =
+      profile.displayName.trim() || displayNameFromEmail(authEmail, DEFAULT_PROFILE.displayName);
     return DEFAULT_MEMBERS.map((member) =>
       member.id === 'owner'
         ? {
@@ -93,7 +105,7 @@ export default function TeamPage() {
           }
         : member,
     );
-  }, [profile.displayName]);
+  }, [authEmail, profile.displayName]);
 
   const metrics = useMemo(
     () => [
@@ -113,17 +125,17 @@ export default function TeamPage() {
         subtitle="Manage people, roles, and who can change this workspace."
         meta={
           <>
-            <span>{profile.displayName}</span>
+            <span>{profile.displayName.trim() || displayNameFromEmail(authEmail, DEFAULT_PROFILE.displayName)}</span>
             <span>{profile.roleLabel}</span>
           </>
         }
         actions={
           <>
-            <Link href="/account" className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
+            <Link href="/account" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }}>
               <UserRound size={13} />
               Account
             </Link>
-            <Link href="/settings" className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }}>
+            <Link href="/settings" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }}>
               <Settings size={13} />
               Settings
             </Link>

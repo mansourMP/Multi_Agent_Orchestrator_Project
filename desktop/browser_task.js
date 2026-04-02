@@ -71,6 +71,31 @@ function ensureUniqueDownloadPath(targetPath) {
   return candidate;
 }
 
+function pushLimitedRecord(bucket, entry, limit = 200) {
+  bucket.push(entry);
+  if (bucket.length > limit) {
+    bucket.splice(0, bucket.length - limit);
+  }
+}
+
+function normalizeCheckpointTabs(rawTabs) {
+  if (!Array.isArray(rawTabs)) return [];
+  const normalized = [];
+  for (const item of rawTabs) {
+    if (!item || typeof item !== 'object') continue;
+    const tabId = normalizeTabId(item.tabId || item.id || '');
+    const url = String(item.url || '').trim();
+    if (!tabId || !url) continue;
+    normalized.push({
+      tabId,
+      url,
+      title: String(item.title || '').trim(),
+      active: Boolean(item.active),
+    });
+  }
+  return normalized;
+}
+
 async function waitForSelector(window, selector, timeoutMs) {
   return waitForSelectorInFrame(window, selector, timeoutMs, '');
 }
@@ -355,6 +380,8 @@ function normalizeActions(payload, legacy) {
         attribute: String(item.attribute || '').trim(),
         path: String(item.path || '').trim(),
         paths: Array.isArray(item.paths) ? item.paths.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
+        label: String(item.label || '').trim(),
+        prompt: String(item.prompt || item.reason || '').trim(),
       });
     }
     return normalized;
@@ -391,6 +418,13 @@ async function main() {
   const typeSelector = String(payload.typeSelector || '').trim();
   const typeText = String(payload.typeText || '').trim();
   const browserActions = normalizeActions(payload, { waitFor, click, typeSelector, typeText });
+  const resumeFromActionIndex = Math.max(0, Math.min(Number(payload.resumeFromActionIndex || payload.resume_from_action_index || 0), browserActions.length));
+  const browserCheckpoint = payload.browserCheckpoint && typeof payload.browserCheckpoint === 'object'
+    ? payload.browserCheckpoint
+    : payload.browser_checkpoint && typeof payload.browser_checkpoint === 'object'
+      ? payload.browser_checkpoint
+      : null;
+  const checkpointTabs = normalizeCheckpointTabs(browserCheckpoint?.tabs);
   const timeoutMs = Math.max(5000, Math.min(Number(payload.timeoutMs || 30000), 120000));
   const settleMs = Math.max(250, Math.min(Number(payload.settleMs || 1200), 10000));
   if (!url) {
@@ -431,11 +465,19 @@ async function main() {
 
     const tabs = new Map();
     const downloadRecords = [];
+    const browserConsoleEntries = [];
+    const browserNetworkFailures = [];
     const popupWaiters = [];
     const popupQueue = [];
     const browserSession = sessionProfile
       ? require('electron').session.fromPartition(`persist:empyralis-browser-${sessionProfile}`)
       : require('electron').session.defaultSession;
+    const appendConsoleEntry = (entry) => {
+      pushLimitedRecord(browserConsoleEntries, entry, 200);
+    };
+    const appendNetworkFailure = (entry) => {
+      pushLimitedRecord(browserNetworkFailures, entry, 200);
+    };
     const notifyPopupReady = (tabId) => {
       for (let index = popupWaiters.length - 1; index >= 0; index -= 1) {
         const waiter = popupWaiters[index];
@@ -477,6 +519,33 @@ async function main() {
       }
       return currentTab;
     };
+    const resolveTabIdForWebContentsId = (webContentsId) => {
+      for (const [tabId, tabWindow] of tabs.entries()) {
+        if (Number(tabWindow.webContents.id) === Number(webContentsId)) return tabId;
+      }
+      return currentTab;
+    };
+    const attachDiagnostics = (tabId, tabWindow) => {
+      tabWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+        appendConsoleEntry({
+          tab: tabId,
+          level: Number(level || 0),
+          message: String(message || ''),
+          line: Number(line || 0),
+          source: String(sourceId || ''),
+        });
+      });
+      tabWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        appendNetworkFailure({
+          tab: tabId,
+          url: String(validatedURL || ''),
+          errorCode: Number(errorCode || 0),
+          errorDescription: String(errorDescription || ''),
+          isMainFrame: Boolean(isMainFrame),
+          source: 'did-fail-load',
+        });
+      });
+    };
     const attachPopupHandler = (ownerTabId, ownerWindow) => {
       ownerWindow.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
         const queuedTabId = popupQueue.shift() || '';
@@ -486,6 +555,7 @@ async function main() {
         }
         const popupWindow = createBrowserTaskWindow(sessionProfile);
         tabs.set(popupTabId, popupWindow);
+        attachDiagnostics(popupTabId, popupWindow);
         attachPopupHandler(popupTabId, popupWindow);
         void navigateTo(popupWindow, nextUrl, settleMs)
           .then(() => {
@@ -502,6 +572,15 @@ async function main() {
             }
           });
         return { action: 'deny' };
+      });
+    };
+    const networkErrorListener = (details) => {
+      appendNetworkFailure({
+        tab: resolveTabIdForWebContentsId(details.webContentsId),
+        url: String(details.url || ''),
+        error: String(details.error || ''),
+        type: String(details.type || ''),
+        source: 'webRequest.onErrorOccurred',
       });
     };
     const downloadListener = (_event, item, webContents) => {
@@ -530,6 +609,52 @@ async function main() {
       });
     };
     browserSession.on('will-download', downloadListener);
+    browserSession.webRequest.onErrorOccurred({ urls: ['<all_urls>'] }, networkErrorListener);
+    const captureAccessibilitySnapshot = async (tabWindow) => {
+      const debuggerClient = tabWindow.webContents.debugger;
+      let attachedHere = false;
+      try {
+        if (!debuggerClient.isAttached()) {
+          debuggerClient.attach('1.3');
+          attachedHere = true;
+        }
+        const result = await debuggerClient.sendCommand('Accessibility.getFullAXTree');
+        const nodes = Array.isArray(result?.nodes) ? result.nodes : [];
+        return {
+          nodes: nodes.slice(0, 250).map((node) => ({
+            nodeId: Number(node?.nodeId || 0),
+            backendDOMNodeId: Number(node?.backendDOMNodeId || 0),
+            role: String(node?.role?.value || ''),
+            name: String(node?.name?.value || ''),
+            value: String(node?.value?.value || ''),
+            ignored: Boolean(node?.ignored),
+          })),
+        };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        if (attachedHere && debuggerClient.isAttached()) {
+          try {
+            debuggerClient.detach();
+          } catch {}
+        }
+      }
+    };
+    const captureOpenTabsState = async (activeTabId) => Promise.all(
+      Array.from(tabs.entries()).map(async ([tabId, tabWindow]) => {
+        let title = '';
+        try {
+          title = String(tabWindow.webContents.getTitle() || '').trim();
+        } catch {}
+        return {
+          id: tabId,
+          tabId,
+          url: String(tabWindow.webContents.getURL() || '').trim(),
+          title,
+          active: tabId === activeTabId,
+        };
+      }),
+    );
     const createTab = async (requestedTab, nextUrl) => {
       const tabId = normalizeTabId(requestedTab) || `tab-${tabs.size + 1}`;
       if (tabs.has(tabId)) {
@@ -537,6 +662,7 @@ async function main() {
       }
       const tabWindow = createBrowserTaskWindow(sessionProfile);
       tabs.set(tabId, tabWindow);
+      attachDiagnostics(tabId, tabWindow);
       attachPopupHandler(tabId, tabWindow);
       await navigateTo(tabWindow, nextUrl, settleMs);
       return tabId;
@@ -567,10 +693,77 @@ async function main() {
     const actionResults = [];
     const mainWindow = createBrowserTaskWindow(sessionProfile);
     tabs.set('main', mainWindow);
+    attachDiagnostics('main', mainWindow);
     let currentTab = 'main';
     attachPopupHandler('main', mainWindow);
-    await navigateTo(mainWindow, url, settleMs);
-    for (const step of browserActions) {
+    const checkpointActiveTab = normalizeTabId(
+      browserCheckpoint?.current_tab
+      || browserCheckpoint?.active_tab
+      || checkpointTabs.find((tab) => tab.active)?.tabId
+      || '',
+    );
+    const checkpointMainTab = checkpointTabs.find((tab) => tab.tabId === 'main') || checkpointTabs[0] || null;
+    await navigateTo(mainWindow, checkpointMainTab?.url || url, settleMs);
+    for (const tabState of checkpointTabs) {
+      if (!tabState || tabState.tabId === 'main') continue;
+      await createTab(tabState.tabId, tabState.url);
+    }
+    if (checkpointActiveTab && tabs.has(checkpointActiveTab)) {
+      currentTab = checkpointActiveTab;
+    }
+
+    const captureCurrentPageState = async (tabId, tabWindow) => {
+      const [pageInfo, image, accessibilitySnapshot] = await Promise.all([
+        tabWindow.webContents.executeJavaScript(
+          `(() => {
+            const title = document.title || '';
+            const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+            const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 40).map((anchor) => ({
+              href: anchor.href,
+              text: (anchor.innerText || anchor.textContent || '').replace(/\\s+/g, ' ').trim(),
+            }));
+            const roleSnapshot = Array.from(
+              document.querySelectorAll('[role], button, a[href], input, select, textarea, summary, [aria-label]')
+            ).slice(0, 200).map((node, index) => ({
+              index,
+              tag: String(node.tagName || '').toLowerCase(),
+              role: String(node.getAttribute('role') || ''),
+              name: (node.getAttribute('aria-label') || node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 160),
+              href: node instanceof HTMLAnchorElement ? String(node.href || '').trim() : '',
+              type: node instanceof HTMLInputElement ? String(node.type || '').trim() : '',
+              disabled: 'disabled' in node ? Boolean(node.disabled) : false,
+            }));
+            return {
+              title,
+              finalUrl: window.location.href,
+              textPreview: text.slice(0, 4000),
+              links,
+              roleSnapshot,
+              width: window.innerWidth,
+              height: window.innerHeight,
+            };
+          })();`,
+          true,
+        ),
+        tabWindow.webContents.capturePage(),
+        captureAccessibilitySnapshot(tabWindow),
+      ]);
+      fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+      const lower = screenshotPath.toLowerCase();
+      const imageBuffer = lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+        ? image.toJPEG(90)
+        : image.toPNG();
+      fs.writeFileSync(screenshotPath, imageBuffer);
+      return { tabId, pageInfo, accessibilitySnapshot };
+    };
+
+    const writeBrowserOutput = (payloadBody) => {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, JSON.stringify(payloadBody, null, 2), 'utf8');
+    };
+
+    for (let actionIndex = resumeFromActionIndex; actionIndex < browserActions.length; actionIndex += 1) {
+      const step = browserActions[actionIndex];
       if (step.action === 'open_tab') {
         if (!step.url) throw new Error('Browser open_tab action requires a URL.');
         const openedTab = await createTab(step.tab, step.url);
@@ -627,6 +820,79 @@ async function main() {
         continue;
       }
       const { tabId, tabWindow } = getTabState(step.tab);
+      if (step.action === 'pause_for_human') {
+        const { pageInfo, accessibilitySnapshot } = await captureCurrentPageState(tabId, tabWindow);
+        const openTabsState = await captureOpenTabsState(tabId);
+        writeBrowserOutput({
+          ok: true,
+          paused: true,
+          mode,
+          url,
+          sessionProfile: sessionProfile || '',
+          currentTab: tabId,
+          openTabs: Array.from(tabs.keys()),
+          tabs: openTabsState,
+          screenshotPath,
+          browserActions,
+          actionResults,
+          title: pageInfo.title || '',
+          finalUrl: pageInfo.finalUrl || url,
+          textPreview: pageInfo.textPreview || '',
+          links: Array.isArray(pageInfo.links) ? pageInfo.links : [],
+          roleSnapshot: Array.isArray(pageInfo.roleSnapshot) ? pageInfo.roleSnapshot : [],
+          accessibilitySnapshot,
+          consoleEntries: browserConsoleEntries.slice(-100),
+          networkFailures: browserNetworkFailures.slice(-100),
+          downloads: downloadRecords.map((record) => ({
+            tab: String(record.tab || ''),
+            url: String(record.url || ''),
+            suggestedFilename: String(record.suggestedFilename || ''),
+            savedPath: String(record.savedPath || ''),
+            state: String(record.state || ''),
+          })),
+          pauseReason: step.prompt || 'human_unblock_required',
+          pauseLabel: step.label || 'Browser operator paused for human unblock.',
+          browserCheckpoint: {
+            current_url: pageInfo.finalUrl || url,
+            current_tab: tabId,
+            open_tabs: Array.from(tabs.keys()),
+            tabs: openTabsState,
+            last_completed_action_index: Math.max(-1, actionIndex - 1),
+            next_action_index: actionIndex + 1,
+            pending_downloads: downloadRecords
+              .filter((record) => String(record.state || '') === 'pending')
+              .map((record) => ({
+                tab: String(record.tab || ''),
+                url: String(record.url || ''),
+                suggestedFilename: String(record.suggestedFilename || ''),
+                savedPath: String(record.savedPath || ''),
+              })),
+            pending_popup_tabs: Array.from(popupQueue),
+            session_profile: sessionProfile || '',
+            accessibility_snapshot: accessibilitySnapshot,
+            role_snapshot: Array.isArray(pageInfo.roleSnapshot) ? pageInfo.roleSnapshot : [],
+          },
+          viewport: {
+            width: Number(pageInfo.width || 0),
+            height: Number(pageInfo.height || 0),
+          },
+        });
+        clearTimeout(timeout);
+        browserSession.removeListener('will-download', downloadListener);
+        browserSession.webRequest.onErrorOccurred(null);
+        if (sessionProfile && typeof browserSession.flushStorageData === 'function') {
+          try {
+            await browserSession.flushStorageData();
+          } catch {}
+        }
+        for (const tabWindow of tabs.values()) {
+          try {
+            tabWindow.destroy();
+          } catch {}
+        }
+        app.exit(0);
+        return;
+      }
       if (step.action === 'wait') {
         if (!step.selector) throw new Error('Browser wait action requires a selector.');
         await waitForSelectorInFrame(tabWindow, step.selector, timeoutMs, step.frame || '');
@@ -744,77 +1010,46 @@ async function main() {
     }
 
     const { tabId: finalTabId, tabWindow: finalWindow } = getTabState('');
-    const [pageInfo, image] = await Promise.all([
-      finalWindow.webContents.executeJavaScript(
-        `(() => {
-          const title = document.title || '';
-          const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-          const links = Array.from(document.querySelectorAll('a[href]')).slice(0, 40).map((anchor) => ({
-            href: anchor.href,
-            text: (anchor.innerText || anchor.textContent || '').replace(/\\s+/g, ' ').trim(),
-          }));
-          return {
-            title,
-            finalUrl: window.location.href,
-            textPreview: text.slice(0, 4000),
-            links,
-            width: window.innerWidth,
-            height: window.innerHeight,
-          };
-        })();`,
-        true,
-      ),
-      finalWindow.webContents.capturePage(),
-    ]);
-
-    fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
-    const lower = screenshotPath.toLowerCase();
-    const imageBuffer = lower.endsWith('.jpg') || lower.endsWith('.jpeg')
-      ? image.toJPEG(90)
-      : image.toPNG();
-    fs.writeFileSync(screenshotPath, imageBuffer);
-
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(
-      outputPath,
-      JSON.stringify(
-        {
-          ok: true,
-          mode,
-          url,
-          sessionProfile: sessionProfile || '',
-          currentTab: finalTabId,
-          openTabs: Array.from(tabs.keys()),
-          screenshotPath,
-          browserActions,
-          actionResults,
-          waitForSelector: waitFor || '',
-          clickSelector: click || '',
-          typeSelector: typeSelector || '',
-          title: pageInfo.title || '',
-          finalUrl: pageInfo.finalUrl || url,
-          textPreview: pageInfo.textPreview || '',
-          links: Array.isArray(pageInfo.links) ? pageInfo.links : [],
-          downloads: downloadRecords.map((record) => ({
-            tab: String(record.tab || ''),
-            url: String(record.url || ''),
-            suggestedFilename: String(record.suggestedFilename || ''),
-            savedPath: String(record.savedPath || ''),
-            state: String(record.state || ''),
-          })),
-          viewport: {
-            width: Number(pageInfo.width || 0),
-            height: Number(pageInfo.height || 0),
-          },
-        },
-        null,
-        2,
-      ),
-      'utf8',
-    );
+    const { pageInfo, accessibilitySnapshot } = await captureCurrentPageState(finalTabId, finalWindow);
+    const openTabsState = await captureOpenTabsState(finalTabId);
+    writeBrowserOutput({
+      ok: true,
+      mode,
+      url,
+      sessionProfile: sessionProfile || '',
+      currentTab: finalTabId,
+      openTabs: Array.from(tabs.keys()),
+      tabs: openTabsState,
+      screenshotPath,
+      browserActions,
+      actionResults,
+      waitForSelector: waitFor || '',
+      clickSelector: click || '',
+      typeSelector: typeSelector || '',
+      title: pageInfo.title || '',
+      finalUrl: pageInfo.finalUrl || url,
+      textPreview: pageInfo.textPreview || '',
+      links: Array.isArray(pageInfo.links) ? pageInfo.links : [],
+      roleSnapshot: Array.isArray(pageInfo.roleSnapshot) ? pageInfo.roleSnapshot : [],
+      accessibilitySnapshot,
+      consoleEntries: browserConsoleEntries.slice(-100),
+      networkFailures: browserNetworkFailures.slice(-100),
+      downloads: downloadRecords.map((record) => ({
+        tab: String(record.tab || ''),
+        url: String(record.url || ''),
+        suggestedFilename: String(record.suggestedFilename || ''),
+        savedPath: String(record.savedPath || ''),
+        state: String(record.state || ''),
+      })),
+      viewport: {
+        width: Number(pageInfo.width || 0),
+        height: Number(pageInfo.height || 0),
+      },
+    });
 
     clearTimeout(timeout);
     browserSession.removeListener('will-download', downloadListener);
+    browserSession.webRequest.onErrorOccurred(null);
     if (sessionProfile && typeof browserSession.flushStorageData === 'function') {
       try {
         await browserSession.flushStorageData();

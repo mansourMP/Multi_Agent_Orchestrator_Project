@@ -811,7 +811,7 @@ function resolveChatNextRecommendation(args: {
       chipText: 'No tools connected yet',
       chipTone: 'warning',
       actionLabel: 'Open Integrations',
-      href: '/credentials',
+      href: '/connectors',
     };
   }
   return {
@@ -2123,7 +2123,7 @@ export function AutopilotWorkspace() {
     if (derivedSetupReady) return null;
     return {
       label: 'Connect Telegram →',
-      href: '/credentials?connector=telegram_bot&onboarding=1',
+      href: '/connectors?connector=telegram_bot&onboarding=1',
     };
   }, [derivedSetupReady]);
   useEffect(() => {
@@ -2370,11 +2370,11 @@ export function AutopilotWorkspace() {
       return;
     }
     if (command === '/skills' || command === '/extensions') {
-      router.push('/skills');
+      router.push('/library');
       return;
     }
     if (command === '/connectors' || command === '/integrations' || command === '/credentials' || command === '/channels') {
-      router.push('/credentials');
+      router.push('/connectors');
       return;
     }
     if (command === '/agents' || command === '/assistant') {
@@ -2386,6 +2386,10 @@ export function AutopilotWorkspace() {
       return;
     }
     if (command === '/library' || command === '/runs' || command === '/executions' || command === '/history') {
+      if (command === '/library') {
+        router.push('/library');
+        return;
+      }
       router.push('/executions');
       return;
     }
@@ -2400,8 +2404,8 @@ export function AutopilotWorkspace() {
     if (command === '/help') {
       setTopError(
         singleAgentMode
-          ? 'Commands: /run <goal>, /run, /connect-ai, /setup, /assistant, /workflows, /library, /approvals, /connectors, /health.'
-          : 'Commands: /run <goal>, /run, /connect-ai, /setup, /agents, /workflows, /library, /approvals, /connectors, /health.',
+          ? 'Commands: /run <goal>, /run, /connect-ai, /setup, /assistant, /workflows, /library, /approvals, /connectors, /health. Built-in tools when relevant: web search/fetch, http_request, generate_image.'
+          : 'Commands: /run <goal>, /run, /connect-ai, /setup, /agents, /workflows, /library, /approvals, /connectors, /health. Built-in tools when relevant: web search/fetch, http_request, generate_image.',
       );
       return;
     }

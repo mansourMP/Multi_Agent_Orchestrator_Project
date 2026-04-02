@@ -52,7 +52,6 @@ OPENCLAW_GATEWAY_POLICY="${ORION_OPENCLAW_GATEWAY_POLICY:-auto_stop}" # auto_sto
 #   or opts in with ORION_STACK_PREFER_API_KEY=1.
 ORION_STACK_PREFER_API_KEY="${ORION_STACK_PREFER_API_KEY:-0}"
 ORION_STACK_START_LOCK_WAIT_SECONDS="${ORION_STACK_START_LOCK_WAIT_SECONDS:-15}"
-LOCAL_DEV_JWT_SECRET_DEFAULT="${LOCAL_DEV_JWT_SECRET_DEFAULT:-dev-secret-change-in-production}"
 if [[ -n "${ORION_AUTH_MODE:-}" ]]; then
   ORION_AUTH_MODE_VALUE="${ORION_AUTH_MODE}"
 else
@@ -87,6 +86,15 @@ load_existing_runtime_key() {
   fi
 }
 
+configured_runtime_worker_count() {
+  local raw="${ORION_RUNTIME_UVICORN_WORKERS:-${UVICORN_WORKERS:-${WEB_CONCURRENCY:-1}}}"
+  if [[ "${raw}" =~ ^[0-9]+$ ]] && (( raw > 0 )); then
+    echo "${raw}"
+    return
+  fi
+  echo "1"
+}
+
 EXISTING_RUNTIME_KEY="$(load_existing_runtime_key)"
 RUNTIME_KEY_RAW="${1:-${RUNTIME_KEY:-${EMPYRALIS_API_KEY:-${ORION_API_KEY:-${EXISTING_RUNTIME_KEY:-}}}}}"
 RUNTIME_KEY="$(printf "%s" "${RUNTIME_KEY_RAW}" | tr -d '[:space:]')"
@@ -99,11 +107,8 @@ fi
 if [[ "${RUNTIME_KEY}" != "${RUNTIME_KEY_RAW}" ]]; then
   echo "Warning: runtime key contained whitespace and was normalized."
 fi
-JWT_SECRET_RAW="${JWT_SECRET:-${ORION_JWT_SECRET:-${LOCAL_DEV_JWT_SECRET_DEFAULT}}}"
+JWT_SECRET_RAW="${JWT_SECRET:-${ORION_JWT_SECRET:-}}"
 JWT_SECRET_VALUE="$(printf "%s" "${JWT_SECRET_RAW}" | tr -d '[:space:]')"
-if [[ -z "${JWT_SECRET_VALUE}" ]]; then
-  JWT_SECRET_VALUE="${LOCAL_DEV_JWT_SECRET_DEFAULT}"
-fi
 if [[ "${JWT_SECRET_VALUE}" != "${JWT_SECRET_RAW}" ]]; then
   echo "Warning: JWT secret contained whitespace and was normalized."
 fi
@@ -484,6 +489,11 @@ kill_port_if_busy() {
 }
 
 start_runtime() {
+  local worker_count
+  worker_count="$(configured_runtime_worker_count)"
+  if (( worker_count > 1 )); then
+    fail_service_startup "runtime" "direct chat streaming requires a single runtime worker because _CHAT_STREAM_SESSIONS is process-local (requested workers=${worker_count})"
+  fi
   echo "Starting Empyralis runtime on ${ORION_BIND_HOST}:${ORION_PORT} (advertised: ${ORION_HOST}:${ORION_PORT}) ..."
   local -a runtime_launcher
   if [[ -x "${ROOT_DIR}/venv/bin/uvicorn" ]]; then
@@ -530,8 +540,9 @@ start_runtime() {
     export JWT_SECRET="${JWT_SECRET_VALUE}"
     export ORION_JWT_SECRET="${JWT_SECRET_VALUE}"
     export OPENAI_HEALTHCHECK="${OPENAI_HEALTHCHECK:-0}"
+    export ORION_RUNTIME_UVICORN_WORKERS="${worker_count}"
     spawn_detached "${PID_DIR}/runtime.pid" "${LOG_DIR}/runtime.log" "${ROOT_DIR}" \
-      "${runtime_launcher[@]}" server:app --host "${ORION_BIND_HOST}" --port "${ORION_PORT}" >/dev/null
+      "${runtime_launcher[@]}" server:app --host "${ORION_BIND_HOST}" --port "${ORION_PORT}" --workers "${worker_count}" >/dev/null
   )
 }
 

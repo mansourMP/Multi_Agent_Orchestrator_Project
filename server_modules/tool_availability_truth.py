@@ -10,6 +10,11 @@ _CONNECTOR_MANIFESTS: Dict[str, Dict[str, Any]] = {
         "resources": [{"id": "gmail_threads", "access": ["read", "write"]}, {"id": "calendar_events", "access": ["read", "write"]}, {"id": "drive_files", "access": ["read", "write"]}],
         "actions": [{"id": "draft_email"}, {"id": "send_email"}, {"id": "create_calendar_event"}, {"id": "create_doc"}, {"id": "create_sheet"}],
     },
+    "smtp": {
+        "label": "SMTP Email",
+        "resources": [{"id": "mailboxes", "access": ["read"]}],
+        "actions": [{"id": "send_email"}, {"id": "fetch_emails"}],
+    },
     "telegram_bot": {
         "label": "Telegram Bot",
         "resources": [{"id": "chats", "access": ["read", "write"]}],
@@ -22,8 +27,56 @@ _CONNECTOR_MANIFESTS: Dict[str, Dict[str, Any]] = {
     },
     "discord_bot": {
         "label": "Discord Bot",
-        "resources": [{"id": "guild_channels", "access": ["read", "write"]}],
-        "actions": [{"id": "send_message"}, {"id": "send_embed"}],
+        "resources": [
+            {"id": "guilds", "access": ["read"]},
+            {"id": "guild_channels", "access": ["read", "write"]},
+            {"id": "guild_members", "access": ["read"]},
+            {"id": "messages", "access": ["read", "write"]},
+            {"id": "threads", "access": ["write"]},
+        ],
+        "actions": [
+            {"id": "send_message"},
+            {"id": "send_embed"},
+            {"id": "send_dm"},
+            {"id": "edit_message"},
+            {"id": "delete_message"},
+            {"id": "list_guilds"},
+            {"id": "list_channels"},
+            {"id": "list_members"},
+            {"id": "get_message_history"},
+            {"id": "create_thread"},
+            {"id": "add_reaction"},
+        ],
+    },
+    "slack": {
+        "label": "Slack",
+        "resources": [{"id": "channels", "access": ["read", "write"]}, {"id": "users", "access": ["read"]}],
+        "actions": [{"id": "send_message"}, {"id": "send_dm"}, {"id": "post_reply"}, {"id": "upload_file"}, {"id": "list_channels"}, {"id": "get_history"}],
+    },
+    "github": {
+        "label": "GitHub",
+        "resources": [{"id": "repositories", "access": ["read", "write"]}, {"id": "issues", "access": ["read", "write"]}, {"id": "pull_requests", "access": ["read", "write"]}, {"id": "repository_contents", "access": ["read", "write"]}],
+        "actions": [{"id": "list_repos"}, {"id": "get_repo"}, {"id": "list_issues"}, {"id": "create_issue"}, {"id": "comment_on_issue"}, {"id": "list_pull_requests"}, {"id": "create_pull_request"}, {"id": "get_file_content"}, {"id": "create_or_update_file"}, {"id": "list_commits"}],
+    },
+    "dropbox": {
+        "label": "Dropbox",
+        "resources": [{"id": "files", "access": ["read", "write"]}, {"id": "folders", "access": ["read", "write"]}, {"id": "shared_links", "access": ["read", "write"]}],
+        "actions": [{"id": "list_folder"}, {"id": "upload_file"}, {"id": "download_file"}, {"id": "delete"}, {"id": "move"}, {"id": "get_shared_link"}, {"id": "search"}],
+    },
+    "s3": {
+        "label": "Amazon S3",
+        "resources": [{"id": "buckets", "access": ["read", "write"]}, {"id": "objects", "access": ["read", "write"]}],
+        "actions": [{"id": "list_buckets"}, {"id": "list_objects"}, {"id": "upload_file"}, {"id": "download_file"}, {"id": "delete_object"}, {"id": "get_presigned_url"}, {"id": "create_bucket"}],
+    },
+    "notion": {
+        "label": "Notion",
+        "resources": [{"id": "pages", "access": ["read", "write"]}, {"id": "databases", "access": ["read", "write"]}],
+        "actions": [{"id": "search"}, {"id": "get_page"}, {"id": "create_page"}, {"id": "update_page"}, {"id": "append_blocks"}, {"id": "query_database"}, {"id": "create_database_item"}],
+    },
+    "linear": {
+        "label": "Linear",
+        "resources": [{"id": "teams", "access": ["read"]}, {"id": "issues", "access": ["read", "write"]}, {"id": "projects", "access": ["read"]}],
+        "actions": [{"id": "list_teams"}, {"id": "list_issues"}, {"id": "get_issue"}, {"id": "create_issue"}, {"id": "update_issue"}, {"id": "list_projects"}, {"id": "add_comment"}],
     },
     "whatsapp_twilio": {
         "label": "WhatsApp (Twilio)",
@@ -59,16 +112,38 @@ _APPROVAL_ACTIONS = {
     "document_update",
     "presentation_create",
     "presentation_update",
+    "issue_write",
+    "pr_write",
+    "repo_write",
+    "notion_write",
+    "storage_write",
 }
 
 _ACTION_TOOL_MAP = {
     "send_email": "send_message",
+    "fetch_emails": "fetch_emails",
     "send_message": "send_message",
     "send_embed": "send_message",
     "send_dm": "send_message",
+    "delete_message": "send_message",
+    "post_reply": "send_message",
     "publish_reply": "send_message",
     "send_media": "send_message",
     "update_message": "send_message",
+    "upload_file": "send_message",
+    "delete": "storage_write",
+    "move": "storage_write",
+    "delete_object": "storage_write",
+    "create_bucket": "storage_write",
+    "create_issue": "issue_write",
+    "comment_on_issue": "issue_write",
+    "create_pull_request": "pr_write",
+    "create_or_update_file": "repo_write",
+    "create_page": "notion_write",
+    "update_page": "notion_write",
+    "create_database_item": "notion_write",
+    "update_issue": "issue_write",
+    "add_comment": "issue_write",
     "draft_email": "draft_email",
     "create_calendar_event": "create_calendar_event",
     "create_doc": "document_create",
@@ -155,6 +230,12 @@ def capability_verification_from_test_result(connector_id: str, test_result: Any
         if bool(test_result.get("files_access")):
             read_actions.append("drive_files.read")
             write_actions.extend(["create_doc", "create_sheet"])
+    elif normalized_connector_id == "smtp":
+        if bool(test_result.get("smtp_access")):
+            write_actions.append("send_email")
+        if bool(test_result.get("imap_access")):
+            read_actions.append("mailboxes.read")
+            write_actions.append("fetch_emails")
     elif normalized_connector_id == "microsoft_365":
         if bool(test_result.get("mail_access")):
             read_actions.append("mail.read")

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -13,19 +14,14 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from server_modules.usage_reporting import build_usage_record
+
 SUPPORTED_PROVIDERS = ("codex_cli", "claude_code_cli", "openai", "anthropic", "gemini", "ollama", "qwen", "deepseek", "mistral")
 LOCAL_CLI_AUTH_MODES = {"local_cli", "local_subscription", "subscription_cli", "claude_code_cli"}
-PROVIDER_COST_PER_1K = {
-    "codex_cli": {"input": 0.0, "output": 0.0},
-    "claude_code_cli": {"input": 0.0, "output": 0.0},
-    "openai": {"input": 0.0030, "output": 0.0100},
-    "anthropic": {"input": 0.0030, "output": 0.0150},
-    "gemini": {"input": 0.0010, "output": 0.0030},
-    "ollama": {"input": 0.0, "output": 0.0},
-    "qwen": {"input": 0.0, "output": 0.0},
-    "deepseek": {"input": 0.0, "output": 0.0},
-    "mistral": {"input": 0.0, "output": 0.0},
-}
 AUTH_SCOPE_ERROR_MARKERS = (
     "api.responses.write",
     "missing scopes",
@@ -1679,43 +1675,14 @@ def ollama_chat_json(
         return None, None, model, format_provider_error(exc)
 
 
-def get_provider_token_rates(provider: str) -> Tuple[float, float]:
-    pid = str(provider or "").strip().lower()
-    default_rates = PROVIDER_COST_PER_1K.get(pid, {"input": 0.0, "output": 0.0})
-    base_input = to_float(default_rates.get("input"), 0.0) / 1000.0
-    base_output = to_float(default_rates.get("output"), 0.0) / 1000.0
-
-    provider_prefix = f"ORION_LOCAL_WORKER_{pid.upper()}"
-    in_override = os.getenv(f"{provider_prefix}_INPUT_COST_PER_TOKEN_USD")
-    out_override = os.getenv(f"{provider_prefix}_OUTPUT_COST_PER_TOKEN_USD")
-    generic_in = os.getenv("ORION_LOCAL_WORKER_INPUT_COST_PER_TOKEN_USD")
-    generic_out = os.getenv("ORION_LOCAL_WORKER_OUTPUT_COST_PER_TOKEN_USD")
-
-    input_rate = to_float(in_override if in_override is not None else generic_in, base_input)
-    output_rate = to_float(out_override if out_override is not None else generic_out, base_output)
-    return max(0.0, input_rate), max(0.0, output_rate)
-
-
 def build_usage_masked(provider: str, model: str, input_tokens: int, output_tokens: int, total_tokens: int) -> Dict[str, Any]:
-    in_rate, out_rate = get_provider_token_rates(provider)
-    cost_est = (max(0, input_tokens) * in_rate) + (max(0, output_tokens) * out_rate)
-    if cost_est <= 0:
-        band = "$0.00"
-    elif cost_est < 0.01:
-        band = "$0.00 - $0.01"
-    elif cost_est < 0.05:
-        band = "$0.01 - $0.05"
-    else:
-        band = "$0.05+"
-    return {
-        "provider": str(provider or "local_companion"),
-        "model": model or "unknown-model",
-        "input_tokens_est": max(0, input_tokens),
-        "output_tokens_est": max(0, output_tokens),
-        "total_tokens_est": max(0, total_tokens),
-        "cost_est_usd": round(cost_est, 6),
-        "cost_band": band,
-    }
+    return build_usage_record(
+        provider,
+        model,
+        max(0, input_tokens),
+        max(0, output_tokens),
+        max(0, total_tokens),
+    )
 
 
 def build_usage_masked_from_provider(provider: str, usage: Optional[Dict[str, Any]], model: str) -> Dict[str, Any]:

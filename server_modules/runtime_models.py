@@ -51,6 +51,7 @@ class RunStartRequest(BaseModel):
     workspace_id: Optional[str] = None
     user_goal: Optional[str] = None
     business_plan: Optional[str] = None
+    max_iterations: Optional[int] = None
     agent_role: Optional[str] = None
     parent_run_id: Optional[str] = None
     provider: Optional[str] = None
@@ -355,6 +356,30 @@ class RuntimeSkillsStateUpsertRequest(BaseModel):
             raise HTTPException(status_code=400, detail="custom_skills must be a list.")
         if self.bindings is not None and not isinstance(self.bindings, dict):
             raise HTTPException(status_code=400, detail="bindings must be an object.")
+
+
+class SkillInstallRequest(BaseModel):
+    source_url: Optional[str] = None
+    zip_path: Optional[str] = None
+
+    def validate_fields(self) -> None:
+        source_url = str(self.source_url or "").strip()
+        zip_path = str(self.zip_path or "").strip()
+        if not source_url and not zip_path:
+            raise HTTPException(status_code=400, detail="source_url or zip_path is required.")
+
+
+class SkillUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class SkillPublishRequest(BaseModel):
+    name: str
+    output_path: Optional[str] = None
+
+    def validate_fields(self) -> None:
+        if not str(self.name or "").strip():
+            raise HTTPException(status_code=400, detail="name is required.")
 
 
 class ProviderProfileUpsertRequest(BaseModel):

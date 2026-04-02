@@ -21,6 +21,14 @@ if [[ -z "${WORKER_ID}" ]]; then
   WORKER_ID="empyralis-local-${HOST_ID}"
 fi
 
+PYTHON_BIN="${ROOT_DIR}/venv/bin/python"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
+
 ARGS=(
   --runtime-url "${API_URL}"
   --api-key "${RUNTIME_KEY}"
@@ -30,4 +38,4 @@ ARGS=(
 if [[ -n "${WORKER_ID}" ]]; then
   ARGS+=(--worker-id "${WORKER_ID}")
 fi
-PYTHONUNBUFFERED=1 python3 -u scripts/orion_local_worker.py "${ARGS[@]}"
+PYTHONUNBUFFERED=1 "${PYTHON_BIN}" -u scripts/orion_local_worker.py "${ARGS[@]}"

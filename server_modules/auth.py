@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, Request
+from server_modules.jwt_secret import resolve_jwt_secret
 
 EMPYRALIS_STATE_HOME = Path(
     os.getenv("EMPYRALIS_STATE_HOME", str(Path.home() / ".empyralis" / "state"))
@@ -44,7 +45,7 @@ def _orion_auth_required() -> bool:
 
 
 def _jwt_secret() -> str:
-    secret = str(os.getenv("ORION_JWT_SECRET") or _orion_api_key() or "").strip()
+    secret = str(resolve_jwt_secret() or "").strip()
     if not secret:
         raise HTTPException(status_code=503, detail="JWT secret is not configured.")
     return secret

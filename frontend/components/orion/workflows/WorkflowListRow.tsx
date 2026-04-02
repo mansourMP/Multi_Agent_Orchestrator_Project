@@ -98,7 +98,7 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
         <button
           type="button"
           className="orion-btn orion-btn-ghost"
-          style={{ minHeight: 34, paddingInline: 10 }}
+          style={{ minHeight: 44, paddingInline: 10 }}
           onClick={(event) => {
             event.stopPropagation();
             onEdit();
@@ -110,7 +110,7 @@ export function WorkflowListRow({ workflow, onEdit, onRun, onDelete, onDuplicate
         <button
           type="button"
           className="orion-btn orion-btn-primary"
-          style={{ minHeight: 34, paddingInline: 10 }}
+          style={{ minHeight: 44, paddingInline: 10 }}
           onClick={(event) => {
             event.stopPropagation();
             onRun();

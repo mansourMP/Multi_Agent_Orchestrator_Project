@@ -983,7 +983,7 @@ function HomeOperationsScene({
                 <button
                   type="button"
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 32, padding: '0 12px', fontSize: 11.5 }}
+                  style={{ minHeight: 44, padding: '0 12px', fontSize: 11.5 }}
                   onClick={onOpenAgentsPage}
                 >
                   +{overflowCount} more active
@@ -1124,7 +1124,7 @@ function HomeOperationsScene({
                 type="button"
                 onClick={onOpenAgentsPage}
                 className="orion-btn orion-btn-ghost"
-                style={{ minHeight: 32, padding: '0 12px', fontSize: 11.5 }}
+                style={{ minHeight: 44, padding: '0 12px', fontSize: 11.5 }}
               >
                 Open workspace
               </button>
@@ -1182,8 +1182,8 @@ function HomeOperationsScene({
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    minHeight: 28,
-                    padding: '0 10px',
+                    minHeight: 44,
+                    padding: '0 12px',
                     borderRadius: 999,
                     border: `1px solid ${UI.borderSoft}`,
                     background: UI.surface,
@@ -1630,7 +1630,7 @@ export function WorkbenchCenterPanel({
                             <button
                               onClick={() => onOpenRun(message.run_id || '')}
                               className="orion-btn orion-btn-ghost"
-                              style={{ minHeight: 28, fontSize: 11, padding: '0 9px' }}
+                              style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                             >
                               Inspect
                             </button>
@@ -1698,7 +1698,7 @@ export function WorkbenchCenterPanel({
                       type="button"
                       className="orion-btn orion-btn-ghost"
                       style={{
-                        minHeight: 34,
+                        minHeight: 44,
                         padding: '0 12px',
                         fontSize: 11.5,
                         borderRadius: 999,
@@ -1870,7 +1870,7 @@ export function WorkbenchCenterPanel({
               <button
                 onClick={onOpenApprovalsPage}
                 className="orion-btn orion-btn-ghost"
-                style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+                style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
               >
                 Open Approvals
               </button>
@@ -1974,7 +1974,7 @@ export function WorkbenchCenterPanel({
                   onClick={() => onResolvePendingApproval(approvalLead.runId, approvalLead.approvalId, 'Proceed')}
                   disabled={Boolean(approvalActionBusy[`${approvalLead.runId}:${approvalLead.approvalId}:Proceed`])}
                   className="orion-btn orion-btn-success"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Approve
                 </button>
@@ -1982,14 +1982,14 @@ export function WorkbenchCenterPanel({
                   onClick={() => onResolvePendingApproval(approvalLead.runId, approvalLead.approvalId, 'Hold')}
                   disabled={Boolean(approvalActionBusy[`${approvalLead.runId}:${approvalLead.approvalId}:Hold`])}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Hold
                 </button>
                 <button
                   onClick={() => onOpenRun(approvalLead.runId)}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Inspect run
                 </button>
@@ -2008,7 +2008,7 @@ export function WorkbenchCenterPanel({
             <button
               onClick={onOpenApprovalsPage}
               className="orion-btn orion-btn-ghost"
-              style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+              style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
             >
               Open Approvals
             </button>
@@ -2031,9 +2031,9 @@ export function WorkbenchCenterPanel({
                     onClick={() => onOpenRun(item.runId)}
                     className="orion-btn orion-btn-ghost"
                     style={{
-                      minHeight: 28,
+                      minHeight: 44,
                       justifyContent: 'flex-start',
-                      padding: '0 8px',
+                      padding: '0 12px',
                       fontFamily: 'var(--font-mono)',
                       fontSize: 11,
                     }}
@@ -2062,7 +2062,7 @@ export function WorkbenchCenterPanel({
                       onClick={() => onResolvePendingApproval(item.runId, item.approvalId, 'Proceed')}
                       disabled={Boolean(approvalActionBusy[`${item.runId}:${item.approvalId}:Proceed`])}
                       className="orion-btn orion-btn-success"
-                      style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+                      style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                     >
                       Approve
                     </button>
@@ -2070,7 +2070,7 @@ export function WorkbenchCenterPanel({
                       onClick={() => onResolvePendingApproval(item.runId, item.approvalId, 'Hold')}
                       disabled={Boolean(approvalActionBusy[`${item.runId}:${item.approvalId}:Hold`])}
                       className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+                      style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                     >
                       Hold
                     </button>
@@ -2127,7 +2127,7 @@ export function WorkbenchCenterPanel({
             <button
               onClick={onOpenRunsPage}
               className="orion-btn orion-btn-ghost"
-              style={{ minHeight: 28, fontSize: 11, padding: '0 8px' }}
+              style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
             >
               Open Runs
             </button>
@@ -2485,7 +2485,7 @@ export function WorkbenchCenterPanel({
                 <button
                   onClick={() => onOpenRun((runReceipt?.id || runId)!)}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   {runReceipt ? 'Full inspect' : 'Open live run'}
                 </button>
@@ -2494,7 +2494,7 @@ export function WorkbenchCenterPanel({
                 <button
                   onClick={copyRunReceipt}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Copy receipt
                 </button>
@@ -2503,7 +2503,7 @@ export function WorkbenchCenterPanel({
                 <button
                   onClick={copyResultSummary}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Copy summary
                 </button>
@@ -2512,7 +2512,7 @@ export function WorkbenchCenterPanel({
                 <button
                   onClick={exportRunJson}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Export JSON
                 </button>
@@ -2521,7 +2521,7 @@ export function WorkbenchCenterPanel({
                 <button
                   onClick={createFollowUpTask}
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 30, fontSize: 11, padding: '0 10px' }}
+                  style={{ minHeight: 44, fontSize: 11, padding: '0 12px' }}
                 >
                   Follow-up
                 </button>

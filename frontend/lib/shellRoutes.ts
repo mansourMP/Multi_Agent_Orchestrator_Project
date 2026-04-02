@@ -121,7 +121,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     title: 'Integrations',
     breadcrumb: 'Integrations',
     slotLabel: 'Connect tools and channels',
-    match: (pathname: string) => pathname === '/credentials',
+    match: (pathname: string) => pathname === '/connectors' || pathname === '/credentials',
   },
   {
     id: 'setup',
@@ -149,7 +149,7 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     title: 'Capabilities',
     breadcrumb: 'Admin',
     slotLabel: 'Skills, access, and execution policy',
-    match: (pathname: string) => pathname === '/skills',
+    match: (pathname: string) => pathname === '/skills' || pathname === '/library',
   },
   {
     id: 'account',

@@ -1,12 +1,11 @@
 import { createContext, useContext, useMemo } from "react";
-import { Appearance } from "react-native";
 
-import { darkColors, lightColors, radii, spacing, typography } from "./tokens";
+import { lightColors, radii, spacing, typography } from "./tokens";
 
-type ThemeColors = typeof lightColors | typeof darkColors;
+type ThemeColors = typeof lightColors;
 
 type ThemeValue = {
-  mode: "light" | "dark";
+  mode: "light";
   colors: ThemeColors;
   spacing: typeof spacing;
   radii: typeof radii;
@@ -16,18 +15,15 @@ type ThemeValue = {
 const ThemeContext = createContext<ThemeValue | null>(null);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const scheme = Appearance.getColorScheme();
-  const mode: "light" | "dark" = scheme === "dark" ? "dark" : "light";
-
   const value = useMemo<ThemeValue>(
     () => ({
-      mode,
-      colors: mode === "dark" ? darkColors : lightColors,
+      mode: "light",
+      colors: lightColors,
       spacing,
       radii,
       typography,
     }),
-    [mode],
+    [],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

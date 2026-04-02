@@ -1,6 +1,5 @@
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { formatExecutionTargetLabel, normalizeExecutionTarget } from '@/lib/executionTargets';
-import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 
 /**
  * Enhanced fetch wrapper to handle JSON errors and provide better feedback
@@ -347,44 +346,6 @@ export async function runWorkflow(id: string, credentials: unknown[] = [], varia
     }
 
     const payload = await response.json();
-    const runId = typeof payload?.run_id === 'string' ? payload.run_id.trim() : '';
-    if (runId) {
-        upsertSeededRuntimeRun({
-            run_id: runId,
-            status: 'running',
-            workflow_name: String(workflow.name || id).trim() || id,
-            user_goal: config.userGoal,
-            created_at: new Date().toISOString(),
-            agent_role: config.agentRole,
-            triggered_by: 'Direct',
-            active_profile_id: typeof payload?.active_profile_id === 'string' ? payload.active_profile_id : null,
-            active_profile_label: typeof payload?.active_profile_label === 'string' ? payload.active_profile_label : null,
-            active_profile_provider:
-                typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : null,
-            active_profile_model:
-                typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : null,
-            requested_provider:
-                typeof payload?.requested_provider === 'string' ? payload.requested_provider : null,
-            effective_provider:
-                typeof payload?.effective_provider === 'string'
-                    ? payload.effective_provider
-                    : null,
-            requested_model:
-                typeof payload?.requested_model === 'string' ? payload.requested_model : null,
-            effective_model:
-                typeof payload?.effective_model === 'string'
-                    ? payload.effective_model
-                    : null,
-            provider_overridden: typeof payload?.provider_overridden === 'boolean' ? payload.provider_overridden : undefined,
-            model_overridden: typeof payload?.model_overridden === 'boolean' ? payload.model_overridden : undefined,
-            fallback_used: typeof payload?.fallback_used === 'boolean' ? payload.fallback_used : undefined,
-            execution_target_selected:
-                typeof payload?.execution_target_selected === 'string'
-                    ? payload.execution_target_selected
-                    : config.executionTarget,
-        });
-    }
-
     return payload;
 }
 

@@ -54,6 +54,25 @@ type ConnectModalState = {
   connector: ConnectorId;
   agentRole: '' | AgentRoleId;
   googleUseLocalAuth: boolean;
+  githubAuthMode: 'pat' | 'app';
+  githubPersonalAccessToken: string;
+  githubAppId: string;
+  githubInstallationId: string;
+  githubPrivateKeyPem: string;
+  githubWebhookSecret: string;
+  dropboxAccessToken: string;
+  s3AccessKeyId: string;
+  s3SecretAccessKey: string;
+  s3Region: string;
+  notionAuthMode: 'integration_token' | 'oauth';
+  notionToken: string;
+  linearAuthMode: 'api_key' | 'oauth';
+  linearApiKey: string;
+  smtpHost: string;
+  smtpPort: string;
+  smtpUsername: string;
+  smtpPassword: string;
+  smtpUseTls: boolean;
   botToken: string;
   chatId: string;
   webhookUrl: string;
@@ -76,11 +95,16 @@ type TestResult = {
   status?: number;
   message?: string;
   warning?: string | null;
+  smtp_access?: boolean;
+  imap_access?: boolean;
   profile?: {
     emailAddress?: string | null;
     displayName?: string | null;
     mail?: string | null;
     userPrincipalName?: string | null;
+    host?: string | null;
+    port?: number | null;
+    username?: string | null;
   } | null;
   mail_access?: boolean;
   calendar_access?: boolean;
@@ -142,6 +166,25 @@ const EMPTY_FORM: ConnectModalState = {
   connector: 'google_workspace',
   agentRole: '',
   googleUseLocalAuth: true,
+  githubAuthMode: 'pat',
+  githubPersonalAccessToken: '',
+  githubAppId: '',
+  githubInstallationId: '',
+  githubPrivateKeyPem: '',
+  githubWebhookSecret: '',
+  dropboxAccessToken: '',
+  s3AccessKeyId: '',
+  s3SecretAccessKey: '',
+  s3Region: 'us-east-1',
+  notionAuthMode: 'integration_token',
+  notionToken: '',
+  linearAuthMode: 'api_key',
+  linearApiKey: '',
+  smtpHost: '',
+  smtpPort: '587',
+  smtpUsername: '',
+  smtpPassword: '',
+  smtpUseTls: true,
   botToken: '',
   chatId: '',
   webhookUrl: '',
@@ -198,6 +241,11 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
+  smtp: {
+    assetSrc: '/connector-logos/email-generic.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
   x_twitter: {
     assetSrc: '/connector-logos/x.svg',
     bg: ASSET_TILE_BG,
@@ -220,6 +268,26 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
   },
   github: {
     assetSrc: '/connector-logos/github.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  dropbox: {
+    assetSrc: '/connector-logos/dropbox.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  s3: {
+    assetSrc: '/connector-logos/s3.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  notion: {
+    assetSrc: '/connector-logos/notion.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  linear: {
+    assetSrc: '/connector-logos/linear.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
@@ -313,9 +381,22 @@ function agentRoleLabel(value?: unknown): string {
 function rowIdentity(row: ConnectorRow): string {
   const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
   const value = String(
-    (metadata as Record<string, unknown>).emailAddress
+    (metadata as Record<string, unknown>).team_name
+      || (metadata as Record<string, unknown>).team_id
+      || (metadata as Record<string, unknown>).display_name
+      || (metadata as Record<string, unknown>).account_id
+      || (metadata as Record<string, unknown>).region
+      || (metadata as Record<string, unknown>).access_key_hint
+      || (metadata as Record<string, unknown>).workspace_name
+      || (metadata as Record<string, unknown>).workspace_id
+      || (metadata as Record<string, unknown>).organization_name
+      || (metadata as Record<string, unknown>).organization_id
+      || (metadata as Record<string, unknown>).username
+      || (metadata as Record<string, unknown>).emailAddress
       || (metadata as Record<string, unknown>).email
       || (metadata as Record<string, unknown>).userPrincipalName
+      || (metadata as Record<string, unknown>).username
+      || (metadata as Record<string, unknown>).host
       || (metadata as Record<string, unknown>).chat_id
       || (metadata as Record<string, unknown>).channel_id
       || (metadata as Record<string, unknown>).instagram_account_id
@@ -438,6 +519,118 @@ function googleSuiteSummary(row: ConnectorRow, test?: TestResult) {
   };
 }
 
+function slackWorkspaceName(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(metadata.team_name || metadata.team_id || '').trim();
+  return value || 'Slack workspace';
+}
+
+function slackBotStatus(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const explicit = String(metadata.bot_status || '').trim();
+  if (explicit) return explicit;
+  if (test?.ok) return 'active';
+  const verification = metadata.capability_verification && typeof metadata.capability_verification === 'object'
+    ? metadata.capability_verification as Record<string, unknown>
+    : {};
+  return verification.runtime_usable === true ? 'active' : 'pending';
+}
+
+function githubUsername(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.displayName || test?.profile?.emailAddress || metadata.username || '').trim();
+  return value || 'GitHub account';
+}
+
+function githubAuthModeLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const mode = String(metadata.auth_mode || '').trim().toLowerCase();
+  return mode === 'app' ? 'GitHub App' : 'PAT';
+}
+
+function dropboxAccountLabel(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.displayName || metadata.display_name || metadata.email || metadata.account_id || '').trim();
+  return value || 'Dropbox account';
+}
+
+function dropboxStatusLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const mode = String(metadata.auth_mode || '').trim().toLowerCase();
+  return mode === 'oauth' ? 'OAuth token' : 'Connected';
+}
+
+function s3RegionLabel(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.host || metadata.region || '').trim();
+  return value || 'S3 region';
+}
+
+function s3IdentityLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const hint = String(metadata.access_key_hint || '').trim();
+  return hint ? `Key ••••${hint}` : 'Access key';
+}
+
+function notionWorkspaceName(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.displayName || metadata.workspace_name || metadata.workspace_id || '').trim();
+  return value || 'Notion workspace';
+}
+
+function notionAuthModeLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const mode = String(metadata.auth_mode || '').trim().toLowerCase();
+  return mode === 'oauth' ? 'OAuth token' : 'Integration token';
+}
+
+function linearOrganizationName(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.displayName || metadata.organization_name || metadata.organization_id || '').trim();
+  return value || 'Linear workspace';
+}
+
+function linearIdentityLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(metadata.username || '').trim();
+  if (value) return value;
+  const mode = String(metadata.auth_mode || '').trim().toLowerCase();
+  return mode === 'oauth' ? 'OAuth token' : 'API key';
+}
+
+function smtpHostLabel(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(test?.profile?.host || metadata.host || '').trim();
+  return value || 'SMTP host';
+}
+
+function smtpStatusLabel(row: ConnectorRow, test?: TestResult): string {
+  if (test?.imap_access) return 'SMTP + IMAP ready';
+  if (test?.smtp_access || test?.ok) return 'SMTP ready';
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const verification = metadata.capability_verification && typeof metadata.capability_verification === 'object'
+    ? metadata.capability_verification as Record<string, unknown>
+    : {};
+  return verification.runtime_usable === true ? 'SMTP ready' : 'pending';
+}
+
+function discordWorkspaceLabel(row: ConnectorRow): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const value = String(metadata.guild_name || metadata.channel_name || metadata.guild_id || metadata.channel_id || '').trim();
+  return value || 'Discord workspace';
+}
+
+function discordBotStatus(row: ConnectorRow, test?: TestResult): string {
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {};
+  const explicit = String(metadata.bot_status || '').trim();
+  if (explicit) return explicit;
+  if (test?.ok) return 'active';
+  const verification = metadata.capability_verification && typeof metadata.capability_verification === 'object'
+    ? metadata.capability_verification as Record<string, unknown>
+    : {};
+  return verification.runtime_usable === true ? 'active' : 'pending';
+}
+
 type SuiteCapability = {
   label: string;
   note: string;
@@ -477,7 +670,14 @@ function connectorRoadmapTier(entry: ConnectorCatalogEntry): ConnectorRoadmapTie
   if (
     entry.id === 'google_workspace'
     || entry.id === 'microsoft_365'
+    || entry.id === 'smtp'
     || entry.id === 'telegram_bot'
+    || entry.id === 'slack'
+    || entry.id === 'github'
+    || entry.id === 'dropbox'
+    || entry.id === 's3'
+    || entry.id === 'notion'
+    || entry.id === 'linear'
     || entry.id === 'wechat_work'
     || entry.id === 'whatsapp_twilio'
     || entry.id === 'discord'
@@ -1134,6 +1334,69 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       access_token: state.accessToken.trim(),
     };
   }
+  if (state.connector === 'github') {
+    if (state.githubAuthMode === 'app') {
+      return {
+        auth_mode: 'app',
+        app_id: state.githubAppId.trim(),
+        installation_id: state.githubInstallationId.trim(),
+        private_key_pem: state.githubPrivateKeyPem,
+        webhook_secret: state.githubWebhookSecret.trim() || undefined,
+      };
+    }
+    return {
+      auth_mode: 'pat',
+      personal_access_token: state.githubPersonalAccessToken.trim(),
+      webhook_secret: state.githubWebhookSecret.trim() || undefined,
+    };
+  }
+  if (state.connector === 'dropbox') {
+    return {
+      auth_mode: 'oauth',
+      access_token: state.dropboxAccessToken.trim(),
+    };
+  }
+  if (state.connector === 's3') {
+    return {
+      auth_mode: 'access_key',
+      aws_access_key_id: state.s3AccessKeyId.trim(),
+      aws_secret_access_key: state.s3SecretAccessKey,
+      region: state.s3Region.trim() || 'us-east-1',
+    };
+  }
+  if (state.connector === 'notion') {
+    if (state.notionAuthMode === 'oauth') {
+      return {
+        auth_mode: 'oauth',
+        access_token: state.notionToken.trim(),
+      };
+    }
+    return {
+      auth_mode: 'integration_token',
+      integration_token: state.notionToken.trim(),
+    };
+  }
+  if (state.connector === 'linear') {
+    if (state.linearAuthMode === 'oauth') {
+      return {
+        auth_mode: 'oauth',
+        access_token: state.linearApiKey.trim(),
+      };
+    }
+    return {
+      auth_mode: 'api_key',
+      api_key: state.linearApiKey.trim(),
+    };
+  }
+  if (state.connector === 'smtp') {
+    return {
+      host: state.smtpHost.trim(),
+      port: state.smtpPort.trim() || '587',
+      username: state.smtpUsername.trim(),
+      password: state.smtpPassword,
+      use_tls: state.smtpUseTls,
+    };
+  }
   if (state.connector === 'telegram_bot') {
     return {
       bot_token: state.botToken.trim(),
@@ -1183,11 +1446,49 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
   }
 
   async function handleCreateConnector() {
-    if (form.connector === 'microsoft_365' && !form.accessToken.trim()) {
-      setCreateError('Enter a Microsoft Graph access token with mail, calendar, and files scopes.');
+    if (form.connector === 'slack') {
+      const slackReturnTo = onboardingMode ? returnTo : '/connectors?connector=slack';
+      const target = `/api/control-plane/connectors/slack/start?returnTo=${encodeURIComponent(slackReturnTo)}`;
+      window.location.assign(target);
       return;
     }
-    if (form.connector === 'google_workspace' && !form.googleUseLocalAuth && !form.accessToken.trim()) {
+  if (form.connector === 'microsoft_365' && !form.accessToken.trim()) {
+    setCreateError('Enter a Microsoft Graph access token with mail, calendar, and files scopes.');
+    return;
+  }
+  if (form.connector === 'github' && form.githubAuthMode === 'pat' && !form.githubPersonalAccessToken.trim()) {
+    setCreateError('Enter a GitHub personal access token.');
+    return;
+  }
+  if (form.connector === 'dropbox' && !form.dropboxAccessToken.trim()) {
+    setCreateError('Enter a Dropbox OAuth access token.');
+    return;
+  }
+  if (form.connector === 's3' && (!form.s3AccessKeyId.trim() || !form.s3SecretAccessKey.trim() || !form.s3Region.trim())) {
+    setCreateError('Enter the AWS access key id, secret access key, and region.');
+    return;
+  }
+  if (form.connector === 'notion' && !form.notionToken.trim()) {
+    setCreateError(form.notionAuthMode === 'oauth' ? 'Enter a Notion OAuth access token.' : 'Enter a Notion integration token.');
+    return;
+  }
+  if (form.connector === 'linear' && !form.linearApiKey.trim()) {
+    setCreateError(form.linearAuthMode === 'oauth' ? 'Enter a Linear OAuth access token.' : 'Enter a Linear personal API key.');
+    return;
+  }
+  if (
+    form.connector === 'github'
+    && form.githubAuthMode === 'app'
+    && (!form.githubAppId.trim() || !form.githubInstallationId.trim() || !form.githubPrivateKeyPem.trim())
+  ) {
+    setCreateError('Enter the GitHub App ID, installation ID, and private key PEM.');
+    return;
+  }
+  if (form.connector === 'smtp' && (!form.smtpHost.trim() || !form.smtpUsername.trim() || !form.smtpPassword)) {
+    setCreateError('Enter the SMTP host, username, and password.');
+    return;
+  }
+  if (form.connector === 'google_workspace' && !form.googleUseLocalAuth && !form.accessToken.trim()) {
       setCreateError('Enter a Google Workspace access token, or switch back to Local gws auth for the authenticated CLI session on this Mac.');
       return;
     }
@@ -1296,11 +1597,11 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
         summary={summary.total > 0 ? <span className="orion-chip">{summary.active} active</span> : null}
         actions={
           <>
-            <button className="btn-secondary" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void loadConnectors()}>
+            <button className="btn-secondary" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void loadConnectors()}>
               <RefreshCw size={13} />
               Refresh
             </button>
-            <button className="btn-primary" style={{ minHeight: 34, paddingInline: 12 }} onClick={openGenericCreateModal}>
+            <button className="btn-primary" style={{ minHeight: 44, paddingInline: 12 }} onClick={openGenericCreateModal}>
               <Plus size={13} />
               Add tool
             </button>
@@ -1356,7 +1657,28 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
               const canCreateFromCard = Boolean(cardConnectorId);
               const isFocused = focusedCatalogEntry?.id === item.id;
               const isConnected = cardConnectorId ? connectedConnectorIds.has(cardConnectorId) : false;
-              const cardMetaCopy = isConnected ? 'Connected in this workspace' : statusMeta.note;
+              const connectedRow = cardConnectorId
+                ? connectors.find((row) => row.connector === cardConnectorId && !rowPaused(row))
+                  || connectors.find((row) => row.connector === cardConnectorId)
+                  || null
+                : null;
+              const cardMetaCopy = isConnected
+                ? (
+                  connectedRow?.connector === 'slack'
+                    ? slackWorkspaceName(connectedRow)
+                    : connectedRow?.connector === 'github'
+                      ? githubUsername(connectedRow)
+                      : connectedRow?.connector === 'dropbox'
+                        ? dropboxAccountLabel(connectedRow)
+                        : connectedRow?.connector === 's3'
+                          ? s3RegionLabel(connectedRow)
+                      : connectedRow?.connector === 'notion'
+                        ? notionWorkspaceName(connectedRow)
+                        : connectedRow?.connector === 'linear'
+                          ? linearOrganizationName(connectedRow)
+                      : 'Connected in this workspace'
+                )
+                : statusMeta.note;
               return (
                 <article
                   key={item.id}
@@ -1406,7 +1728,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       )}
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 32, paddingInline: 12 }}
+                        style={{ minHeight: 44, paddingInline: 12 }}
                         onClick={(event) => {
                           event.stopPropagation();
                           if (!canCreateFromCard) {
@@ -1458,7 +1780,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     </span>
                     <button
                       className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 34, paddingInline: 12 }}
+                      style={{ minHeight: 44, paddingInline: 12 }}
                       onClick={() => setFocusedCatalogId('')}
                     >
                       Close details
@@ -1485,7 +1807,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                   {canAddFocused ? (
                     <button
                       className="orion-btn orion-btn-primary"
-                      style={{ minHeight: 40, minWidth: 160, paddingInline: 14 }}
+                      style={{ minHeight: 44, minWidth: 160, paddingInline: 14 }}
                       onClick={() => openCreateModal(focusedConnectorId!, focusedCatalogEntry.label)}
                     >
                       <Plus size={13} />
@@ -1496,7 +1818,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     <>
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 40, paddingInline: 14 }}
+                        style={{ minHeight: 44, paddingInline: 14 }}
                         onClick={openGoogleSuiteDrive}
                         disabled={!googleSuiteRow}
                         title={!googleSuiteRow ? 'Connect Google Workspace first to browse Drive.' : undefined}
@@ -1506,7 +1828,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       </button>
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 40, paddingInline: 14 }}
+                        style={{ minHeight: 44, paddingInline: 14 }}
                         onClick={() => googleSuiteRow && void handleCreateGoogleWorkspaceAsset(googleSuiteRow, 'doc')}
                         disabled={!googleSuiteRow || rowBusy[googleSuiteRow.id] === 'google-doc'}
                         title={!googleSuiteRow ? 'Connect Google Workspace first to create Docs from here.' : undefined}
@@ -1516,7 +1838,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       </button>
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 40, paddingInline: 14 }}
+                        style={{ minHeight: 44, paddingInline: 14 }}
                         onClick={() => googleSuiteRow && void handleCreateGoogleWorkspaceAsset(googleSuiteRow, 'sheet')}
                         disabled={!googleSuiteRow || rowBusy[googleSuiteRow.id] === 'google-sheet'}
                         title={!googleSuiteRow ? 'Connect Google Workspace first to create Sheets from here.' : undefined}
@@ -1524,7 +1846,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         <Plus size={13} />
                         {googleSuiteRow && rowBusy[googleSuiteRow.id] === 'google-sheet' ? 'Creating…' : 'Create Google Sheet'}
                       </button>
-                      <Link href="/artifacts" className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 14 }}>
+                      <Link href="/artifacts" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 14 }}>
                         <ArrowUpRight size={13} />
                         Open Outputs
                       </Link>
@@ -1534,7 +1856,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     <>
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 40, paddingInline: 14 }}
+                        style={{ minHeight: 44, paddingInline: 14 }}
                         onClick={openMicrosoftSuiteDrive}
                         disabled={!microsoftSuiteRow}
                         title={!microsoftSuiteRow ? 'Connect Microsoft 365 first to browse OneDrive.' : undefined}
@@ -1553,7 +1875,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                               tertiary: JSON.stringify([{ title: 'Executive summary', body: 'Key points to write into the document.' }], null, 2),
                             })}
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 40, paddingInline: 14 }}
+                            style={{ minHeight: 44, paddingInline: 14 }}
                           >
                             <Plus size={13} />
                             Create Word doc
@@ -1567,7 +1889,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                               tertiary: JSON.stringify([{ title: 'Opening slide', bullets: ['Objective', 'Key update', 'Next step'] }], null, 2),
                             })}
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 40, paddingInline: 14 }}
+                            style={{ minHeight: 44, paddingInline: 14 }}
                           >
                             <Plus size={13} />
                             Create PowerPoint deck
@@ -1581,7 +1903,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                               tertiary: JSON.stringify({ sheet: 'Sheet1' }, null, 2),
                             })}
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 40, paddingInline: 14 }}
+                            style={{ minHeight: 44, paddingInline: 14 }}
                           >
                             <ArrowUpRight size={13} />
                             Run Spreadsheet Ops
@@ -1589,21 +1911,21 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         </>
                       ) : (
                         <>
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to create Word documents from here.">
+                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to create Word documents from here.">
                             <Plus size={13} />
                             Create Word doc
                           </button>
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to create PowerPoint decks from here.">
+                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to create PowerPoint decks from here.">
                             <Plus size={13} />
                             Create PowerPoint deck
                           </button>
-                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to run Spreadsheet Ops on OneDrive files.">
+                          <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 14, opacity: 0.55 }} disabled title="Connect Microsoft 365 first to run Spreadsheet Ops on OneDrive files.">
                             <ArrowUpRight size={13} />
                             Run Spreadsheet Ops
                           </button>
                         </>
                       )}
-                      <Link href="/artifacts" className="orion-btn orion-btn-ghost" style={{ minHeight: 40, paddingInline: 14 }}>
+                      <Link href="/artifacts" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 14 }}>
                         <ArrowUpRight size={13} />
                         Open Outputs
                       </Link>
@@ -1741,7 +2063,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     {row.connector === 'google_workspace' ? (
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 34, paddingInline: 12 }}
+                        style={{ minHeight: 44, paddingInline: 12 }}
                         onClick={() => {
                           if (googleDriveBrowser?.open) {
                             collapseGoogleDriveBrowser(row.id);
@@ -1758,7 +2080,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                     {row.connector === 'microsoft_365' ? (
                       <button
                         className="orion-btn orion-btn-ghost"
-                        style={{ minHeight: 34, paddingInline: 12 }}
+                        style={{ minHeight: 44, paddingInline: 12 }}
                         onClick={() => {
                           if (driveBrowser?.open) {
                             collapseDriveBrowser(row.id);
@@ -1773,14 +2095,14 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       </button>
                     ) : null}
                     {!isSuite ? (
-                      <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 12 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
+                      <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
                         <ShieldCheck size={13} />
                         {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
                       </button>
                     ) : null}
                     <button
                       className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 34, paddingInline: 12 }}
+                      style={{ minHeight: 44, paddingInline: 12 }}
                       onClick={() => setConfiguredRowId((current) => (current === row.id ? '' : row.id))}
                     >
                       {isConfiguredOpen ? 'Hide setup' : 'Configure'}
@@ -1793,17 +2115,93 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 <details className="orion-connector-inline-details">
                   <summary>Details</summary>
                   <div className="orion-connector-inline-meta">
-                    <span className="orion-chip" style={{ minHeight: 24 }}>
-                      {connectorLabel(row.connector)}
-                    </span>
-                    {isSuite ? (
-                      <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
-                        {suiteReadinessLabel(suiteCapabilities)}
-                      </span>
-                    ) : null}
-                    <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
-                      {assignedRole ? `Used by ${agentRoleLabel(assignedRole)}` : 'Shared'}
-                    </span>
+                    {row.connector === 'slack' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {slackWorkspaceName(row)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          Bot {slackBotStatus(row, test)}
+                        </span>
+                      </>
+                    ) : row.connector === 'github' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {githubUsername(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {githubAuthModeLabel(row)}
+                        </span>
+                      </>
+                    ) : row.connector === 'dropbox' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {dropboxAccountLabel(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {dropboxStatusLabel(row)}
+                        </span>
+                      </>
+                    ) : row.connector === 's3' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {s3RegionLabel(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {s3IdentityLabel(row)}
+                        </span>
+                      </>
+                    ) : row.connector === 'notion' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {notionWorkspaceName(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {notionAuthModeLabel(row)}
+                        </span>
+                      </>
+                    ) : row.connector === 'linear' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {linearOrganizationName(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {linearIdentityLabel(row)}
+                        </span>
+                      </>
+                    ) : row.connector === 'smtp' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {smtpHostLabel(row, test)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {smtpStatusLabel(row, test)}
+                        </span>
+                      </>
+                    ) : row.connector === 'discord_bot' ? (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {discordWorkspaceLabel(row)}
+                        </span>
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          Bot {discordBotStatus(row, test)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="orion-chip" style={{ minHeight: 24 }}>
+                          {connectorLabel(row.connector)}
+                        </span>
+                        {isSuite ? (
+                          <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                            {suiteReadinessLabel(suiteCapabilities)}
+                          </span>
+                        ) : null}
+                        <span className="orion-chip" style={CONNECTOR_CHIP_STYLE_SUBTLE}>
+                          {assignedRole ? `Used by ${agentRoleLabel(assignedRole)}` : 'Shared'}
+                        </span>
+                      </>
+                    )}
                     <span className="orion-connector-inline-note">{rowRoutingLabel(row)}</span>
                   </div>
                 </details>
@@ -1827,22 +2225,22 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                           onChange={(event) => {
                             void handleAssignRole(row, (event.target.value || '') as '' | AgentRoleId);
                           }}
-                          style={{ minWidth: 188, minHeight: 34, paddingInline: 10 }}
+                          style={{ minWidth: 188, minHeight: 44, paddingInline: 10 }}
                         >
                           <option value="">Shared access</option>
                           {AGENT_ROLE_OPTIONS.map((role) => (
                             <option key={role.id} value={role.id}>{role.label}</option>
                           ))}
                         </select>
-                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleTest(row)} disabled={Boolean(busyAction)}>
                           <ShieldCheck size={13} />
                           {busyAction === 'test' ? 'Testing…' : (test ? 'Retest' : 'Test')}
                         </button>
-                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleTogglePaused(row)} disabled={Boolean(busyAction)}>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleTogglePaused(row)} disabled={Boolean(busyAction)}>
                           {paused ? <PlayCircle size={13} /> : <PauseCircle size={13} />}
                           {busyAction === 'pause' ? 'Saving…' : paused ? 'Resume' : 'Pause'}
                         </button>
-                        <button className="orion-btn orion-btn-danger" style={{ minHeight: 34, paddingInline: 10 }} onClick={() => void handleRemove(row)} disabled={Boolean(busyAction)}>
+                        <button className="orion-btn orion-btn-danger" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleRemove(row)} disabled={Boolean(busyAction)}>
                           <Trash2 size={13} />
                           {busyAction === 'remove' ? 'Removing…' : 'Remove'}
                         </button>
@@ -1901,7 +2299,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         {googleDriveBrowser.path && googleDriveBrowser.path !== 'gdrive:/' ? (
                           <button
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 32, paddingInline: 10 }}
+                            style={{ minHeight: 44, paddingInline: 10 }}
                             onClick={() => {
                               const current = String(googleDriveBrowser.path || 'gdrive:/');
                               const normalized = current.replace(/^gdrive:\//, '').replace(/\/$/, '');
@@ -1915,7 +2313,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             Up
                           </button>
                         ) : null}
-                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, googleDriveBrowser.path)}>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, googleDriveBrowser.path)}>
                           <RefreshCw size={13} />
                           Refresh
                         </button>
@@ -1948,7 +2346,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             </div>
                             <div className="orion-drive-browser-item-actions">
                               {isFolder ? (
-                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, itemPath)}>
+                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleBrowseGoogleDrive(row, itemPath)}>
                                   <FolderOpen size={13} />
                                   Open
                                 </button>
@@ -1956,7 +2354,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                               {item.webUrl ? (
                                 <button
                                   className="orion-btn orion-btn-ghost"
-                                  style={{ minHeight: 30, paddingInline: 10 }}
+                                  style={{ minHeight: 44, paddingInline: 10 }}
                                   onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Google Drive file'))}
                                 >
                                   <ArrowUpRight size={13} />
@@ -1983,7 +2381,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                         {driveBrowser.path && driveBrowser.path !== 'onedrive:/' ? (
                           <button
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 32, paddingInline: 10 }}
+                            style={{ minHeight: 44, paddingInline: 10 }}
                             onClick={() => {
                               const current = String(driveBrowser.path || 'onedrive:/');
                               const normalized = current.replace(/^onedrive:\//, '').replace(/\/$/, '');
@@ -1997,7 +2395,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             Up
                           </button>
                         ) : null}
-                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, driveBrowser.path)}>
+                        <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, driveBrowser.path)}>
                           <RefreshCw size={13} />
                           Refresh
                         </button>
@@ -2030,7 +2428,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                             </div>
                             <div className="orion-drive-browser-item-actions">
                               {isFolder ? (
-                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 30, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, itemPath)}>
+                                <button className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 10 }} onClick={() => void handleBrowseMicrosoftDrive(row, itemPath)}>
                                   <FolderOpen size={13} />
                                   Open
                                 </button>
@@ -2038,7 +2436,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                               {item.webUrl ? (
                                 <button
                                   className="orion-btn orion-btn-ghost"
-                                  style={{ minHeight: 30, paddingInline: 10 }}
+                                  style={{ minHeight: 44, paddingInline: 10 }}
                                   onClick={() => void openProviderExternal(String(item.webUrl), String(item.name || 'Microsoft file'))}
                                 >
                                   <ArrowUpRight size={13} />
@@ -2201,6 +2599,293 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                 </>
               ) : null}
 
+              {form.connector === 'smtp' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Generic SMTP email</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect any standard SMTP server for approval-gated outbound email. The built-in connector validates the SMTP login now and attempts IMAP inbox access when the matching server is reachable.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                      Use the existing Test action after connecting to confirm the server and inbox status without sending a live email.
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>SMTP host</span>
+                      <input className="input" value={form.smtpHost} onChange={(event) => setForm((prev) => ({ ...prev, smtpHost: event.target.value }))} placeholder="smtp.mailserver.com" />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Port</span>
+                      <input className="input" value={form.smtpPort} onChange={(event) => setForm((prev) => ({ ...prev, smtpPort: event.target.value }))} placeholder="587" />
+                    </label>
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Username</span>
+                    <input className="input" value={form.smtpUsername} onChange={(event) => setForm((prev) => ({ ...prev, smtpUsername: event.target.value }))} placeholder="you@example.com" />
+                  </label>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Password</span>
+                    <input type="password" className="input" value={form.smtpPassword} onChange={(event) => setForm((prev) => ({ ...prev, smtpPassword: event.target.value }))} placeholder="App password or SMTP password" />
+                  </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <input type="checkbox" checked={form.smtpUseTls} onChange={(event) => setForm((prev) => ({ ...prev, smtpUseTls: event.target.checked }))} />
+                    Use STARTTLS before login
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 'github' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>GitHub repositories and issues</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect GitHub with either a personal access token or a GitHub App installation. Repo writes, issue creation, PR creation, and file updates still go through approval before anything is changed.
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.githubAuthMode === 'pat' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, githubAuthMode: 'pat' }))}
+                      >
+                        Personal access token
+                      </button>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.githubAuthMode === 'app' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, githubAuthMode: 'app' }))}
+                      >
+                        GitHub App
+                      </button>
+                    </div>
+                  </div>
+                  {form.githubAuthMode === 'pat' ? (
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Personal access token</span>
+                      <textarea className="input" rows={4} value={form.githubPersonalAccessToken} onChange={(event) => setForm((prev) => ({ ...prev, githubPersonalAccessToken: event.target.value }))} placeholder="ghp_..." />
+                    </label>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 44, paddingInline: 12 }}
+                          onClick={() => {
+                            window.open('/api/control-plane/connectors/github/start', '_blank', 'noopener,noreferrer');
+                          }}
+                        >
+                          <ArrowUpRight size={13} />
+                          Open GitHub App install
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>App ID</span>
+                          <input className="input" value={form.githubAppId} onChange={(event) => setForm((prev) => ({ ...prev, githubAppId: event.target.value }))} placeholder="123456" />
+                        </label>
+                        <label style={{ display: 'grid', gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Installation ID</span>
+                          <input className="input" value={form.githubInstallationId} onChange={(event) => setForm((prev) => ({ ...prev, githubInstallationId: event.target.value }))} placeholder="78901234" />
+                        </label>
+                      </div>
+                      <label style={{ display: 'grid', gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Private key PEM</span>
+                        <textarea className="input" rows={7} value={form.githubPrivateKeyPem} onChange={(event) => setForm((prev) => ({ ...prev, githubPrivateKeyPem: event.target.value }))} placeholder="-----BEGIN RSA PRIVATE KEY-----" />
+                      </label>
+                    </>
+                  )}
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Webhook secret (optional)</span>
+                    <input className="input" value={form.githubWebhookSecret} onChange={(event) => setForm((prev) => ({ ...prev, githubWebhookSecret: event.target.value }))} placeholder="Optional X-Hub-Signature-256 secret" />
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 'dropbox' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Dropbox storage workspace</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect Dropbox with a long-lived OAuth token. Folder browsing, search, downloads, uploads, moves, and deletes are all available, with write-side actions still routed through approval.
+                      </div>
+                    </div>
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Access token</span>
+                    <textarea className="input" rows={4} value={form.dropboxAccessToken} onChange={(event) => setForm((prev) => ({ ...prev, dropboxAccessToken: event.target.value }))} placeholder="sl. or dropbox access token" />
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 's3' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Amazon S3 buckets and objects</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect S3 with an AWS access key, secret, and region. Bucket reads run directly; uploads, deletes, and bucket creation remain approval-gated.
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Access key ID</span>
+                      <input className="input" value={form.s3AccessKeyId} onChange={(event) => setForm((prev) => ({ ...prev, s3AccessKeyId: event.target.value }))} placeholder="AKIA..." />
+                    </label>
+                    <label style={{ display: 'grid', gap: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Region</span>
+                      <input className="input" value={form.s3Region} onChange={(event) => setForm((prev) => ({ ...prev, s3Region: event.target.value }))} placeholder="us-east-1" />
+                    </label>
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Secret access key</span>
+                    <input type="password" className="input" value={form.s3SecretAccessKey} onChange={(event) => setForm((prev) => ({ ...prev, s3SecretAccessKey: event.target.value }))} placeholder="AWS secret access key" />
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 'notion' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Notion workspace pages and databases</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect Notion with either an internal integration token or an OAuth access token. Search and read actions run directly; page and database writes still go through approval before anything changes.
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.notionAuthMode === 'integration_token' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, notionAuthMode: 'integration_token' }))}
+                      >
+                        Integration token
+                      </button>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.notionAuthMode === 'oauth' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, notionAuthMode: 'oauth' }))}
+                      >
+                        OAuth token
+                      </button>
+                    </div>
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      {form.notionAuthMode === 'oauth' ? 'OAuth access token' : 'Integration token'}
+                    </span>
+                    <textarea
+                      className="input"
+                      rows={4}
+                      value={form.notionToken}
+                      onChange={(event) => setForm((prev) => ({ ...prev, notionToken: event.target.value }))}
+                      placeholder={form.notionAuthMode === 'oauth' ? 'secret_... OAuth token' : 'secret_... integration token'}
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              {form.connector === 'linear' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Linear issues and projects</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect Linear with a personal API key or an OAuth access token. Listing teams, issues, and projects runs directly; issue creation, updates, and comments stay approval-gated.
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.linearAuthMode === 'api_key' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, linearAuthMode: 'api_key' }))}
+                      >
+                        Personal API key
+                      </button>
+                      <button
+                        type="button"
+                        className={`orion-credentials-modal-toggle-btn${form.linearAuthMode === 'oauth' ? ' is-active' : ''}`}
+                        onClick={() => setForm((prev) => ({ ...prev, linearAuthMode: 'oauth' }))}
+                      >
+                        OAuth token
+                      </button>
+                    </div>
+                  </div>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      {form.linearAuthMode === 'oauth' ? 'OAuth access token' : 'Personal API key'}
+                    </span>
+                    <textarea
+                      className="input"
+                      rows={4}
+                      value={form.linearApiKey}
+                      onChange={(event) => setForm((prev) => ({ ...prev, linearApiKey: event.target.value }))}
+                      placeholder={form.linearAuthMode === 'oauth' ? 'lin_oauth_...' : 'lin_api_...'}
+                    />
+                  </label>
+                </>
+              ) : null}
+
               {form.connector === 'wechat_work' ? (
                 <>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -2231,6 +2916,31 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
                       <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Guild ID</span>
                       <input className="input" value={form.discordGuildId} onChange={(event) => setForm((prev) => ({ ...prev, discordGuildId: event.target.value }))} placeholder="Optional guild ID" />
                     </label>
+                  </div>
+                </>
+              ) : null}
+
+              {form.connector === 'slack' ? (
+                <>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 10,
+                      borderRadius: 14,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-element)',
+                      padding: 14,
+                    }}
+                  >
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>Slack workspace OAuth</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        Connect Slack through the official OAuth install flow. Empyralist stores the workspace bot token, the user token when Slack returns one, and validates the bot before saving the connector.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                      After connection, the card shows the workspace name and bot status. Outbound Slack sends still require approval before anything is posted.
+                    </div>
                   </div>
                 </>
               ) : null}
@@ -2389,7 +3099,7 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             <div className="orion-modal-footer orion-credentials-modal-footer">
               <button className="orion-btn orion-btn-ghost" onClick={resetModal}>Cancel</button>
               <button className="orion-btn orion-btn-primary" onClick={() => void handleCreateConnector()} disabled={createBusy}>
-                {createBusy ? 'Connecting…' : form.connector === 'telegram_bot' && onboardingMode ? 'Done' : 'Connect'}
+                {createBusy ? 'Connecting…' : form.connector === 'slack' ? 'Continue to Slack' : form.connector === 'telegram_bot' && onboardingMode ? 'Done' : 'Connect'}
               </button>
             </div>
           </div>

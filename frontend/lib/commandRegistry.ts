@@ -63,7 +63,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
     description: 'Connect tools, channels, and accounts.',
     group: 'Navigate',
     keywords: ['connections', 'integrations', 'credentials', 'connectors', 'channels'],
-    action: { type: 'navigate', href: '/credentials' },
+    action: { type: 'navigate', href: '/connectors' },
   },
   {
     id: 'nav.setup',
@@ -135,7 +135,7 @@ const BASE_COMMANDS: PlatformCommand[] = [
     description: 'Manage assistant skills, capability packs, and execution policy.',
     group: 'Navigate',
     keywords: ['capabilities', 'skills', 'marketplace', 'plugins'],
-    action: { type: 'navigate', href: '/skills' },
+    action: { type: 'navigate', href: '/library' },
   },
   {
     id: 'nav.health',

@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { X } from 'lucide-react';
 import { usePlatformShell } from '@/components/orion/PlatformShellContext';
-import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { promptControlPlaneSignIn } from '@/lib/controlPlaneSession';
 
 function toTitleCase(value: string): string {
   return value
@@ -33,7 +34,7 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
 }
 
 export default function PlatformInspectPanel() {
-  const { inspectPanelOpen, inspectState, status } = usePlatformShell();
+  const { inspectPanelOpen, inspectState, setInspectPanelOpen, status } = usePlatformShell();
   const [authBusy, setAuthBusy] = useState(false);
 
   useEffect(() => {
@@ -42,6 +43,16 @@ export default function PlatformInspectPanel() {
       document.body.classList.remove('orion-inspect-open');
     };
   }, [inspectPanelOpen]);
+
+  useEffect(() => {
+    if (!inspectPanelOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setInspectPanelOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [inspectPanelOpen, setInspectPanelOpen]);
 
   const contract = inspectState?.runDetailContract ?? null;
   const providerModel = contract?.provider_model ?? null;
@@ -82,117 +93,135 @@ export default function PlatformInspectPanel() {
   const promptSignIn = async () => {
     setAuthBusy(true);
     try {
-      await ensureControlPlaneSession({ forcePrompt: true });
+      await promptControlPlaneSignIn();
     } finally {
       setAuthBusy(false);
     }
   };
 
   return (
-    <aside
-      className={`orion-inspect-panel${inspectPanelOpen ? ' is-open' : ''}`}
-      aria-hidden={!inspectPanelOpen}
-    >
-      <div className="orion-inspect-panel-inner">
-        <div className="orion-inspect-panel-header">
-          <div>
-            <div className="orion-inspect-panel-kicker">Inspect</div>
-            <div className="orion-inspect-panel-title">{status.authRequired ? 'System status' : 'Current run'}</div>
+    <>
+      <button
+        type="button"
+        className="orion-inspect-panel-backdrop"
+        aria-label="Close inspect panel"
+        aria-hidden={!inspectPanelOpen}
+        tabIndex={inspectPanelOpen ? 0 : -1}
+        onClick={() => setInspectPanelOpen(false)}
+      />
+      <aside
+        className={`orion-inspect-panel${inspectPanelOpen ? ' is-open' : ''}`}
+        aria-hidden={!inspectPanelOpen}
+      >
+        <div className="orion-inspect-panel-inner">
+          <div className="orion-inspect-panel-header">
+            <div>
+              <div className="orion-inspect-panel-kicker">Inspect</div>
+              <div className="orion-inspect-panel-title">{status.authRequired ? 'System status' : 'Current run'}</div>
+            </div>
+            <button
+              type="button"
+              className="orion-icon-btn"
+              onClick={() => setInspectPanelOpen(false)}
+              aria-label="Close inspect panel"
+            >
+              <X size={16} />
+            </button>
           </div>
+
+          {!hasActiveRun && !status.authRequired ? (
+            <div className="orion-inspect-panel-empty">No active run.</div>
+          ) : (
+            <div className="orion-inspect-panel-sections">
+              {status.authRequired ? (
+                <section className="orion-inspect-panel-section">
+                  <div className="orion-inspect-panel-label">Browser sign-in</div>
+                  <div className="orion-inspect-panel-value">Continue in your browser to unlock protected actions.</div>
+                  <div className="orion-inspect-panel-muted">
+                    {String(status.authMessage || 'Continue in your browser to sign in.').trim()}
+                  </div>
+                  <div className="orion-inspect-panel-actions">
+                    <button
+                      type="button"
+                      className="orion-btn orion-btn-secondary sm"
+                      onClick={() => {
+                        void promptSignIn();
+                      }}
+                      disabled={authBusy}
+                    >
+                      {authBusy ? 'Opening browser…' : 'Sign in'}
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+
+              {hasActiveRun ? (
+                <>
+                  <section className="orion-inspect-panel-section">
+                    <div className="orion-inspect-panel-label">Current run status</div>
+                    <div className="orion-inspect-panel-value">{normalizeStatus(inspectState?.status)}</div>
+                  </section>
+
+                  <section className="orion-inspect-panel-section">
+                    <div className="orion-inspect-panel-label">Model and provider used</div>
+                    <div className="orion-inspect-panel-value">
+                      {String(providerModel?.effective_provider || '').trim() || 'Unknown provider'}
+                      {' · '}
+                      {String(providerModel?.effective_model || '').trim() || 'Unknown model'}
+                    </div>
+                  </section>
+
+                  <section className="orion-inspect-panel-section">
+                    <div className="orion-inspect-panel-label">Tools called</div>
+                    {toolsCalled.length > 0 ? (
+                      <div className="orion-inspect-panel-list">
+                        {toolsCalled.map((item) => (
+                          <div key={item} className="orion-inspect-panel-list-item">
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="orion-inspect-panel-muted">No tools recorded.</div>
+                    )}
+                  </section>
+
+                  <section className="orion-inspect-panel-section">
+                    <div className="orion-inspect-panel-label">Evidence items</div>
+                    {evidenceItems.length > 0 ? (
+                      <div className="orion-inspect-panel-list">
+                        {evidenceItems.map((item, index) => (
+                          <div key={String(item.id || `evidence-${index}`)} className="orion-inspect-panel-evidence">
+                            <div className="orion-inspect-panel-evidence-label">{item.label}</div>
+                            <div className="orion-inspect-panel-evidence-value">{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="orion-inspect-panel-muted">No evidence recorded.</div>
+                    )}
+                  </section>
+
+                  <section className="orion-inspect-panel-section">
+                    <div className="orion-inspect-panel-label">Pending approvals</div>
+                    {pendingApprovalItems.length > 0 ? (
+                      <div className="orion-inspect-panel-list">
+                        {pendingApprovalItems.map((item) => (
+                          <div key={item} className="orion-inspect-panel-list-item">
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="orion-inspect-panel-muted">No pending approvals.</div>
+                    )}
+                  </section>
+                </>
+              ) : null}
+            </div>
+          )}
         </div>
-
-        {!hasActiveRun && !status.authRequired ? (
-          <div className="orion-inspect-panel-empty">No active run.</div>
-        ) : (
-          <div className="orion-inspect-panel-sections">
-            {status.authRequired ? (
-              <section className="orion-inspect-panel-section">
-                <div className="orion-inspect-panel-label">Browser sign-in</div>
-                <div className="orion-inspect-panel-value">Continue in your browser to unlock protected actions.</div>
-                <div className="orion-inspect-panel-muted">
-                  {String(status.authMessage || 'Continue in your browser to sign in.').trim()}
-                </div>
-                <div className="orion-inspect-panel-actions">
-                  <button
-                    type="button"
-                    className="orion-btn orion-btn-secondary sm"
-                    onClick={() => {
-                      void promptSignIn();
-                    }}
-                    disabled={authBusy}
-                  >
-                    {authBusy ? 'Opening browser…' : 'Sign in'}
-                  </button>
-                </div>
-              </section>
-            ) : null}
-
-            {hasActiveRun ? (
-              <>
-            <section className="orion-inspect-panel-section">
-              <div className="orion-inspect-panel-label">Current run status</div>
-              <div className="orion-inspect-panel-value">{normalizeStatus(inspectState?.status)}</div>
-            </section>
-
-            <section className="orion-inspect-panel-section">
-              <div className="orion-inspect-panel-label">Model and provider used</div>
-              <div className="orion-inspect-panel-value">
-                {String(providerModel?.effective_provider || '').trim() || 'Unknown provider'}
-                {' · '}
-                {String(providerModel?.effective_model || '').trim() || 'Unknown model'}
-              </div>
-            </section>
-
-            <section className="orion-inspect-panel-section">
-              <div className="orion-inspect-panel-label">Tools called</div>
-              {toolsCalled.length > 0 ? (
-                <div className="orion-inspect-panel-list">
-                  {toolsCalled.map((item) => (
-                    <div key={item} className="orion-inspect-panel-list-item">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="orion-inspect-panel-muted">No tools recorded.</div>
-              )}
-            </section>
-
-            <section className="orion-inspect-panel-section">
-              <div className="orion-inspect-panel-label">Evidence items</div>
-              {evidenceItems.length > 0 ? (
-                <div className="orion-inspect-panel-list">
-                  {evidenceItems.map((item, index) => (
-                    <div key={String(item.id || `evidence-${index}`)} className="orion-inspect-panel-evidence">
-                      <div className="orion-inspect-panel-evidence-label">{item.label}</div>
-                      <div className="orion-inspect-panel-evidence-value">{item.value}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="orion-inspect-panel-muted">No evidence recorded.</div>
-              )}
-            </section>
-
-            <section className="orion-inspect-panel-section">
-              <div className="orion-inspect-panel-label">Pending approvals</div>
-              {pendingApprovalItems.length > 0 ? (
-                <div className="orion-inspect-panel-list">
-                  {pendingApprovalItems.map((item) => (
-                    <div key={item} className="orion-inspect-panel-list-item">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="orion-inspect-panel-muted">No pending approvals.</div>
-              )}
-            </section>
-              </>
-            ) : null}
-          </div>
-        )}
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

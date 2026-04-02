@@ -35,25 +35,15 @@ def _persist_idempotency():
     _init()
     with IDEMPOTENCY_LOCK:
         _prune_idempotency_locked()
-        payload = {
-            "version": 1,
-            "updated_at": _utc_now_iso(),
-            "items": IDEMPOTENCY_RECORDS,
-        }
-    _safe_write_json(ORION_IDEMPOTENCY_FILE, payload)
+    _server.sync_acp_manager_paths(idempotency_path=_server.ORION_IDEMPOTENCY_FILE)
+    _server.ACP_MANAGER._persist_idempotency()
 
 
 def _load_idempotency():
     _init()
-    payload = _safe_read_json(ORION_IDEMPOTENCY_FILE, {"version": 1, "items": {}})
-    items = payload.get("items")
-    if not isinstance(items, dict):
-        return
     with IDEMPOTENCY_LOCK:
-        IDEMPOTENCY_RECORDS.clear()
-        for key, record in items.items():
-            if isinstance(key, str) and isinstance(record, dict):
-                IDEMPOTENCY_RECORDS[key] = record
+        _server.sync_acp_manager_paths(idempotency_path=_server.ORION_IDEMPOTENCY_FILE)
+        _server.ACP_MANAGER.reload_secondary_state()
         _prune_idempotency_locked()
 
 

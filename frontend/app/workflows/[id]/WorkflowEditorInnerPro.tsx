@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Hand, Loader2, Play, Rocket, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, CheckCircle2, Code2, GitBranch, Globe, Hand, Loader2, Play, Redo2, Rocket, Save, Search, Send, ShieldCheck, Shuffle, UploadCloud, X, Zap } from 'lucide-react';
 import { ReactFlow, Controls, Background, BackgroundVariant, MarkerType, addEdge, applyEdgeChanges, applyNodeChanges, type Connection, type Edge, type EdgeChange, type EdgeTypes, type Node, type NodeChange, type NodeTypes, type ReactFlowInstance } from '@xyflow/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -38,7 +38,6 @@ import {
     normalizeExecutionTarget,
 } from '@/lib/executionTargets';
 import { buildRunStartedMessage, OPEN_LIVE_RUN_LABEL, RUN_WAITING_STATUS_COPY } from '@/lib/runStartCopy';
-import { upsertSeededRuntimeRun } from '@/lib/runtimeRunSeed';
 import { buildDefaultCanonicalConfig, resetCanonicalConfigForVariant } from '@/lib/workflowNodeDefaults';
 import {
     formatWorkflowRunNodeStatusLabel,
@@ -54,6 +53,7 @@ import HttpRequestNode from '@/components/nodes/HttpRequestNode';
 import ConditionNode from '@/components/nodes/ConditionNode';
 import TransformNode from '@/components/nodes/TransformNode';
 import CodeNode from '@/components/nodes/CodeNode';
+import LoopNode from '@/components/nodes/LoopNode';
 import SmoothConnectionLine from '@/components/nodes/SmoothConnectionLine';
 import SmoothActionEdge, { type SmoothActionEdgeData } from '@/components/nodes/SmoothActionEdge';
 import WorkflowValidationPanel from '@/components/workflows/WorkflowValidationPanel';
@@ -167,9 +167,10 @@ interface AutopilotPack {
     prompt: string;
 }
 
-type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code';
-type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+type CanvasNodeType = 'trigger' | 'agent' | 'action' | 'http_request' | 'condition' | 'transform' | 'code' | 'loop';
+type CanonicalNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow' | 'loop';
 type TriggerKind = 'schedule' | 'webhook' | 'manual' | 'connector_event' | 'workflow' | 'file_watch';
+type LoopKind = 'for_each' | 'while' | 'repeat';
 type ActionKind =
     | 'send_wechat'
     | 'send_telegram'
@@ -252,6 +253,14 @@ type CodeCanvasData = {
     executionSummary?: string;
 } & CanvasCompatibilityMeta;
 
+type LoopCanvasData = {
+    label: string;
+    loopType: LoopKind;
+    summary: string;
+    status?: string;
+    executionSummary?: string;
+} & CanvasCompatibilityMeta;
+
 type CanvasNodeData =
     | TriggerCanvasData
     | AgentCanvasData
@@ -259,7 +268,8 @@ type CanvasNodeData =
     | HttpRequestCanvasData
     | ConditionCanvasData
     | TransformCanvasData
-    | CodeCanvasData;
+    | CodeCanvasData
+    | LoopCanvasData;
 type CanvasWorkflowNode = Node<CanvasNodeData>;
 type CanvasWorkflowEdge = Edge;
 type CanonicalInspectorNode = {
@@ -334,6 +344,7 @@ const CANVAS_NODE_TYPES: NodeTypes = {
     condition: ConditionNode,
     transform: TransformNode,
     code: CodeNode,
+    loop: LoopNode,
 };
 
 const CANVAS_EDGE_TYPES = {
@@ -438,6 +449,36 @@ const CANVAS_NODE_LIBRARY: CanvasLibraryItem[] = [
         defaultData: { label: 'Call workflow', actionType: 'call_workflow' },
     },
     {
+        id: 'loop_for_each',
+        type: 'loop',
+        label: 'For each',
+        accent: '#8b5cf6',
+        icon: <Redo2 size={14} />,
+        canonicalType: 'loop',
+        canonicalVariant: 'for_each',
+        defaultData: { label: 'For each item', loopType: 'for_each', summary: 'Run once for every array item' },
+    },
+    {
+        id: 'loop_while',
+        type: 'loop',
+        label: 'While',
+        accent: '#8b5cf6',
+        icon: <Redo2 size={14} />,
+        canonicalType: 'loop',
+        canonicalVariant: 'while',
+        defaultData: { label: 'While condition', loopType: 'while', summary: 'Repeat while the condition is true' },
+    },
+    {
+        id: 'loop_repeat',
+        type: 'loop',
+        label: 'Repeat',
+        accent: '#8b5cf6',
+        icon: <Redo2 size={14} />,
+        canonicalType: 'loop',
+        canonicalVariant: 'repeat',
+        defaultData: { label: 'Repeat', loopType: 'repeat', summary: 'Run a fixed number of times' },
+    },
+    {
         id: 'code_tool',
         type: 'code',
         label: 'Code tool',
@@ -455,6 +496,7 @@ const CANVAS_NODE_GROUPS: Array<{ label: string; items: string[] }> = [
     { label: 'Tools', items: ['tool', 'http', 'code_tool'] },
     { label: 'Human', items: ['human'] },
     { label: 'Logic', items: ['decision'] },
+    { label: 'Loops', items: ['loop_for_each', 'loop_while', 'loop_repeat'] },
     { label: 'Data', items: ['data'] },
     { label: 'Subflows', items: ['subflow'] },
 ];
@@ -464,17 +506,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isCanvasNodeType(value: string): value is CanvasNodeType {
-    return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code'].includes(value);
+    return ['trigger', 'agent', 'action', 'http_request', 'condition', 'transform', 'code', 'loop'].includes(value);
 }
 
 function isCanonicalNodeType(value: string): value is CanonicalNodeType {
-    return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow'].includes(value);
+    return ['trigger', 'agent', 'tool', 'decision', 'human', 'data', 'subflow', 'loop'].includes(value);
 }
 
 function canonicalTypeForCanvasType(type: CanvasNodeType): CanonicalNodeType {
     if (type === 'http_request' || type === 'code' || type === 'action') return 'tool';
     if (type === 'condition') return 'decision';
     if (type === 'transform') return 'data';
+    if (type === 'loop') return 'loop';
     return type;
 }
 
@@ -508,6 +551,11 @@ function normalizeActionKind(value: unknown): ActionKind {
         || token === 'call_workflow'
         ? token
         : 'write_file';
+}
+
+function normalizeLoopKind(value: unknown): LoopKind {
+    const token = String(value || '').trim().toLowerCase();
+    return token === 'while' || token === 'repeat' ? token : 'for_each';
 }
 
 function compactText(value: unknown, max = 160): string {
@@ -590,6 +638,7 @@ function deriveCanvasType(rawNode: Record<string, unknown>): CanvasNodeType | nu
     if (rawType === 'decision') return 'condition';
     if (rawType === 'data') return 'transform';
     if (rawType === 'human' || rawType === 'subflow') return 'action';
+    if (rawType === 'loop') return 'loop';
     return rawType;
 }
 
@@ -679,6 +728,21 @@ function deriveCanvasDataFromCanonicalNode(rawNode: Record<string, unknown>, can
         };
     }
 
+    if (canvasType === 'loop') {
+        const loopType = normalizeLoopKind(canonicalVariant || 'for_each');
+        const summary = loopType === 'for_each'
+            ? String(config.array_source || subtitle || 'Iterate over array items').trim() || 'Iterate over array items'
+            : loopType === 'while'
+                ? String(config.expression || subtitle || 'Repeat while condition is true').trim() || 'Repeat while condition is true'
+                : String(config.count_source || config.count || subtitle || 'Repeat a fixed number of times').trim() || 'Repeat a fixed number of times';
+        return {
+            ...compatibility,
+            label: label || (loopType === 'for_each' ? 'For each item' : loopType === 'while' ? 'While condition' : 'Repeat'),
+            loopType,
+            summary,
+        };
+    }
+
     if (canvasType === 'condition') {
         return {
             ...compatibility,
@@ -730,6 +794,7 @@ function canonicalVariantForCanvasNode(type: CanvasNodeType, data: CanvasNodeDat
     if (type === 'code') return 'code';
     if (type === 'condition') return 'if_else';
     if (type === 'transform') return 'transform';
+    if (type === 'loop') return normalizeLoopKind((data as LoopCanvasData).loopType);
     if (type === 'action') {
         const actionType = normalizeActionKind((data as ActionCanvasData).actionType);
         if (actionType === 'approval' || actionType === 'review' || actionType === 'wait_for_reply' || actionType === 'call_workflow') {
@@ -795,6 +860,29 @@ function canonicalConfigFromCanvasNode(
         const codeData = data as CodeCanvasData;
         next.summary = codeData.summary;
         next.code = codeData.code;
+        return next;
+    }
+    if (type === 'loop') {
+        const loopData = data as LoopCanvasData;
+        if (loopData.loopType === 'for_each') {
+            next.item_variable_name = typeof next.item_variable_name === 'string' && String(next.item_variable_name).trim()
+                ? next.item_variable_name
+                : 'item';
+            next.parallel = Boolean(next.parallel);
+            next.max_iterations = next.max_iterations ?? 100;
+        } else if (loopData.loopType === 'while') {
+            next.expression = typeof next.expression === 'string' && String(next.expression).trim()
+                ? next.expression
+                : 'result_data["should_continue"] == True';
+            next.max_iterations = next.max_iterations ?? 50;
+        } else {
+            next.count = next.count ?? 3;
+            next.max_iterations = next.max_iterations ?? 50;
+        }
+        if (typeof next.continue_on_error !== 'boolean') next.continue_on_error = false;
+        if (!isRecord(next.body)) {
+            next.body = { version: 'empyralist.workflow.v2', nodes: [], edges: [] };
+        }
         return next;
     }
     const actionData = data as ActionCanvasData;
@@ -901,6 +989,13 @@ function defaultNodeData(type: CanvasNodeType): CanvasNodeData {
             code: 'return input;',
         };
     }
+    if (type === 'loop') {
+        return {
+            label: 'For each item',
+            loopType: 'for_each',
+            summary: 'Run once for every array item',
+        };
+    }
     if (type === 'action') {
         return {
             label: 'Tool action',
@@ -998,6 +1093,17 @@ function normalizeCanvasNodeData(type: CanvasNodeType, raw: unknown): CanvasNode
             label: String(raw.label || base.label).trim() || base.label,
             summary: String(raw.summary || base.summary).trim() || base.summary,
             code: String(raw.code || base.code),
+            status: String(raw.status || '').trim() || undefined,
+            executionSummary: String(raw.executionSummary || '').trim() || undefined,
+        };
+    }
+    if (type === 'loop') {
+        const base: LoopCanvasData = { label: 'For each item', loopType: 'for_each', summary: 'Run once for every array item' };
+        return {
+            ...(raw as CanvasCompatibilityMeta),
+            label: String(raw.label || base.label).trim() || base.label,
+            loopType: normalizeLoopKind(raw.loopType || base.loopType),
+            summary: String(raw.summary || base.summary).trim() || base.summary,
             status: String(raw.status || '').trim() || undefined,
             executionSummary: String(raw.executionSummary || '').trim() || undefined,
         };
@@ -4031,44 +4137,6 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
             const payload = await res.json();
             const nextRunId = typeof payload?.run_id === 'string' ? payload.run_id : '';
             if (!nextRunId) throw new Error('Run ID missing from backend response.');
-            upsertSeededRuntimeRun({
-                run_id: nextRunId,
-                status: 'running',
-                workflow_name: activeWorkflowName,
-                user_goal: operator.userGoal.trim(),
-                created_at: new Date().toISOString(),
-                agent_role: operator.agentRole,
-                triggered_by: 'Direct',
-                active_profile_id:
-                    typeof payload?.active_profile_id === 'string' ? payload.active_profile_id : null,
-                active_profile_label:
-                    typeof payload?.active_profile_label === 'string'
-                        ? payload.active_profile_label
-                        : null,
-                active_profile_provider:
-                    typeof payload?.active_profile_provider === 'string' ? payload.active_profile_provider : null,
-                active_profile_model:
-                    typeof payload?.active_profile_model === 'string' ? payload.active_profile_model : null,
-                requested_provider:
-                    typeof payload?.requested_provider === 'string' ? payload.requested_provider : null,
-                effective_provider:
-                    typeof payload?.effective_provider === 'string'
-                        ? payload.effective_provider
-                        : null,
-                requested_model:
-                    typeof payload?.requested_model === 'string' ? payload.requested_model : null,
-                effective_model:
-                    typeof payload?.effective_model === 'string'
-                        ? payload.effective_model
-                        : null,
-                provider_overridden: typeof payload?.provider_overridden === 'boolean' ? payload.provider_overridden : undefined,
-                model_overridden: typeof payload?.model_overridden === 'boolean' ? payload.model_overridden : undefined,
-                fallback_used: typeof payload?.fallback_used === 'boolean' ? payload.fallback_used : undefined,
-                execution_target_selected:
-                    typeof payload?.execution_target_selected === 'string'
-                        ? payload.execution_target_selected
-                        : executionTarget,
-            });
             setRunId(nextRunId);
             appendLog(buildRunStartedMessage(selectedRuntimeProfile?.label, runtimeProvider, runtimeModel));
             void refreshRunDetail(nextRunId);
@@ -4329,7 +4397,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                     </div>
                     <button
                         className="orion-btn orion-btn-primary"
-                        onClick={() => router.push('/credentials?connector=telegram_bot&onboarding=1')}
+                        onClick={() => router.push('/connectors?connector=telegram_bot&onboarding=1')}
                     >
                         Connect Telegram
                     </button>
@@ -4407,7 +4475,7 @@ export default function WorkflowEditorInnerPro({ workflowId }: WorkflowEditorInn
                                 </div>
                             ))}
                             <div style={{ ...workflowMutedCopyStyle, lineHeight: 1.5 }}>
-                                Add triggers, agents, tools, human checkpoints, decisions, data steps, and subflows. Drag handles to connect steps. Press Backspace to delete the selected node or edge.
+                                Add triggers, agents, tools, loops, human checkpoints, decisions, data steps, and subflows. Drag handles to connect steps. Press Backspace to delete the selected node or edge.
                             </div>
                         </section>
 

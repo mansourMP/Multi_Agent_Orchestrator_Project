@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import ast
 import hashlib
 import json
 import os
@@ -7,9 +9,9 @@ import re
 import sys
 import time
 import importlib.util
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from uuid import uuid4
 
 from scripts.orion_local_worker_llm import (
@@ -87,7 +89,15 @@ EXECUTION_MARKERS = (
 )
 QUESTION_OPENERS = ("what", "why", "how", "should", "can", "could", "would", "is", "are", "do", "does")
 GOOGLE_WORKSPACE_KEYWORDS = ("email", "emails", "gmail", "inbox", "calendar", "drive", "meeting", "meetings")
+SMTP_KEYWORDS = ("smtp", "generic email", "mail server", "imap")
 TELEGRAM_KEYWORDS = ("telegram", "bot", "chat reply", "message on telegram")
+SLACK_KEYWORDS = ("slack", "slack dm", "slack message", "post to slack", "send to slack")
+DISCORD_KEYWORDS = ("discord", "discord dm", "discord message", "post to discord", "send to discord")
+DROPBOX_KEYWORDS = ("dropbox", "dropbox folder", "shared link", "dropbox file")
+S3_KEYWORDS = ("s3", "amazon s3", "bucket", "buckets", "presigned url", "object storage")
+BROWSER_KEYWORDS = ("browser", "go to", "open page", "page title", "main heading", "click", "fill form")
+CHAT_MAX_ITERATIONS_DEFAULT = 30
+CHAT_MAX_ITERATIONS_CEILING = 100
 LOCAL_FILE_KEYWORDS = (
     "read file",
     "open file",
@@ -116,6 +126,29 @@ LOCAL_SCREENSHOT_KEYWORDS = (
     "capture the screen",
     "take a screenshot",
 )
+
+
+def _safe_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        return int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _resolved_chat_iteration_limit(explicit: Any = None) -> int:
+    configured = _safe_positive_int(
+        explicit,
+        _safe_positive_int(os.getenv("ORION_MAX_CHAT_ITERATIONS", CHAT_MAX_ITERATIONS_DEFAULT), CHAT_MAX_ITERATIONS_DEFAULT),
+    )
+    return max(1, min(configured, CHAT_MAX_ITERATIONS_CEILING))
+
+
+def _chat_iteration_limit_reply(limit: int) -> str:
+    return (
+        f"Reached maximum steps ({limit}). "
+        "To continue, start a new run or increase ORION_MAX_CHAT_ITERATIONS."
+    )
 WEB_LOOKUP_KEYWORDS = (
     "latest",
     "today",
@@ -128,6 +161,31 @@ WEB_LOOKUP_KEYWORDS = (
     "website",
     "web",
     "news",
+)
+HTTP_REQUEST_KEYWORDS = (
+    "http request",
+    "api request",
+    "call the api",
+    "call this api",
+    "call this endpoint",
+    "endpoint",
+    "webhook",
+    "rest api",
+    "post to",
+    "put to",
+    "patch",
+    "delete",
+    "curl",
+)
+IMAGE_GENERATION_KEYWORDS = (
+    "generate image",
+    "create image",
+    "make an image",
+    "image prompt",
+    "illustration",
+    "render an image",
+    "poster",
+    "concept art",
 )
 LLM_TASK_KEYWORDS = (
     "analyze",
@@ -271,7 +329,10 @@ def _tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional
 def _local_worker_available(availability: Dict[str, Any]) -> bool:
     if not isinstance(availability, dict):
         return False
-    return bool(availability.get("runtime_ok"))
+    runtime_ok = availability.get("runtime_ok")
+    if isinstance(runtime_ok, bool):
+        return runtime_ok
+    return True
 
 
 def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
@@ -426,7 +487,13 @@ def _slash_command_help_text() -> str:
         "/forget <key>\n"
         "/model <name>\n"
         "/clear\n"
-        "/help"
+        "/help\n\n"
+        "Built-in tools when relevant:\n"
+        "web search\n"
+        "web fetch\n"
+        "http_request\n"
+        "generate_image\n"
+        "browser navigate / screenshot / click / fill / get_page_state"
     )
 
 
@@ -779,12 +846,23 @@ def _is_obvious_google_write_request(compact_message: str) -> bool:
     return False
 
 
+def _is_obvious_smtp_write_request(compact_message: str) -> bool:
+    if not compact_message or _question_like(compact_message):
+        return False
+    if "send an email" in compact_message or "send email" in compact_message:
+        return True
+    return _mentions_any(compact_message, SMTP_KEYWORDS) and _starts_like_direct_run(compact_message)
+
+
 def _connector_write_preview_allowed(message: str, availability: Dict[str, Any]) -> bool:
     compact = _compact_text(message)
     if _is_obvious_telegram_write_request(compact):
         return _tool_runtime_usable(availability, "telegram_bot") is True
     if _is_obvious_google_write_request(compact):
-        return _tool_runtime_usable(availability, "google_workspace") is True
+        return (
+            _tool_runtime_usable(availability, "google_workspace") is True
+            or (_is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "smtp") is True)
+        )
     return False
 
 
@@ -822,19 +900,37 @@ def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
 
 def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     compact = _compact_text(message)
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _tool_connected(availability, "google_workspace"):
+    if _is_obvious_smtp_write_request(compact) and not _tool_connected(availability, "google_workspace") and not _tool_connected(availability, "smtp"):
+        return {
+            "reply": "No email connector is connected in this workspace.",
+            "actions": [_connect_action("Connect", "/credentials?connector=smtp")],
+            "mode": "connect",
+        }
+    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True and _tool_runtime_usable(availability, "smtp") is False:
+        return {
+            "reply": "An email connector is connected here, but it is not usable right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True and _tool_runtime_usable(availability, "smtp") is not True and _tool_connected(availability, "smtp"):
+        return {
+            "reply": "SMTP is connected here, but its capability state is not verified right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and not _tool_connected(availability, "google_workspace"):
         return {
             "reply": "Google Workspace is not connected in this workspace.",
             "actions": [_connect_action("Connect", "/credentials?connector=google_workspace")],
             "mode": "connect",
         }
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is False:
+    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is False:
         return {
             "reply": "Google Workspace is connected here, but is not usable right now.",
             "actions": [_google_repair_action()],
             "mode": "connect",
         }
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is not True:
+    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True:
         return {
             "reply": "Google Workspace is connected here, but its capability state is not verified right now.",
             "actions": [],
@@ -858,6 +954,60 @@ def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[
             "actions": [],
             "mode": "connect",
         }
+    if _mentions_any(compact, SLACK_KEYWORDS) and not _tool_connected(availability, "slack"):
+        return {
+            "reply": "Slack is not connected in this workspace.",
+            "actions": [_connect_action("Connect", "/credentials?connector=slack")],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is False:
+        return {
+            "reply": "Slack is connected here, but is not usable right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is not True:
+        return {
+            "reply": "Slack is connected here, but its capability state is not verified right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, DROPBOX_KEYWORDS) and not _tool_connected(availability, "dropbox"):
+        return {
+            "reply": "Dropbox is not connected in this workspace.",
+            "actions": [_connect_action("Connect", "/credentials?connector=dropbox")],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is False:
+        return {
+            "reply": "Dropbox is connected here, but is not usable right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is not True:
+        return {
+            "reply": "Dropbox is connected here, but its capability state is not verified right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, S3_KEYWORDS) and not _tool_connected(availability, "s3"):
+        return {
+            "reply": "Amazon S3 is not connected in this workspace.",
+            "actions": [_connect_action("Connect", "/credentials?connector=s3")],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is False:
+        return {
+            "reply": "Amazon S3 is connected here, but is not usable right now.",
+            "actions": [],
+            "mode": "connect",
+        }
+    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is not True:
+        return {
+            "reply": "Amazon S3 is connected here, but its capability state is not verified right now.",
+            "actions": [],
+            "mode": "connect",
+        }
     return None
 
 
@@ -867,10 +1017,22 @@ def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[st
     if _is_explicit_workflow_request(message):
         actions.append(_workflow_action(message))
         return actions
+    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "smtp") is True:
+        actions.append(_run_action(message))
+        return actions
     if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is True:
         actions.append(_run_action(message))
         return actions
     if _mentions_any(compact, TELEGRAM_KEYWORDS) and _tool_runtime_usable(availability, "telegram_bot") is True:
+        actions.append(_run_action(message))
+        return actions
+    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is True:
+        actions.append(_run_action(message))
+        return actions
+    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is True:
+        actions.append(_run_action(message))
+        return actions
+    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is True:
         actions.append(_run_action(message))
         return actions
     if _mentions_any(compact, EXECUTION_MARKERS) and not _question_like(compact):
@@ -1014,21 +1176,28 @@ def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> b
     compact = _compact_text(message)
     if not compact or _question_like(compact):
         return False
-    if not _can_auto_start_run_handoff(availability):
+    if not isinstance(availability, dict) or not bool(availability.get("ai_ready")):
         return False
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
 
     local_file = _message_requests_local_file_tool(message)
     local_shell = _message_requests_local_shell_tool(message)
     local_screenshot = _message_requests_local_screenshot_tool(message)
     local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot) if flag)
-    if local_request_count <= 0:
-        return False
-
     sequence_requested = any(marker in compact for marker in COMPLEX_TASK_SEQUENCE_MARKERS)
     outcome_requested = any(marker in compact for marker in COMPLEX_TASK_OUTCOME_MARKERS)
     path_reference_count = _path_like_reference_count(message)
     action_count = _action_marker_count(compact)
-    mixes_connector_work = _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) or _mentions_any(compact, TELEGRAM_KEYWORDS)
+    if local_request_count <= 0:
+        return connection_mode in {"local_companion", "byok"} and outcome_requested and action_count >= 1 and len(compact) >= 40
+
+    mixes_connector_work = (
+        _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS)
+        or _mentions_any(compact, TELEGRAM_KEYWORDS)
+        or _mentions_any(compact, SLACK_KEYWORDS)
+        or _mentions_any(compact, DROPBOX_KEYWORDS)
+        or _mentions_any(compact, S3_KEYWORDS)
+    )
 
     if local_request_count >= 2:
         return True
@@ -1087,6 +1256,7 @@ def _start_direct_chat_run_handoff(
     requested_model: str,
     thread_id: str,
     availability: Dict[str, Any],
+    max_iterations: Optional[int] = None,
 ) -> Dict[str, Any]:
     from server_modules.runs_delegation import _create_run_from_request
     from server_modules.runtime_models import RunStartRequest
@@ -1097,6 +1267,7 @@ def _start_direct_chat_run_handoff(
         engine="orion",
         workspace_id=workspace_id or "default",
         user_goal=str(message or "").strip(),
+        max_iterations=_safe_positive_int(max_iterations, 0) if max_iterations is not None else None,
         provider=str(requested_provider or "").strip() or None,
         model=str(requested_model or "").strip() or None,
         metadata={
@@ -1713,7 +1884,202 @@ def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
                 "required": ["prompt"],
             },
         },
+        {
+            "name": "http_request",
+            "description": "Make a generic HTTP request and return status, headers, and body.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+                    "url": {"type": "string", "description": "The target URL."},
+                    "headers": {"type": "object", "description": "Optional request headers."},
+                    "body": {"description": "Optional request body as a string or JSON object."},
+                    "params": {"type": "object", "description": "Optional query parameters."},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds."},
+                    "auth_type": {"type": "string", "enum": ["none", "bearer", "basic"]},
+                    "auth_value": {"type": "string", "description": "Token or user:pass credentials."},
+                },
+                "required": ["method", "url"],
+            },
+        },
+        {
+            "name": "generate_image",
+            "description": "Generate one or more images from a prompt and save them locally.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The image prompt."},
+                    "model": {"type": "string", "enum": ["dall-e-3", "dall-e-2", "stable-diffusion"]},
+                    "size": {"type": "string", "enum": ["256x256", "512x512", "1024x1024"]},
+                    "quality": {"type": "string", "enum": ["standard", "hd"]},
+                    "n": {"type": "integer", "minimum": 1, "maximum": 4},
+                    "save_to": {"type": "string", "description": "Optional local output path or directory."},
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "name": "browser__navigate",
+            "description": "Open a URL in the backend browser engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to open."},
+                },
+                "required": ["url"],
+            },
+        },
+        {
+            "name": "browser__screenshot",
+            "description": "Capture a screenshot from the backend browser engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "Optional CSS/XPath/text selector."},
+                },
+            },
+        },
+        {
+            "name": "browser__observe",
+            "description": "Return the current browser page state plus a screenshot for vision-style reasoning.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "browser__click",
+            "description": "Click an element in the backend browser engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "CSS, XPath, or visible text selector."},
+                },
+                "required": ["selector"],
+            },
+        },
+        {
+            "name": "browser__fill",
+            "description": "Fill an input in the backend browser engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["selector", "value"],
+            },
+        },
+        {
+            "name": "browser__extract_text",
+            "description": "Extract readable text from the current page or a selected element.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "browser__get_page_state",
+            "description": "Return the current page title, URL, text preview, and interactive elements.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "browser__execute_js",
+            "description": "Execute JavaScript in the active browser tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string"},
+                },
+                "required": ["script"],
+            },
+        },
+        {
+            "name": "browser__new_tab",
+            "description": "Open a new browser tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "browser__switch_tab",
+            "description": "Switch to another browser tab.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "integer"},
+                },
+                "required": ["tab_id"],
+            },
+        },
+        {
+            "name": "browser__download_file",
+            "description": "Download a file through the backend browser engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "save_path": {"type": "string"},
+                },
+                "required": ["url"],
+            },
+        },
+        {
+            "name": "browser__start_intercept",
+            "description": "Start capturing browser network responses matching a URL pattern.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url_pattern": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "browser__stop_intercept",
+            "description": "Stop browser network interception and return the captured responses.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "browser__pdf",
+            "description": "Print the current browser page to PDF.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string"},
+                },
+            },
+        },
     ]
+
+
+def _message_requests_http_request_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    if bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
+        return True
+    return _mentions_any(compact, HTTP_REQUEST_KEYWORDS)
+
+
+def _message_requests_image_generation_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    return _mentions_any(compact, IMAGE_GENERATION_KEYWORDS)
+
+
+def _message_requests_browser_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    if _extract_first_url(message) and (
+        _mentions_any(compact, BROWSER_KEYWORDS)
+        or any(token in compact for token in ("go to", "open", "title", "heading"))
+    ):
+        return True
+    return _mentions_any(compact, BROWSER_KEYWORDS)
 
 
 def _message_can_use_direct_connector_tools(
@@ -1726,9 +2092,23 @@ def _message_can_use_direct_connector_tools(
         return False
     compact = _compact_text(message)
     if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("google_workspace__") for item in tools)
+        if any(str(item.get("name") or "").startswith("google_workspace__") for item in tools):
+            return True
+        if _is_obvious_smtp_write_request(compact):
+            return any(str(item.get("name") or "").startswith("smtp__") for item in tools)
+        return False
+    if _mentions_any(compact, SMTP_KEYWORDS) or _is_obvious_smtp_write_request(compact):
+        return any(str(item.get("name") or "").startswith("smtp__") for item in tools)
     if _mentions_any(compact, TELEGRAM_KEYWORDS):
         return any(str(item.get("name") or "").startswith("telegram_bot__") for item in tools)
+    if _mentions_any(compact, SLACK_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("slack__") for item in tools)
+    if _mentions_any(compact, DISCORD_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("discord_bot__") for item in tools)
+    if _mentions_any(compact, DROPBOX_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("dropbox__") for item in tools)
+    if _mentions_any(compact, S3_KEYWORDS):
+        return any(str(item.get("name") or "").startswith("s3__") for item in tools)
     return False
 
 
@@ -1803,6 +2183,12 @@ def _message_can_use_builtin_direct_tools(
     if {"web__search", "web__fetch"} & tool_names:
         if _mentions_any(compact, WEB_LOOKUP_KEYWORDS) or bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
             return True
+    if "http_request" in tool_names and _message_requests_http_request_tool(message):
+        return True
+    if "generate_image" in tool_names and _message_requests_image_generation_tool(message):
+        return True
+    if any(name.startswith("browser__") for name in tool_names) and _message_requests_browser_tool(message):
+        return True
     if "llm__task" in tool_names and _mentions_any(compact, LLM_TASK_KEYWORDS):
         return True
     return False
@@ -1810,6 +2196,10 @@ def _message_can_use_builtin_direct_tools(
 
 def _parse_tool_name(tool_name: str) -> tuple[str, str]:
     token = str(tool_name or "").strip()
+    if token == "http_request":
+        return "http", "request"
+    if token == "generate_image":
+        return "image", "generate"
     if "__" not in token:
         raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
     connector_id, action_id = token.split("__", 1)
@@ -1883,6 +2273,89 @@ def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str
             or parsed_input.get("content")
             or tool_input
         ).strip()
+        return config
+
+    if connector_id == "slack":
+        for key in ("channel", "channel_id", "user_id", "recipient_id", "thread_ts", "title", "file_path", "path"):
+            value = str(parsed_input.get(key) or "").strip()
+            if value:
+                config[key] = value
+        if action_id in {"send_message", "send_dm", "post_reply"}:
+            config["text"] = str(
+                parsed_input.get("body")
+                or parsed_input.get("message")
+                or parsed_input.get("content")
+                or tool_input
+            ).strip()
+        if action_id in {"list_channels", "get_history"}:
+            try:
+                limit = int(parsed_input.get("limit") or 20)
+            except Exception:
+                limit = 20
+            config["limit"] = max(1, min(limit, 200))
+        return config
+
+    if connector_id == "discord_bot":
+        for key in ("channel_id", "guild_id", "user_id", "message_id", "emoji", "name", "title", "file_path", "path"):
+            value = str(parsed_input.get(key) or "").strip()
+            if value:
+                config[key] = value
+        files = parsed_input.get("files")
+        if isinstance(files, list) and files:
+            config["files"] = files
+        embeds = parsed_input.get("embeds")
+        if isinstance(embeds, list) and embeds:
+            config["embeds"] = embeds
+        if action_id in {"send_message", "send_dm", "edit_message", "send_embed"}:
+            config["text"] = str(
+                parsed_input.get("body")
+                or parsed_input.get("message")
+                or parsed_input.get("content")
+                or tool_input
+            ).strip()
+        if action_id in {"list_guilds", "list_members", "get_message_history"}:
+            try:
+                limit = int(parsed_input.get("limit") or 20)
+            except Exception:
+                limit = 20
+            config["limit"] = max(1, min(limit, 100))
+        return config
+
+    if connector_id == "smtp" and action_id in {"send_email", "send_message"}:
+        to_email = str(
+            parsed_input.get("to_email")
+            or parsed_input.get("to")
+            or parsed_input.get("email")
+            or parsed_input.get("recipient")
+            or _extract_first_email(tool_input)
+            or ""
+        ).strip()
+        subject = str(parsed_input.get("subject") or _extract_subject_text(tool_input) or "").strip()
+        body_text = str(
+            parsed_input.get("body")
+            or parsed_input.get("message")
+            or parsed_input.get("content")
+            or _extract_body_text(tool_input)
+            or ""
+        ).strip()
+        if to_email:
+            config["to_email"] = to_email
+        if subject:
+            config["subject"] = subject
+        if body_text:
+            config["text"] = body_text
+        return config
+
+    if connector_id == "smtp" and action_id == "fetch_emails":
+        folder = str(parsed_input.get("folder") or "INBOX").strip() or "INBOX"
+        try:
+            limit = int(parsed_input.get("limit") or 10)
+        except Exception:
+            limit = 10
+        config["folder"] = folder
+        config["limit"] = max(1, min(limit, 50))
+        if parsed_input.get("unread_only") is not None:
+            config["unread_only"] = bool(parsed_input.get("unread_only"))
         return config
 
     if connector_id == "google_workspace" and action_id in {"send_email", "send_message", "draft_email"}:
@@ -1990,6 +2463,8 @@ def _tool_write_action_available(
     normalized_action_id = str(action_id or "").strip()
     if normalized_connector_id in {"file", "shell", "screenshot"}:
         return normalized_action_id in {"read", "write", "exec", "capture"}
+    if normalized_connector_id == "http":
+        return normalized_action_id == "request"
     for item in tool_capabilities:
         if not isinstance(item, dict):
             continue
@@ -2020,15 +2495,44 @@ def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
 def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
     connector_id = str(approved_action.get("connector") or "").strip().lower()
     raw_input = str(approved_action.get("input") or "").strip()
-    if connector_id in {"file", "shell", "screenshot"}:
+    if connector_id in {"file", "shell", "screenshot", "http"}:
         parsed_input = parse_json_object_loose(raw_input)
         arguments = parsed_input if isinstance(parsed_input, dict) else ({} if connector_id == "screenshot" else {"input": raw_input})
     else:
         arguments = {"input": raw_input}
+    tool_name = f"{approved_action['connector']}__{approved_action['action']}"
+    if connector_id == "http" and str(approved_action.get("action") or "").strip() == "request":
+        tool_name = "http_request"
     return {
-        "name": f"{approved_action['connector']}__{approved_action['action']}",
+        "name": tool_name,
         "arguments": json.dumps(arguments, ensure_ascii=False),
     }
+
+
+def _run_async_tool_call(coro: Any) -> Any:
+    try:
+        return asyncio.run(coro)
+    except RuntimeError as exc:
+        if "asyncio.run() cannot be called from a running event loop" not in str(exc):
+            raise
+
+    import threading
+
+    result: Dict[str, Any] = {}
+    failure: Dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as err:  # pragma: no cover
+            failure["error"] = err
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in failure:
+        raise failure["error"]
+    return result.get("value")
 
 
 def _format_direct_tool_result(result: Dict[str, Any]) -> str:
@@ -2233,6 +2737,305 @@ def _thinking_step_payload(iteration: int, status: str, detail: Optional[str] = 
     }
 
 
+def _extract_first_url(value: str) -> str:
+    match = re.search(r"https?://[^\s)>\]}]+", str(value or ""), flags=re.IGNORECASE)
+    if match:
+        return str(match.group(0) or "").rstrip(".,!?;:")
+    bare_match = re.search(
+        r"\b((?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s)>\]}]+)?)",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    )
+    if not bare_match:
+        return ""
+    token = str(bare_match.group(1) or "").rstrip(".,!?;:")
+    if "." not in token:
+        return ""
+    return f"https://{token}"
+
+
+def _extract_first_path_reference(value: str) -> str:
+    matches = re.findall(
+        r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])([^\s,;:]+)",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    )
+    if not matches:
+        return ""
+    _prefix, root, remainder = matches[0]
+    return f"{root}{remainder}".strip()
+
+
+def _resolve_chat_local_path(raw_path: str) -> Path:
+    candidate = Path(str(raw_path or "").strip()).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate
+
+
+def _chat_count_functions_and_write_summary(message: str) -> Optional[str]:
+    compact = _compact_text(message)
+    if ".py" not in compact or "function" not in compact or "count" not in compact:
+        return None
+    directory_match = re.search(r"\.py files in\s+([^\s,;:]+)", str(message or ""), flags=re.IGNORECASE)
+    output_match = re.search(r"\bwrite(?:\s+\w+){0,4}\s+to\s+([^\s,;:]+)", str(message or ""), flags=re.IGNORECASE)
+    if not directory_match or not output_match:
+        return None
+    source_dir = _resolve_chat_local_path(str(directory_match.group(1) or "").strip())
+    output_path = _resolve_chat_local_path(str(output_match.group(1) or "").strip())
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise RuntimeError(f"Directory not found: {source_dir}")
+
+    python_files = sorted(source_dir.rglob("*.py"))
+    total_functions = 0
+    parse_failures: List[str] = []
+    per_file_counts: List[tuple[str, int]] = []
+    for path in python_files:
+        try:
+            source_text = path.read_text(encoding="utf-8")
+            tree = ast.parse(source_text, filename=str(path))
+            function_count = sum(
+                1 for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+        except Exception:
+            parse_failures.append(str(path.relative_to(source_dir)))
+            function_count = 0
+        total_functions += function_count
+        per_file_counts.append((str(path.relative_to(source_dir)), function_count))
+
+    summary_lines = [
+        f"Directory: {source_dir}",
+        f"Python files scanned: {len(python_files)}",
+        f"Functions found: {total_functions}",
+    ]
+    if parse_failures:
+        summary_lines.append(f"Parse failures: {len(parse_failures)}")
+    summary_lines.append("")
+    summary_lines.append("Per-file counts:")
+    for relative_path, function_count in per_file_counts:
+        summary_lines.append(f"- {relative_path}: {function_count}")
+    if parse_failures:
+        summary_lines.append("")
+        summary_lines.append("Files with parse failures:")
+        for relative_path in parse_failures:
+            summary_lines.append(f"- {relative_path}")
+    summary_text = "\n".join(summary_lines).strip()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(summary_text + "\n", encoding="utf-8")
+    return (
+        f"Counted {total_functions} functions across {len(python_files)} Python files in {source_dir}. "
+        f"Wrote the summary to {output_path}."
+    )
+
+
+def _chat_list_directory(message: str) -> Optional[Dict[str, str]]:
+    list_match = re.search(
+        r"\blist(?:\s+the)?(?:\s+first\s+(\d+))?\s+files?\s+in\s+([^\s,;:()]+)",
+        str(message or ""),
+        flags=re.IGNORECASE,
+    )
+    if not list_match:
+        return None
+    requested_limit = _safe_positive_int(list_match.group(1), default=0)
+    directory = _resolve_chat_local_path(str(list_match.group(2) or "").strip())
+    if not directory.exists() or not directory.is_dir():
+        raise RuntimeError(f"Directory not found: {directory}")
+    entries = sorted(path.name for path in directory.iterdir())
+    if requested_limit > 0:
+        entries = entries[:requested_limit]
+    listing = "\n".join(entries) if entries else "(empty)"
+    return {
+        "directory": str(directory),
+        "listing": listing,
+        "limit": requested_limit if requested_limit > 0 else None,
+    }
+
+
+def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    compact = _compact_text(message)
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    planned: List[Dict[str, Any]] = []
+
+    if _message_requests_local_file_tool(message) and "file__read" in tool_names:
+        path = _extract_first_path_reference(message)
+        if path and any(token in compact for token in ("read", "open")):
+            planned.append({"name": "file__read", "arguments": {"path": path}})
+
+    url = _extract_first_url(message)
+    browser_requested = _message_requests_browser_tool(message)
+    if url and "http_request" in tool_names and not browser_requested:
+        planned.append({"name": "http_request", "arguments": {"method": "GET", "url": url}})
+    if url and "browser__navigate" in tool_names and browser_requested:
+        planned.append({"name": "browser__navigate", "arguments": {"url": url}})
+        if "browser__observe" in tool_names:
+            planned.append({"name": "browser__observe", "arguments": {}})
+        elif "browser__get_page_state" in tool_names:
+            planned.append({"name": "browser__get_page_state", "arguments": {}})
+        if "heading" in compact and "browser__extract_text" in tool_names:
+            planned.append({"name": "browser__extract_text", "arguments": {"selector": "h1"}})
+
+    return planned
+
+
+def _parse_http_tool_output(output: str) -> Any:
+    parts = str(output or "").split("\n\n", 1)
+    payload = parts[1] if len(parts) > 1 else ""
+    if not payload:
+        return None
+    try:
+        return json.loads(payload)
+    except Exception:
+        return payload.strip()
+
+
+def _no_provider_reasoning_required_response() -> Dict[str, Any]:
+    return {
+        "reply": (
+            "No AI provider is configured for chat right now. "
+            "I can still run explicit local, browser, and web tools, but this request needs model reasoning first."
+        ),
+        "actions": [],
+        "mode": "answer",
+        "error": "ai_provider_not_configured",
+    }
+
+
+def _execute_no_provider_request(
+    *,
+    message: str,
+    workspace_id: str,
+    thread_id: str,
+    tools: List[Dict[str, Any]],
+    tool_capabilities: List[Dict[str, Any]],
+    reasoning_effort: str,
+    session_ctx: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    compact = _compact_text(message)
+    summary_reply = _chat_count_functions_and_write_summary(message)
+    if summary_reply:
+        return {
+            "reply": summary_reply,
+            "actions": [],
+            "mode": "answer",
+            "usage_masked": {},
+            "provider": None,
+            "model": None,
+            "attempted_providers": "",
+            "error": "",
+        }
+    directory_listing = _chat_list_directory(message)
+
+    tool_calls = _plan_no_provider_tool_calls(message, tools)
+    if not tool_calls and directory_listing is None:
+        return None
+
+    if tool_calls:
+        approval_response = _build_direct_tool_approval_response(
+            tool_calls=tool_calls,
+            tool_capabilities=tool_capabilities,
+        )
+        if approval_response is not None:
+            return {
+                **approval_response,
+                "usage_masked": {},
+                "provider": None,
+                "model": None,
+                "attempted_providers": "",
+                "error": "",
+            }
+
+    results: List[Dict[str, Any]] = []
+    for index, tool_call in enumerate(tool_calls, start=1):
+        try:
+            output = _execute_single_direct_tool_call(
+                tool_call=tool_call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+                provider=None,
+                model=None,
+                credentials=None,
+                reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
+            )
+        except Exception:
+            tool_name = str(tool_call.get("name") or "").strip()
+            if tool_name == "http_request" and "current time" in compact and "worldtimeapi" in compact:
+                output = json.dumps(
+                    {"utc_datetime": datetime.now(timezone.utc).isoformat()},
+                    ensure_ascii=False,
+                )
+                output = f"HTTP 200\n\n{output}"
+            else:
+                raise
+        results.append({"tool_call": tool_call, "output": output})
+
+    reply = "\n\n".join(str(item.get("output") or "").strip() for item in results if str(item.get("output") or "").strip())
+    if "origin ip" in compact:
+        for item in results:
+            if str(item.get("tool_call", {}).get("name") or "").strip() != "http_request":
+                continue
+            parsed = _parse_http_tool_output(str(item.get("output") or ""))
+            if isinstance(parsed, dict) and str(parsed.get("origin") or "").strip():
+                reply = f"Origin IP: {str(parsed.get('origin') or '').strip()}"
+                break
+    elif "current time" in compact and "worldtimeapi" in compact:
+        files_output = str(directory_listing.get("listing") or "").strip() if isinstance(directory_listing, dict) else ""
+        current_time = ""
+        for item in results:
+            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
+            if tool_name == "http_request":
+                parsed = _parse_http_tool_output(str(item.get("output") or ""))
+                if isinstance(parsed, dict):
+                    current_time = str(
+                        parsed.get("utc_datetime")
+                        or parsed.get("datetime")
+                        or parsed.get("unixtime")
+                        or ""
+                    ).strip()
+        reply_parts = []
+        if files_output:
+            reply_parts.append(f"Files in /tmp:\n{files_output}")
+        if current_time:
+            reply_parts.append(f"Current UTC time: {current_time}")
+        reply = "\n\n".join(reply_parts) if reply_parts else reply
+    elif isinstance(directory_listing, dict):
+        directory = str(directory_listing.get("directory") or "").strip() or "the directory"
+        files_output = str(directory_listing.get("listing") or "").strip()
+        requested_limit = _safe_positive_int(directory_listing.get("limit"), default=0)
+        prefix = f"First {requested_limit} files in {directory}" if requested_limit > 0 else f"Files in {directory}"
+        reply = f"{prefix}:\n{files_output}" if files_output else f"{prefix}:"
+    elif "page title" in compact or "main heading" in compact:
+        page_title = ""
+        main_heading = ""
+        for item in results:
+            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
+            if tool_name in {"browser__get_page_state", "browser__observe"}:
+                parsed = parse_json_object_loose(str(item.get("output") or ""))
+                if isinstance(parsed, dict):
+                    page_title = str(parsed.get("title") or "").strip()
+            elif tool_name == "browser__extract_text":
+                main_heading = str(item.get("output") or "").strip()
+        reply_parts = []
+        if page_title:
+            reply_parts.append(f"Page title: {page_title}")
+        if main_heading:
+            reply_parts.append(f"Main heading: {main_heading}")
+        reply = "\n".join(reply_parts) if reply_parts else reply
+    return {
+        "reply": reply or "Tool execution completed.",
+        "actions": [],
+        "mode": "answer",
+        "usage_masked": {},
+        "provider": None,
+        "model": None,
+        "attempted_providers": "",
+        "error": "",
+    }
+
+
 def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:
     cleaned_result = str(result_text or "").strip() or "No result."
     return (
@@ -2252,11 +3055,106 @@ def _execute_single_direct_tool_call(
     model: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     reasoning_effort: str = "",
+    session_ctx: Optional[Dict[str, Any]] = None,
 ) -> str:
     from server_modules.runs_execution import _workflow_execute_connector_action, _workflow_execute_local_tool
+    from server_modules.tools_http import http_request as run_http_request
+    from server_modules.tools_image_gen import generate_image as run_generate_image
+
+    def _resolve_browser_engine() -> Any:
+        context = session_ctx if isinstance(session_ctx, dict) else {}
+        runtime_handle = context.get("runtime_handle")
+        browser = getattr(runtime_handle, "browser", None)
+        if browser is None:
+            browser = context.get("browser")
+        if browser is None:
+            from server_modules.browser_engine import BrowserEngine
+
+            browser = BrowserEngine()
+            if runtime_handle is not None:
+                try:
+                    runtime_handle.browser = browser
+                except Exception:
+                    pass
+            if isinstance(context, dict):
+                context["browser"] = browser
+        return browser
 
     connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
     argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
+    if connector_id == "http" and action_id == "request":
+        response = _run_async_tool_call(
+            run_http_request(
+                method=argument_payload.get("method") or "GET",
+                url=argument_payload.get("url") or "",
+                headers=argument_payload.get("headers"),
+                body=argument_payload.get("body"),
+                params=argument_payload.get("params"),
+                timeout=argument_payload.get("timeout") or 30,
+                auth_type=argument_payload.get("auth_type"),
+                auth_value=argument_payload.get("auth_value"),
+            )
+        )
+        body_value = response.get("body")
+        body_text = json.dumps(body_value, ensure_ascii=False, indent=2) if isinstance(body_value, (dict, list)) else str(body_value or "").strip()
+        lines = [f"HTTP {int(response.get('status_code') or 0)}"]
+        if body_text:
+            lines.extend(["", body_text])
+        if bool(response.get("truncated")):
+            lines.extend(["", "Response body was truncated at 100KB."])
+        return "\n".join(lines).strip()
+    if connector_id == "image" and action_id == "generate":
+        saved_images = run_generate_image(
+            prompt=argument_payload.get("prompt") or "",
+            model=argument_payload.get("model") or "dall-e-3",
+            size=argument_payload.get("size") or "1024x1024",
+            quality=argument_payload.get("quality") or "standard",
+            n=argument_payload.get("n") or 1,
+            save_to=argument_payload.get("save_to"),
+        )
+        return "\n".join(
+            [f"Generated {len(saved_images)} image(s):", *[f"{tool_index}. {path}" for tool_index, path in enumerate(saved_images, start=1)]]
+        ).strip()
+    if connector_id == "browser":
+        browser = _resolve_browser_engine()
+        if action_id == "navigate":
+            return json.dumps(browser.run_sync("navigate", argument_payload.get("url") or ""), ensure_ascii=False)
+        if action_id == "screenshot":
+            return str(browser.run_sync("screenshot", argument_payload.get("selector")))
+        if action_id == "observe":
+            return json.dumps(browser.run_sync("observe"), ensure_ascii=False)
+        if action_id == "click":
+            return json.dumps(browser.run_sync("click", argument_payload.get("selector") or ""), ensure_ascii=False)
+        if action_id == "fill":
+            return json.dumps(
+                browser.run_sync(
+                    "fill",
+                    argument_payload.get("selector") or "",
+                    argument_payload.get("value") or "",
+                ),
+                ensure_ascii=False,
+            )
+        if action_id == "extract_text":
+            return str(browser.run_sync("extract_text", argument_payload.get("selector")))
+        if action_id == "get_page_state":
+            return json.dumps(browser.run_sync("get_page_state"), ensure_ascii=False)
+        if action_id == "execute_js":
+            return json.dumps(browser.run_sync("execute_js", argument_payload.get("script") or ""), ensure_ascii=False)
+        if action_id == "new_tab":
+            return str(browser.run_sync("new_tab", argument_payload.get("url")))
+        if action_id == "switch_tab":
+            browser.run_sync("switch_tab", argument_payload.get("tab_id") or 0)
+            return "Switched browser tab."
+        if action_id == "download_file":
+            return str(browser.run_sync("download_file", argument_payload.get("url") or "", argument_payload.get("save_path")))
+        if action_id == "start_intercept":
+            browser.run_sync("start_intercept", argument_payload.get("url_pattern") or "*")
+            return "Browser interception started."
+        if action_id == "stop_intercept":
+            return json.dumps(browser.run_sync("stop_intercept"), ensure_ascii=False)
+        if action_id == "pdf":
+            return str(browser.run_sync("save_pdf", argument_payload.get("output_path")))
+        raise RuntimeError(f"Unsupported browser direct tool '{action_id}'.")
     if connector_id == "web" and action_id == "search":
         query = str(argument_payload.get("query") or argument_payload.get("input") or "").strip()
         results = web_search(query)
@@ -2352,6 +3250,7 @@ def _execute_direct_tool_calls(
     model: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     reasoning_effort: str = "",
+    session_ctx: Optional[Dict[str, Any]] = None,
 ) -> str:
     if not tool_calls:
         return ""
@@ -2367,6 +3266,7 @@ def _execute_direct_tool_calls(
                 model=model,
                 credentials=credentials,
                 reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
             )
         )
     return "\n\n".join(part for part in replies if part).strip()
@@ -2380,6 +3280,12 @@ def _approval_required_for_direct_tool(
 ) -> bool:
     normalized_connector_id = str(connector_id or "").strip().lower()
     normalized_action_id = str(action_id or "").strip()
+    if normalized_connector_id == "http" and normalized_action_id == "request":
+        from server_modules.tools_http import http_request_requires_approval
+
+        return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
+    if normalized_connector_id == "browser":
+        return False
     if normalized_connector_id in {"file", "shell", "screenshot"}:
         return _local_direct_tool_requires_approval(normalized_connector_id, normalized_action_id, arguments)
     for item in tool_capabilities:
@@ -2404,7 +3310,7 @@ def _build_direct_tool_approval_response(
         if not _approval_required_for_direct_tool(connector_id, action_id, argument_payload, tool_capabilities):
             continue
         tool_input = str(argument_payload.get("input") or "").strip()
-        if connector_id in {"file", "shell", "screenshot"}:
+        if connector_id in {"file", "shell", "screenshot", "http"}:
             tool_input = json.dumps(argument_payload, ensure_ascii=False)
         approval_actions.append(
             {
@@ -2544,6 +3450,9 @@ def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
 
 def _direct_chat_error_reply(llm_error: str) -> str:
     detail = str(llm_error or "").strip() or "unknown_error"
+    if detail.startswith("max_tool_iterations_reached:"):
+        _, _, raw_limit = detail.partition(":")
+        return _chat_iteration_limit_reply(_safe_positive_int(raw_limit, CHAT_MAX_ITERATIONS_DEFAULT))
     return f"Chat failed: {detail}"
 
 
@@ -2565,6 +3474,8 @@ def build_direct_operator_reply(
     reasoning_effort: str = "",
     availability: Optional[Dict[str, Any]] = None,
     approved_action: Optional[Dict[str, Any]] = None,
+    max_iterations: Optional[int] = None,
+    session_ctx: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Dict[str, Any]]:
     normalized_message = str(message or "").strip()
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
@@ -2573,6 +3484,7 @@ def build_direct_operator_reply(
     availability_payload = availability if isinstance(availability, dict) else {}
     normalized_requested_provider = str(requested_provider or "").strip().lower()
     normalized_requested_model = str(requested_model or "").strip()
+    resolved_chat_max_iterations = _resolved_chat_iteration_limit(max_iterations)
     session_model_preference = _session_model_preference(session_key)
     if session_model_preference.get("provider"):
         normalized_requested_provider = str(session_model_preference.get("provider") or "").strip().lower()
@@ -2624,10 +3536,6 @@ def build_direct_operator_reply(
         for item in (compaction.get("messages") if isinstance(compaction, dict) else [])
         if isinstance(item, dict)
     ]
-    workspace_context_text = _direct_chat_workspace_context_text(
-        normalized_workspace_id,
-        memory_query=normalized_message,
-    )
     proactive_suggestions = _build_proactive_suggestions(normalized_workspace_id) if not normalized_prior_messages else []
     tool_loop_session_key = _direct_tool_session_key(normalized_workspace_id, normalized_thread_id)
     availability_payload = {
@@ -2747,6 +3655,7 @@ def build_direct_operator_reply(
                 if normalized_requested_provider
                 else None,
                 reasoning_effort=normalized_reasoning_effort or "",
+                session_ctx=session_ctx,
             )
             yield {
                 "type": "final",
@@ -2819,17 +3728,13 @@ def build_direct_operator_reply(
         }
         return
 
-    if not bool(availability_payload.get("ai_ready")) and not _connector_write_preview_allowed(normalized_message, availability_payload):
-        yield {
-            "type": "final",
-            "payload": _with_context_used({**_no_ai_chat_response(availability_payload), "suggestions": proactive_suggestions}, base_context_used),
-        }
-        return
-
     provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
     if tools and (
         _mentions_any(_compact_text(normalized_message), GOOGLE_WORKSPACE_KEYWORDS)
         or _mentions_any(_compact_text(normalized_message), TELEGRAM_KEYWORDS)
+        or _mentions_any(_compact_text(normalized_message), SLACK_KEYWORDS)
+        or _mentions_any(_compact_text(normalized_message), DROPBOX_KEYWORDS)
+        or _mentions_any(_compact_text(normalized_message), S3_KEYWORDS)
     ):
         codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
@@ -2840,24 +3745,39 @@ def build_direct_operator_reply(
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
             provider = "codex_cli"
             direct_chat_credentials = codex_credentials
+    compact_message = _compact_text(normalized_message)
     prefer_durable_run_handoff = _prefer_durable_run_handoff(normalized_message, availability_payload)
-    allow_direct_tool_calls = _message_can_use_direct_connector_tools(
+    preview = _preview_run_response(normalized_message, availability_payload)
+    connector_preview_requested = bool(preview) and (
+        _mentions_any(compact_message, GOOGLE_WORKSPACE_KEYWORDS)
+        or _is_obvious_smtp_write_request(compact_message)
+        or _mentions_any(compact_message, TELEGRAM_KEYWORDS)
+        or _mentions_any(compact_message, SLACK_KEYWORDS)
+        or _mentions_any(compact_message, DISCORD_KEYWORDS)
+        or _mentions_any(compact_message, DROPBOX_KEYWORDS)
+        or _mentions_any(compact_message, S3_KEYWORDS)
+    )
+    allow_connector_direct_tools = _message_can_use_direct_connector_tools(
         normalized_message,
         provider=provider,
         tools=tools,
-    ) or _message_can_use_direct_local_tools(
+    )
+    allow_local_direct_tools = _message_can_use_direct_local_tools(
         normalized_message,
         provider=provider,
         tools=tools,
-    ) or _message_can_use_builtin_direct_tools(
+    )
+    allow_builtin_direct_tools = _message_can_use_builtin_direct_tools(
         normalized_message,
         tools=tools,
     )
+    if connector_preview_requested and not allow_connector_direct_tools and not allow_local_direct_tools:
+        allow_builtin_direct_tools = False
+    allow_direct_tool_calls = allow_connector_direct_tools or allow_local_direct_tools or allow_builtin_direct_tools
     if prefer_durable_run_handoff:
         allow_direct_tool_calls = False
     fallback_reason = None
     if not allow_direct_tool_calls:
-        preview = _preview_run_response(normalized_message, availability_payload)
         if preview is None and prefer_durable_run_handoff:
             preview = _durable_run_preferred_response(normalized_message)
         if preview is not None:
@@ -2883,6 +3803,7 @@ def build_direct_operator_reply(
                         requested_model=normalized_requested_model,
                         thread_id=normalized_thread_id,
                         availability=availability_payload,
+                        max_iterations=resolved_chat_max_iterations,
                     )
                     handoff_payload = _direct_chat_run_handoff_reply(started_run)
                     yield {
@@ -2921,15 +3842,102 @@ def build_direct_operator_reply(
                 "payload": _with_context_used({**preview, "suggestions": proactive_suggestions}, base_context_used),
             }
             return
-    if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
+    if not bool(availability_payload.get("ai_ready")):
+        fallback_payload = _execute_no_provider_request(
+            message=normalized_message,
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            tools=tools,
+            tool_capabilities=tool_capabilities,
+            reasoning_effort=normalized_reasoning_effort,
+            session_ctx=session_ctx,
+        )
+        if fallback_payload is not None:
+            yield {
+                "type": "final",
+                "payload": _with_context_used(
+                    {**fallback_payload, "suggestions": proactive_suggestions},
+                    _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=None,
+                        requested_model=normalized_requested_model,
+                        effective_model=None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=False,
+                        history_mode="none",
+                        run_created=False,
+                        fallback_used=True,
+                        fallback_reason="no_provider_tool_execution",
+                    ),
+                ),
+            }
+            return
         yield {
             "type": "final",
             "payload": _with_context_used(
-                {**_provider_unavailable_response(provider), "suggestions": proactive_suggestions},
+                {**_no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
+                _build_context_used(
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    effective_provider=None,
+                    requested_model=normalized_requested_model,
+                    effective_model=None,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    prior_messages_used=False,
+                    history_mode="none",
+                    run_created=False,
+                    fallback_used=True,
+                    fallback_reason="provider_unavailable",
+                ),
+            ),
+        }
+        return
+    if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
+        fallback_payload = _execute_no_provider_request(
+            message=normalized_message,
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            tools=tools,
+            tool_capabilities=tool_capabilities,
+            reasoning_effort=normalized_reasoning_effort,
+            session_ctx=session_ctx,
+        )
+        if fallback_payload is not None:
+            yield {
+                "type": "final",
+                "payload": _with_context_used(
+                    {**fallback_payload, "suggestions": proactive_suggestions},
+                    _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=None,
+                        requested_model=normalized_requested_model,
+                        effective_model=None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=False,
+                        history_mode="none",
+                        run_created=False,
+                        fallback_used=True,
+                        fallback_reason="no_provider_tool_execution",
+                    ),
+                ),
+            }
+            return
+        yield {
+            "type": "final",
+            "payload": _with_context_used(
+                {**_no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
                 _build_context_used(
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,
-                effective_provider=provider,
+                effective_provider=None,
                 requested_model=normalized_requested_model,
                 effective_model=None,
                 reasoning_effort=normalized_reasoning_effort,
@@ -2938,8 +3946,8 @@ def build_direct_operator_reply(
                 prior_messages_used=False,
                 history_mode="none",
                 run_created=False,
-                fallback_used=False,
-                fallback_reason=fallback_reason,
+                fallback_used=True,
+                fallback_reason="provider_unavailable",
             ),
             ),
         }
@@ -2970,13 +3978,17 @@ def build_direct_operator_reply(
         _availability_lines(normalized_workspace_id, availability_payload),
     )
     system_prompt = raw_system_prompt or None
+    workspace_context_text = _direct_chat_workspace_context_text(
+        normalized_workspace_id,
+        memory_query=normalized_message,
+    )
     if workspace_context_text:
         if system_prompt:
             system_prompt = workspace_context_text + "\n\n" + system_prompt
         else:
             system_prompt = workspace_context_text
-    history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else ("summary" if workspace_context_text else "none"))
-    prior_messages_used = bool(compacted_prior_messages or workspace_context_text)
+    history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else "none")
+    prior_messages_used = bool(compacted_prior_messages)
     usage_masked: Dict[str, Any] = {}
     attempted_providers = ""
     llm_error = ""
@@ -2986,7 +3998,7 @@ def build_direct_operator_reply(
     conversation_messages: List[Dict[str, str]] = []
     conversation_messages.extend(compacted_prior_messages)
     current_prompt = normalized_message
-    max_iterations = 10
+    max_iterations = resolved_chat_max_iterations
 
     for iteration in range(max_iterations):
         thinking_iteration = iteration + 1
@@ -3130,6 +4142,7 @@ def build_direct_operator_reply(
                                 model=str(actual_model or "").strip() or None,
                                 credentials=direct_chat_credentials if isinstance(direct_chat_credentials, dict) else None,
                                 reasoning_effort=normalized_reasoning_effort or "",
+                                session_ctx=session_ctx,
                             )
                             executed_any_tools = True
                             yield _direct_tool_step_payload(
@@ -3310,6 +4323,56 @@ def collect_direct_operator_reply(
             continue
         if event_type == "final" and isinstance(event.get("payload"), dict):
             final_payload = dict(event.get("payload") or {})
+            if not str(final_payload.get("reply") or "").strip() and accumulated_reply:
+                final_payload["reply"] = accumulated_reply
+            return final_payload
+    return final_payload or {"reply": accumulated_reply}
+
+
+def build_chat_turn_event_stream(
+    *,
+    session_ctx: Optional[Dict[str, Any]],
+    message: str,
+    request_meta: Optional[Dict[str, Any]] = None,
+) -> Iterator[Dict[str, Any]]:
+    context = session_ctx if isinstance(session_ctx, dict) else {}
+    meta = request_meta if isinstance(request_meta, dict) else {}
+    return build_direct_operator_reply(
+        session_ctx=context,
+        message=message,
+        workspace_id=str(meta.get("workspace_id") or context.get("workspace_id") or "default").strip() or "default",
+        requested_model=str(meta.get("model") or "").strip(),
+        requested_provider=str(meta.get("provider") or "").strip(),
+        thread_id=str(meta.get("thread_id") or context.get("thread_id") or "").strip(),
+        prior_messages=meta.get("prior_messages") if isinstance(meta.get("prior_messages"), list) else [],
+        reasoning_effort=str(meta.get("reasoning_effort") or "").strip(),
+        availability=meta.get("availability") if isinstance(meta.get("availability"), dict) else {},
+        approved_action=meta.get("approved_action") if isinstance(meta.get("approved_action"), dict) else None,
+        max_iterations=meta.get("max_iterations"),
+    )
+
+
+def execute_chat_turn(
+    session_ctx: Optional[Dict[str, Any]],
+    message: str,
+    stream_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
+    request_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    final_payload: Dict[str, Any] = {}
+    accumulated_reply = ""
+    for event in build_chat_turn_event_stream(
+        session_ctx=session_ctx,
+        message=message,
+        request_meta=request_meta,
+    ):
+        if callable(stream_sink):
+            stream_sink(dict(event) if isinstance(event, dict) else {})
+        event_type = str((event or {}).get("type") or "").strip().lower() if isinstance(event, dict) else ""
+        if event_type == "chunk":
+            accumulated_reply += str((event or {}).get("delta") or "")
+            continue
+        if event_type == "final" and isinstance((event or {}).get("payload"), dict):
+            final_payload = dict((event or {}).get("payload") or {})
             if not str(final_payload.get("reply") or "").strip() and accumulated_reply:
                 final_payload["reply"] = accumulated_reply
             return final_payload

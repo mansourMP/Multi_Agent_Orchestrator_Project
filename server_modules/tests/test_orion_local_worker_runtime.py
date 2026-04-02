@@ -82,6 +82,31 @@ class LocalWorkerRuntimeClientTests(TestCase):
         self.assertEqual(captured[1]["session_token"], "fresh-session")
         self.assertEqual(captured[1]["instance_id"], "fresh-instance")
 
+    def test_pause_run_retry_uses_new_session_token(self):
+        client = self._client()
+        captured = []
+
+        def fake_request(method, path, payload=None):
+            captured.append(payload)
+            if len(captured) == 1:
+                raise worker_runtime.ApiRequestError("stale", status_code=401)
+            return {"ok": True}
+
+        def fake_register(*args, **kwargs):
+            client.runtime_session_token = "fresh-session"
+            client.runtime_instance_id = "fresh-instance"
+            return {"ok": True}
+
+        with (
+            patch.object(client, "_request", side_effect=fake_request),
+            patch.object(client, "register_runtime", side_effect=fake_register),
+        ):
+            client.pause_run("run-1", "worker-1", "paused", browser_checkpoint={"next_action_index": 2})
+
+        self.assertEqual(captured[0]["session_token"], "stale-session")
+        self.assertEqual(captured[1]["session_token"], "fresh-session")
+        self.assertEqual(captured[1]["instance_id"], "fresh-instance")
+
     def test_register_runtime_sends_policy_mode(self):
         client = self._client()
         captured = {}

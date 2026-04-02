@@ -344,7 +344,7 @@ export function WorkbenchControlDeck({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 34,
+    minHeight: 44,
     padding: '0 13px',
     border: 0,
     borderBottom: active ? `2px solid ${UI.accent}` : '2px solid transparent',
@@ -495,7 +495,7 @@ export function WorkbenchControlDeck({
               <button
                 onClick={() => onOpenRunInspect(inspectTargetRunId)}
                 className="orion-btn orion-btn-ghost"
-                style={{ minHeight: 30, width: 'fit-content', padding: '0 10px', fontSize: 11.5 }}
+                style={{ minHeight: 44, width: 'fit-content', padding: '0 12px', fontSize: 11.5 }}
               >
                 Open inspect
               </button>
@@ -572,7 +572,7 @@ export function WorkbenchControlDeck({
                 <div style={{ fontSize: 11, color: UI.textMuted }}>Plan steps</div>
                 <button
                   className="orion-btn orion-btn-ghost"
-                  style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                  style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                   onClick={() =>
                     onLocalExecutionDraftChange((prev) => {
                       const operations = [...prev.operations, { ...DEFAULT_LOCAL_EXECUTION_OPERATION }];
@@ -639,7 +639,7 @@ export function WorkbenchControlDeck({
                       <div style={{ display: 'inline-flex', gap: 4 }}>
                         <button
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 28, paddingInline: 8, fontSize: 11 }}
+                          style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                           onClick={() =>
                             onLocalExecutionDraftChange((prev) => {
                               if (index === 0) return prev;
@@ -663,7 +663,7 @@ export function WorkbenchControlDeck({
                         </button>
                         <button
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 28, paddingInline: 8, fontSize: 11 }}
+                          style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                           onClick={() =>
                             onLocalExecutionDraftChange((prev) => {
                               if (index >= prev.operations.length - 1) return prev;
@@ -687,7 +687,7 @@ export function WorkbenchControlDeck({
                         </button>
                         <button
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 28, paddingInline: 8, fontSize: 11, color: UI.error }}
+                          style={{ minHeight: 44, paddingInline: 12, fontSize: 11, color: UI.error }}
                           onClick={() =>
                             onLocalExecutionDraftChange((prev) => {
                               if (prev.operations.length <= 1) {
@@ -800,7 +800,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="server.py or docs/notes.md"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 {activeLocalExecutionOperation.fileMode !== 'read' ? (
@@ -904,7 +904,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="https://example.com"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 {activeLocalExecutionOperation.browserMode === 'capture_page' ? (
@@ -927,7 +927,7 @@ export function WorkbenchControlDeck({
                       }
                       placeholder="marketing-login"
                       className="input"
-                      style={{ minHeight: 34, fontSize: 12 }}
+                      style={{ minHeight: 44, fontSize: 12 }}
                     />
                   </div>
                 ) : null}
@@ -954,7 +954,7 @@ export function WorkbenchControlDeck({
                         : 'Leave blank to save under .orion-artifacts/local-execution/browser'
                     }
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4 }}>
@@ -976,7 +976,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder=".app-ready"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4 }}>
@@ -998,7 +998,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="input[type='search']"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4 }}>
@@ -1020,7 +1020,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="Empyralis"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4 }}>
@@ -1042,7 +1042,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="button[type='submit']"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 {activeLocalExecutionOperation.browserMode === 'capture_page' ? (
@@ -1119,7 +1119,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="pwd"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4 }}>
@@ -1141,7 +1141,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="Optional, relative to the local root"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ fontSize: 11, color: UI.warning, lineHeight: 1.4 }}>
@@ -1171,7 +1171,7 @@ export function WorkbenchControlDeck({
                     }
                     placeholder="Leave blank to save under .orion-artifacts/local-execution/screenshots"
                     className="input"
-                    style={{ minHeight: 34, fontSize: 12 }}
+                    style={{ minHeight: 44, fontSize: 12 }}
                   />
                 </div>
                 <div style={{ display: 'grid', gap: 4, fontSize: 11, lineHeight: 1.45 }}>
@@ -1282,7 +1282,7 @@ export function WorkbenchControlDeck({
                       <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
                         <button
                           className="orion-btn orion-btn-ghost"
-                          style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                          style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                           onClick={() => {
                             if (driveBrowser.open) {
                               setDriveBrowser((current) => ({ ...current, open: false, error: '' }));
@@ -1296,7 +1296,7 @@ export function WorkbenchControlDeck({
                         {driveBrowser.open ? (
                           <button
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                            style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                             onClick={() => void handleBrowseMicrosoftDrive(driveBrowser.path || 'onedrive:/')}
                           >
                             Refresh
@@ -1321,7 +1321,7 @@ export function WorkbenchControlDeck({
                         {driveBrowser.path && driveBrowser.path !== 'onedrive:/' ? (
                           <button
                             className="orion-btn orion-btn-ghost"
-                            style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                            style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                             onClick={goToParentDrivePath}
                           >
                             Up
@@ -1382,7 +1382,7 @@ export function WorkbenchControlDeck({
                                   {isFolder ? (
                                     <button
                                       className="orion-btn orion-btn-ghost"
-                                      style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                                      style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                                       onClick={() => void handleBrowseMicrosoftDrive(itemPath)}
                                     >
                                       Open
@@ -1391,14 +1391,14 @@ export function WorkbenchControlDeck({
                                     <>
                                       <button
                                         className="orion-btn orion-btn-ghost"
-                                        style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                                        style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                                         onClick={() => onPackPrimaryInputChange(itemPath)}
                                       >
                                         Use path
                                       </button>
                                       <button
                                         className="orion-btn orion-btn-ghost"
-                                        style={{ minHeight: 28, paddingInline: 10, fontSize: 11 }}
+                                        style={{ minHeight: 44, paddingInline: 12, fontSize: 11 }}
                                         onClick={() => {
                                           if (typeof navigator !== 'undefined' && navigator.clipboard) {
                                             void navigator.clipboard.writeText(itemPath);
@@ -1549,7 +1549,7 @@ export function WorkbenchControlDeck({
           <button
             onClick={() => onOpenRunInspect(inspectTargetRunId)}
             className="orion-btn orion-btn-ghost"
-            style={{ minHeight: 30, fontSize: 11 }}
+            style={{ minHeight: 44, fontSize: 11, paddingInline: 12 }}
           >
             Full inspect
           </button>

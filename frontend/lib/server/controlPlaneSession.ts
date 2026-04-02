@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
+import { homedir } from 'os';
 import path from 'path';
-import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { API_BASE } from '@/lib/config';
@@ -14,7 +15,12 @@ const CONTROL_PLANE_AUTH_URL =
   process.env.ORION_API_URL || process.env.NEXT_PUBLIC_ORION_API_URL || API_BASE;
 const CONTROL_PLANE_BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL || API_BASE;
-const INSECURE_DEV_JWT_SECRET = 'dev-secret-change-in-production';
+
+type ControlPlaneAuthProviders = {
+  email: { enabled: boolean };
+  google: { enabled: boolean };
+  apple: { enabled: boolean };
+};
 
 type ControlPlaneSessionPayload = {
   v: 1;
@@ -80,12 +86,44 @@ function safeEqualText(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function normalizedSecret(raw: string | undefined | null): string {
+  return String(raw || '').trim();
+}
+
+function stateHomePath(): string {
+  return normalizedSecret(process.env.EMPYRALIS_STATE_HOME) || path.join(homedir(), '.empyralis', 'state');
+}
+
+function jwtSecretPath(): string {
+  return normalizedSecret(process.env.EMPYRALIS_JWT_SECRET_FILE) || path.join(stateHomePath(), 'auth', 'jwt_secret');
+}
+
+async function readPersistedJwtSecret(): Promise<string> {
+  const explicit = normalizedSecret(process.env.ORION_JWT_SECRET) || normalizedSecret(process.env.JWT_SECRET);
+  if (explicit) return explicit;
+
+  const filePath = jwtSecretPath();
+  const existing = normalizedSecret(await fs.readFile(filePath, 'utf8').catch(() => ''));
+  if (existing) return existing;
+
+  const seeded = normalizedSecret(process.env.ORION_API_KEY) || normalizedSecret(process.env.RUNTIME_KEY)
+    || normalizedSecret(await readServerRuntimeKey().catch(() => ''));
+  const secret = seeded || randomBytes(48).toString('base64url');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${secret}\n`, { mode: 0o600 });
+  return secret;
+}
+
 async function jwtSecrets(): Promise<string[]> {
   const candidates = [
     String(process.env.ORION_JWT_SECRET || '').trim(),
     String(process.env.JWT_SECRET || '').trim(),
-    INSECURE_DEV_JWT_SECRET,
   ].filter(Boolean);
+
+  const persisted = normalizedSecret(await readPersistedJwtSecret().catch(() => ''));
+  if (persisted) {
+    candidates.push(persisted);
+  }
 
   const runtimeKey = String(await readServerRuntimeKey().catch(() => '')).trim();
   if (runtimeKey) {
@@ -137,6 +175,8 @@ function pendingControlPlaneOauthPath(state: string): string {
 async function controlPlaneSessionSecret(): Promise<string> {
   const configured = String(process.env.ORION_CONTROL_PLANE_SESSION_SECRET || '').trim();
   if (configured) return configured;
+  const persisted = normalizedSecret(await readPersistedJwtSecret().catch(() => ''));
+  if (persisted) return persisted;
   return readServerRuntimeKey();
 }
 
@@ -302,6 +342,16 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
   const claims = parseBearerClaims(token);
   if (claims instanceof Response) return claims;
 
+  const signatureFailure = await verifyBearerSignature(token);
+  if (!signatureFailure) {
+    return {
+      sub: claims.sub,
+      email: claims.email,
+      authType: 'bearer',
+      admin: true,
+    };
+  }
+
   let runtimeResponse: Response | null = null;
   try {
     runtimeResponse = await fetch(`${CONTROL_PLANE_AUTH_URL}/approvals/audit?limit=1`, {
@@ -350,16 +400,6 @@ async function verifyAdminBearerIdentity(token: string): Promise<ControlPlaneIde
     return Response.json({ detail: 'Admin control-plane access required.' }, { status: 403 });
   }
 
-  const signatureFailure = await verifyBearerSignature(token);
-  if (!signatureFailure) {
-    return {
-      sub: claims.sub,
-      email: claims.email,
-      authType: 'bearer',
-      admin: true,
-    };
-  }
-
   if (runtimeResponse?.status === 401 && backendResponse?.status === 401) {
     return Response.json({ detail: 'Invalid bearer token.' }, { status: 401 });
   }
@@ -389,6 +429,37 @@ export function sanitizeReturnTo(raw: string): string {
   if (!normalized.startsWith('/')) return '/';
   if (normalized.startsWith('//')) return '/';
   return normalized;
+}
+
+function localControlPlaneAuthProviders(): ControlPlaneAuthProviders {
+  const googleEnabled = Boolean(
+    String(process.env.GOOGLE_CLIENT_ID || '').trim()
+    && String(process.env.GOOGLE_CLIENT_SECRET || '').trim(),
+  );
+  const backendPublicOrigin = String(process.env.BACKEND_PUBLIC_ORIGIN || '').trim();
+  let appleEnabled = false;
+  if (backendPublicOrigin) {
+    try {
+      const parsed = new URL(backendPublicOrigin);
+      const hostname = parsed.hostname.trim().toLowerCase();
+      appleEnabled = parsed.protocol === 'https:'
+        && !['localhost', '127.0.0.1', '::1'].includes(hostname)
+        && Boolean(
+          String(process.env.APPLE_CLIENT_ID || '').trim()
+          && String(process.env.APPLE_TEAM_ID || '').trim()
+          && String(process.env.APPLE_KEY_ID || '').trim()
+          && String(process.env.APPLE_PRIVATE_KEY || '').trim(),
+        );
+    } catch {
+      appleEnabled = false;
+    }
+  }
+
+  return {
+    email: { enabled: true },
+    google: { enabled: googleEnabled },
+    apple: { enabled: appleEnabled },
+  };
 }
 
 async function decodeSession(token: string, request: NextRequest): Promise<ControlPlaneSessionPayload | null> {
@@ -554,35 +625,30 @@ export async function requireControlPlaneSession(request: NextRequest): Promise<
   return Response.json({ detail: 'Control-plane session required.' }, { status: 401 });
 }
 
-export function controlPlaneAuthProviders() {
-  const googleEnabled = Boolean(
-    String(process.env.GOOGLE_CLIENT_ID || '').trim()
-    && String(process.env.GOOGLE_CLIENT_SECRET || '').trim(),
-  );
-  const backendPublicOrigin = String(process.env.BACKEND_PUBLIC_ORIGIN || '').trim();
-  let appleEnabled = false;
-  if (backendPublicOrigin) {
-    try {
-      const parsed = new URL(backendPublicOrigin);
-      const hostname = parsed.hostname.trim().toLowerCase();
-      appleEnabled = parsed.protocol === 'https:'
-        && !['localhost', '127.0.0.1', '::1'].includes(hostname)
-        && Boolean(
-          String(process.env.APPLE_CLIENT_ID || '').trim()
-          && String(process.env.APPLE_TEAM_ID || '').trim()
-          && String(process.env.APPLE_KEY_ID || '').trim()
-          && String(process.env.APPLE_PRIVATE_KEY || '').trim(),
-        );
-    } catch {
-      appleEnabled = false;
-    }
-  }
+export function controlPlaneAuthProviders(): ControlPlaneAuthProviders {
+  return localControlPlaneAuthProviders();
+}
 
-  return {
-    email: { enabled: true },
-    google: { enabled: googleEnabled },
-    apple: { enabled: appleEnabled },
-  };
+export async function fetchControlPlaneAuthProviders(): Promise<ControlPlaneAuthProviders> {
+  try {
+    const response = await fetch(`${CONTROL_PLANE_BACKEND_URL}/auth/providers`, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (response.ok) {
+      const payload = await response.json().catch(() => null) as Partial<ControlPlaneAuthProviders> | null;
+      if (payload && typeof payload === 'object') {
+        return {
+          email: { enabled: Boolean(payload.email?.enabled ?? true) },
+          google: { enabled: Boolean(payload.google?.enabled) },
+          apple: { enabled: Boolean(payload.apple?.enabled) },
+        };
+      }
+    }
+  } catch {
+    // Fall back to the frontend runtime view when the backend auth service is unavailable.
+  }
+  return localControlPlaneAuthProviders();
 }
 
 export async function issuePendingControlPlaneOauthRedirect(

@@ -1,13 +1,26 @@
 import queue
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from server_modules import runs_execution, runs_output
+from server_modules import runs_execution, runs_output, shared
+from server_modules.runtime_state_store import init_runtime_state_db
 
 
 class RunsExecutionGraphTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmpdir.name) / "runtime-state.sqlite3"
+        init_runtime_state_db(self.db_path)
+        self.patchers = [
+            patch.object(runs_execution, "ORION_RUNTIME_STATE_DB", self.db_path),
+            patch.object(runs_output, "ORION_RUNTIME_STATE_DB", self.db_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        shared.sync_acp_manager_paths(runtime_db_path=self.db_path)
+        runs_execution.ACP_MANAGER.reload_runtime_state()
         runs_execution.runs.clear()
         runs_execution.RUN_QUEUE_INDEX.clear()
         with runs_execution.IDEMPOTENCY_LOCK:
@@ -18,6 +31,11 @@ class RunsExecutionGraphTests(unittest.TestCase):
         runs_execution.RUN_QUEUE_INDEX.clear()
         with runs_execution.IDEMPOTENCY_LOCK:
             runs_execution.IDEMPOTENCY_RECORDS.clear()
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        shared.sync_acp_manager_paths(runtime_db_path=runs_execution.ORION_RUNTIME_STATE_DB)
+        runs_execution.ACP_MANAGER.reload_runtime_state()
+        self.tmpdir.cleanup()
 
     def _register_live_run(self, run_id: str) -> queue.Queue:
         log_queue = queue.Queue()
@@ -1457,29 +1475,39 @@ class RunsExecutionGraphTests(unittest.TestCase):
 
         create_child_run_mock.assert_not_called()
 
+    @patch("server_modules.runs_execution._workflow_wait_for_child_run")
     @patch("server_modules.runs_execution._workflow_tool_create_child_local_run")
-    def test_browser_tool_rejects_session_backed_interactive_actions(self, create_child_run_mock):
-        with self.assertRaises(RuntimeError):
-            runs_execution._workflow_execute_local_tool(
-                "run-browser-interactive",
-                {"metadata": {}},
-                {
-                    "url": "https://example.com",
-                    "mode": "capture_page",
-                    "session_profile": "default",
-                    "browser_actions": [{"action": "click", "selector": "#login"}],
-                    "execution_target": "local_companion",
-                    "permissions": {
-                        "file_mount_grants": [],
-                        "browser_permissions": {"allow": True},
-                    },
-                },
-                label="Capture page",
-                variant="browser",
-                current_text="",
-            )
+    def test_browser_tool_passes_reviewed_interactive_metadata_to_child_run(self, create_child_run_mock, wait_child_mock):
+        create_child_run_mock.return_value = "child-browser-run"
+        wait_child_mock.return_value = {
+            "status": "completed",
+            "result": "Browser done",
+            "result_data": {"summary": "Browser done"},
+        }
 
-        create_child_run_mock.assert_not_called()
+        runs_execution._workflow_execute_local_tool(
+            "run-browser-interactive",
+            {"metadata": {}},
+            {
+                "url": "https://example.com",
+                "mode": "capture_page",
+                "session_profile": "default",
+                "browser_actions": [{"action": "click", "selector": "#login"}],
+                "execution_target": "local_companion",
+                "permissions": {
+                    "file_mount_grants": [],
+                    "browser_permissions": {"allow": True},
+                },
+            },
+            label="Capture page",
+            variant="browser",
+            current_text="",
+        )
+
+        metadata_overrides = create_child_run_mock.call_args.kwargs["metadata_overrides"]
+        self.assertEqual(metadata_overrides["browser_session_profile"], "default")
+        self.assertTrue(metadata_overrides["browser_reviewed_approval_required"])
+        self.assertTrue(metadata_overrides["browser_immutable_plan_hash"])
 
     @patch("server_modules.runs_execution._workflow_execute_local_tool")
     @patch("server_modules.runs_execution.wait_for_human_decision", return_value=True)

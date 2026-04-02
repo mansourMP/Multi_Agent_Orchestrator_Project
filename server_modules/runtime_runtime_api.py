@@ -1,13 +1,28 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import asyncio
+import io
+import os
+import re
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 import uuid
 
-from fastapi import Depends, HTTPException
+import httpx
+from fastapi import Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from server_modules.runtime_common import require_api_key
 from server_modules import local_queue
+
+SUPPORTED_STT_CONTENT_TYPES: Dict[str, str] = {
+    "audio/webm": "input.webm",
+    "audio/wav": "input.wav",
+    "audio/wave": "input.wav",
+    "audio/x-wav": "input.wav",
+}
+TTS_MAX_CHARS = 4096
+TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 
 
 class RuntimeRegisterPayload(BaseModel):
@@ -54,11 +69,163 @@ class RuntimeTaskCompletePayload(BaseModel):
     usage_masked: Optional[Dict[str, Any]] = None
 
 
+class RuntimeTaskPausePayload(BaseModel):
+    runtime_id: Optional[str] = None
+    session_token: Optional[str] = None
+    instance_id: Optional[str] = None
+    result_text: Optional[str] = None
+    result_data: Optional[Dict[str, Any]] = None
+    browser_checkpoint: Optional[Dict[str, Any]] = None
+    wait_reason: Optional[str] = None
+
+
 class RuntimeTaskFailPayload(BaseModel):
     runtime_id: Optional[str] = None
     session_token: Optional[str] = None
     instance_id: Optional[str] = None
     error: str
+
+
+class RuntimeTtsPayload(BaseModel):
+    text: str = Field(min_length=1)
+    voice: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"] = "alloy"
+    speed: float = Field(default=1.0, ge=0.25, le=4.0)
+
+
+def _normalized_openai_api_key() -> str:
+    return str(os.getenv("OPENAI_API_KEY") or "").strip()
+
+
+async def _transcribe_with_openai(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
+    api_key = _normalized_openai_api_key()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+    filename = SUPPORTED_STT_CONTENT_TYPES.get(content_type, "input.webm")
+    files = {
+        "file": (filename, audio_bytes, content_type),
+    }
+    data = {
+        "model": "whisper-1",
+        "response_format": "json",
+    }
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            data=data,
+            files=files,
+        )
+    response.raise_for_status()
+    payload = response.json()
+    transcript = str(payload.get("text") or "").strip()
+    return {
+        "transcript": transcript,
+        "confidence": 1.0 if transcript else 0.0,
+        "provider": "openai_whisper",
+    }
+
+
+def _transcribe_with_google(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
+    if content_type not in {"audio/wav", "audio/wave", "audio/x-wav"}:
+        raise RuntimeError("Google speech fallback only supports WAV audio.")
+    try:
+        import speech_recognition as sr  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("Google speech fallback is unavailable.") from exc
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+        audio = recognizer.record(source)
+    transcript = str(recognizer.recognize_google(audio) or "").strip()
+    return {
+        "transcript": transcript,
+        "confidence": 0.6 if transcript else 0.0,
+        "provider": "google_speech",
+    }
+
+
+async def _transcribe_audio_bytes(audio_bytes: bytes, content_type: str) -> Dict[str, Any]:
+    if _normalized_openai_api_key():
+        return await _transcribe_with_openai(audio_bytes, content_type)
+    return await asyncio.to_thread(_transcribe_with_google, audio_bytes, content_type)
+
+
+def _split_tts_text(text: str, max_chars: int = TTS_MAX_CHARS) -> List[str]:
+    normalized = re.sub(r"[ \t]+\n", "\n", str(text or "")).strip()
+    if not normalized:
+        return []
+    if len(normalized) <= max_chars:
+        return [normalized]
+
+    def flush_chunk(chunks: List[str], current: str) -> str:
+        value = current.strip()
+        if value:
+            chunks.append(value)
+        return ""
+
+    chunks: List[str] = []
+    current = ""
+    paragraphs = [part.strip() for part in re.split(r"\n{2,}", normalized) if part.strip()]
+    for paragraph in paragraphs:
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", paragraph) if part.strip()]
+        if not sentences:
+            sentences = [paragraph]
+        for sentence in sentences:
+            candidate = f"{current} {sentence}".strip() if current else sentence
+            if len(candidate) <= max_chars:
+                current = candidate
+                continue
+            current = flush_chunk(chunks, current)
+            if len(sentence) <= max_chars:
+                current = sentence
+                continue
+            start = 0
+            while start < len(sentence):
+                slice_end = min(start + max_chars, len(sentence))
+                piece = sentence[start:slice_end].strip()
+                if piece:
+                    chunks.append(piece)
+                start = slice_end
+        current = flush_chunk(chunks, current)
+    flush_chunk(chunks, current)
+    return chunks or [normalized[:max_chars]]
+
+
+async def _synthesize_tts_chunk(text: str, voice: str, speed: float) -> bytes:
+    api_key = _normalized_openai_api_key()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/audio/speech",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "tts-1",
+                "voice": voice,
+                "input": text,
+                "speed": speed,
+                "format": "mp3",
+            },
+        )
+    response.raise_for_status()
+    return bytes(response.content)
+
+
+async def _synthesize_tts_chunks(text: str, voice: str, speed: float) -> List[bytes]:
+    parts = _split_tts_text(text)
+    if not parts:
+        raise RuntimeError("Text is required.")
+    results: List[bytes] = []
+    for part in parts:
+        results.append(await _synthesize_tts_chunk(part, voice, speed))
+    return results
+
+
+async def _iter_audio_chunks(chunks: List[bytes]) -> AsyncIterator[bytes]:
+    for chunk in chunks:
+        yield chunk
 
 
 def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,6 +271,7 @@ def _task_summary_from_local_claim(run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def runtime_status_payload() -> Dict[str, Any]:
+    local_queue.recover_orphaned_local_runs_on_startup()
     payload = local_queue.handle_get_local_workers_status()
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     return {
@@ -133,6 +301,39 @@ def legacy_local_workers_status_payload() -> Dict[str, Any]:
 
 
 def register_runtime_routes(app) -> None:
+    @app.post("/stt", dependencies=[Depends(require_api_key)])
+    async def transcribe_audio(request: Request):
+        raw_content_type = str(request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if raw_content_type not in SUPPORTED_STT_CONTENT_TYPES:
+            raise HTTPException(status_code=415, detail="Unsupported audio format.")
+        audio_bytes = await request.body()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Audio payload is required.")
+        try:
+            result = await _transcribe_audio_bytes(audio_bytes, raw_content_type)
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() if exc.response is not None else "Speech transcription failed."
+            raise HTTPException(status_code=502, detail=detail or "Speech transcription failed.") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {
+            "transcript": str(result.get("transcript") or "").strip(),
+            "confidence": float(result.get("confidence") or 0.0),
+        }
+
+    @app.post("/tts", dependencies=[Depends(require_api_key)])
+    async def synthesize_speech(payload: RuntimeTtsPayload):
+        if payload.voice not in TTS_VOICES:
+            raise HTTPException(status_code=400, detail="Unsupported voice.")
+        try:
+            chunks = await _synthesize_tts_chunks(payload.text, payload.voice, payload.speed)
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() if exc.response is not None else "Text-to-speech synthesis failed."
+            raise HTTPException(status_code=502, detail=detail or "Text-to-speech synthesis failed.") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return StreamingResponse(_iter_audio_chunks(chunks), media_type="audio/mpeg")
+
     @app.get("/runtime/runtimes/status", dependencies=[Depends(require_api_key)])
     async def get_runtime_status():
         return runtime_status_payload()
@@ -251,6 +452,21 @@ def register_runtime_routes(app) -> None:
                 result_text=payload.result_text,
                 result_data=payload.result_data,
                 usage_masked=payload.usage_masked,
+            ),
+        )
+        return {"ok": True, "task_id": str(task_id), **result}
+
+    @app.post("/runtime/tasks/{task_id}/pause", dependencies=[Depends(require_api_key)])
+    async def pause_runtime_task(task_id: uuid.UUID, payload: RuntimeTaskPausePayload):
+        local_queue._assert_runtime_session(str(payload.runtime_id or "").strip(), payload.session_token, instance_id=payload.instance_id)
+        result = local_queue.handle_pause_local_run(
+            task_id,
+            local_queue.LocalRunPausePayload(
+                worker_id=(str(payload.runtime_id or "").strip() or None),
+                result_text=payload.result_text,
+                result_data=payload.result_data,
+                browser_checkpoint=payload.browser_checkpoint,
+                wait_reason=payload.wait_reason,
             ),
         )
         return {"ok": True, "task_id": str(task_id), **result}

@@ -38,6 +38,8 @@ def infer_file_mount_for_path(raw_path: Any) -> Tuple[str, str]:
     text = str(raw_path or "").strip()
     if not text:
         return "project", ""
+    if text in {".", "./"}:
+        return "project", "."
     try:
         candidate = Path(text).expanduser()
     except Exception:

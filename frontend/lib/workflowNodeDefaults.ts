@@ -1,5 +1,5 @@
 type ExecutionTarget = 'auto' | 'cloud' | 'local_companion';
-type WorkflowDefaultNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow';
+type WorkflowDefaultNodeType = 'trigger' | 'agent' | 'tool' | 'decision' | 'human' | 'data' | 'subflow' | 'loop';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -198,6 +198,50 @@ export function buildDefaultCanonicalConfig(type: WorkflowDefaultNodeType, varia
     };
   }
 
+  if (type === 'loop') {
+    const body = {
+      version: 'empyralist.workflow.v2',
+      nodes: [
+        {
+          id: 'loop_body_data_1',
+          type: 'data',
+          variant: 'transform',
+          config: {
+            mapping: 'Transform the current loop input into the next step payload.',
+            template: '',
+          },
+        },
+      ],
+      edges: [],
+    };
+    if (variant === 'while') {
+      return {
+        expression: 'result_data["should_continue"] == True',
+        condition: {},
+        max_iterations: 50,
+        continue_on_error: false,
+        body,
+      };
+    }
+    if (variant === 'repeat') {
+      return {
+        count: 3,
+        count_source: '',
+        max_iterations: 50,
+        continue_on_error: false,
+        body,
+      };
+    }
+    return {
+      array_source: 'result_data["items"]',
+      item_variable_name: 'item',
+      parallel: false,
+      max_iterations: 100,
+      continue_on_error: false,
+      body,
+    };
+  }
+
   return {
     workflow_id: '',
     mode: 'sync',
@@ -324,6 +368,21 @@ export function resetCanonicalConfigForVariant(
     return mergeConfigDefaults(defaults, {
       mapping: current.mapping,
       template: current.template,
+    });
+  }
+
+  if (type === 'loop') {
+    return mergeConfigDefaults(defaults, {
+      array_source: current.array_source,
+      item_variable_name: current.item_variable_name,
+      parallel: current.parallel,
+      max_iterations: current.max_iterations,
+      continue_on_error: current.continue_on_error,
+      condition: isRecord(current.condition) ? current.condition : {},
+      expression: current.expression,
+      count: current.count,
+      count_source: current.count_source,
+      body: isRecord(current.body) ? current.body : {},
     });
   }
 

@@ -46,6 +46,7 @@ CHECK_TITLES: Dict[str, str] = {
     "control_plane_rate_limit": "Control-plane rate limit",
     "run_timeout": "Run timeout",
     "retry_policy": "Retry policy",
+    "direct_chat_session_manager": "Direct chat session manager",
     "scheduler": "Scheduler",
     "scheduler_poll": "Scheduler polling",
     "telegram_autopilot": "Telegram autopilot",
@@ -93,7 +94,7 @@ def _human_check_title(name: str) -> str:
 def _check_category(name: str) -> str:
     if name.startswith("telegram_") or name.startswith("whatsapp_") or name.startswith("scheduler"):
         return "automation"
-    if name in {"runtime_contract", "runtime_validation", "execution_routing", "memory_runtime", "run_timeout", "retry_policy"}:
+    if name in {"runtime_contract", "runtime_validation", "execution_routing", "memory_runtime", "run_timeout", "retry_policy", "direct_chat_session_manager"}:
         return "runtime"
     if name in {"openai_credentials", "openai_connectivity", "codex_signin_mode", "auth_policy"}:
         return "auth"
@@ -239,8 +240,22 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
         add_check("openai_connectivity", "pass", f"OpenAI probe healthy (source={openai_source}, status={openai_status}).")
 
     codex_oauth_interactive = bool(health_data.get("codex_oauth_interactive_supported"))
+    codex_token_supported = bool(health_data.get("codex_token_credential_supported"))
+    auth_mode = str(health_data.get("auth_mode") or "").strip().lower()
     if codex_oauth_interactive:
         add_check("codex_signin_mode", "pass", "Interactive Codex OAuth sign-in is enabled.")
+    elif auth_mode == "codex" and openai_valid and codex_token_supported:
+        add_check(
+            "codex_signin_mode",
+            "pass",
+            "Codex token-based sign-in is active; interactive OAuth is not required in this runtime build.",
+        )
+    elif codex_token_supported:
+        add_check(
+            "codex_signin_mode",
+            "pass",
+            "Interactive Codex OAuth is unavailable, but token-based Codex sign-in is supported.",
+        )
     else:
         add_check(
             "codex_signin_mode",
@@ -360,6 +375,25 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
     else:
         add_check("retry_policy", "pass", f"Retry policy configured (max={max_retries}).")
 
+    direct_chat_session_manager_enabled = bool(health_data.get("direct_chat_session_manager_enabled"))
+    direct_chat_queue_depth = int(health_data.get("direct_chat_session_manager_queue_depth") or 0)
+    direct_chat_active_turns = int(health_data.get("direct_chat_session_manager_active_turns") or 0)
+    direct_chat_active_sessions = int(health_data.get("direct_chat_session_manager_active_sessions") or 0)
+    if direct_chat_session_manager_enabled:
+        add_check(
+            "direct_chat_session_manager",
+            "pass",
+            "Direct chat session manager is enabled "
+            f"(sessions={direct_chat_active_sessions}, active_turns={direct_chat_active_turns}, queue_depth={direct_chat_queue_depth}).",
+        )
+    else:
+        add_check(
+            "direct_chat_session_manager",
+            "warn",
+            "Legacy direct chat session ownership is still active.",
+            "Enable ORION_DIRECT_CHAT_SESSION_MANAGER after rollout validation completes.",
+        )
+
     scheduler_poll_seconds = int(config.get("ORION_SCHEDULER_POLL_SECONDS") or 0)
     scheduler_enabled = bool(config.get("ORION_SCHEDULER_ENABLED"))
     if scheduler_poll_seconds < 5:
@@ -425,19 +459,18 @@ def build_doctor_report(health_data: Dict[str, Any], config: Dict[str, Any]) -> 
     whatsapp_connector_errors = int(health_data.get("whatsapp_autopilot_connector_error_count") or 0)
     whatsapp_last_error = str(health_data.get("whatsapp_autopilot_last_error") or "").strip()
     if whatsapp_enabled:
-        if not whatsapp_active:
+        if whatsapp_connectors_seen <= 0:
+            add_check(
+                "whatsapp_autopilot",
+                "pass",
+                "WhatsApp autopilot is available, but no WhatsApp (Twilio) connectors are configured yet.",
+            )
+        elif not whatsapp_active:
             add_check(
                 "whatsapp_autopilot_runtime",
                 "fail",
                 "WhatsApp autopilot is enabled but not active.",
                 "Restart Empyralis runtime and verify ORION_WHATSAPP_AUTOPILOT_ENABLED=1.",
-            )
-        elif whatsapp_connectors_seen <= 0:
-            add_check(
-                "whatsapp_autopilot_connectors",
-                "warn",
-                "WhatsApp autopilot is enabled but no WhatsApp (Twilio) connectors were found.",
-                "Add a WhatsApp (Twilio) connector in Empyralis Setup -> Connect Channels.",
             )
         elif whatsapp_connector_errors > 0 or whatsapp_last_error:
             add_check(

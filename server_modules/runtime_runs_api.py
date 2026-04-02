@@ -465,7 +465,6 @@ def _build_direct_chat_request_meta(
         "model": str(body.get("model") or "").strip(),
         "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
         "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-        "availability": body.get("availability") if isinstance(body.get("availability"), dict) else {},
         "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
         "max_iterations": body.get("max_iterations"),
         "runtime_options": {
@@ -500,7 +499,6 @@ def _build_direct_chat_event_producer(
             thread_id=str(body.get("thread_id") or "").strip(),
             prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
             reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
-            availability=body.get("availability") if isinstance(body.get("availability"), dict) else {},
             approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
             max_iterations=body.get("max_iterations"),
         )

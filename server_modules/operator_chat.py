@@ -24,6 +24,8 @@ from scripts.orion_local_worker_llm import (
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
+from server_modules.local_queue import _is_worker_online
+from server_modules.shared import LOCAL_WORKER_REGISTRY
 try:
     from server_modules.tool_availability_truth import resolve_workspace_tool_capabilities
 except Exception:
@@ -375,6 +377,40 @@ def _local_worker_available(availability: Dict[str, Any]) -> bool:
     if isinstance(runtime_ok, bool):
         return runtime_ok
     return True
+
+
+def _direct_chat_runtime_available() -> bool:
+    try:
+        now = datetime.now(timezone.utc)
+        return any(
+            isinstance(record, dict) and _is_worker_online(record, now)
+            for record in LOCAL_WORKER_REGISTRY.values()
+        )
+    except Exception:
+        return False
+
+
+def _resolve_direct_chat_availability(
+    workspace_id: str,
+    requested_provider: str = "",
+    availability_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    runtime_ok = _direct_chat_runtime_available()
+    provider, credentials = _preferred_provider(normalized_workspace_id, requested_provider)
+    ai_ready = _supports_direct_message_native_chat(provider, credentials)
+    resolved: Dict[str, Any] = {
+        "ai_ready": ai_ready,
+        "runtime_ok": runtime_ok,
+        "connection_mode": "local_companion" if runtime_ok else "byok" if ai_ready else "",
+        "provider": provider,
+        "tool_capabilities": resolve_workspace_tool_capabilities(normalized_workspace_id),
+    }
+    if isinstance(availability_override, dict) and availability_override:
+        resolved.update(availability_override)
+        if "tool_capabilities" not in availability_override:
+            resolved["tool_capabilities"] = resolve_workspace_tool_capabilities(normalized_workspace_id)
+    return resolved
 
 
 def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
@@ -2742,6 +2778,13 @@ def _local_direct_tool_requires_approval(connector_id: str, action_id: str, argu
     return False
 
 
+def _browser_direct_tool_requires_approval(action_id: str, arguments: Dict[str, Any]) -> bool:
+    normalized_action = str(action_id or "").strip().lower()
+    if normalized_action in {"click", "fill", "execute_js", "download_file"}:
+        return True
+    return False
+
+
 def _titleize_direct_step_token(value: str) -> str:
     words = [part for part in str(value or "").strip().replace("-", "_").split("_") if part]
     return " ".join(word.capitalize() for word in words)
@@ -3384,7 +3427,7 @@ def _approval_required_for_direct_tool(
 
         return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
     if normalized_connector_id == "browser":
-        return False
+        return _browser_direct_tool_requires_approval(normalized_action_id, arguments)
     if normalized_connector_id in {"file", "shell", "screenshot"}:
         return _local_direct_tool_requires_approval(normalized_connector_id, normalized_action_id, arguments)
     for item in tool_capabilities:
@@ -3409,7 +3452,7 @@ def _build_direct_tool_approval_response(
         if not _approval_required_for_direct_tool(connector_id, action_id, argument_payload, tool_capabilities):
             continue
         tool_input = str(argument_payload.get("input") or "").strip()
-        if connector_id in {"file", "shell", "screenshot", "http"}:
+        if connector_id in {"file", "shell", "screenshot", "http", "browser"}:
             tool_input = json.dumps(argument_payload, ensure_ascii=False)
         approval_actions.append(
             {
@@ -3580,7 +3623,6 @@ def build_direct_operator_reply(
     normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     normalized_thread_id = str(thread_id or "").strip()
     session_key = _direct_chat_session_key(normalized_workspace_id, normalized_thread_id)
-    availability_payload = availability if isinstance(availability, dict) else {}
     normalized_requested_provider = str(requested_provider or "").strip().lower()
     normalized_requested_model = str(requested_model or "").strip()
     resolved_chat_max_iterations = _resolved_chat_iteration_limit(max_iterations)
@@ -3637,10 +3679,11 @@ def build_direct_operator_reply(
     ]
     proactive_suggestions = _build_proactive_suggestions(normalized_workspace_id) if not normalized_prior_messages else []
     tool_loop_session_key = _direct_tool_session_key(normalized_workspace_id, normalized_thread_id)
-    availability_payload = {
-        **availability_payload,
-        "tool_capabilities": resolve_workspace_tool_capabilities(normalized_workspace_id),
-    }
+    availability_payload = _resolve_direct_chat_availability(
+        normalized_workspace_id,
+        normalized_requested_provider,
+        availability_override=availability if isinstance(availability, dict) else None,
+    )
     connected_systems = _connected_system_labels(availability_payload)
     tool_capabilities = _context_tool_capabilities(availability_payload)
     tools = _build_direct_chat_tools(tool_capabilities)
@@ -4447,7 +4490,6 @@ def build_chat_turn_event_stream(
         thread_id=str(meta.get("thread_id") or context.get("thread_id") or "").strip(),
         prior_messages=meta.get("prior_messages") if isinstance(meta.get("prior_messages"), list) else [],
         reasoning_effort=str(meta.get("reasoning_effort") or "").strip(),
-        availability=meta.get("availability") if isinstance(meta.get("availability"), dict) else {},
         approved_action=meta.get("approved_action") if isinstance(meta.get("approved_action"), dict) else None,
         max_iterations=meta.get("max_iterations"),
     )

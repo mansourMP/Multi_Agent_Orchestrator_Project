@@ -470,46 +470,7 @@ export default function ExecutionsPage() {
         ...item,
         source: 'backend' as const,
       }));
-      const backendById = new Set(backendExecutions.map((item) => item.id));
-      const runtimeById = new Set(runtimeItems.map((item) => String(item?.run_id || '').trim()).filter(Boolean));
-      const runtimeFallbacks: ExecutionRecord[] = runtimeItems
-        .filter((item) => {
-          const runId = String(item?.run_id || '').trim();
-          return runId && !backendById.has(runId);
-        })
-        .map((item) => {
-          const runId = String(item?.run_id || '').trim();
-          const userGoal = String(item?.user_goal || '').trim();
-          const agentRole = String(item?.agent_role || '').trim();
-          const connectorBinding =
-            item?.connector_binding && typeof item.connector_binding === 'object'
-              ? item.connector_binding
-              : null;
-          const channel =
-            connectorBinding && 'channel' in connectorBinding
-              ? String(connectorBinding.channel || '').trim()
-              : '';
-          return {
-            id: runId,
-            source: 'runtime',
-            status: String(item?.status || '').trim() || 'unknown',
-            triggeredBy: channel || 'Manual',
-            createdAt: String(item?.created_at || '').trim() || undefined,
-            durationMs: typeof item?.duration_ms === 'number' ? item.duration_ms : null,
-            userGoal: userGoal || null,
-            workflow: {
-              name: userGoal || `Run ${runId.slice(0, 8)}`,
-              definition: {
-                meta: {
-                  operator: {
-                    agentRole: agentRole || null,
-                  },
-                },
-              },
-            },
-          };
-        });
-      setExecutions([...backendExecutions, ...runtimeFallbacks]);
+      setExecutions(backendExecutions);
     } catch (error) {
       setExecutions([]);
       setRuntimeRunMeta({});

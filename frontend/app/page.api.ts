@@ -875,19 +875,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     });
   }, [controlPlaneFetch]);
 
-  const hasEnabledRuntimeProviderProfile = useCallback(async (providerId: ProviderId) => {
-    const res = await controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(WORKSPACE_ID)}`);
-    if (!res.ok) throw new Error('Unable to load provider profiles.');
-    const payload = await res.json().catch(() => ({ items: [] }));
-    const items = Array.isArray(payload?.items) ? payload.items : [];
-    return items.some((item: unknown) => {
-      if (!item || typeof item !== 'object') return false;
-      const record = item as Record<string, unknown>;
-      const normalizedProvider = normalizeProviderId(typeof record.provider === 'string' ? record.provider.trim().toLowerCase() : '');
-      return normalizedProvider === providerId && record.enabled !== false;
-    });
-  }, [controlPlaneFetch]);
-
   const buildScheduledRunRequest = useCallback(() => {
     const selectedPack = OUTCOME_PACKS.find((pack) => pack.id === selectedPackId) || OUTCOME_PACKS[0];
     const selectedPreset = BUSINESS_PRESETS.find((preset) => preset.id === selectedPresetId) || BUSINESS_PRESETS[0];
@@ -1984,38 +1971,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
   }, [fetchLocalWorkerStatus, fetchRuntimeMetrics, state]);
 
-  const buildOperatorChatAvailability = useCallback(async () => {
-    const [runtimeAccountReady, enabledRuntimeProfile] = await Promise.all([
-      hasRuntimeProviderAccount(provider).catch(() => false),
-      hasEnabledRuntimeProviderProfile(provider).catch(() => false),
-    ]);
-    const legacyAiReady = Boolean(setupStatus?.accountConnected && setupStatus?.connectionTested);
-    const localMachineOnline = Boolean(
-      Number(state.localWorkerStatus?.summary?.online ?? 0) > 0
-      || state.localWorkerStatus?.items?.some((item) => item.online),
-    );
-    return {
-      ai_ready: localMachineOnline
-        ? true
-        : Boolean(runtimeAccountReady || enabledRuntimeProfile || legacyAiReady),
-      runtime_ok: localMachineOnline || Boolean(setupStatus?.runtimeReady),
-      provider: provider,
-      provider_label: providerOptions.find((item) => item.id === provider)?.label || provider,
-      connection_mode: connectionMode,
-    };
-  }, [
-    connectionMode,
-    hasEnabledRuntimeProviderProfile,
-    hasRuntimeProviderAccount,
-    provider,
-    providerOptions,
-    state.localWorkerStatus?.items,
-    state.localWorkerStatus?.summary?.online,
-    setupStatus?.accountConnected,
-    setupStatus?.connectionTested,
-    setupStatus?.runtimeReady,
-  ]);
-
   const sendOperatorChat = useCallback(async (
     message: string,
     options?: {
@@ -2030,7 +1985,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
   ): Promise<OperatorChatResponsePayload> => {
     const priorMessages = normalizeOperatorChatPriorMessages(options?.priorMessages);
     await ensureControlPlaneSession();
-    const availability = await buildOperatorChatAvailability();
     let streamedReply = '';
     let streamedSteps: OperatorChatStepPayload[] = [];
     const maxRetries = 3;
@@ -2104,7 +2058,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           provider,
           model,
           reasoning_effort: options?.reasoningEffort || undefined,
-          availability,
           prior_messages: priorMessages.length > 0 ? priorMessages : undefined,
           approved_action: options?.approvedAction || undefined,
         });
@@ -2253,7 +2206,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     }
 
     return normalizeOperatorChatResponsePayload({ reply: streamedReply, steps: streamedSteps });
-  }, [buildOperatorChatAvailability, model, provider]);
+  }, [model, provider]);
 
   const buildLocalExecutionGoal = useCallback((draft: LocalExecutionDraft): string => {
     const operations = Array.isArray(draft.operations) ? draft.operations : [];
@@ -2361,7 +2314,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       );
       void fetchLocalWorkerStatus(true);
       void fetchRuntimeMetrics();
-      state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
 
       const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
       const source = openAuthenticatedEventStream({
@@ -2702,7 +2654,6 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       );
       void fetchLocalWorkerStatus(true);
       void fetchRuntimeMetrics();
-      state.setSetupStatus((prev) => ({ ...prev, runtimeReady: true, accountConnected: true, connectionTested: true }));
 
       const streamUrl = `/api/runs/${encodeURIComponent(nextRunId)}/stream`;
       const source = openAuthenticatedEventStream({

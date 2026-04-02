@@ -1,3 +1,4 @@
+import json
 import importlib.util
 import sys
 import unittest
@@ -26,6 +27,98 @@ class OperatorChatDirectToolTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._workspace_context_patcher.stop()
+
+    def test_memory_tools_are_exposed_in_direct_chat_prompt(self):
+        captured = {}
+
+        def _fake_stream(**kwargs):
+            captured["system_prompt"] = kwargs.get("system_prompt")
+            captured["tools"] = kwargs.get("metadata", {}).get("tools")
+            return iter(
+                [
+                    {
+                        "type": "result",
+                        "reply": "Checked memory.",
+                        "usage_masked": {"provider": "codex_cli", "model": "gpt-5.4"},
+                        "provider": "codex_cli",
+                        "model": "gpt-5.4",
+                        "attempted_providers": "codex_cli",
+                        "error": "",
+                    }
+                ]
+            )
+
+        with patch(
+            "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",
+            return_value=[],
+        ):
+            with patch(
+                "operator_chat_direct_tools_under_test._preferred_provider",
+                return_value=("codex_cli", {}),
+            ):
+                with patch(
+                    "operator_chat_direct_tools_under_test._supports_direct_message_native_chat",
+                    return_value=True,
+                ):
+                    with patch(
+                        "operator_chat_direct_tools_under_test.generate_chat_reply_stream_with_provider_fallback",
+                        side_effect=_fake_stream,
+                    ):
+                        payload = operator_chat.collect_direct_operator_reply(
+                            message="What do you know about my preferences?",
+                            workspace_id="default",
+                            requested_model="gpt-5.4",
+                            requested_provider="openai",
+                            availability={"ai_ready": True},
+                        )
+
+        self.assertEqual(payload["reply"], "Checked memory.")
+        tool_names = {item["name"] for item in captured["tools"]}
+        self.assertIn("memory_search", tool_names)
+        self.assertIn("memory_get", tool_names)
+        self.assertIn("## Memory Recall", str(captured["system_prompt"] or ""))
+        self.assertIn("run memory_search", str(captured["system_prompt"] or ""))
+
+    def test_memory_direct_tools_execute_notebook_lookup(self):
+        with patch(
+            "operator_chat_direct_tools_under_test.search_memory_notebook",
+            return_value=[
+                {
+                    "path": "MEMORY.md",
+                    "start_line": 2,
+                    "end_line": 3,
+                    "score": 11,
+                    "snippet": "- timezone: Asia/Shanghai",
+                }
+            ],
+        ):
+            raw = operator_chat._execute_single_direct_tool_call(
+                tool_call={"name": "memory_search", "arguments": {"query": "timezone"}},
+                workspace_id="default",
+                thread_id="thread-1",
+            )
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["results"][0]["path"], "MEMORY.md")
+
+        with patch(
+            "operator_chat_direct_tools_under_test.get_memory_notebook_excerpt",
+            return_value={
+                "path": "MEMORY.md",
+                "from_line": 2,
+                "to_line": 3,
+                "text": "- timezone: Asia/Shanghai",
+                "total_lines": 4,
+            },
+        ):
+            raw = operator_chat._execute_single_direct_tool_call(
+                tool_call={"name": "memory_get", "arguments": {"path": "MEMORY.md", "from": 2, "lines": 2}},
+                workspace_id="default",
+                thread_id="thread-1",
+            )
+        parsed = json.loads(raw)
+        self.assertEqual(parsed["path"], "MEMORY.md")
+        self.assertEqual(parsed["from_line"], 2)
+        self.assertIn("Asia/Shanghai", parsed["text"])
 
     @patch(
         "operator_chat_direct_tools_under_test.resolve_workspace_tool_capabilities",

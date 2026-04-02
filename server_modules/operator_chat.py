@@ -37,11 +37,13 @@ except Exception:
 
 from server_modules.agent_memory import (
     delete_memory,
+    get_memory_notebook_excerpt,
     get_memory,
     get_recent_logs,
     list_memory_entries,
     save_daily_log,
     save_memory,
+    search_memory_notebook,
     semantic_search,
 )
 from server_modules.conversation_compaction import compact_conversation_history
@@ -262,10 +264,50 @@ _DIRECT_CHAT_LOOP_REPLY = "I appear to be stuck in a loop. Please clarify what y
 _DIRECT_TOOL_LOOP_STATE: Dict[str, Dict[str, Any]] = {}
 _DIRECT_CHAT_MODEL_PREFERENCES: Dict[str, Dict[str, Optional[str]]] = {}
 _DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
+_MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get"}
 
 
 def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _direct_chat_memory_recall_section(tools: List[Dict[str, Any]]) -> str:
+    available = {
+        str(item.get("name") or "").strip()
+        for item in tools
+        if isinstance(item, dict)
+    }
+    if not (_MEMORY_NOTEBOOK_TOOL_NAMES & available):
+        return ""
+    return (
+        "## Memory Recall\n"
+        "Before answering anything about prior work, decisions, dates, people, preferences, or todos: "
+        "run memory_search on MEMORY.md + memory/*.md, then use memory_get to read only the needed lines. "
+        "If memory results are weak, say you checked."
+    )
+
+
+def _build_direct_chat_system_prompt(
+    *,
+    workspace_id: str,
+    availability: Dict[str, Any],
+    tools: List[Dict[str, Any]],
+) -> Optional[str]:
+    tool_lines = [
+        f"{str(item.get('name') or '').strip()}: {str(item.get('description') or '').strip()}"
+        for item in tools
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    base_prompt = build_operator_system_prompt(
+        _availability_lines(workspace_id, availability),
+        tool_lines=tool_lines,
+    )
+    sections = [base_prompt.strip()] if str(base_prompt or "").strip() else []
+    memory_section = _direct_chat_memory_recall_section(tools)
+    if memory_section:
+        sections.append(memory_section)
+    prompt = "\n\n".join(section for section in sections if section).strip()
+    return prompt or None
 
 
 def _normalize_tool_capabilities(availability: Any) -> List[Dict[str, Any]]:
@@ -489,6 +531,7 @@ def _slash_command_help_text() -> str:
         "/clear\n"
         "/help\n\n"
         "Built-in tools when relevant:\n"
+        "memory_search / memory_get\n"
         "web search\n"
         "web fetch\n"
         "http_request\n"
@@ -1851,6 +1894,37 @@ def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Di
 def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
     return [
         {
+            "name": "memory_search",
+            "description": (
+                "Mandatory recall step before answering about prior work, decisions, dates, people, "
+                "preferences, or todos. Search MEMORY.md and memory/*.md and return matching snippets "
+                "with paths and line numbers."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The memory query to search for."},
+                    "max_results": {"type": "integer", "description": "Optional maximum number of snippets to return."},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "memory_get",
+            "description": (
+                "Read a small excerpt from MEMORY.md or memory/*.md after memory_search identifies the file and lines."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative notebook path such as MEMORY.md or memory/2026-04-02.md."},
+                    "from": {"type": "integer", "description": "Starting line number (1-based)."},
+                    "lines": {"type": "integer", "description": "Maximum number of lines to read."},
+                },
+                "required": ["path"],
+            },
+        },
+        {
             "name": "web__search",
             "description": "Search the web and return the top 5 results with titles, URLs, and snippets.",
             "parameters": {
@@ -2200,6 +2274,10 @@ def _parse_tool_name(tool_name: str) -> tuple[str, str]:
         return "http", "request"
     if token == "generate_image":
         return "image", "generate"
+    if token == "memory_search":
+        return "memory", "search"
+    if token == "memory_get":
+        return "memory", "get"
     if "__" not in token:
         raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
     connector_id, action_id = token.split("__", 1)
@@ -3197,6 +3275,27 @@ def _execute_single_direct_tool_call(
         if isinstance(result, (dict, list)):
             return json.dumps(result, ensure_ascii=False, indent=2)
         return str(result or "").strip()
+    if connector_id == "memory" and action_id == "search":
+        query = str(argument_payload.get("query") or argument_payload.get("input") or "").strip()
+        if not query:
+            raise RuntimeError("Tool 'memory_search' requires a query.")
+        results = search_memory_notebook(
+            workspace_id,
+            query,
+            max_results=_safe_positive_int(argument_payload.get("max_results"), 5),
+        )
+        return json.dumps({"results": results}, ensure_ascii=False)
+    if connector_id == "memory" and action_id == "get":
+        rel_path = str(argument_payload.get("path") or argument_payload.get("input") or "").strip()
+        if not rel_path:
+            raise RuntimeError("Tool 'memory_get' requires a path.")
+        excerpt = get_memory_notebook_excerpt(
+            workspace_id,
+            rel_path,
+            from_line=argument_payload.get("from"),
+            line_count=argument_payload.get("lines"),
+        )
+        return json.dumps(excerpt, ensure_ascii=False)
     if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
         nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
         if isinstance(nested_input, dict):
@@ -3974,8 +4073,10 @@ def build_direct_operator_reply(
     }
     if direct_chat_credentials:
         metadata["credentials"] = direct_chat_credentials
-    raw_system_prompt = build_operator_system_prompt(
-        _availability_lines(normalized_workspace_id, availability_payload),
+    raw_system_prompt = _build_direct_chat_system_prompt(
+        workspace_id=normalized_workspace_id,
+        availability=availability_payload,
+        tools=tools,
     )
     system_prompt = raw_system_prompt or None
     workspace_context_text = _direct_chat_workspace_context_text(

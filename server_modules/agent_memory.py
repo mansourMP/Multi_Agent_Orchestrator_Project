@@ -8,12 +8,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from server_modules.workspace_context import read_workspace_context_file, write_workspace_context_file
+from server_modules.workspace_context import (
+    read_workspace_context_file,
+    workspace_context_dir,
+    write_workspace_context_file,
+)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MEMORY_DIR = _REPO_ROOT / ".orion-stack" / "memory"
 _SEMANTIC_MODEL: Any = None
+_NOTEBOOK_DIRNAME = "memory"
 
 
 def _normalize_workspace_token(workspace_id: str) -> str:
@@ -34,6 +39,49 @@ def _memory_logs_dir(workspace_id: str) -> Path:
     path = _MEMORY_DIR / token
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _memory_notebook_dir(_workspace_id: str) -> Path:
+    path = workspace_context_dir() / _NOTEBOOK_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _memory_notebook_documents(workspace_id: str) -> List[Dict[str, Any]]:
+    root = workspace_context_dir()
+    docs: List[Dict[str, Any]] = []
+
+    memory_md_path = root / "MEMORY.md"
+    if memory_md_path.exists():
+        docs.append({"path": "MEMORY.md", "abs_path": memory_md_path})
+
+    notes_root = _memory_notebook_dir(workspace_id)
+    for path in sorted(notes_root.rglob("*.md")):
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(notes_root).as_posix()
+        docs.append({"path": f"{_NOTEBOOK_DIRNAME}/{rel_path}", "abs_path": path})
+    return docs
+
+
+def _resolve_notebook_path(workspace_id: str, rel_path: str) -> Path:
+    normalized = str(rel_path or "").strip().replace("\\", "/").lstrip("/")
+    root = workspace_context_dir().resolve()
+    if normalized == "MEMORY.md":
+        path = (root / "MEMORY.md").resolve()
+        if path.parent != root:
+            raise ValueError("Invalid notebook path.")
+        return path
+    prefix = f"{_NOTEBOOK_DIRNAME}/"
+    if not normalized.startswith(prefix):
+        raise ValueError("Notebook path must be MEMORY.md or memory/*.md.")
+    notes_root = _memory_notebook_dir(workspace_id).resolve()
+    candidate = (notes_root / normalized[len(prefix):]).resolve()
+    if candidate == notes_root or notes_root not in candidate.parents:
+        raise ValueError("Notebook path escapes memory directory.")
+    if candidate.suffix.lower() != ".md":
+        raise ValueError("Notebook path must target a markdown file.")
+    return candidate
 
 
 @contextmanager
@@ -291,4 +339,115 @@ def import_memory_md(workspace_id: str) -> Dict[str, Any]:
     return {
         "workspace_id": _normalize_workspace_token(workspace_id),
         "imported": imported,
+    }
+
+
+def list_memory_notebook_files(workspace_id: str) -> List[Dict[str, Any]]:
+    docs: List[Dict[str, Any]] = []
+    for item in _memory_notebook_documents(workspace_id):
+        path = item.get("abs_path")
+        if not isinstance(path, Path):
+            continue
+        try:
+            stat = path.stat()
+        except Exception:
+            continue
+        docs.append(
+            {
+                "path": str(item.get("path") or "").strip(),
+                "size": int(stat.st_size or 0),
+                "updated_at": float(stat.st_mtime or 0.0),
+            }
+        )
+    return docs
+
+
+def search_memory_notebook(workspace_id: str, query: str, *, max_results: int = 5) -> List[Dict[str, Any]]:
+    normalized_query = re.sub(r"\s+", " ", str(query or "").strip()).lower()
+    if not normalized_query:
+        return []
+    query_tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", normalized_query)
+        if len(token) >= 2
+    ]
+    docs = _memory_notebook_documents(workspace_id)
+    results: List[Dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for item in docs:
+        rel_path = str(item.get("path") or "").strip()
+        abs_path = item.get("abs_path")
+        if not rel_path or not isinstance(abs_path, Path):
+            continue
+        try:
+            lines = abs_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for index, line in enumerate(lines):
+            compact_line = re.sub(r"\s+", " ", str(line or "").strip()).lower()
+            if not compact_line:
+                continue
+            score = 0
+            if normalized_query in compact_line:
+                score += 10
+            token_hits = sum(1 for token in query_tokens if token in compact_line)
+            score += token_hits
+            if score <= 0:
+                continue
+            start_line = max(1, index)
+            end_line = min(len(lines), index + 2)
+            dedupe_key = (rel_path, start_line)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            snippet = "\n".join(lines[start_line - 1:end_line]).strip()
+            results.append(
+                {
+                    "path": rel_path,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "score": score,
+                    "snippet": snippet,
+                }
+            )
+
+    results.sort(
+        key=lambda item: (
+            -int(item.get("score") or 0),
+            str(item.get("path") or ""),
+            int(item.get("start_line") or 0),
+        )
+    )
+    return results[: max(1, min(int(max_results or 5), 20))]
+
+
+def get_memory_notebook_excerpt(
+    workspace_id: str,
+    rel_path: str,
+    *,
+    from_line: int | None = None,
+    line_count: int | None = None,
+) -> Dict[str, Any]:
+    path = _resolve_notebook_path(workspace_id, rel_path)
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    safe_from_line = max(1, int(from_line or 1))
+    safe_line_count = max(1, min(int(line_count or max(len(lines), 1)), 200))
+    if safe_from_line > len(lines):
+        return {
+            "path": str(rel_path or "").strip(),
+            "from_line": safe_from_line,
+            "to_line": safe_from_line - 1,
+            "text": "",
+            "total_lines": len(lines),
+        }
+    to_line = min(len(lines), safe_from_line + safe_line_count - 1)
+    excerpt = "\n".join(lines[safe_from_line - 1:to_line])
+    return {
+        "path": str(rel_path or "").strip(),
+        "from_line": safe_from_line,
+        "to_line": to_line,
+        "text": excerpt,
+        "total_lines": len(lines),
     }

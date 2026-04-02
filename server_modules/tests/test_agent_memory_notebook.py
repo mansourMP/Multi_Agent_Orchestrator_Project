@@ -1,0 +1,55 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from server_modules import agent_memory, workspace_context
+
+
+class AgentMemoryNotebookTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="agent-memory-notebook-")
+        self.addCleanup(self._tmpdir.cleanup)
+        self._workspace_root = Path(self._tmpdir.name) / "workspace"
+        self._workspace_root.mkdir(parents=True, exist_ok=True)
+        self._workspace_patch = patch.object(workspace_context, "_WORKSPACE_DIR", self._workspace_root)
+        self._workspace_patch.start()
+        self.addCleanup(self._workspace_patch.stop)
+
+    def test_search_memory_notebook_finds_memory_md_and_notes(self) -> None:
+        workspace_context.write_workspace_context_file(
+            "MEMORY.md",
+            "# Curated Memory\n\n- favorite_food: sushi\n- timezone: Asia/Shanghai\n",
+        )
+        notes_dir = agent_memory._memory_notebook_dir("default")
+        (notes_dir / "2026-04-02.md").write_text(
+            "# 2026-04-02\n\nUser prefers night owl work sessions.\n",
+            encoding="utf-8",
+        )
+
+        sushi_results = agent_memory.search_memory_notebook("default", "favorite_food")
+        self.assertTrue(any(item["path"] == "MEMORY.md" for item in sushi_results))
+
+        session_results = agent_memory.search_memory_notebook("default", "night owl")
+        self.assertEqual(session_results[0]["path"], "memory/2026-04-02.md")
+        self.assertIn("night owl", session_results[0]["snippet"].lower())
+
+    def test_get_memory_notebook_excerpt_reads_requested_line_window(self) -> None:
+        notes_dir = agent_memory._memory_notebook_dir("default")
+        (notes_dir / "people.md").write_text(
+            "# People\n\nAlice likes structured updates.\nBob prefers async check-ins.\n",
+            encoding="utf-8",
+        )
+
+        excerpt = agent_memory.get_memory_notebook_excerpt(
+            "default",
+            "memory/people.md",
+            from_line=2,
+            line_count=2,
+        )
+
+        self.assertEqual(excerpt["path"], "memory/people.md")
+        self.assertEqual(excerpt["from_line"], 2)
+        self.assertEqual(excerpt["to_line"], 3)
+        self.assertIn("Alice likes structured updates.", excerpt["text"])
+        self.assertNotIn("Bob prefers async check-ins.", excerpt["text"])

@@ -1,104 +1,69 @@
 import React from "react";
-import { ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Text, TouchableOpacity, View, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useSegments } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { APP_CATALOG } from "@/src/lib/appCatalog";
-import { normalizeServerUrl } from "@/src/lib/api";
 import { useKinPreferences } from "@/src/lib/kin-preferences";
-import {
-  getStoredNotificationState,
-  registerForPushNotificationsAsync,
-  scheduleAgentTestNotification,
-  StoredNotificationState,
-} from "@/src/lib/notifications";
 import { useSessionState } from "@/src/lib/session-context";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 
 const PROFILE_APP_IDS = ["study", "health", "finance", "travel", "nutrition", "language"];
+const DEFAULT_ACTIVE_APP_IDS = ["study", "health", "finance", "travel"];
+
+const UTILITY_LINKS: Array<{
+  href: string;
+  label: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  {
+    href: "/notifications",
+    label: "Notifications",
+    subtitle: "Push permissions and alert delivery",
+    icon: "notifications-outline",
+  },
+  {
+    href: "/session",
+    label: "Connected Accounts",
+    subtitle: "Runtime and platform access",
+    icon: "link-outline",
+  },
+  {
+    href: "/status",
+    label: "Status",
+    subtitle: "Core health and runtime availability",
+    icon: "pulse-outline",
+  },
+  {
+    href: "/settings",
+    label: "Settings",
+    subtitle: "Behavior, memory, and privacy controls",
+    icon: "settings-outline",
+  },
+];
 
 export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
-  const { session, saveSession, clearSession } = useSessionState();
+  const { session, clearSession } = useSessionState();
   const { preferences, ready, updatePreferences } = useKinPreferences();
-  const [runtimeUrl, setRuntimeUrl] = React.useState(session?.runtimeUrl || "");
-  const [runtimeKey, setRuntimeKey] = React.useState(session?.runtimeKey || "");
-  const [workspaceId, setWorkspaceId] = React.useState(session?.workspaceId || "default");
-  const [platformUrl, setPlatformUrl] = React.useState(session?.platformUrl || "");
-  const [platformKey, setPlatformKey] = React.useState(session?.platformKey || "");
-  const [saved, setSaved] = React.useState(false);
-  const [notificationState, setNotificationState] = React.useState<StoredNotificationState>({ permissionStatus: "undetermined" });
-  const [notificationBusy, setNotificationBusy] = React.useState(false);
-
-  const showBack = segments[1] !== "profile";
+  const isProfile = segments[1] === "profile";
   const connected = Boolean(session?.runtimeUrl && session?.runtimeKey);
   const activeApps = APP_CATALOG.filter((app) => PROFILE_APP_IDS.includes(app.id));
-
-  React.useEffect(() => {
-    setRuntimeUrl(session?.runtimeUrl || "");
-    setRuntimeKey(session?.runtimeKey || "");
-    setWorkspaceId(session?.workspaceId || "default");
-    setPlatformUrl(session?.platformUrl || "");
-    setPlatformKey(session?.platformKey || "");
-  }, [session?.platformKey, session?.platformUrl, session?.runtimeKey, session?.runtimeUrl, session?.workspaceId]);
-
-  React.useEffect(() => {
-    let active = true;
-    getStoredNotificationState().then((state) => {
-      if (active) {
-        setNotificationState(state);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const handleSave = async () => {
-    const nextRuntimeUrl = normalizeServerUrl(runtimeUrl);
-    const nextRuntimeKey = runtimeKey.trim();
-    const nextWorkspaceId = workspaceId.trim() || "default";
-
-    await saveSession({
-      runtimeUrl: nextRuntimeUrl,
-      runtimeKey: nextRuntimeKey,
-      workspaceId: nextWorkspaceId,
-      platformUrl: normalizeServerUrl(platformUrl),
-      platformKey: platformKey.trim(),
-    });
-
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1800);
-  };
-
-  const handleEnableNotifications = async () => {
-    setNotificationBusy(true);
-    try {
-      const nextState = await registerForPushNotificationsAsync();
-      setNotificationState(nextState);
-    } finally {
-      setNotificationBusy(false);
-    }
-  };
-
-  const handleSendTestNotification = async () => {
-    setNotificationBusy(true);
-    try {
-      await scheduleAgentTestNotification();
-    } finally {
-      setNotificationBusy(false);
-    }
-  };
+  const selectedAppIds = preferences.activeAppIds.length ? preferences.activeAppIds : DEFAULT_ACTIVE_APP_IDS;
+  const enabledApps = activeApps.filter((app) => selectedAppIds.includes(app.id));
 
   const toggleApp = (appId: string) => {
     updatePreferences((current) => {
-      const activeAppIds = current.activeAppIds.includes(appId)
-        ? current.activeAppIds.filter((id) => id !== appId)
-        : [...current.activeAppIds, appId];
+      const nextSource = current.activeAppIds.length ? current.activeAppIds : DEFAULT_ACTIVE_APP_IDS;
+      const activeAppIds = nextSource.includes(appId)
+        ? nextSource.filter((id) => id !== appId)
+        : [...nextSource, appId];
 
       return {
         ...current,
@@ -106,6 +71,186 @@ export default function SettingsScreen() {
       };
     });
   };
+
+  if (isProfile) {
+    return (
+      <ScrollView
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <PrimaryScreenHeader title="Profile" subtitle="Preferences, privacy, and connected tools." />
+
+        <View
+          style={{
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            padding: 16,
+            gap: 10,
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 11,
+              fontFamily: "DMSans_700Bold",
+              color: theme.colors.textSecondary,
+              textTransform: "uppercase",
+              letterSpacing: 1.1,
+            }}
+          >
+            Identity
+          </Text>
+          <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+            {connected ? "Connected to your private core." : "Preview mode only."}
+          </Text>
+          <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
+            {connected
+              ? "KIN can use the runtime access you enabled. Utilities stay in the drawer so the main tabs remain focused."
+              : "Connect your runtime when you want live approvals, active runs, and saved outputs to flow into the app."}
+          </Text>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => router.push(connected ? "/status" : "/session")}
+            style={{
+              height: 42,
+              alignSelf: "flex-start",
+              paddingHorizontal: 16,
+              borderRadius: 999,
+              backgroundColor: theme.colors.accent,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>
+              {connected ? "Open Status" : "Connected Accounts"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <SectionTitle title="Utilities" />
+        <View style={{ marginTop: 10, gap: 10 }}>
+          {UTILITY_LINKS.map((item) => (
+            <TouchableOpacity
+              key={item.href}
+              activeOpacity={0.86}
+              onPress={() => router.push(item.href as never)}
+              style={{
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                backgroundColor: theme.colors.surface,
+                padding: 14,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <View
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 14,
+                  backgroundColor: theme.colors.background,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name={item.icon} size={18} color={theme.colors.text} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 15, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>
+                  {item.label}
+                </Text>
+                <Text style={{ marginTop: 3, fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+                  {item.subtitle}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <SectionTitle title="KIN Preferences" />
+        <View
+          style={{
+            marginTop: 10,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            padding: 16,
+            gap: 12,
+          }}
+        >
+          <PreferenceRow label="Proactivity" value={formatValue(preferences.proactivity)} />
+          <PreferenceRow label="Memory" value={formatValue(preferences.memoryBoundary)} />
+          <PreferenceRow label="Reminders" value={formatValue(preferences.reminderCadence)} />
+          <PreferenceRow
+            label="Active apps"
+            value={enabledApps.length ? `${enabledApps.length} enabled` : "Default set"}
+          />
+          <Text style={{ fontSize: 12, lineHeight: 18, color: theme.colors.textSecondary }}>
+            {enabledApps.length
+              ? enabledApps.map((app) => app.name).join(", ")
+              : "Study, Health, Finance, and Travel are enabled by default."}
+          </Text>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={() => router.push("/settings")}
+            style={{
+              marginTop: 2,
+              height: 40,
+              alignSelf: "flex-start",
+              paddingHorizontal: 16,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.background,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: "700" }}>Open full settings</Text>
+          </TouchableOpacity>
+        </View>
+
+        <SectionTitle title="Privacy" />
+        <View
+          style={{
+            marginTop: 10,
+            gap: 12,
+            padding: 16,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+          }}
+        >
+          <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary }}>
+            KIN only uses the connections and apps you allow. Disconnecting removes this device from your private core.
+          </Text>
+          <TouchableOpacity
+            activeOpacity={0.86}
+            onPress={async () => {
+              await clearSession();
+            }}
+            style={{
+              height: 42,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.background,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: "700" }}>Disconnect core</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -117,31 +262,28 @@ export default function SettingsScreen() {
           flexDirection: "row",
           alignItems: "center",
           backgroundColor: theme.colors.background,
+          gap: 12,
         }}
       >
-        {showBack ? (
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.surface,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 40, height: 40 }} />
-        )}
-        <View style={{ marginLeft: 12, flex: 1 }}>
-          <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Profile</Text>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 22, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Settings</Text>
           <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>
-            Settings, integrations, privacy, and KIN behavior.
+            Deeper controls for KIN behavior, app access, and privacy.
           </Text>
         </View>
       </View>
@@ -149,166 +291,25 @@ export default function SettingsScreen() {
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40 }}>
         <View
           style={{
-            padding: 18,
-            borderRadius: 24,
+            padding: 16,
+            borderRadius: 16,
             borderWidth: 1,
             borderColor: theme.colors.border,
             backgroundColor: theme.colors.surface,
           }}
         >
-          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textTransform: "uppercase", fontFamily: "DMSans_700Bold" }}>
-            KIN status
+          <Text style={{ fontSize: 14, lineHeight: 21, color: theme.colors.textSecondary }}>
+            Notifications, connected accounts, and runtime status stay in dedicated utility screens. Settings focuses on how KIN behaves inside the app.
           </Text>
-          <Text style={{ marginTop: 8, fontSize: 22, fontFamily: "Fraunces_700Bold", color: theme.colors.text }}>
-            {connected ? "Connected to your private core." : "Preview mode only."}
-          </Text>
-          <Text style={{ marginTop: 8, fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            {connected
-              ? "Home, Inbox, and app workspaces can now show live runs, approvals, and saved outputs."
-              : "Add your runtime and optional platform registry here. KIN only gets access to the connections you enable."}
-          </Text>
-        </View>
-
-        <SectionTitle title="Connections" />
-        <View
-          style={{
-            marginTop: 14,
-            gap: 14,
-            padding: 18,
-            borderRadius: 22,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
-          }}
-        >
-          <Field
-            label="Server URL"
-            value={runtimeUrl}
-            onChangeText={setRuntimeUrl}
-            placeholder="http://192.168.1.2:8001"
-          />
-
-          <Field
-            label="API Key"
-            value={runtimeKey}
-            onChangeText={setRuntimeKey}
-            placeholder="Your API key"
-          />
-
-          <Field
-            label="Workspace ID"
-            value={workspaceId}
-            onChangeText={setWorkspaceId}
-            placeholder="default"
-          />
-
-          <Field
-            label="Platform URL"
-            value={platformUrl}
-            onChangeText={setPlatformUrl}
-            placeholder="Optional platform registry"
-          />
-
-          <Field
-            label="Platform Key"
-            value={platformKey}
-            onChangeText={setPlatformKey}
-            placeholder="Optional platform key"
-          />
-
-          <TouchableOpacity
-            onPress={handleSave}
-            style={{
-              marginTop: 4,
-              height: 48,
-              borderRadius: 16,
-              backgroundColor: theme.colors.accent,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text style={{ color: "#FFFFFF", fontSize: 15, fontWeight: "700" }}>Save connections</Text>
-          </TouchableOpacity>
-
-          {saved ? <Text style={{ fontSize: 13, color: theme.colors.success }}>Saved</Text> : null}
-        </View>
-
-        <SectionTitle title="Notifications" />
-        <View
-          style={{
-            marginTop: 14,
-            gap: 14,
-            padding: 18,
-            borderRadius: 22,
-            borderWidth: 1,
-            borderColor: theme.colors.border,
-            backgroundColor: theme.colors.surface,
-          }}
-        >
-          <View>
-            <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6 }}>Permission</Text>
-            <Text style={{ fontSize: 15, color: theme.colors.text, fontFamily: "DMSans_700Bold" }}>
-              {notificationState.permissionStatus}
-            </Text>
-          </View>
-
-          <View>
-            <Text style={{ fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6 }}>Expo push token</Text>
-            <Text style={{ fontSize: 13, color: theme.colors.text, lineHeight: 20 }}>
-              {notificationState.expoPushToken || "Not registered yet."}
-            </Text>
-          </View>
-
-          {notificationState.error ? (
-            <Text style={{ fontSize: 13, color: theme.colors.warning, lineHeight: 20 }}>{notificationState.error}</Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <TouchableOpacity
-              onPress={handleEnableNotifications}
-              disabled={notificationBusy}
-              style={{
-                flex: 1,
-                height: 46,
-                borderRadius: 16,
-                backgroundColor: theme.colors.accent,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: notificationBusy ? 0.7 : 1,
-              }}
-            >
-              <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "700" }}>
-                {notificationBusy ? "Working..." : "Enable"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={handleSendTestNotification}
-              disabled={notificationBusy}
-              style={{
-                flex: 1,
-                height: 46,
-                borderRadius: 16,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                backgroundColor: theme.colors.background,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: notificationBusy ? 0.7 : 1,
-              }}
-            >
-              <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: "700" }}>Send test</Text>
-            </TouchableOpacity>
-          </View>
         </View>
 
         <SectionTitle title="KIN Behavior" />
         <View
           style={{
-            marginTop: 14,
+            marginTop: 10,
             gap: 16,
             padding: 18,
-            borderRadius: 22,
+            borderRadius: 16,
             borderWidth: 1,
             borderColor: theme.colors.border,
             backgroundColor: theme.colors.surface,
@@ -371,11 +372,11 @@ export default function SettingsScreen() {
           <View>
             <Text style={{ fontSize: 13, color: theme.colors.text, marginBottom: 10 }}>Active apps</Text>
             <Text style={{ fontSize: 13, lineHeight: 20, color: theme.colors.textSecondary, marginBottom: 12 }}>
-              KIN can launch these app workspaces when structure helps. Home uses this list for pinned app cards.
+              KIN can open these app workspaces when structure helps.
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               {activeApps.map((app) => {
-                const selected = preferences.activeAppIds.includes(app.id);
+                const selected = selectedAppIds.includes(app.id);
                 return (
                   <ChoicePill
                     key={app.id}
@@ -396,27 +397,22 @@ export default function SettingsScreen() {
         <SectionTitle title="Privacy" />
         <View
           style={{
-            marginTop: 14,
+            marginTop: 10,
             gap: 14,
             padding: 18,
-            borderRadius: 22,
+            borderRadius: 16,
             borderWidth: 1,
             borderColor: theme.colors.border,
             backgroundColor: theme.colors.surface,
           }}
         >
           <Text style={{ fontSize: 14, lineHeight: 22, color: theme.colors.textSecondary }}>
-            KIN only uses the runtime, notifications, and apps you enable here. Clearing the connection removes this device from your private core.
+            KIN only uses the runtime and apps you explicitly enable. Use Connected Accounts in the drawer when you want to change runtime access.
           </Text>
 
           <TouchableOpacity
             onPress={async () => {
               await clearSession();
-              setRuntimeUrl("");
-              setRuntimeKey("");
-              setWorkspaceId("default");
-              setPlatformUrl("");
-              setPlatformKey("");
             }}
             style={{
               height: 46,
@@ -436,50 +432,39 @@ export default function SettingsScreen() {
   );
 }
 
+function formatValue(value: string) {
+  return value
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function SectionTitle({ title }: { title: string }) {
   const theme = useTheme();
 
   return (
-    <Text style={{ marginTop: 26, fontSize: 12, color: theme.colors.textSecondary, textTransform: "uppercase", fontFamily: "DMSans_700Bold" }}>
+    <Text
+      style={{
+        marginTop: 22,
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        textTransform: "uppercase",
+        letterSpacing: 1.1,
+        fontFamily: "DMSans_700Bold",
+      }}
+    >
       {title}
     </Text>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  placeholder: string;
-}) {
+function PreferenceRow({ label, value }: { label: string; value: string }) {
   const theme = useTheme();
 
   return (
-    <View>
-      <Text style={{ fontSize: 13, color: theme.colors.text, marginBottom: 8 }}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        autoCapitalize="none"
-        autoCorrect={false}
-        placeholder={placeholder}
-        placeholderTextColor="#9CA3AF"
-        style={{
-          height: 48,
-          borderRadius: 16,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.background,
-          color: theme.colors.text,
-          paddingHorizontal: 14,
-          fontSize: 15,
-        }}
-      />
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+      <Text style={{ fontSize: 13, color: theme.colors.textSecondary }}>{label}</Text>
+      <Text style={{ fontSize: 13, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>{value}</Text>
     </View>
   );
 }
@@ -519,7 +504,7 @@ function ChoicePill({
       style={{
         paddingHorizontal: 14,
         height: 38,
-        borderRadius: 19,
+        borderRadius: 999,
         borderWidth: 1,
         borderColor: selected ? theme.colors.accent : theme.colors.border,
         backgroundColor: selected ? theme.colors.accent : theme.colors.background,
@@ -527,7 +512,7 @@ function ChoicePill({
         justifyContent: "center",
       }}
     >
-      <Text style={{ color: selected ? "#FFFFFF" : theme.colors.text, fontSize: 13, fontWeight: "700" }}>{label}</Text>
+      <Text style={{ fontSize: 13, fontWeight: "700", color: selected ? "#FFFFFF" : theme.colors.text }}>{label}</Text>
     </TouchableOpacity>
   );
 }

@@ -70,11 +70,18 @@ def _connect_auth_db() -> sqlite3.Connection:
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL UNIQUE,
             name TEXT,
+            avatar_url TEXT,
             password_hash TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )
         """
     )
+    existing_columns = {
+        str(row[1]).strip().lower()
+        for row in connection.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "avatar_url" not in existing_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
     connection.commit()
     return connection
 
@@ -99,12 +106,36 @@ def _find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     with AUTH_LOCK:
         with _connect_auth_db() as connection:
             row = connection.execute(
-                "SELECT id, email, name, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
+                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE lower(email) = lower(?)",
                 (email_token,),
             ).fetchone()
         if row is not None:
             return dict(row)
     return None
+
+
+def _find_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    user_token = str(user_id or "").strip()
+    if not user_token:
+        return None
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            row = connection.execute(
+                "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE id = ?",
+                (user_token,),
+            ).fetchone()
+        if row is not None:
+            return dict(row)
+    return None
+
+
+def _public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(user.get("id") or "").strip(),
+        "email": str(user.get("email") or "").strip().lower(),
+        "name": str(user.get("name") or "").strip() or None,
+        "avatar_url": str(user.get("avatar_url") or "").strip() or None,
+    }
 
 
 def issue_token(user_id: str, *, email: Optional[str] = None) -> str:
@@ -262,7 +293,7 @@ def register_user(email: str, password: str, *, name: Optional[str] = None) -> D
             connection.commit()
     return {
         "ok": True,
-        "user": {"id": user_id, "email": email_token, "name": user_name},
+        "user": {"id": user_id, "email": email_token, "name": user_name, "avatar_url": None},
         "token": issue_token(user_id, email=email_token),
     }
 
@@ -276,9 +307,58 @@ def login_user(email: str, password: str) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid user record.")
     return {
         "ok": True,
-        "user": {"id": user_id, "email": str(user.get("email") or ""), "name": user.get("name")},
+        "user": _public_user_payload(user),
         "token": issue_token(user_id, email=str(user.get("email") or "")),
     }
+
+
+def _current_bearer_user_id(current_user: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(current_user, dict):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if str(current_user.get("auth_type") or "").strip() != "bearer":
+        raise HTTPException(status_code=401, detail="Bearer token required.")
+    user_id = str(current_user.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user is missing.")
+    return user_id
+
+
+def get_authenticated_user_profile(current_user: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    user = _find_user_by_id(_current_bearer_user_id(current_user))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"ok": True, "user": _public_user_payload(user)}
+
+
+def update_authenticated_user_profile(
+    current_user: Optional[Dict[str, Any]],
+    *,
+    name: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    user_id = _current_bearer_user_id(current_user)
+    next_name = str(name or "").strip() or None
+    next_avatar_url = str(avatar_url or "").strip() or None
+    with AUTH_LOCK:
+        with _connect_auth_db() as connection:
+            existing = connection.execute(
+                "SELECT id, email, name, avatar_url FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="User not found.")
+            connection.execute(
+                "UPDATE users SET name = ?, avatar_url = ? WHERE id = ?",
+                (next_name, next_avatar_url, user_id),
+            )
+            row = connection.execute(
+                "SELECT id, email, name, avatar_url FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            connection.commit()
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"ok": True, "user": _public_user_payload(dict(row))}
 
 
 def get_current_user(

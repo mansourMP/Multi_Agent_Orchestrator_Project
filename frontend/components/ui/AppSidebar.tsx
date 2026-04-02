@@ -14,6 +14,7 @@ import {
   PanelLeft,
   PlugZap,
   Settings,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -38,6 +39,12 @@ type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+};
+
+type SidebarIdentity = {
+  email: string;
+  name: string;
+  avatarUrl: string;
 };
 
 const SIDEBAR_COLLAPSED_KEY = 'empyralist:sidebar-collapsed';
@@ -102,11 +109,34 @@ function syncSidebarRoot(collapsed: boolean, hidden: boolean) {
   root.style.setProperty('--shell-sidebar-width', hidden ? '0px' : collapsed ? '64px' : '228px');
 }
 
+function displayName(name: string, email: string): string {
+  const explicit = String(name || '').trim();
+  if (explicit) return explicit;
+  const localPart = String(email || '').trim().split('@')[0] || '';
+  if (!localPart) return 'Account';
+  return localPart
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function initials(value: string): string {
+  const parts = String(value || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  if (parts.length === 0) return 'A';
+  return parts.map((part) => part.slice(0, 1).toUpperCase()).join('');
+}
+
 export default function AppSidebar() {
   const pathname = usePathname() ?? '/';
   const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { state, setOpen, toggleSidebar } = useSidebar();
   const initializedRef = React.useRef(false);
+  const [identity, setIdentity] = React.useState<SidebarIdentity | null>(null);
 
   React.useEffect(() => {
     if (hideShellChrome || initializedRef.current) return;
@@ -132,9 +162,38 @@ export default function AppSidebar() {
     }
   }, [hideShellChrome, state]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadIdentity() {
+      try {
+        const response = await fetch('/api/control-plane/auth/me', { cache: 'no-store' });
+        if (!response.ok) return;
+        const payload = (await response.json().catch(() => null)) as {
+          user?: { email?: string | null; name?: string | null; avatar_url?: string | null } | null;
+        } | null;
+        if (cancelled || !payload?.user) return;
+        setIdentity({
+          email: String(payload.user.email || '').trim(),
+          name: String(payload.user.name || '').trim(),
+          avatarUrl: String(payload.user.avatar_url || '').trim(),
+        });
+      } catch {
+        if (!cancelled) setIdentity(null);
+      }
+    }
+    void loadIdentity();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (hideShellChrome) {
     return null;
   }
+
+  const expanded = state === 'expanded';
+  const accountName = displayName(identity?.name || '', identity?.email || '');
+  const accountInitials = initials(accountName);
 
   return (
     <Sidebar
@@ -207,6 +266,98 @@ export default function AppSidebar() {
             );
           })}
         </SidebarMenu>
+        {expanded ? (
+          <div
+            style={{
+              marginTop: 14,
+              borderTop: '1px solid var(--sidebar-border)',
+              paddingTop: 14,
+              display: 'grid',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              {identity?.avatarUrl ? (
+                <img
+                  src={identity.avatarUrl}
+                  alt={accountName}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: '999px',
+                    objectFit: 'cover',
+                    border: '1px solid var(--sidebar-border)',
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: '999px',
+                    display: 'grid',
+                    placeItems: 'center',
+                    background: 'var(--sidebar-accent)',
+                    color: 'var(--sidebar-accent-foreground)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {accountInitials}
+                </div>
+              )}
+              <div style={{ minWidth: 0, display: 'grid', gap: 2 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: 'var(--sidebar-foreground)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {accountName}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--sidebar-foreground)',
+                    opacity: 0.7,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {identity?.email || 'Signed-in account'}
+                </div>
+              </div>
+            </div>
+            <Link
+              href="/account"
+              className="orion-btn orion-btn-ghost"
+              style={{ minHeight: 44, justifyContent: 'flex-start', paddingInline: 12 }}
+            >
+              <UserRound size={15} />
+              Account
+            </Link>
+          </div>
+        ) : (
+          <SidebarMenu className="mt-3 group-data-[collapsible=icon]:items-center">
+            <SidebarMenuItem className="group-data-[collapsible=icon]:w-fit">
+              <SidebarMenuButton
+                render={<Link href="/account" />}
+                tooltip="Account"
+                isActive={pathname === '/account'}
+                size="lg"
+                className={FOOTER_BUTTON_CLASS}
+              >
+                <UserRound className="size-[19px]" strokeWidth={2.5} />
+                <span>Account</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        )}
       </SidebarFooter>
     </Sidebar>
   );

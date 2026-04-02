@@ -37,7 +37,7 @@ import {
   type AgentRoleId,
 } from './page.catalog';
 import { type PageState } from './page.state';
-import { resolveActiveSkills, resolveSkillsByIds } from '@/lib/skills';
+import { loadActiveSkills, resolveSkillsByIds } from '@/lib/skills';
 import { BRAND } from '@/lib/brand';
 import { API_BASE } from '@/lib/config';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
@@ -875,7 +875,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     });
   }, [controlPlaneFetch]);
 
-  const buildScheduledRunRequest = useCallback(() => {
+  const buildScheduledRunRequest = useCallback(async () => {
     const selectedPack = OUTCOME_PACKS.find((pack) => pack.id === selectedPackId) || OUTCOME_PACKS[0];
     const selectedPreset = BUSINESS_PRESETS.find((preset) => preset.id === selectedPresetId) || BUSINESS_PRESETS[0];
 
@@ -906,7 +906,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       packInputs.slots = effectiveTertiary;
     }
 
-    const activeSkills = resolveActiveSkills('automationDefaults');
+    const activeSkills = await loadActiveSkills('automationDefaults');
 
     return {
       engine: 'orion',
@@ -1003,7 +1003,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
         return;
       }
 
-      const runRequest = buildScheduledRunRequest();
+      const runRequest = await buildScheduledRunRequest();
       if (weeklyScheduleId) {
         const patchRes = await controlPlaneFetch(`/api/control-plane/schedules/weekly/${encodeURIComponent(weeklyScheduleId)}`, {
           method: 'PATCH',
@@ -2447,7 +2447,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
 
       const effectiveTrustMode: TrustMode = state.guidedDefaultsEnabled ? 'guarded' : state.trustMode;
       const agentSkills = resolveAgentProfileSkills(effectiveAgentRole);
-      const activeSkills = agentSkills.skills.length > 0 ? agentSkills : resolveActiveSkills('automationDefaults');
+      const activeSkills = agentSkills.skills.length > 0 ? agentSkills : await loadActiveSkills('automationDefaults');
       const activeSkillScope = agentSkills.skills.length > 0 ? 'agent_profile' : activeSkills.skills.length > 0 ? 'automation_defaults' : undefined;
       const effectivePrimary = state.inboxInput.trim() || (state.guidedDefaultsEnabled ? selectedPreset.inputs.primary : '');
       const effectiveSecondary = state.leadsInput.trim() || (state.guidedDefaultsEnabled ? selectedPreset.inputs.secondary : '');

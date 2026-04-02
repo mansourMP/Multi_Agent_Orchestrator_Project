@@ -64,13 +64,6 @@ const SHELL_ROUTE_DEFS: ShellRouteDef[] = [
     match: (pathname: string) => pathname === '/agents',
   },
   {
-    id: 'team',
-    title: 'Team',
-    breadcrumb: 'Admin',
-    slotLabel: 'People, roles, and access',
-    match: (pathname: string) => pathname === '/team',
-  },
-  {
     id: 'approvals',
     title: 'Approvals',
     breadcrumb: 'Admin',

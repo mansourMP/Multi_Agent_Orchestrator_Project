@@ -164,7 +164,7 @@ export function CoreControlCenter() {
             <Link href="/workflows" className="btn-secondary">
               Workflows
             </Link>
-            <Link href="/workspace" className="btn-primary">
+            <Link href="/workflows" className="btn-primary">
               Open Assistant
             </Link>
           </div>
@@ -241,7 +241,7 @@ export function CoreControlCenter() {
                 <RefreshCw size={14} />
                 Retry
               </button>
-              <Link href="/workspace" className="btn-primary">
+              <Link href="/workflows" className="btn-primary">
                 Open Assistant
               </Link>
             </>
@@ -299,7 +299,7 @@ export function CoreControlCenter() {
                 <div className="orion-empty-title">No workflows yet</div>
                 <div className="orion-empty-copy">Start with the assistant if you want help outlining a flow, then save the result here for reuse.</div>
                 <div className="orion-state-actions">
-                  <Link href="/workspace" className="btn-primary">
+                  <Link href="/workflows" className="btn-primary">
                     Open Assistant
                   </Link>
                   <Link href="/workflows" className="btn-secondary">

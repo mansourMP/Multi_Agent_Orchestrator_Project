@@ -91,6 +91,20 @@ export default function RootLayout() {
                   }} 
                 />
                 <Stack.Screen
+                  name="notifications"
+                  options={{
+                    animation: "slide_from_left",
+                    presentation: "card",
+                  }}
+                />
+                <Stack.Screen
+                  name="status"
+                  options={{
+                    animation: "slide_from_left",
+                    presentation: "card",
+                  }}
+                />
+                <Stack.Screen
                   name="apps/store"
                   options={{
                     presentation: "transparentModal",
@@ -106,7 +120,13 @@ export default function RootLayout() {
                     animationDuration: 520,
                   }}
                 />
-                <Stack.Screen name="session" />
+                <Stack.Screen
+                  name="session"
+                  options={{
+                    animation: "slide_from_left",
+                    presentation: "card",
+                  }}
+                />
               </Stack>
             </SafeAreaProvider>
           </SessionProvider>

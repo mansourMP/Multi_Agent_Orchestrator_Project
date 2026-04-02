@@ -39,6 +39,7 @@ export default function SolutionsPage() {
 
   const totalAlerts = solutions.reduce((count, item) => count + Number(item.status?.unresolved_alerts || 0), 0);
   const totalSpaces = solutions.reduce((count, item) => count + Number(item.status?.spaces_monitored || 0), 0);
+  const solutionsDisabled = !PACKAGED_SOLUTIONS_ENABLED;
 
   return (
     <div className="orion-page-shell orion-animate-in">
@@ -46,26 +47,28 @@ export default function SolutionsPage() {
         icon={<LayoutDashboard size={18} />}
         title="Packages"
         subtitle="Optional packaged capability layers built on top of workflows, skills, and connectors."
-        meta={
+        meta={solutionsDisabled ? undefined : (
           <>
             <span>{solutions.length} installed</span>
             <span>{totalAlerts} unresolved alerts</span>
           </>
-        }
+        )}
       />
 
-      <MetricStrip
-        items={[
-          { label: 'Installed', value: String(solutions.length) },
-          { label: 'Live monitors', value: String(totalSpaces) },
-          { label: 'Unresolved alerts', value: String(totalAlerts) },
-        ]}
-      />
+      {solutionsDisabled ? null : (
+        <MetricStrip
+          items={[
+            { label: 'Installed', value: String(solutions.length) },
+            { label: 'Live monitors', value: String(totalSpaces) },
+            { label: 'Unresolved alerts', value: String(totalAlerts) },
+          ]}
+        />
+      )}
 
-      {!PACKAGED_SOLUTIONS_ENABLED ? (
+      {solutionsDisabled ? (
         <section className="orion-panel muted" style={{ minHeight: 220, display: 'grid', gap: 10, placeItems: 'center' }}>
-          <div className="orion-panel-title">Packages are disabled</div>
-          <div className="orion-panel-copy">This workspace is running the general platform surface. Packaged vertical experiences are opt-in.</div>
+          <div className="orion-panel-title">Solutions are coming soon.</div>
+          <div className="orion-panel-copy">Solutions are coming soon. Check back after launch.</div>
         </section>
       ) : loading ? (
         <section className="orion-panel muted">

@@ -39,37 +39,37 @@ export default function AccountPage() {
   const [saveNotice, setSaveNotice] = useState('');
 
   useEffect(() => {
-    const stored = readAccountProfilePreferences();
-    setDraft({
-      displayName: stored.displayName || DEFAULT_PROFILE.displayName,
-      email: '',
-      photoUrl: stored.photoUrl,
-    });
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
     async function loadIdentity() {
       try {
         const response = await fetch('/api/control-plane/auth/me', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => null)) as { user?: { email?: string | null } | null } | null;
+        if (!response.ok) {
+          throw new Error('Profile lookup failed.');
+        }
+        const payload = (await response.json().catch(() => null)) as {
+          user?: { email?: string | null; name?: string | null; avatar_url?: string | null } | null;
+        } | null;
         if (cancelled) return;
+        if (!payload?.user) {
+          throw new Error('Profile lookup failed.');
+        }
         const email = String(payload?.user?.email || '').trim();
-        if (!email) return;
         setAuthEmail(email);
-        setDraft((current) => {
-          const nextDisplayName =
-            current.displayName === DEFAULT_PROFILE.displayName
-              ? displayNameFromEmail(email, DEFAULT_PROFILE.displayName)
-              : current.displayName;
-          return {
-            ...current,
-            email,
-            displayName: nextDisplayName,
-          };
+        const name = String(payload?.user?.name || '').trim();
+        const avatarUrl = String(payload?.user?.avatar_url || '').trim();
+        setDraft({
+          displayName: name || displayNameFromEmail(email, DEFAULT_PROFILE.displayName),
+          email,
+          photoUrl: avatarUrl,
         });
       } catch {
-        // Ignore identity lookup failures on local-only sessions.
+        if (cancelled) return;
+        const stored = readAccountProfilePreferences();
+        setDraft({
+          displayName: stored.displayName || DEFAULT_PROFILE.displayName,
+          email: '',
+          photoUrl: stored.photoUrl,
+        });
       }
     }
     void loadIdentity();
@@ -82,18 +82,48 @@ export default function AccountPage() {
   const effectiveDisplayName = draft.displayName.trim() || displayNameFromEmail(effectiveEmail, DEFAULT_PROFILE.displayName);
   const avatarLabel = useMemo(() => initialsForName(effectiveDisplayName), [effectiveDisplayName]);
 
-  const persist = useCallback(() => {
+  const persist = useCallback(async () => {
     const next: AccountProfile = {
       displayName: draft.displayName.trim() || displayNameFromEmail(effectiveEmail, DEFAULT_PROFILE.displayName),
       email: effectiveEmail,
       photoUrl: draft.photoUrl?.trim() || '',
     };
-    setDraft(next);
-    writeAccountProfilePreferences({
-      displayName: next.displayName,
-      photoUrl: next.photoUrl || '',
-    } satisfies AccountProfilePreferences);
-    setSaveNotice('Saved');
+    try {
+      const response = await fetch('/api/control-plane/auth/me', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: next.displayName,
+          avatar_url: next.photoUrl || '',
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Profile update failed.');
+      }
+      const payload = (await response.json().catch(() => null)) as {
+        user?: { email?: string | null; name?: string | null; avatar_url?: string | null } | null;
+      } | null;
+      const savedEmail = String(payload?.user?.email || next.email || '').trim();
+      const savedName = String(payload?.user?.name || next.displayName || '').trim()
+        || displayNameFromEmail(savedEmail, DEFAULT_PROFILE.displayName);
+      const savedAvatarUrl = String(payload?.user?.avatar_url || next.photoUrl || '').trim();
+      setAuthEmail(savedEmail);
+      setDraft({
+        displayName: savedName,
+        email: savedEmail,
+        photoUrl: savedAvatarUrl,
+      });
+      setSaveNotice('Saved');
+    } catch {
+      setDraft(next);
+      writeAccountProfilePreferences({
+        displayName: next.displayName,
+        photoUrl: next.photoUrl || '',
+      } satisfies AccountProfilePreferences);
+      setSaveNotice('Saved locally');
+    }
     window.setTimeout(() => setSaveNotice(''), 1600);
   }, [draft, effectiveEmail]);
 

@@ -1,9 +1,8 @@
 import React from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { HeaderSearchButton } from "@/src/components/HeaderSearchButton";
+import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 import { useSessionState } from "@/src/lib/session-context";
 import { mobileApi } from "@/src/lib/api";
@@ -85,7 +84,6 @@ function AppGrid({
 export default function AppsScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { session } = useSessionState();
   const [installed, setInstalled] = React.useState<AppRecord[]>([]);
   const [loadedOnce, setLoadedOnce] = React.useState(false);
@@ -132,29 +130,20 @@ export default function AppsScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.background }}
-      contentContainerStyle={{ paddingHorizontal: 20, paddingTop: insets.top + 12, paddingBottom: 40 }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
     >
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 14,
+      <PrimaryScreenHeader
+        title="Apps"
+        subtitle="Focused tools KIN can open when structure helps."
+        action={{
+          accessibilityLabel: "Open app store",
+          label: "Store",
+          onPress: () => router.push("/apps/store"),
+          variant: "ghost",
         }}
-      >
-        <View>
-          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Apps</Text>
-          <Text style={{ marginTop: 3, fontSize: 13, color: theme.colors.textSecondary }}>Focused tools KIN can open when structure helps</Text>
-        </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <TouchableOpacity onPress={() => router.push("/apps/store")}>
-            <Text style={{ fontSize: 15, color: theme.colors.accent, fontWeight: "700" }}>Store</Text>
-          </TouchableOpacity>
-          <HeaderSearchButton />
-        </View>
-      </View>
+      />
 
-      <Text style={{ marginBottom: 16, fontSize: 14, color: theme.colors.textSecondary, lineHeight: 22 }}>
+      <Text style={{ marginBottom: 14, fontSize: 14, color: theme.colors.textSecondary, lineHeight: 22 }}>
         Installed apps you can open now.
       </Text>
 
@@ -173,7 +162,7 @@ export default function AppsScreen() {
             Connect your Mac Mini to install and open apps.
           </Text>
           <TouchableOpacity
-            onPress={() => router.push("/profile")}
+            onPress={() => router.push("/session")}
             style={{
               marginTop: 10,
               height: 42,

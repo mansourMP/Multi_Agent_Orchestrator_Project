@@ -1,17 +1,4 @@
-export const SKILLS_STORAGE_KEY = 'empyralis_custom_skills_v1';
-export const LEGACY_SKILLS_STORAGE_KEY = 'orion_custom_skills_v1';
-export const SKILL_BINDINGS_STORAGE_KEY = 'empyralis_skill_bindings_v1';
-export const LEGACY_SKILL_BINDINGS_STORAGE_KEY = 'orion_skill_bindings_v1';
-export const PINNED_APPS_STORAGE_KEY = 'empyralis_pinned_apps_v1';
-export const LEGACY_PINNED_APPS_STORAGE_KEY = 'orion_pinned_apps_v1';
-
-export const SKILLS_UPDATED_EVENT = 'empyralis:skills-updated';
-export const LEGACY_SKILLS_UPDATED_EVENT = 'orion:skills-updated';
-export const SKILLS_UPDATED_EVENTS = [SKILLS_UPDATED_EVENT, LEGACY_SKILLS_UPDATED_EVENT] as const;
-
-export const APPS_PINNED_UPDATED_EVENT = 'empyralis:apps-pinned-updated';
-export const LEGACY_APPS_PINNED_UPDATED_EVENT = 'orion:apps-pinned-updated';
-export const APPS_PINNED_UPDATED_EVENTS = [APPS_PINNED_UPDATED_EVENT, LEGACY_APPS_PINNED_UPDATED_EVENT] as const;
+type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 export type SkillPolicyMode = 'off' | 'warn' | 'enforce';
 
@@ -36,6 +23,32 @@ export type SkillBindings = {
 };
 
 export type SkillScope = 'assistantDefaults' | 'automationDefaults';
+
+type RuntimeSkillsStatePayload = {
+  state?: {
+    custom_skills?: unknown[];
+    bindings?: {
+      assistant_defaults?: unknown[];
+      automation_defaults?: unknown[];
+    };
+    updated_at?: string | null;
+  } | null;
+};
+
+type InstalledSkillsPayload = {
+  items?: unknown[];
+};
+
+const EMPTY_BINDINGS: SkillBindings = {
+  assistantDefaults: [],
+  automationDefaults: [],
+};
+
+let customSkillsCache: SkillCard[] = [];
+let installedSkillsCache: SkillCard[] = [];
+let bindingsCache: SkillBindings = EMPTY_BINDINGS;
+let runtimeSkillsHydrated = false;
+let runtimeSkillsHydrationPromise: Promise<void> | null = null;
 
 export const BUILTIN_SKILLS: SkillCard[] = [
   {
@@ -82,94 +95,263 @@ export const BUILTIN_SKILLS: SkillCard[] = [
   },
 ];
 
+function sanitizeText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => sanitizeText(item)).filter(Boolean)
+    : [];
+}
+
+function sanitizeSkillCard(value: unknown): SkillCard | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = sanitizeText(record.id) || sanitizeText(record.name);
+  const title = sanitizeText(record.title) || sanitizeText(record.name);
+  const intent = sanitizeText(record.intent) || sanitizeText(record.description);
+  if (!id || !title || !intent) return null;
+  const preferredTarget = sanitizeText(record.preferred_target || record.preferredTarget);
+  const preferredTrustMode = sanitizeText(record.preferred_trust_mode || record.preferredTrustMode);
+  const policyMode = sanitizeText(record.policy_mode || record.policyMode);
+  return {
+    id,
+    title,
+    intent,
+    tools: sanitizeStringList(record.tools),
+    guardrail: sanitizeText(record.guardrail) || 'No special guardrail declared.',
+    runtimeTools: sanitizeStringList(record.runtime_tools ?? record.runtimeTools),
+    preferredTarget:
+      preferredTarget === 'auto' || preferredTarget === 'cloud' || preferredTarget === 'local_companion'
+        ? preferredTarget
+        : undefined,
+    preferredTrustMode:
+      preferredTrustMode === 'auto'
+      || preferredTrustMode === 'guarded'
+      || preferredTrustMode === 'strict'
+      || preferredTrustMode === 'cost_guard'
+      || preferredTrustMode === 'sensitive_guard'
+        ? preferredTrustMode
+        : undefined,
+    policyMode:
+      policyMode === 'off' || policyMode === 'warn' || policyMode === 'enforce'
+        ? policyMode
+        : undefined,
+    version: sanitizeText(record.version) || undefined,
+    author: sanitizeText(record.author) || undefined,
+    category: sanitizeText(record.category) || undefined,
+  };
+}
+
+function sanitizeInstalledSkillCard(value: unknown): SkillCard | null {
+  const skill = sanitizeSkillCard(value);
+  if (skill) return skill;
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = sanitizeText(record.id) || sanitizeText(record.name);
+  const title = sanitizeText(record.name) || sanitizeText(record.title);
+  const intent = sanitizeText(record.description) || 'Installed marketplace skill';
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    intent,
+    tools: sanitizeStringList(record.tools),
+    guardrail: 'See the installed skill contract for guardrails.',
+    version: sanitizeText(record.version) || undefined,
+    author: sanitizeText(record.author) || undefined,
+  };
+}
+
+function sanitizeBindings(value: unknown): SkillBindings {
+  const record = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  return {
+    assistantDefaults: sanitizeStringList(record.assistant_defaults ?? record.assistantDefaults),
+    automationDefaults: sanitizeStringList(record.automation_defaults ?? record.automationDefaults),
+  };
+}
+
+function dedupeSkills(skills: SkillCard[]): SkillCard[] {
+  const seen = new Set<string>();
+  const result: SkillCard[] = [];
+  for (const skill of skills) {
+    const id = sanitizeText(skill.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(skill);
+  }
+  return result;
+}
+
+function updateRuntimeSkillsCache(payload: RuntimeSkillsStatePayload | null, installedPayload?: InstalledSkillsPayload | null) {
+  if (payload?.state) {
+    customSkillsCache = dedupeSkills(
+      (Array.isArray(payload.state.custom_skills) ? payload.state.custom_skills : [])
+        .map((item) => sanitizeSkillCard(item))
+        .filter((item): item is SkillCard => Boolean(item)),
+    );
+    bindingsCache = sanitizeBindings(payload.state.bindings);
+    runtimeSkillsHydrated = true;
+  }
+  if (installedPayload?.items) {
+    installedSkillsCache = dedupeSkills(
+      installedPayload.items
+        .map((item) => sanitizeInstalledSkillCard(item))
+        .filter((item): item is SkillCard => Boolean(item)),
+    );
+  }
+  return {
+    customSkills: [...customSkillsCache],
+    bindings: {
+      assistantDefaults: [...bindingsCache.assistantDefaults],
+      automationDefaults: [...bindingsCache.automationDefaults],
+    },
+    installedSkills: [...installedSkillsCache],
+  };
+}
+
+function snapshotRuntimeSkills() {
+  return {
+    customSkills: [...customSkillsCache],
+    bindings: {
+      assistantDefaults: [...bindingsCache.assistantDefaults],
+      automationDefaults: [...bindingsCache.automationDefaults],
+    },
+    installedSkills: [...installedSkillsCache],
+  };
+}
+
+async function readRuntimeSkillsState(fetcher: Fetcher = fetch) {
+  const response = await fetcher('/api/skills/state', {
+    method: 'GET',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load runtime skills state (HTTP ${response.status}).`);
+  }
+  const payload = (await response.json().catch(() => null)) as RuntimeSkillsStatePayload | null;
+  return payload;
+}
+
+async function readInstalledSkills(fetcher: Fetcher = fetch) {
+  const response = await fetcher('/api/skills', {
+    method: 'GET',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load installed skills (HTTP ${response.status}).`);
+  }
+  const payload = (await response.json().catch(() => null)) as InstalledSkillsPayload | null;
+  return payload;
+}
+
+function serializeSkillCard(skill: SkillCard) {
+  return {
+    id: sanitizeText(skill.id),
+    title: sanitizeText(skill.title),
+    intent: sanitizeText(skill.intent),
+    tools: sanitizeStringList(skill.tools),
+    guardrail: sanitizeText(skill.guardrail),
+    runtime_tools: sanitizeStringList(skill.runtimeTools),
+    preferred_target: skill.preferredTarget,
+    preferred_trust_mode: skill.preferredTrustMode,
+    policy_mode: skill.policyMode,
+    version: sanitizeText(skill.version),
+    author: sanitizeText(skill.author),
+    category: sanitizeText(skill.category),
+  };
+}
+
+function maybeWarmRuntimeSkillsCache() {
+  if (typeof window === 'undefined' || runtimeSkillsHydrationPromise || runtimeSkillsHydrated) return;
+  runtimeSkillsHydrationPromise = (async () => {
+    try {
+      const [statePayload, installedPayload] = await Promise.all([
+        readRuntimeSkillsState(fetch).catch(() => null),
+        readInstalledSkills(fetch).catch(() => null),
+      ]);
+      updateRuntimeSkillsCache(statePayload, installedPayload);
+    } finally {
+      runtimeSkillsHydrationPromise = null;
+    }
+  })();
+}
+
+export async function loadRuntimeSkills(fetcher: Fetcher = fetch) {
+  const [statePayload, installedPayload] = await Promise.all([
+    readRuntimeSkillsState(fetcher),
+    readInstalledSkills(fetcher).catch(() => null),
+  ]);
+  return updateRuntimeSkillsCache(statePayload, installedPayload);
+}
+
+export async function loadCustomSkills(fetcher: Fetcher = fetch): Promise<SkillCard[]> {
+  const snapshot = await loadRuntimeSkills(fetcher);
+  return snapshot.customSkills;
+}
+
+export async function loadBindings(fetcher: Fetcher = fetch): Promise<SkillBindings> {
+  const snapshot = await loadRuntimeSkills(fetcher);
+  return snapshot.bindings;
+}
+
+export async function saveCustomSkills(items: SkillCard[], fetcher: Fetcher = fetch): Promise<SkillCard[]> {
+  const response = await fetcher('/api/skills/state', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      custom_skills: items.map(serializeSkillCard),
+    }),
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update skills state (HTTP ${response.status}).`);
+  }
+  const payload = (await response.json().catch(() => null)) as RuntimeSkillsStatePayload | null;
+  return updateRuntimeSkillsCache(payload).customSkills;
+}
+
+export async function saveBindings(bindings: SkillBindings, fetcher: Fetcher = fetch): Promise<SkillBindings> {
+  const response = await fetcher('/api/skills/state', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      bindings: {
+        assistant_defaults: sanitizeStringList(bindings.assistantDefaults),
+        automation_defaults: sanitizeStringList(bindings.automationDefaults),
+      },
+    }),
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update skill bindings (HTTP ${response.status}).`);
+  }
+  const payload = (await response.json().catch(() => null)) as RuntimeSkillsStatePayload | null;
+  return updateRuntimeSkillsCache(payload).bindings;
+}
+
+export async function loadActiveSkills(scope: SkillScope, fetcher: Fetcher = fetch) {
+  await loadRuntimeSkills(fetcher).catch(() => null);
+  return resolveActiveSkills(scope);
+}
+
 export function listAvailableSkills(): SkillCard[] {
-  return [...BUILTIN_SKILLS, ...loadCustomSkills()];
+  maybeWarmRuntimeSkillsCache();
+  return dedupeSkills([...BUILTIN_SKILLS, ...installedSkillsCache, ...customSkillsCache]);
 }
 
-export function loadCustomSkills(): SkillCard[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(SKILLS_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_SKILLS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as SkillCard[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s) => s && typeof s.id === 'string' && typeof s.title === 'string');
-  } catch {
-    return [];
-  }
-}
-
-export function saveCustomSkills(items: SkillCard[]): void {
-  try {
-    const payload = JSON.stringify(items);
-    window.localStorage.setItem(SKILLS_STORAGE_KEY, payload);
-    window.localStorage.setItem(LEGACY_SKILLS_STORAGE_KEY, payload);
-    for (const eventName of SKILLS_UPDATED_EVENTS) {
-      window.dispatchEvent(new Event(eventName));
-    }
-  } catch {
-    // no-op
-  }
-}
-
-export function loadBindings(): SkillBindings {
-  if (typeof window === 'undefined') return { assistantDefaults: [], automationDefaults: [] };
-  try {
-    const raw = window.localStorage.getItem(SKILL_BINDINGS_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_SKILL_BINDINGS_STORAGE_KEY);
-    if (!raw) return { assistantDefaults: [], automationDefaults: [] };
-    const parsed = JSON.parse(raw) as SkillBindings;
-    return {
-      assistantDefaults: Array.isArray(parsed.assistantDefaults) ? parsed.assistantDefaults : [],
-      automationDefaults: Array.isArray(parsed.automationDefaults) ? parsed.automationDefaults : [],
-    };
-  } catch {
-    return { assistantDefaults: [], automationDefaults: [] };
-  }
-}
-
-export function saveBindings(bindings: SkillBindings): void {
-  try {
-    const payload = JSON.stringify(bindings);
-    window.localStorage.setItem(SKILL_BINDINGS_STORAGE_KEY, payload);
-    window.localStorage.setItem(LEGACY_SKILL_BINDINGS_STORAGE_KEY, payload);
-    for (const eventName of SKILLS_UPDATED_EVENTS) {
-      window.dispatchEvent(new Event(eventName));
-    }
-  } catch {
-    // no-op
-  }
-}
-
+// TODO: Add a backend endpoint for pinned apps before restoring persistence here.
 export function loadPinnedApps(): string[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(PINNED_APPS_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_PINNED_APPS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
-export function savePinnedApps(ids: string[]): void {
-  try {
-    const normalized = ids
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
-    const payload = JSON.stringify(normalized);
-    window.localStorage.setItem(PINNED_APPS_STORAGE_KEY, payload);
-    window.localStorage.setItem(LEGACY_PINNED_APPS_STORAGE_KEY, payload);
-    for (const eventName of APPS_PINNED_UPDATED_EVENTS) {
-      window.dispatchEvent(new Event(eventName));
-    }
-  } catch {
-    // no-op
-  }
-}
+// TODO: Add a backend endpoint for pinned apps before restoring persistence here.
+export function savePinnedApps(_ids: string[]): void {}
 
 function mapSkillById(skills: SkillCard[]): Record<string, SkillCard> {
   const out: Record<string, SkillCard> = {};
@@ -201,6 +383,7 @@ export function resolveSkillsByIds(ids: string[]): {
   skills: SkillCard[];
   promptAppend: string;
 } {
+  maybeWarmRuntimeSkillsCache();
   const normalizedIds = Array.isArray(ids)
     ? ids
         .map((id) => String(id || '').trim())
@@ -225,7 +408,7 @@ export function resolveActiveSkills(scope: SkillScope): {
   skills: SkillCard[];
   promptAppend: string;
 } {
-  const bindings = loadBindings();
-  const ids = scope === 'assistantDefaults' ? bindings.assistantDefaults : bindings.automationDefaults;
+  maybeWarmRuntimeSkillsCache();
+  const ids = scope === 'assistantDefaults' ? bindingsCache.assistantDefaults : bindingsCache.automationDefaults;
   return resolveSkillsByIds(ids);
 }

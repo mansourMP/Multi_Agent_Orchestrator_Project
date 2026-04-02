@@ -2,9 +2,8 @@ import React from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { HeaderSearchButton } from "@/src/components/HeaderSearchButton";
+import { PrimaryScreenHeader } from "@/src/components/navigation/PrimaryScreenHeader";
 import { getPrimaryAgent } from "@/src/lib/agents";
 import {
   formatRelativeTime,
@@ -21,7 +20,6 @@ import { useAppTheme as useTheme } from "@/src/theme/useAppTheme";
 export default function InboxScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { session } = useSessionState();
   const ensureSessionForAgent = useChatStore((state) => state.ensureSessionForAgent);
   const { approvals, runs, artifacts, loading } = useMobileOverviewData();
@@ -58,23 +56,18 @@ export default function InboxScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: theme.colors.background }}
-      contentContainerStyle={{ paddingTop: insets.top + 12, paddingHorizontal: 20, paddingBottom: 36 }}
+      contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 36 }}
       showsVerticalScrollIndicator={false}
     >
-      <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <View style={{ flex: 1, paddingRight: 12 }}>
-          <Text style={{ fontSize: 30, fontFamily: "DMSans_700Bold", color: theme.colors.text }}>Inbox</Text>
-          <Text style={{ marginTop: 4, fontSize: 14, color: theme.colors.textSecondary }}>
-            Approvals, active runs, completed work, and saved outputs.
-          </Text>
-        </View>
-        <HeaderSearchButton />
-      </View>
+      <PrimaryScreenHeader
+        title="Inbox"
+        subtitle="Approvals, completed work, and saved outputs in one trust layer."
+      />
 
       {!connected ? (
         <View
           style={{
-            marginTop: 18,
+            marginTop: 4,
             padding: 18,
             borderRadius: 16,
             borderWidth: 1,
@@ -87,7 +80,7 @@ export default function InboxScreen() {
             Inbox becomes your trust layer once KIN can sync runs, approvals, and outputs from your private runtime.
           </Text>
           <TouchableOpacity
-            onPress={() => router.push("/profile")}
+            onPress={() => router.push("/session")}
             style={{
               marginTop: 14,
               height: 44,
@@ -99,7 +92,7 @@ export default function InboxScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Open Profile</Text>
+            <Text style={{ color: "#FFFFFF", fontSize: 13, fontWeight: "700" }}>Connected Accounts</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -202,7 +195,7 @@ function SectionTitle({ title }: { title: string }) {
   return (
     <Text
       style={{
-        marginTop: 28,
+        marginTop: 22,
         fontSize: 11,
         fontFamily: "DMSans_700Bold",
         color: theme.colors.textSecondary,

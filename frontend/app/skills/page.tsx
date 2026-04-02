@@ -22,10 +22,7 @@ import { BRAND } from '@/lib/brand';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import {
   BUILTIN_SKILLS,
-  loadBindings,
-  loadCustomSkills,
-  saveBindings,
-  saveCustomSkills,
+  loadRuntimeSkills,
   type SkillBindings,
   type SkillCard,
   type SkillPolicyMode,
@@ -309,16 +306,6 @@ export default function SkillsPage() {
   const allSkills = useMemo(() => [...BUILTIN_SKILLS, ...customSkills], [customSkills]);
   const installedSkillIds = useMemo(() => new Set(allSkills.map((item) => item.id)), [allSkills]);
 
-  const persistSkills = useCallback((next: SkillCard[]) => {
-    setCustomSkills(next);
-    saveCustomSkills(next);
-  }, []);
-
-  const persistBindings = useCallback((next: SkillBindings) => {
-    setBindings(next);
-    saveBindings(next);
-  }, []);
-
   const syncRuntimeSkills = useCallback(async (skillsArg: SkillCard[], bindingsArg: SkillBindings) => {
     const payload = {
       custom_skills: skillsArg.map((skill) => ({
@@ -340,19 +327,19 @@ export default function SkillsPage() {
         automation_defaults: bindingsArg.automationDefaults,
       },
     };
-    try {
-      const res = await controlPlaneFetch('/api/skills/state', {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const json = await res.json().catch(() => null);
-        if (json?.state && typeof json.state === 'object') {
-          setRuntimeSkillsState(json.state as RuntimeSkillsSnapshot);
-        }
-      }
-    } catch {
-      // Runtime sync is best-effort; local UI keeps working offline.
+    const res = await controlPlaneFetch('/api/skills/state', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(text || `skills/state failed (HTTP ${res.status})`);
+    }
+    const json = await res.json().catch(() => null);
+    setCustomSkills(skillsArg);
+    setBindings(bindingsArg);
+    if (json?.state && typeof json.state === 'object') {
+      setRuntimeSkillsState(json.state as RuntimeSkillsSnapshot);
     }
   }, [controlPlaneFetch]);
 
@@ -431,15 +418,27 @@ export default function SkillsPage() {
   }, [controlPlaneFetch, selectedTools, target, trustMode]);
 
   useEffect(() => {
-    const custom = loadCustomSkills();
-    const loadedBindings = loadBindings();
-    setCustomSkills(custom);
-    setBindings(loadedBindings);
-    void syncRuntimeSkills(custom, loadedBindings);
+    let cancelled = false;
+    async function loadInitialState() {
+      try {
+        const snapshot = await loadRuntimeSkills(controlPlaneFetch);
+        if (cancelled) return;
+        setCustomSkills(snapshot.customSkills);
+        setBindings(snapshot.bindings);
+      } catch {
+        if (cancelled) return;
+        setCustomSkills([]);
+        setBindings({ assistantDefaults: [], automationDefaults: [] });
+      }
+    }
+    void loadInitialState();
     void refreshContracts();
     void refreshRuntimePolicy();
     void refreshRuntimeSkills();
-  }, [refreshContracts, refreshRuntimePolicy, refreshRuntimeSkills, syncRuntimeSkills]);
+    return () => {
+      cancelled = true;
+    };
+  }, [controlPlaneFetch, refreshContracts, refreshRuntimePolicy, refreshRuntimeSkills]);
 
   useEffect(() => {
     if (!focusExtensionId) return;
@@ -461,8 +460,10 @@ export default function SkillsPage() {
       ? current.filter((id) => id !== skillId)
       : [...current, skillId];
     const nextBindings = { ...bindings, [scope]: next };
-    persistBindings(nextBindings);
-    void syncRuntimeSkills(customSkills, nextBindings);
+    void syncRuntimeSkills(customSkills, nextBindings).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Failed to update capability bindings.';
+      setExtensionNotice(message);
+    });
   };
 
   const addCustomSkill = () => {
@@ -482,24 +483,30 @@ export default function SkillsPage() {
       policyMode: newPolicyMode,
     };
     const nextSkills = [skill, ...customSkills];
-    persistSkills(nextSkills);
-    void syncRuntimeSkills(nextSkills, bindings);
-    setNewTitle('');
-    setNewIntent('');
-    setNewTools('');
-    setNewGuardrail('');
-    setNewPolicyMode('warn');
+    void syncRuntimeSkills(nextSkills, bindings)
+      .then(() => {
+        setNewTitle('');
+        setNewIntent('');
+        setNewTools('');
+        setNewGuardrail('');
+        setNewPolicyMode('warn');
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : 'Failed to save capability.';
+        setExtensionNotice(message);
+      });
   };
 
   const removeCustomSkill = (skillId: string) => {
     const next = customSkills.filter((skill) => skill.id !== skillId);
-    persistSkills(next);
     const nextBindings = {
       assistantDefaults: bindings.assistantDefaults.filter((id) => id !== skillId),
       automationDefaults: bindings.automationDefaults.filter((id) => id !== skillId),
     };
-    persistBindings(nextBindings);
-    void syncRuntimeSkills(next, nextBindings);
+    void syncRuntimeSkills(next, nextBindings).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Failed to remove capability.';
+      setExtensionNotice(message);
+    });
   };
 
   const installManifestBatch = (manifests: ExtensionManifest[]) => {
@@ -530,12 +537,16 @@ export default function SkillsPage() {
       installedCount += 1;
     }
 
-    persistSkills(nextSkills);
-    persistBindings(nextBindings);
-    void syncRuntimeSkills(nextSkills, nextBindings);
-    setExtensionNotice(
-      installedCount === 1 ? `${manifests[0].title} installed.` : `${installedCount} capabilities installed.`,
-    );
+    void syncRuntimeSkills(nextSkills, nextBindings)
+      .then(() => {
+        setExtensionNotice(
+          installedCount === 1 ? `${manifests[0].title} installed.` : `${installedCount} capabilities installed.`,
+        );
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : 'Failed to install capability.';
+        setExtensionNotice(message);
+      });
   };
 
   const installExtension = (manifest: ExtensionManifest) => {

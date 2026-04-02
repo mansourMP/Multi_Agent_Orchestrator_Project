@@ -28,7 +28,29 @@ export default function SessionScreen() {
 
   return (
     <MobileScreen>
-      <ScreenHeader title="Connect Empyralis" subtitle="Connect your personal core and optional platform registry." />
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <Pressable
+          onPress={() => router.back()}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ color: theme.colors.text, fontSize: 20, lineHeight: 22 }}>‹</Text>
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <ScreenHeader
+            title="Connected Accounts"
+            subtitle="Connect your personal core and optional platform registry."
+          />
+        </View>
+      </View>
       <SectionCard title="Personal Core" subtitle="Your Mac Mini runtime powers private memory, files, and device actions.">
         <Field
           label="Runtime URL"

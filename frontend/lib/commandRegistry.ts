@@ -122,14 +122,6 @@ const BASE_COMMANDS: PlatformCommand[] = [
     action: { type: 'navigate', href: '/approvals' },
   },
   {
-    id: 'nav.team',
-    title: 'Go to Team',
-    description: 'Manage people, roles, and platform access.',
-    group: 'Navigate',
-    keywords: ['team', 'people', 'roles', 'owner', 'admin', 'viewer', 'access'],
-    action: { type: 'navigate', href: '/team' },
-  },
-  {
     id: 'nav.capabilities',
     title: 'Go to Capabilities',
     description: 'Manage assistant skills, capability packs, and execution policy.',

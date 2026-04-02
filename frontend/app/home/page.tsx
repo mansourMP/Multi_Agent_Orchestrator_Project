@@ -146,9 +146,9 @@ export default function HomePage() {
               <PlayCircle size={14} />
               See what happened
             </Link>
-            <Link href="/agents" className="btn-secondary">
+            <Link href="/workflows" className="btn-secondary">
               <ArrowRight size={14} />
-              Saved automations
+              Saved workflows
             </Link>
           </>
         }
@@ -156,12 +156,12 @@ export default function HomePage() {
           <>
             <PageHeroCard label="Continue recent work">
               {loading ? (
-                <div className="orion-home-side-empty">Loading automations…</div>
+                <div className="orion-home-side-empty">Loading workflows…</div>
               ) : error ? (
-                <div className="orion-home-side-empty">Couldn&apos;t load automations.</div>
+                <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
               ) : featuredWorkflow ? (
                 <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
-                  <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Automation'}</div>
+                  <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
                   <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
                   <div className="orion-home-featured-meta">
                     {runtimeProfileLabel(featuredWorkflow) ? <span>{runtimeProfileLabel(featuredWorkflow)}</span> : null}
@@ -169,26 +169,26 @@ export default function HomePage() {
                   </div>
                 </Link>
               ) : (
-                <div className="orion-home-side-empty">No automations yet.</div>
+                <div className="orion-home-side-empty">No workflows yet.</div>
               )}
             </PageHeroCard>
 
-            <PageHeroCard label="Saved automations">
+            <PageHeroCard label="Saved workflows">
               <div className="orion-home-side-stats">
                 <div>
                   <div className="orion-home-side-value">{workflows.length}</div>
-                  <div className="orion-home-side-note">Saved automations</div>
+                  <div className="orion-home-side-note">Saved workflows</div>
                 </div>
                 <div>
                   <div className="orion-home-side-value">{recentWorkflows.length}</div>
-                  <div className="orion-home-side-note">Recently updated automations</div>
+                  <div className="orion-home-side-note">Recently updated workflows</div>
                 </div>
               </div>
               {supportingWorkflows.length > 0 ? (
                 <div className="orion-home-mini-list">
                   {supportingWorkflows.map((workflow) => (
                     <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
-                      <span>{workflow.name || 'Untitled Automation'}</span>
+                      <span>{workflow.name || 'Untitled Workflow'}</span>
                       <ArrowRight size={13} />
                     </Link>
                   ))}
@@ -200,22 +200,22 @@ export default function HomePage() {
       />
 
       <PageSection
-        title="Recent automations"
-        description="Saved automations you can reopen, refine, and run again."
+        title="Recent workflows"
+        description="Saved workflows you can reopen, refine, and run again."
         actions={
-          <Link href="/agents" className="orion-control-link">
-            Open automations
+          <Link href="/workflows" className="orion-control-link">
+            Open workflows
           </Link>
         }
         className="orion-home-list-panel"
       >
 
         {loading ? (
-          <PageStatePanel variant="loading" title="Loading automations…" />
+          <PageStatePanel variant="loading" title="Loading workflows…" />
         ) : error ? (
           <PageStatePanel variant="error" title="Couldn't load this section." copy={error} />
         ) : recentWorkflows.length === 0 ? (
-          <PageStatePanel variant="empty" title="No automations yet" copy="Start with a task. Save it as an automation later if it works well." />
+          <PageStatePanel variant="empty" title="No workflows yet" copy="Start with a task. Save it as a workflow later if it works well." />
         ) : (
           <div className="orion-list">
             {recentWorkflows.map((workflow) => (
@@ -229,7 +229,7 @@ export default function HomePage() {
                     {(workflow.name || 'AU').slice(0, 2).toUpperCase()}
                   </div>
                   <div className="orion-list-row-main">
-                    <div className="orion-list-row-title">{workflow.name || 'Untitled Automation'}</div>
+                    <div className="orion-list-row-title">{workflow.name || 'Untitled Workflow'}</div>
                     <div className="orion-list-row-subtitle">{compactText(workflow.description)}</div>
                   </div>
                 </div>

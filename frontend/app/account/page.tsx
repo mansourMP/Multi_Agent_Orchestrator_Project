@@ -7,8 +7,6 @@ import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import {
   displayNameFromEmail,
   readAccountProfilePreferences,
-  writeAccountProfilePreferences,
-  type AccountProfilePreferences,
 } from '@/lib/accountProfile';
 
 type AccountProfile = {
@@ -37,6 +35,7 @@ export default function AccountPage() {
   const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
   const [authEmail, setAuthEmail] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +82,7 @@ export default function AccountPage() {
   const avatarLabel = useMemo(() => initialsForName(effectiveDisplayName), [effectiveDisplayName]);
 
   const persist = useCallback(async () => {
+    setSaveError('');
     const next: AccountProfile = {
       displayName: draft.displayName.trim() || displayNameFromEmail(effectiveEmail, DEFAULT_PROFILE.displayName),
       email: effectiveEmail,
@@ -118,13 +118,13 @@ export default function AccountPage() {
       setSaveNotice('Saved');
     } catch {
       setDraft(next);
-      writeAccountProfilePreferences({
-        displayName: next.displayName,
-        photoUrl: next.photoUrl || '',
-      } satisfies AccountProfilePreferences);
-      setSaveNotice('Saved locally');
+      setSaveNotice('');
+      setSaveError('Failed to save. Try again.');
     }
-    window.setTimeout(() => setSaveNotice(''), 1600);
+    window.setTimeout(() => {
+      setSaveNotice('');
+      setSaveError('');
+    }, 1600);
   }, [draft, effectiveEmail]);
 
   return (
@@ -261,6 +261,7 @@ export default function AccountPage() {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, paddingTop: 4 }}>
               {saveNotice ? <span className="orion-panel-copy">{saveNotice}</span> : null}
+              {saveError ? <span className="orion-panel-copy" style={{ color: 'var(--error-fg)' }}>{saveError}</span> : null}
               <button className="orion-btn orion-btn-primary" onClick={persist}>
                 Save
               </button>

@@ -1540,6 +1540,7 @@ export function isConnectorId(value: string): value is ConnectorId {
 }
 
 export const WORKSPACE_ID = 'default';
+// Deprecated for setup truth: setup state is backend-authoritative and should not be persisted locally.
 export const SETUP_STORAGE_KEY = `empyralis_setup_state_${WORKSPACE_ID}`;
 export const LEGACY_SETUP_STORAGE_KEY = `orion_setup_state_${WORKSPACE_ID}`;
 export const SETUP_STORAGE_KEYS = [SETUP_STORAGE_KEY, LEGACY_SETUP_STORAGE_KEY] as const;

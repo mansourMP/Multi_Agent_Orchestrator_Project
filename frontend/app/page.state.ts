@@ -131,12 +131,16 @@ export interface PageState {
   setIsChecking: (v: boolean | ((prev: boolean) => boolean)) => void;
   metricsLoading: boolean;
   setMetricsLoading: (v: boolean | ((prev: boolean) => boolean)) => void;
+  metricsUnavailable: boolean;
+  setMetricsUnavailable: (v: boolean | ((prev: boolean) => boolean)) => void;
   runtimeMetrics: RuntimeMetrics | null;
   setRuntimeMetrics: (v: RuntimeMetrics | null | ((prev: RuntimeMetrics | null) => RuntimeMetrics | null)) => void;
   localWorkerStatus: LocalWorkerStatus | null;
   setLocalWorkerStatus: (v: LocalWorkerStatus | null | ((prev: LocalWorkerStatus | null) => LocalWorkerStatus | null)) => void;
   workersLoading: boolean;
   setWorkersLoading: (v: boolean | ((prev: boolean) => boolean)) => void;
+  workersUnavailable: boolean;
+  setWorkersUnavailable: (v: boolean | ((prev: boolean) => boolean)) => void;
   logs: LogEntry[];
   setLogs: (v: LogEntry[] | ((prev: LogEntry[]) => LogEntry[])) => void;
   runId: string | null;
@@ -247,9 +251,11 @@ Wed 3:00 PM`);
   const [isStarting, setIsStarting] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [metricsLoading, setMetricsLoading] = useState(false);
+  const [metricsUnavailable, setMetricsUnavailable] = useState(false);
   const [runtimeMetrics, setRuntimeMetrics] = useState<RuntimeMetrics | null>(null);
   const [localWorkerStatus, setLocalWorkerStatus] = useState<LocalWorkerStatus | null>(null);
   const [workersLoading, setWorkersLoading] = useState(false);
+  const [workersUnavailable, setWorkersUnavailable] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
@@ -333,9 +339,11 @@ Wed 3:00 PM`);
     isStarting, setIsStarting,
     isChecking, setIsChecking,
     metricsLoading, setMetricsLoading,
+    metricsUnavailable, setMetricsUnavailable,
     runtimeMetrics, setRuntimeMetrics,
     localWorkerStatus, setLocalWorkerStatus,
     workersLoading, setWorkersLoading,
+    workersUnavailable, setWorkersUnavailable,
     logs, setLogs,
     runId, setRunId,
     pendingApprovalId, setPendingApprovalId,

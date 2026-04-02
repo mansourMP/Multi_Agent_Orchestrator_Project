@@ -1,8 +1,8 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { SETUP_STORAGE_KEYS } from '@/app/page.catalog';
 import { ensureControlPlaneSession, readControlPlaneFailure } from '@/lib/controlPlaneSession';
+import { fetchSetupReadiness } from '@/lib/setupReadiness';
 
 export type PlatformAccessMode = 'default' | 'full';
 
@@ -52,6 +52,8 @@ export type PlatformInspectState = {
 type PlatformShellStatus = {
   setupReady: boolean;
   setupProgressCount: number;
+  setupLoading: boolean;
+  setupError: string | null;
   runtimeHealthy: boolean | null;
   onlineWorkers: number;
   machineCount: number;
@@ -84,36 +86,11 @@ type PlatformShellContextValue = {
 const ACCESS_MODE_STORAGE_KEY = 'orion.platform.access.mode.v1';
 const PlatformShellContext = createContext<PlatformShellContextValue | null>(null);
 
-function readSetupSnapshot(): { setupReady: boolean; setupProgressCount: number; accessMode: PlatformAccessMode | null } {
-  if (typeof window === 'undefined') {
-    return { setupReady: false, setupProgressCount: 0, accessMode: null };
-  }
-
-  try {
-    const raw = SETUP_STORAGE_KEYS
-      .map((key) => window.localStorage.getItem(key))
-      .find((value) => Boolean(value && value.trim()));
-    if (!raw) {
-      return { setupReady: false, setupProgressCount: 0, accessMode: null };
-    }
-    const saved = JSON.parse(raw);
-    const runtimeReady = Boolean(saved?.setupStatus?.runtimeReady);
-    const accountConnected = Boolean(saved?.setupStatus?.accountConnected);
-    const connectionTested = Boolean(saved?.setupStatus?.connectionTested);
-    const trustMode = typeof saved?.trustMode === 'string' ? String(saved.trustMode).trim().toLowerCase() : '';
-    return {
-      setupReady: runtimeReady && accountConnected && connectionTested,
-      setupProgressCount: [runtimeReady, accountConnected, connectionTested].filter(Boolean).length,
-      accessMode: trustMode === 'auto' ? 'full' : trustMode ? 'default' : null,
-    };
-  } catch {
-    return { setupReady: false, setupProgressCount: 0, accessMode: null };
-  }
-}
-
 const INITIAL_STATUS: PlatformShellStatus = {
   setupReady: false,
   setupProgressCount: 0,
+  setupLoading: true,
+  setupError: null,
   runtimeHealthy: null,
   onlineWorkers: 0,
   machineCount: 0,
@@ -126,6 +103,8 @@ const INITIAL_STATUS: PlatformShellStatus = {
 function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStatus): boolean {
   return left.setupReady === right.setupReady
     && left.setupProgressCount === right.setupProgressCount
+    && left.setupLoading === right.setupLoading
+    && left.setupError === right.setupError
     && left.runtimeHealthy === right.runtimeHealthy
     && left.onlineWorkers === right.onlineWorkers
     && left.machineCount === right.machineCount
@@ -171,29 +150,62 @@ export function PlatformShellProvider({ children }: { children: React.ReactNode 
   }, [accessMode]);
 
   useEffect(() => {
-    const refreshSetup = () => {
-      const next = readSetupSnapshot();
+    let alive = true;
+
+    const refreshSetup = async () => {
       setStatus((current) => {
-        const updated = {
+        const next = {
           ...current,
-          setupReady: next.setupReady,
-          setupProgressCount: next.setupProgressCount,
+          setupLoading: true,
+          setupError: null,
         };
-        return areShellStatusEqual(current, updated) ? current : updated;
+        return areShellStatusEqual(current, next) ? current : next;
       });
+      try {
+        const readiness = await fetchSetupReadiness();
+        if (!alive) return;
+        setStatus((current) => {
+          const next = {
+            ...current,
+            setupReady: readiness.complete,
+            setupProgressCount: [readiness.hasAiModel, readiness.hasIntegration].filter(Boolean).length,
+            setupLoading: false,
+            setupError: null,
+          };
+          return areShellStatusEqual(current, next) ? current : next;
+        });
+      } catch (error) {
+        if (!alive) return;
+        const message = error instanceof Error ? error.message.trim() : 'Failed to load setup readiness.';
+        setStatus((current) => {
+          const next = {
+            ...current,
+            setupReady: false,
+            setupProgressCount: 0,
+            setupLoading: false,
+            setupError: message || 'Failed to load setup readiness.',
+          };
+          return areShellStatusEqual(current, next) ? current : next;
+        });
+      }
     };
 
-    const initialRefresh = window.setTimeout(refreshSetup, 0);
-    const timer = window.setInterval(refreshSetup, 4000);
+    void refreshSetup();
+    const timer = window.setInterval(() => {
+      void refreshSetup();
+    }, 15000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshSetup();
+      }
+    };
     window.addEventListener('focus', refreshSetup);
-    document.addEventListener('visibilitychange', refreshSetup);
-    window.addEventListener('storage', refreshSetup);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
-      window.clearTimeout(initialRefresh);
+      alive = false;
       window.clearInterval(timer);
       window.removeEventListener('focus', refreshSetup);
-      document.removeEventListener('visibilitychange', refreshSetup);
-      window.removeEventListener('storage', refreshSetup);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

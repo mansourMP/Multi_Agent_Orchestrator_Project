@@ -82,6 +82,9 @@ export default function BrowserSignInPage({ returnTo, errorCode = '', desktopMod
         if (response.ok && payload) {
           setProviders(payload);
         }
+      } catch {
+        if (!active) return;
+        setError('Could not load sign-in options. Please refresh.');
       } finally {
         if (active) {
           setLoadingProviders(false);

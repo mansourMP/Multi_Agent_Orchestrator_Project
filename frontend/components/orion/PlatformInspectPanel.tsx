@@ -129,10 +129,23 @@ export default function PlatformInspectPanel() {
             </button>
           </div>
 
-          {!hasActiveRun && !status.authRequired ? (
+          {!hasActiveRun && !status.authRequired && !status.setupLoading && !status.setupError ? (
             <div className="orion-inspect-panel-empty">No active run.</div>
           ) : (
             <div className="orion-inspect-panel-sections">
+              {status.setupLoading ? (
+                <section className="orion-inspect-panel-section">
+                  <div className="orion-inspect-panel-label">System status</div>
+                  <div className="orion-inspect-panel-value">Loading setup status…</div>
+                </section>
+              ) : null}
+              {status.setupError ? (
+                <section className="orion-inspect-panel-section">
+                  <div className="orion-inspect-panel-label">System status</div>
+                  <div className="orion-inspect-panel-value">Setup status unavailable.</div>
+                  <div className="orion-inspect-panel-muted">{status.setupError}</div>
+                </section>
+              ) : null}
               {status.authRequired ? (
                 <section className="orion-inspect-panel-section">
                   <div className="orion-inspect-panel-label">Browser sign-in</div>

@@ -742,7 +742,7 @@ function buildPackLaunchHref(args: {
   if (args.primary) params.set('primary', args.primary);
   if (args.secondary) params.set('secondary', args.secondary);
   if (args.tertiary) params.set('tertiary', args.tertiary);
-  return `/workspace?${params.toString()}`;
+  return `/connectors?${params.toString()}`;
 }
 
 const CONNECTOR_CATALOG_BADGES: Record<ConnectorCatalogStatus, { label: string; style: React.CSSProperties }> = {

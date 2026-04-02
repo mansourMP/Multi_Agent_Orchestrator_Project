@@ -69,6 +69,7 @@ const WORKBENCH_PRELOAD_QUERY_KEYS = ['pack', 'goal', 'primary', 'secondary', 't
 const LOCAL_EXECUTION_DEFAULT_GOAL =
   OUTCOME_PACKS.find((item) => item.id === 'local-execution-v1')?.defaultGoal?.trim().toLowerCase() || '';
 const CHAT_SESSION_LIMIT = 24;
+let agentProfileConfigWarningShown = false;
 
 type StoredAgentProfileConfig = {
   name?: string;
@@ -1207,6 +1208,7 @@ export function AutopilotWorkspace() {
     setTrustMode,
     status,
     setStatus,
+    metricsUnavailable,
     logs,
     runId,
     lastRouteInfo,
@@ -1214,6 +1216,7 @@ export function AutopilotWorkspace() {
     lastRunPayload,
     topError, setTopError,
     setupStatus,
+    workersUnavailable,
     showLiveLogs, setShowLiveLogs,
     guidedDefaultsEnabled,
     setGuidedDefaultsEnabled,
@@ -1744,6 +1747,10 @@ export function AutopilotWorkspace() {
       }
       const storedConfigs = window.localStorage.getItem(AGENT_CONFIG_STORAGE_KEY);
       if (storedConfigs) {
+        if (!agentProfileConfigWarningShown) {
+          agentProfileConfigWarningShown = true;
+          console.warn('agent profile config is local-only — backend sync not implemented');
+        }
         const parsed = JSON.parse(storedConfigs) as Partial<Record<AgentRoleId, StoredAgentProfileConfig>>;
         if (parsed && typeof parsed === 'object') setWorkbenchAgentConfigs(parsed);
       }
@@ -2126,6 +2133,10 @@ export function AutopilotWorkspace() {
       href: '/connectors?connector=telegram_bot&onboarding=1',
     };
   }, [derivedSetupReady]);
+  const shellStatusNotice = useMemo(() => {
+    if (metricsUnavailable || workersUnavailable) return 'Status unavailable.';
+    return null;
+  }, [metricsUnavailable, workersUnavailable]);
   useEffect(() => {
     const activeRunId = pendingSimpleRun?.runId || runId;
     const isActiveRun = Boolean(activeRunId) && ['queued_local', 'running', 'waiting'].includes(status);
@@ -2789,6 +2800,7 @@ export function AutopilotWorkspace() {
   return (
     <WorkbenchShell
       topError={topError}
+      statusNotice={shellStatusNotice}
     >
       <div className="orion-workbench-grid" suppressHydrationWarning>
         <ChatSurface

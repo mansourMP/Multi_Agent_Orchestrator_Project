@@ -48,11 +48,13 @@ import { StreamAssembler, extractDisplaySuffix } from '@/lib/StreamAssembler';
 export const ORION_API_URL = API_BASE;
 export const ORION_FRONTEND_VERSION = '2026.2.26';
 const SCREENSHOT_PATH_PATTERN = /\.(png|jpg|jpeg|webp)$/i;
+// TODO: per-role agent profile config is still local-only; no backend sync endpoint exists yet.
 const AGENT_CONFIG_STORAGE_KEY = 'empyralis.agents.profile-config.v1';
 const PROVIDER_POLL_MIN_INTERVAL_MS = 30_000;
 const MODEL_ALIAS_DEBOUNCE_MS = 120;
 const PROVIDER_CATALOG_DEBOUNCE_MS = 260;
 const PROVIDER_MODELS_DEBOUNCE_MS = 420;
+let agentProfileConfigWarningShown = false;
 
 type TimedResourceCache<T> = {
   value: T | null;
@@ -150,6 +152,10 @@ function resolveAgentProfileSkills(agentRole: string | null | undefined): Return
   const roleId = String(agentRole || '').trim();
   if (!roleId || typeof window === 'undefined') {
     return { ids: [], skills: [], promptAppend: '' };
+  }
+  if (!agentProfileConfigWarningShown) {
+    agentProfileConfigWarningShown = true;
+    console.warn('agent profile config is local-only — backend sync not implemented');
   }
   try {
     const raw = window.localStorage.getItem(AGENT_CONFIG_STORAGE_KEY);
@@ -390,8 +396,10 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     setupSession,
     setSetupSessionBusy,
     setMetricsLoading,
+    setMetricsUnavailable,
     setRuntimeMetrics,
     setWorkersLoading,
+    setWorkersUnavailable,
     setLocalWorkerStatus,
     setProviderOptions,
     modelAliases,
@@ -628,25 +636,35 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
     try {
       await ensureControlPlaneSession();
       const res = await fetch('/api/health/overview', { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setRuntimeMetrics(null);
+        setMetricsUnavailable(true);
+        return;
+      }
       const payload = await res.json();
       const metricsPayload = payload?.metrics?.payload;
       if (metricsPayload && typeof metricsPayload === 'object') {
         setRuntimeMetrics(metricsPayload as RuntimeMetrics);
+        setMetricsUnavailable(false);
       }
     } catch {
-      // Ignore transient metrics failures in simple mode.
+      setRuntimeMetrics(null);
+      setMetricsUnavailable(true);
     } finally {
       setMetricsLoading(false);
     }
-  }, [setMetricsLoading, setRuntimeMetrics]);
+  }, [setMetricsLoading, setMetricsUnavailable, setRuntimeMetrics]);
 
   const fetchLocalWorkerStatus = useCallback(async (silent = false) => {
     if (!silent) setWorkersLoading(true);
     try {
       await ensureControlPlaneSession();
       const res = await fetch(`/api/runtime/machines`, { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setLocalWorkerStatus(null);
+        setWorkersUnavailable(true);
+        return;
+      }
       const payload = await res.json();
       if (payload && typeof payload === 'object') {
         const runtimePayload = payload as {
@@ -683,13 +701,15 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
               }))
             : [],
         });
+        setWorkersUnavailable(false);
       }
     } catch {
-      // Ignore transient worker-status failures.
+      setLocalWorkerStatus(null);
+      setWorkersUnavailable(true);
     } finally {
       if (!silent) setWorkersLoading(false);
     }
-  }, [setWorkersLoading, setLocalWorkerStatus]);
+  }, [setWorkersLoading, setWorkersUnavailable, setLocalWorkerStatus]);
 
   const refreshModelAliasCatalog = useCallback(async (): Promise<ModelAliasOption[]> => {
     const aliases = await getOrRefreshCachedResource(
@@ -1774,7 +1794,7 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
       await setupAction('verify', { ok: true });
       await setupAction('complete');
       if (typeof window !== 'undefined') {
-        window.location.assign('/workspace?onboarding=tool-connected');
+        window.location.assign('/connectors?onboarding=tool-connected');
         return;
       }
     } catch (error: unknown) {

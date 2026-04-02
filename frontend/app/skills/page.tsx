@@ -753,6 +753,9 @@ export default function SkillsPage() {
           </div>
 
           <div className="orion-list">
+            <div className="orion-panel-copy" style={{ marginBottom: 8 }}>
+              Curated by Empyralis
+            </div>
             {curatedSkills.map((skill) => {
               const installed = installedSkillIds.has(skill.id);
               const assistantEnabled = bindings.assistantDefaults.includes(skill.id);

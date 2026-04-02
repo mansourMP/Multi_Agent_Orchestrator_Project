@@ -6,6 +6,7 @@ import { UI } from '@/app/page.catalog';
 
 type WorkbenchShellProps = {
   topError: string | null;
+  statusNotice: string | null;
   children: ReactNode;
 };
 
@@ -27,6 +28,7 @@ function formatSimpleTopError(message: string): string {
 
 export function WorkbenchShell({
   topError,
+  statusNotice,
   children,
 }: WorkbenchShellProps) {
   const simpleTopError = topError ? formatSimpleTopError(topError) : null;
@@ -65,6 +67,23 @@ export function WorkbenchShell({
         >
           <AlertTriangle size={14} />
           {simpleTopError}
+        </div>
+      ) : null}
+      {!simpleTopError && statusNotice ? (
+        <div
+          style={{
+            marginBottom: 12,
+            alignSelf: 'stretch',
+            width: '100%',
+            borderRadius: 10,
+            border: `1px solid ${UI.borderSoft}`,
+            background: UI.surfaceAlt,
+            color: UI.textMuted,
+            padding: '8px 12px',
+            fontSize: 12,
+          }}
+        >
+          {statusNotice}
         </div>
       ) : null}
 

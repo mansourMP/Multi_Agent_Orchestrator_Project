@@ -8,20 +8,12 @@ import {
   DEFAULT_CONNECTOR_LABELS,
   OUTCOME_PACKS,
   OUTCOME_CONTRACTS,
-  normalizeAgentRoleId,
   DEFAULT_OUTCOME_PACK_ID,
   DEFAULT_PROVIDER_OPTIONS,
-  isAgentRoleId,
-  isProviderId,
-  isConnectorId,
   formatDurationMs,
   formatPercent,
-  normalizeConnectionMode,
-  normalizeProviderId,
-  normalizeTrustMode,
   RUNTIME_KEY_STORAGE_KEYS,
   SETUP_SESSION_ID_STORAGE_KEYS,
-  SETUP_STORAGE_KEYS,
 } from './page.catalog';
 import { type PageState } from './page.state';
 import { type usePlatformApi } from './page.api';
@@ -369,6 +361,7 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
 
   useEffect(() => {
     try {
+      // Runtime API key and setup session id are kept locally only to resume the active setup handshake.
       const storedRuntime = RUNTIME_KEY_STORAGE_KEYS
         .map((key) => window.localStorage.getItem(key))
         .find((value) => Boolean(value && value.trim()));
@@ -380,94 +373,22 @@ export function usePageActions(state: PageState, api: ReturnType<typeof usePlatf
       if (storedSession) setSetupSessionId(storedSession);
     } catch {
       // ignore localStorage read errors
-    }
-  }, [setRuntimeApiKey, setSetupSessionId]);
-
-  useEffect(() => {
-    try {
-      const raw = SETUP_STORAGE_KEYS
-        .map((key) => window.localStorage.getItem(key))
-        .find((value) => Boolean(value && value.trim()));
-      if (raw) {
-        const saved = JSON.parse(raw);
-        if (saved?.setupStatus) {
-          const nextStatus = {
-            runtimeReady: Boolean(saved.setupStatus.runtimeReady),
-            accountConnected: Boolean(saved.setupStatus.accountConnected),
-            connectionTested: Boolean(saved.setupStatus.connectionTested),
-          };
-          setSetupStatus(nextStatus);
-          setShowSetupWizard(!(nextStatus.runtimeReady && nextStatus.accountConnected && nextStatus.connectionTested));
-        }
-        if (typeof saved?.connectionMode === 'string') {
-          setConnectionMode(normalizeConnectionMode(saved.connectionMode));
-        }
-        if (typeof saved?.provider === 'string' && isProviderId(saved.provider)) {
-          setProvider(normalizeProviderId(saved.provider));
-        }
-        if (typeof saved?.providerAuthMode === 'string' && saved.providerAuthMode.trim()) {
-          setProviderAuthMode(saved.providerAuthMode.trim());
-        }
-        if (typeof saved?.model === 'string' && saved.model.trim()) {
-          setModel(saved.model.trim());
-        }
-        if (typeof saved?.credentialId === 'string') {
-          setCredentialId(saved.credentialId);
-        }
-        if (typeof saved?.connectorCredentialId === 'string') {
-          setConnectorCredentialId(saved.connectorCredentialId);
-        }
-        if (typeof saved?.connectorType === 'string' && isConnectorId(saved.connectorType)) {
-          setConnectorType(saved.connectorType);
-        }
-        if (typeof saved?.trustMode === 'string') {
-          setTrustMode(normalizeTrustMode(saved.trustMode));
-        }
-        if (typeof saved?.selectedPackId === 'string') {
-          const pack = OUTCOME_PACKS.find((item) => item.id === saved.selectedPackId);
-          if (pack) setSelectedPackId(pack.id);
-        }
-        if (typeof saved?.selectedPresetId === 'string') {
-          const preset = BUSINESS_PRESETS.find((item) => item.id === saved.selectedPresetId);
-          if (preset) setSelectedPresetId(preset.id);
-        }
-        if (isAgentRoleId(saved?.selectedAgentRole)) {
-          setSelectedAgentRole(normalizeAgentRoleId(saved.selectedAgentRole));
-        }
-        if (typeof saved?.showSetupWizard === 'boolean') setShowSetupWizard(saved.showSetupWizard);
-        if (typeof saved?.showPackInputs === 'boolean') setShowPackInputs(saved.showPackInputs);
-        if (typeof saved?.showAdvancedControls === 'boolean') setShowAdvancedControls(saved.showAdvancedControls);
-        if (typeof saved?.showKpis === 'boolean') setShowKpis(saved.showKpis);
-        if (typeof saved?.guidedDefaultsEnabled === 'boolean') setGuidedDefaultsEnabled(saved.guidedDefaultsEnabled);
-        if (typeof saved?.weeklyAutopilotEnabled === 'boolean') setWeeklyAutopilotEnabled(saved.weeklyAutopilotEnabled);
-        if (typeof saved?.weeklyAutopilotDay === 'string' && saved.weeklyAutopilotDay.trim()) setWeeklyAutopilotDay(saved.weeklyAutopilotDay);
-        if (typeof saved?.weeklyAutopilotTime === 'string' && /^\d{2}:\d{2}$/.test(saved.weeklyAutopilotTime)) setWeeklyAutopilotTime(saved.weeklyAutopilotTime);
-        if (saved?.weeklyAutopilotTimezone === 'local' || saved?.weeklyAutopilotTimezone === 'utc') setWeeklyAutopilotTimezone(saved.weeklyAutopilotTimezone);
-        if (typeof saved?.setupSessionId === 'string' && saved.setupSessionId.trim()) setSetupSessionId(saved.setupSessionId.trim());
-      }
-    } catch {
-      // ignore localStorage parsing errors
     } finally {
       setSetupHydrated(true);
     }
-  }, [setSetupStatus, setShowSetupWizard, setConnectionMode, setProvider, setProviderAuthMode, setModel, setCredentialId, setConnectorCredentialId, setConnectorType, setTrustMode, setSelectedPackId, setSelectedPresetId, setSelectedAgentRole, setShowPackInputs, setShowAdvancedControls, setShowKpis, setGuidedDefaultsEnabled, setWeeklyAutopilotEnabled, setWeeklyAutopilotDay, setWeeklyAutopilotTime, setWeeklyAutopilotTimezone, setSetupSessionId, setSetupHydrated]);
+  }, [setRuntimeApiKey, setSetupHydrated, setSetupSessionId]);
 
   useEffect(() => {
     if (!setupHydrated) return;
     try {
+      // Setup session id is kept locally only to resume the active backend setup handshake.
       for (const key of SETUP_SESSION_ID_STORAGE_KEYS) {
         if (setupSessionId) window.localStorage.setItem(key, setupSessionId);
         else window.localStorage.removeItem(key);
       }
-
-      const setupPayload = JSON.stringify({
-        setupStatus, connectionMode, provider, providerAuthMode, model, credentialId, connectorCredentialId: state.connectorCredentialId, connectorType, trustMode, selectedPackId, selectedPresetId, selectedAgentRole, showSetupWizard, showPackInputs, showAdvancedControls, showKpis, guidedDefaultsEnabled, weeklyAutopilotEnabled, weeklyAutopilotDay, weeklyAutopilotTime, weeklyAutopilotTimezone, setupSessionId, updatedAt: new Date().toISOString(),
-      });
-      for (const key of SETUP_STORAGE_KEYS) {
-        window.localStorage.setItem(key, setupPayload);
-      }
+      // TODO: setup state is backend-authoritative, do not persist locally
     } catch { /* ignore */ }
-  }, [setupHydrated, setupStatus, connectionMode, provider, providerAuthMode, model, credentialId, state.connectorCredentialId, connectorType, trustMode, selectedPackId, selectedPresetId, selectedAgentRole, showSetupWizard, showPackInputs, showAdvancedControls, showKpis, guidedDefaultsEnabled, weeklyAutopilotEnabled, weeklyAutopilotDay, weeklyAutopilotTime, weeklyAutopilotTimezone, setupSessionId]);
+  }, [setupHydrated, setupSessionId]);
 
   useEffect(() => {
     if (setupReady) setShowSetupWizard(false);

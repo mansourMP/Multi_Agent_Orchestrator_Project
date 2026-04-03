@@ -16,6 +16,7 @@ import {
   Mic,
   Plus,
   PlugZap,
+  PanelLeft,
   Square,
   SlidersHorizontal,
   Sparkles,
@@ -27,7 +28,16 @@ import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { fmtTime } from '@/app/page.catalog';
-import type { ChatMessageActionRecord, ChatMessageRecord, ChatRunCardStatus, ChatSessionRecord, ChatStepRecord } from './chatSchema';
+import {
+  CHAT_STORE_STORAGE_KEY,
+  CHAT_STORE_UPDATED_EVENT,
+  sanitizeChatStore,
+  type ChatMessageActionRecord,
+  type ChatMessageRecord,
+  type ChatRunCardStatus,
+  type ChatSessionRecord,
+  type ChatStepRecord,
+} from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
 import { normalizeAssembledAssistantText } from '@/lib/StreamAssembler';
@@ -701,6 +711,8 @@ export function ChatSurface({
   const [voicePhase, setVoicePhase] = useState<'idle' | 'listening' | 'processing'>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [historySessions, setHistorySessions] = useState<ChatSessionRecord[]>(sessions);
   const goalValueRef = useRef(goal);
   const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const speechTranscriptRef = useRef('');
@@ -1084,6 +1096,36 @@ export function ChatSurface({
   }, [goal]);
 
   useEffect(() => {
+    setHistorySessions(sessions);
+  }, [sessions]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncHistorySessions = () => {
+      try {
+        const raw = window.localStorage.getItem(CHAT_STORE_STORAGE_KEY);
+        if (!raw) {
+          setHistorySessions(sessions);
+          return;
+        }
+        const parsed = sanitizeChatStore(JSON.parse(raw));
+        setHistorySessions(parsed?.sessions ?? sessions);
+      } catch {
+        setHistorySessions(sessions);
+      }
+    };
+
+    syncHistorySessions();
+    window.addEventListener('storage', syncHistorySessions);
+    window.addEventListener(CHAT_STORE_UPDATED_EVENT, syncHistorySessions);
+    return () => {
+      window.removeEventListener('storage', syncHistorySessions);
+      window.removeEventListener(CHAT_STORE_UPDATED_EVENT, syncHistorySessions);
+    };
+  }, [sessions]);
+
+  useEffect(() => {
     const element = primaryGoalRef.current;
     if (!element) return;
     const minHeight = 28;
@@ -1237,45 +1279,138 @@ export function ChatSurface({
       suppressHydrationWarning
     >
       <div className="orion-chat-v2-workspace" ref={workspaceRef}>
-        {!isMobile ? (
-          <aside className="orion-chat-v2-history" aria-label="Chat history">
-            <div className="orion-chat-v2-history-header">
-              <div>
-                <div className="orion-chat-v2-history-title">Chats</div>
-                <div className="orion-chat-v2-history-copy">Switch between stored conversations or start a fresh thread.</div>
+        {historyDrawerOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label="Close chat history"
+              onClick={() => setHistoryDrawerOpen(false)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                border: 0,
+                background: 'rgba(15, 18, 24, 0.18)',
+                zIndex: 14,
+              }}
+            />
+            <aside
+              aria-label="Chat history"
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: isMobile ? 'min(100%, 320px)' : 320,
+                zIndex: 15,
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                borderRight: '1px solid color-mix(in srgb, var(--border-default) 78%, transparent 22%)',
+                background: 'color-mix(in srgb, var(--bg-surface) 96%, var(--bg-element) 4%)',
+                boxShadow: '12px 0 32px rgba(0, 0, 0, 0.08)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 12,
+                  padding: 18,
+                  borderBottom: '1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%)',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 650, color: 'var(--text-primary)' }}>Chats</div>
+                  <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                    Previous sessions from the local chat store.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button" className="orion-btn orion-btn-primary" style={{ minHeight: 44, flex: 1 }} onClick={onNewChat}>
+                    New chat
+                  </button>
+                  <button type="button" className="orion-btn orion-btn-ghost" style={{ minHeight: 44 }} onClick={() => setHistoryDrawerOpen(false)}>
+                    Close
+                  </button>
+                </div>
               </div>
-              <button type="button" className="orion-btn orion-btn-primary orion-chat-v2-history-new" onClick={onNewChat}>
-                New chat
-              </button>
-            </div>
-            <div className="orion-chat-v2-history-list">
-              {sessions.length === 0 ? (
-                <div className="orion-chat-v2-history-empty">No saved chats yet.</div>
-              ) : (
-                sessions.map((session) => {
-                  const active = session.id === selectedSessionId;
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className={`orion-chat-v2-history-item${active ? ' is-active' : ''}`}
-                      onClick={() => onSelectSession(session.id)}
-                      aria-current={active ? 'page' : undefined}
-                    >
-                      <div className="orion-chat-v2-history-item-head">
-                        <div className="orion-chat-v2-history-item-title">{session.title}</div>
-                        <div className="orion-chat-v2-history-item-time">{formatChatHistoryTimestamp(session.updatedAt)}</div>
-                      </div>
-                      <div className="orion-chat-v2-history-item-preview">{buildChatHistoryPreview(session)}</div>
-                      <div className="orion-chat-v2-history-item-meta">
-                        {session.messages.length} message{session.messages.length === 1 ? '' : 's'}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </aside>
+              <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: 12, display: 'grid', gap: 8 }}>
+                {historySessions.length === 0 ? (
+                  <div
+                    style={{
+                      border: '1px dashed var(--border-subtle)',
+                      borderRadius: 16,
+                      padding: 16,
+                      fontSize: 12,
+                      lineHeight: 1.55,
+                      color: 'var(--text-secondary)',
+                      background: 'color-mix(in srgb, var(--bg-surface) 94%, transparent 6%)',
+                    }}
+                  >
+                    No saved chats yet.
+                  </div>
+                ) : (
+                  historySessions.map((session) => {
+                    const active = session.id === selectedSessionId;
+                    return (
+                      <button
+                        key={session.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectSession(session.id);
+                          setHistoryDrawerOpen(false);
+                        }}
+                        aria-current={active ? 'page' : undefined}
+                        style={{
+                          width: '100%',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 16,
+                          background: active
+                            ? 'color-mix(in srgb, var(--bg-element) 88%, var(--bg-surface) 12%)'
+                            : 'var(--bg-shell)',
+                          padding: 12,
+                          display: 'grid',
+                          gap: 8,
+                          textAlign: 'left',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                          <div
+                            style={{
+                              minWidth: 0,
+                              fontSize: 13,
+                              fontWeight: 650,
+                              color: 'var(--text-primary)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {buildChatHistoryPreview(session)}
+                          </div>
+                          <div style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                            {formatChatHistoryTimestamp(session.updatedAt)}
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            lineHeight: 1.55,
+                            color: 'var(--text-secondary)',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {buildChatHistoryPreview(session)}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </aside>
+          </>
         ) : null}
         <div
           className="orion-chat-v2-main"
@@ -1631,6 +1766,15 @@ export function ChatSurface({
 
               <div className="orion-chat-v2-composer-toolbar">
                 <div className="orion-chat-v2-composer-toolbar-left">
+                  <button
+                    type="button"
+                    className="orion-chat-v2-model-pill"
+                    onClick={() => setHistoryDrawerOpen(true)}
+                    aria-label="Open chat history"
+                  >
+                    <PanelLeft size={14} />
+                    <span>History</span>
+                  </button>
                   <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
                     <button
                       type="button"

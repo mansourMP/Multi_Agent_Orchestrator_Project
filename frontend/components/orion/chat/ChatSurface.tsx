@@ -1547,6 +1547,23 @@ export function ChatSurface({
           style={artifactPanelVisible ? { width: `${100 - artifactPanelWidth}%` } : undefined}
         >
           <div className="orion-chat-v2-thread-shell" ref={threadRef}>
+            {!hasMessages ? (
+              <div className="orion-chat-v2-compact-empty">
+                <h1 className="orion-chat-v2-compact-title">Start a new chat</h1>
+                <p className="orion-chat-v2-compact-copy">
+                  Ask a question, describe a task, or tell {targetLabel} what to do next.
+                </p>
+                {providerBanner ? (
+                  <button
+                    type="button"
+                    className="orion-chat-v2-empty-action"
+                    onClick={() => router.push(providerBanner.href)}
+                  >
+                    {providerBanner.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {visibleMessages.length > 0 ? (
               <div className="orion-chat-v2-thread" aria-live="polite">
                 {visibleMessages.map((message, index) => {

@@ -3677,6 +3677,7 @@ input:focus-visible {
   display: flex;
   align-items: stretch;
   overflow: hidden;
+  max-width: none;
 }
 
 .orion-chat-v2-history {
@@ -3794,11 +3795,14 @@ input:focus-visible {
 }
 
 .orion-chat-v2-main {
+  width: 100%;
+  max-width: none;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  align-self: stretch;
   transition: width 180ms ease;
 }
 
@@ -4067,9 +4071,10 @@ input:focus-visible {
 
 .orion-chat-v2-thread-shell {
   width: 100%;
+  max-width: none;
   display: flex;
   flex-direction: column;
-  flex: 1 1 0%;
+  flex: 1 1 auto;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
@@ -4077,6 +4082,7 @@ input:focus-visible {
   padding: 18px 0 0;
   position: relative;
   scrollbar-gutter: stable;
+  align-self: stretch;
 }
 
 .orion-chat-v2-anchor {
@@ -4266,13 +4272,20 @@ input:focus-visible {
   flex-direction: column;
   align-content: initial;
   justify-items: initial;
-  justify-content: flex-start;
-  padding: 18px 0 0;
+  justify-content: flex-end;
+  padding: 24px 0 0;
+}
+
+.orion-chat-v2.is-empty .orion-chat-v2-composer-shell {
+  position: static;
+  margin-top: auto;
+  padding-top: 0;
+  background: transparent;
 }
 
 .orion-chat-v2-compact-empty {
   width: min(560px, calc(100vw - var(--shell-sidebar-width) - 96px));
-  margin: 0 auto 10px;
+  margin: auto auto 18px;
   display: grid;
   gap: 6px;
   justify-items: center;
@@ -5777,7 +5790,7 @@ input:focus-visible {
 
 .orion-chat-v2--deer .orion-chat-v2-compact-empty {
   width: min(100%, 920px);
-  margin: 52px auto 20px;
+  margin: auto auto 24px;
   padding: 0 24px;
   gap: 14px;
 }
@@ -8961,14 +8974,6 @@ body.orion-chat-home .sidebar-brandmark {
 }
 
 /* Empyralist platform redesign */
-body,
-body.orion-chat-home,
-body.orion-chat-home .orion-app-shell,
-body.orion-chat-home .orion-main-shell,
-body.orion-chat-home .orion-main-stage,
-.orion-app-shell,
-.orion-main-shell,
-
 .orion-main-shell {
   margin-left: var(--shell-sidebar-width);
   width: calc(100vw - var(--shell-sidebar-width));

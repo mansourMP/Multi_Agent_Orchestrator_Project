@@ -344,7 +344,6 @@ async function importOpenAiCodexCredential(
       workspace_id: workspaceId,
       mode: 'byok',
       metadata,
-      skip_validation: true,
       credentials: {
         oauth_token: payload.access_token,
         refresh_token: payload.refresh_token,
@@ -353,6 +352,7 @@ async function importOpenAiCodexCredential(
         ...(payload.email ? { email: payload.email } : {}),
         ...(payload.profile_name ? { profile_name: payload.profile_name } : {}),
         auth_mode: 'oauth_token',
+        credential_type: 'codex_token',
       },
     }),
   });
@@ -375,53 +375,57 @@ async function importOpenAiCodexCredential(
     : 'OpenAI / Codex local session imported from this Mac.';
   let runtimeDetail: string | null = null;
 
-  if (enableRuntime && credentialId) {
-    const validation = await runtimeJsonRequest(
-      `/credentials/vault/${encodeURIComponent(credentialId)}/test?workspace_id=${encodeURIComponent(workspaceId)}`,
+  if (credentialId) {
+    const probe = await runtimeJsonRequest(
+      `/providers/openai-codex/probe?workspace_id=${encodeURIComponent(workspaceId)}&credential_id=${encodeURIComponent(credentialId)}`,
       { method: 'POST' },
     );
-    const validationBody = validation.payload && typeof validation.payload === 'object'
-      ? validation.payload as Record<string, unknown>
+    const probeBody = probe.payload && typeof probe.payload === 'object'
+      ? probe.payload as Record<string, unknown>
       : {};
-    const validationOk = validation.status < 400 && validationBody.ok === true;
-    if (!validationOk) {
+    const probeOk = probe.status < 400 && probeBody.ok === true;
+    if (!probeOk) {
+      await runtimeJsonRequest(
+        `/credentials/vault/${encodeURIComponent(credentialId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'DELETE' },
+      );
+      return Response.json(
+        {
+          detail: 'Codex session imported but could not be validated — please log in again with Codex',
+          runtime_detail: String(probeBody.detail || probeBody.message || '').trim() || null,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (enableRuntime && credentialId) {
+    const profileCreate = await runtimeJsonRequest('/providers/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openai-codex',
+        label,
+        credential_id: credentialId,
+        auth_mode: 'oauth_token',
+        workspace_id: workspaceId,
+        priority: 100,
+        enabled: true,
+        model: 'gpt-5.4',
+      }),
+    });
+    if (profileCreate.status >= 400) {
       attention = true;
       runtimeDetail = String(
-        validationBody.message
-        || validationBody.detail
-        || 'The OpenAI / Codex session was saved, but it is not ready for runtime use yet.',
-      ).trim() || 'The OpenAI / Codex session was saved, but it is not ready for runtime use yet.';
+        (profileCreate.payload as { detail?: unknown; message?: unknown } | null | undefined)?.detail
+        || (profileCreate.payload as { detail?: unknown; message?: unknown } | null | undefined)?.message
+        || 'Imported the OpenAI / Codex session, but failed to enable it for runtime.',
+      ).trim() || 'Imported the OpenAI / Codex session, but failed to enable it for runtime.';
       message = importSource === 'openai_codex_oauth'
-        ? 'OpenAI / Codex browser OAuth connected, but it needs attention before runtime can use it.'
-        : 'OpenAI / Codex local session imported, but it needs attention before runtime can use it.';
+        ? 'OpenAI / Codex browser OAuth connected, but runtime could not enable it yet.'
+        : 'OpenAI / Codex local session imported, but runtime could not enable it yet.';
     } else {
-      const profileCreate = await runtimeJsonRequest('/providers/profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: 'openai-codex',
-          label,
-          credential_id: credentialId,
-          auth_mode: 'oauth_token',
-          workspace_id: workspaceId,
-          priority: 100,
-          enabled: true,
-          model: 'gpt-5.4',
-        }),
-      });
-      if (profileCreate.status >= 400) {
-        attention = true;
-        runtimeDetail = String(
-          (profileCreate.payload as { detail?: unknown; message?: unknown } | null | undefined)?.detail
-          || (profileCreate.payload as { detail?: unknown; message?: unknown } | null | undefined)?.message
-          || 'Imported the OpenAI / Codex session, but failed to enable it for runtime.',
-        ).trim() || 'Imported the OpenAI / Codex session, but failed to enable it for runtime.';
-        message = importSource === 'openai_codex_oauth'
-          ? 'OpenAI / Codex browser OAuth connected, but runtime could not enable it yet.'
-          : 'OpenAI / Codex local session imported, but runtime could not enable it yet.';
-      } else {
-        enabledForRuntime = true;
-      }
+      enabledForRuntime = true;
     }
   }
 

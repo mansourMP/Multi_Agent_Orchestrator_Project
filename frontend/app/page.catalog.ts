@@ -27,7 +27,7 @@ export const UI = {
 
 export type RunStatus = 'idle' | 'queued_local' | 'running' | 'waiting' | 'completed' | 'error';
 export type LogLevel = 'info' | 'warn' | 'error';
-export type ProviderId = 'openai' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex' | 'qwen' | 'deepseek' | 'mistral' | 'ollama';
+export type ProviderId = 'openai' | 'openai-codex' | 'anthropic' | 'claude_code_cli' | 'gemini' | 'vertex' | 'qwen' | 'deepseek' | 'mistral' | 'ollama';
 export type ConnectorId =
   | 'google_workspace'
   | 'microsoft_365'
@@ -981,6 +981,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
   openai: [...DEFAULT_OPENAI_CODEX_MODELS],
+  'openai-codex': [...DEFAULT_OPENAI_CODEX_MODELS],
   anthropic: ['claude-sonnet', 'claude-haiku'],
   claude_code_cli: ['sonnet', 'opus'],
   gemini: ['gemini-flash', 'gemini-pro'],
@@ -1212,6 +1213,7 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
 
 export const DEFAULT_PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: 'My OpenAI Key',
+  'openai-codex': 'My OpenAI (Codex) Session',
   anthropic: 'My Anthropic Key',
   claude_code_cli: 'My Claude Subscription',
   gemini: 'My Gemini Key',
@@ -1510,6 +1512,7 @@ export const PRIORITY_LAUNCH_CONNECTORS: ConnectorLaunchPlan[] = [
 
 export function isProviderId(value: string): value is ProviderId {
   return value === 'openai'
+    || value === 'openai-codex'
     || value === 'anthropic'
     || value === 'claude_code_cli'
     || value === 'gemini'

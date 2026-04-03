@@ -7,6 +7,39 @@ globals().update({key: value for key, value in vars(config).items() if not key.s
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(common).items() if not key.startswith("__")})
 
+
+def _credential_type_from_openai_env_source(source: Any) -> str:
+    normalized = str(source or "").strip().lower()
+    if normalized in {"env_codex_oauth_token", "codex_token_vault"}:
+        return "codex_token"
+    if normalized == "env_api_key":
+        return "api_key"
+    if normalized in {"env_oauth_token", "env_access_token"}:
+        return "oauth_token"
+    return "oauth_token"
+
+
+def _openai_env_credentials(token: str, source: Any) -> Dict[str, Any]:
+    sanitized = str(token or "").strip()
+    if not sanitized:
+        return {}
+    credential_type = _credential_type_from_openai_env_source(source)
+    credentials: Dict[str, Any] = {
+        "credential_type": credential_type,
+        "org_id": OPENAI_ORG_ID,
+        "project_id": OPENAI_PROJECT_ID,
+    }
+    if credential_type == "api_key":
+        credentials["api_key"] = sanitized
+        credentials["auth_mode"] = "api_key"
+    elif credential_type == "codex_token":
+        credentials["oauth_token"] = sanitized
+        credentials["auth_mode"] = "oauth_token"
+    else:
+        credentials["access_token"] = sanitized
+        credentials["auth_mode"] = "access_token"
+    return credentials
+
 def _serialize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     now = _utc_now()
     cooldown_until = _parse_utc_ts(profile.get("cooldown_until"))
@@ -335,13 +368,9 @@ async def probe_provider(
         try:
             credentials = resolve_default_vault_credential("openai", workspace_id)
         except Exception:
-            key, _ = _openai_env_bearer_with_source()
+            key, source = _openai_env_bearer_with_source()
             if key:
-                credentials = {
-                    "access_token": key,
-                    "org_id": OPENAI_ORG_ID,
-                    "project_id": OPENAI_PROJECT_ID,
-                }
+                credentials = _openai_env_credentials(key, source)
     elif provider_id == "openai-codex":
         try:
             credentials = resolve_default_vault_credential("openai-codex", workspace_id)
@@ -414,13 +443,9 @@ async def get_provider_models(
         try:
             credentials = resolve_default_vault_credential("openai", workspace_id)
         except Exception:
-            key, _ = _openai_env_bearer_with_source()
+            key, source = _openai_env_bearer_with_source()
             if key:
-                credentials = {
-                    "access_token": key,
-                    "org_id": OPENAI_ORG_ID,
-                    "project_id": OPENAI_PROJECT_ID,
-                }
+                credentials = _openai_env_credentials(key, source)
 
     if not credentials:
         raise HTTPException(status_code=400, detail="No credential available for this provider.")

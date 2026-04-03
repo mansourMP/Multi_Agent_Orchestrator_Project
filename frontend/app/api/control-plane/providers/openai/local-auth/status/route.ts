@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
   const authFilePath = snapshot?.authFilePath || openAiLocalAuthFilePath();
   const hasAccessToken = Boolean(snapshot?.accessToken);
   const hasApiKey = Boolean(snapshot?.openaiApiKey);
-  const available = hasAccessToken || hasApiKey;
+  const available = hasAccessToken;
 
   return Response.json({
     available,
@@ -30,6 +30,8 @@ export async function GET(request: NextRequest) {
       ? hasAccessToken
         ? 'A local OpenAI / Codex session was found on this Mac. You can import it into Empyralis without pasting a token.'
         : 'A local OpenAI API key was found on this Mac.'
-      : 'No local OpenAI / Codex session was found yet. Sign in with ChatGPT or Codex in your browser first, then return here.',
+      : hasApiKey
+        ? 'A local OpenAI API key was found on this Mac, but there is no importable Codex session yet.'
+        : 'No local OpenAI / Codex session was found yet. Sign in with ChatGPT or Codex in your browser first, then return here.',
   });
 }

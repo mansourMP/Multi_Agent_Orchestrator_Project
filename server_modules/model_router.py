@@ -9,6 +9,7 @@ from server_modules.provider_profiles import (
     PROVIDER_CATALOG,
     _build_provider_credential_candidates,
     _openai_bearer_from_credentials,
+    _openai_credential_type,
     http_json_request,
     normalize_provider_id,
     resolve_provider_adapter,
@@ -263,6 +264,8 @@ def _provider_kwargs(provider: str, credentials: Optional[Dict[str, Any]]) -> Di
     if not credentials:
         return {}
     if provider == "openai":
+        if _openai_credential_type(credentials) == "codex_token":
+            raise RuntimeError("This is a Codex OAuth token. Use openai-codex provider or set a direct OpenAI API key.")
         token = _openai_bearer_from_credentials(credentials)
         if not token:
             raise RuntimeError("OpenAI credential requires api_key or access_token.")

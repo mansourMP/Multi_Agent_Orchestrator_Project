@@ -3482,15 +3482,25 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
     payload = credentials if isinstance(credentials, dict) else {}
     auth_mode = _credential_auth_mode(provider, payload)
     normalized_provider = str(provider or "").strip().lower()
+    bearer_token = str(
+        payload.get("access_token")
+        or payload.get("oauth_token")
+        or ""
+    ).strip()
     if normalized_provider == "anthropic":
         if auth_mode == "local_cli":
             return bool(get_claude_code_session_token())
         return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("anthropic")
     if normalized_provider == "openai":
-        return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("openai")
+        return (
+            bool(str(payload.get("api_key") or "").strip())
+            or (auth_mode in {"oauth_token", "access_token"} and bool(bearer_token))
+            or bool(str(payload.get("credential_type") or "").strip().lower() == "codex_token" and bearer_token)
+            or provider_has_key("openai")
+        )
     if normalized_provider == "gemini":
         return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("gemini")
-    if normalized_provider == "codex_cli":
+    if normalized_provider in {"openai-codex", "codex_cli"}:
         return bool(payload) or provider_has_key("codex_cli")
     return provider_has_key(normalized_provider)
 

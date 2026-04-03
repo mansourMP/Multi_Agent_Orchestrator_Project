@@ -125,6 +125,58 @@ def _validation_result(provider_label: str, response: Dict[str, Any]) -> Dict[st
     }
 
 
+def _openai_credential_type(credentials: Optional[Dict[str, Any]]) -> str:
+    payload = credentials if isinstance(credentials, dict) else {}
+    explicit = str(payload.get("credential_type") or "").strip().lower()
+    if explicit in {"api_key", "oauth_token", "codex_token"}:
+        return explicit
+    token = str(payload.get("oauth_token") or payload.get("access_token") or "").strip()
+    if str(payload.get("account_id") or "").strip():
+        return "codex_token"
+    if token and codex_account_id_from_token(token):
+        return "codex_token"
+    if str(payload.get("api_key") or "").strip():
+        return "api_key"
+    if str(payload.get("oauth_token") or "").strip():
+        return "oauth_token"
+    if str(payload.get("access_token") or "").strip():
+        return "oauth_token"
+    return ""
+
+
+def _credential_type_from_openai_env_source(source: Any) -> str:
+    normalized = str(source or "").strip().lower()
+    if normalized in {"env_codex_oauth_token", "codex_token_vault"}:
+        return "codex_token"
+    if normalized == "env_api_key":
+        return "api_key"
+    if normalized in {"env_oauth_token", "env_access_token"}:
+        return "oauth_token"
+    return "oauth_token"
+
+
+def _openai_env_credentials(token: str, source: Any) -> Dict[str, Any]:
+    sanitized = str(token or "").strip()
+    if not sanitized:
+        return {}
+    credential_type = _credential_type_from_openai_env_source(source)
+    credentials: Dict[str, Any] = {
+        "credential_type": credential_type,
+        "org_id": OPENAI_ORG_ID,
+        "project_id": OPENAI_PROJECT_ID,
+    }
+    if credential_type == "api_key":
+        credentials["api_key"] = sanitized
+        credentials["auth_mode"] = "api_key"
+    elif credential_type == "codex_token":
+        credentials["oauth_token"] = sanitized
+        credentials["auth_mode"] = "oauth_token"
+    else:
+        credentials["access_token"] = sanitized
+        credentials["auth_mode"] = "access_token"
+    return credentials
+
+
 # ---------------------------------------------------------------------------
 # Provider catalog (moved from server.py)
 # ---------------------------------------------------------------------------
@@ -314,15 +366,19 @@ def secretless_provider_credentials(provider: Any, auth_mode: Any) -> Dict[str, 
 def resolve_provider_adapter(provider: Any, credentials: Optional[Dict[str, Any]] = None) -> tuple[str, str, ProviderAdapter]:
     provider_id = normalize_provider_id(provider)
     auth_mode = normalize_auth_mode(provider, credentials=credentials)
+    resolved_provider_id = provider_id
     adapter_key = provider_id
     if provider_id == "anthropic" and auth_mode == "local_cli":
         adapter_key = "claude_code_cli"
+    if provider_id == "openai" and _openai_credential_type(credentials) == "codex_token":
+        adapter_key = "openai-codex"
+        resolved_provider_id = "openai-codex"
     if provider_id == "openai-codex":
         adapter_key = "openai-codex"
     adapter = PROVIDER_ADAPTERS.get(adapter_key)
     if adapter is None:
         raise RuntimeError(f"Unsupported provider '{provider}'.")
-    return provider_id, adapter_key, adapter
+    return resolved_provider_id, adapter_key, adapter
 
 # ---------------------------------------------------------------------------
 # Provider adapters (moved from server.py)
@@ -477,10 +533,8 @@ def run_claude_code_cli(system_prompt: str, user_input: str, model: str, timeout
 class OpenAIAdapter(ProviderAdapter):
     provider_id = "openai"
 
-    def _uses_oauth_token(self, credentials: Dict[str, Any]) -> bool:
-        auth_mode = str(credentials.get("auth_mode") or "").strip().lower()
-        oauth_token = str(credentials.get("oauth_token") or "").strip()
-        return auth_mode == "oauth_token" or (not auth_mode and bool(oauth_token))
+    def _uses_codex_token(self, credentials: Dict[str, Any]) -> bool:
+        return _openai_credential_type(credentials) == "codex_token"
 
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
         self._ensure_direct_api_credentials(credentials)
@@ -500,23 +554,15 @@ class OpenAIAdapter(ProviderAdapter):
         return headers
 
     def _ensure_direct_api_credentials(self, credentials: Dict[str, Any]) -> None:
-        if self._uses_oauth_token(credentials):
+        if self._uses_codex_token(credentials):
             raise RuntimeError(OPENAI_CODEX_DIRECT_AUTH_ERROR)
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        if self._uses_oauth_token(credentials):
-            return {
-                "ok": True,
-                "status": 200,
-                "message": "ChatGPT / Codex OAuth session imported.",
-            }
         self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         return _validation_result("OpenAI", res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
-        if self._uses_oauth_token(credentials):
-            return list(OPENAI_CODEX_MODEL_CATALOG)
         self._ensure_direct_api_credentials(credentials)
         res = http_json_request("https://api.openai.com/v1/models", headers=self._headers(credentials))
         data = res.get("json", {}) or {}
@@ -682,11 +728,35 @@ class OpenAICodexAdapter(ProviderAdapter):
         token = self._oauth_token(credentials)
         account_id = str(credentials.get("account_id") or "").strip() or codex_account_id_from_token(token)
         if not account_id:
-            raise RuntimeError("OpenAI Codex OAuth token is missing a ChatGPT account id.")
+            return {
+                "ok": False,
+                "status": 401,
+                "message": "Codex session expired — re-authenticate",
+            }
+        try:
+            result = self.probe(credentials)
+        except Exception as exc:
+            detail = str(exc or "").strip().lower()
+            if (
+                "http_401" in detail
+                or "http_403" in detail
+                or "missing_oauth_token" in detail
+                or "missing_chatgpt_account_id" in detail
+                or "expired" in detail
+                or "unauthorized" in detail
+                or "forbidden" in detail
+            ):
+                return {
+                    "ok": False,
+                    "status": 401,
+                    "message": "Codex session expired — re-authenticate",
+                }
+            raise
         return {
             "ok": True,
             "status": 200,
-            "message": "ChatGPT / Codex OAuth session imported.",
+            "message": "Codex session is valid.",
+            "model": result.get("model"),
         }
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
@@ -1218,16 +1288,12 @@ def _build_provider_credential_candidates(context: Dict[str, Any], metadata: Dic
                 seen_labels.add("vault-default")
         except Exception:
             pass
-        env_key, _ = _openai_env_bearer_with_source()
+        env_key, env_source = _openai_env_bearer_with_source()
         if env_key and "env-openai" not in seen_labels:
             candidates.append(
                 {
                     "source": "env",
-                    "credentials": {
-                        "access_token": env_key,
-                        "org_id": OPENAI_ORG_ID,
-                        "project_id": OPENAI_PROJECT_ID,
-                    },
+                    "credentials": _openai_env_credentials(env_key, env_source),
                     "profile_id": None,
                     "label": "env-openai",
                 }

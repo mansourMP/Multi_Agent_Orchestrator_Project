@@ -73,7 +73,7 @@ export function ProviderLogoMark({
   provider: ProviderId;
   size?: number;
 }) {
-  if (provider === 'openai') {
+  if (provider === 'openai' || provider === 'openai-codex') {
     return (
       <LogoTile size={size} bg="#111111">
         <SvgMark size={size}>

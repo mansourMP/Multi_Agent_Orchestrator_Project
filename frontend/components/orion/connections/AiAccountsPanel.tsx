@@ -345,6 +345,17 @@ function normalizeProvidersError(message?: string | null): string {
 }
 
 function providerOptionFor(provider: ProviderId, options: ProviderOption[]): ProviderOption {
+  if (provider === 'openai-codex') {
+    return {
+      id: 'openai-codex',
+      label: 'OpenAI (Codex)',
+      defaultModel: DEFAULT_PROVIDER_MODELS['openai-codex'][0] || 'gpt-5.4',
+      auth: ['oauth_token'],
+      defaultAuthMode: 'oauth_token',
+      authModes: [{ id: 'oauth_token', label: 'ChatGPT / Codex OAuth', secretRequired: true }],
+      note: 'Use a ChatGPT / Codex OAuth session for the Codex transport.',
+    };
+  }
   return options.find((item) => item.id === provider)
     || DEFAULT_PROVIDER_OPTIONS.find((item) => item.id === provider)
     || DEFAULT_PROVIDER_OPTIONS[0];
@@ -381,7 +392,6 @@ function defaultProviderLabel(provider: ProviderId, authMode: string): string {
 function knownProviderId(value?: unknown): ProviderId | null {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'claude_code_cli') return 'anthropic';
-  if (raw === 'openai-codex') return 'openai';
   return isProviderId(raw) ? raw : null;
 }
 

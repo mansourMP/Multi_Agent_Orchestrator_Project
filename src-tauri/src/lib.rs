@@ -1240,14 +1240,18 @@ pub fn run() {
                     as Box<dyn std::error::Error>
             })?;
 
-            if let Err(error) =
+            let mut window_builder =
                 WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(url))
                     .initialization_script(&desktop_bridge_script())
                     .title(WINDOW_TITLE)
-                    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-                    .min_inner_size(1100.0, 760.0)
-                    .build()
+                    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT);
+
+            #[cfg(target_os = "macos")]
             {
+                window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+            }
+
+            if let Err(error) = window_builder.build() {
                 stop_sidecars(&state);
                 release_desktop_start_metadata(&start_meta_path);
                 release_desktop_shell_lock(&lock_path);

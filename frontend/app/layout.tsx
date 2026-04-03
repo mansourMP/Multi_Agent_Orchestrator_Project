@@ -46,6 +46,8 @@ const CRITICAL_SHELL_CSS = `
 :root {
   --shell-sidebar-width: 56px;
   --topbar-height: 56px;
+  --desktop-titlebar-height: 0px;
+  --desktop-drag-padding-left: 0px;
   --critical-bg-shell: var(--bg-shell);
   --critical-bg-app: var(--bg-app);
   --critical-bg-surface: var(--bg-surface);
@@ -92,7 +94,7 @@ a {
   margin-left: var(--shell-sidebar-width);
   width: calc(100vw - var(--shell-sidebar-width));
   max-width: calc(100vw - var(--shell-sidebar-width));
-  padding-top: var(--topbar-height);
+  padding-top: calc(var(--topbar-height) + var(--desktop-titlebar-height));
   min-height: 100vh;
   overflow: hidden;
   box-sizing: border-box;
@@ -101,8 +103,8 @@ a {
   transition: margin-left 180ms ease, width 180ms ease, max-width 180ms ease, padding-top 180ms ease;
 }
 .orion-main-stage {
-  min-height: calc(100vh - var(--topbar-height));
-  height: calc(100vh - var(--topbar-height));
+  min-height: calc(100vh - var(--topbar-height) - var(--desktop-titlebar-height));
+  height: calc(100vh - var(--topbar-height) - var(--desktop-titlebar-height));
   overflow: hidden;
   padding: 0;
   background: var(--critical-bg-app);
@@ -122,7 +124,7 @@ a {
 }
 .orion-shellbar {
   position: fixed;
-  top: 0;
+  top: var(--desktop-titlebar-height);
   left: var(--shell-sidebar-width);
   right: 0;
   min-height: var(--topbar-height);
@@ -135,6 +137,11 @@ a {
   background: var(--critical-bg-shell);
   border-bottom: 0;
   transition: left 180ms ease;
+}
+.orion-app-shell > aside {
+  top: var(--desktop-titlebar-height) !important;
+  bottom: 0 !important;
+  height: calc(100vh - var(--desktop-titlebar-height));
 }
 html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-focus):not(.orion-setup-focus) .orion-main-stage {
   transform: none;
@@ -166,6 +173,8 @@ const THEME_BOOTSTRAP_SCRIPT = `
       : theme;
     const pathname = String(window.location.pathname || '/');
     const hideShellChrome = pathname.startsWith('/builder/') || pathname.startsWith('/setup');
+    const isTauriDesktop = '__TAURI_INTERNALS__' in window || navigator.userAgent.includes('Tauri');
+    const isMacDesktop = isTauriDesktop && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
     const root = document.documentElement;
     root.setAttribute('data-theme', resolved);
     if (resolved === 'dark') root.classList.add('dark');
@@ -175,6 +184,8 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
     root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '220px');
     root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
+    root.style.setProperty('--desktop-titlebar-height', hideShellChrome || !isTauriDesktop ? '0px' : '32px');
+    root.style.setProperty('--desktop-drag-padding-left', hideShellChrome || !isMacDesktop ? '0px' : '72px');
     document.body?.style?.setProperty('background', 'var(--critical-bg-app)');
   } catch {}
 })();
@@ -233,6 +244,20 @@ export default function RootLayout({
                 <SidebarProvider style={sidebarStyle}>
                   <ToastProvider>
                     <div className="orion-app-shell">
+                      <div
+                        data-tauri-drag-region
+                        aria-hidden="true"
+                        style={{
+                          height: '32px',
+                          width: '100%',
+                          position: 'fixed',
+                          top: 0,
+                          left: 0,
+                          zIndex: 9999,
+                          pointerEvents: 'none',
+                          paddingLeft: 'var(--desktop-drag-padding-left)',
+                        }}
+                      />
                       <Suspense fallback={null}>
                         <Sidebar />
                       </Suspense>

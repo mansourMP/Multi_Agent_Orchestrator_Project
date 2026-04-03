@@ -100,6 +100,10 @@ type PendingSimpleRun = {
   goal: string;
 };
 
+type OperatorChatErrorWithCode = Error & {
+  code?: string;
+};
+
 const ASSISTANT_PROFILE_LIBRARY: AssistantProfileMeta[] = [
   { id: 'support', label: 'Support', subtitle: 'Customer replies, inbox triage, and follow-up', backendRole: 'support' },
   { id: 'research', label: 'Research', subtitle: 'Briefs, analysis, memory, and synthesis', backendRole: 'research' },
@@ -127,6 +131,10 @@ function truncateChatContext(value: string, limit = 84): string {
   const normalized = value.replace(/\s+/g, ' ').trim();
   if (!normalized) return 'No conversation yet';
   return normalized.length > limit ? `${normalized.slice(0, limit - 1).trimEnd()}…` : normalized;
+}
+
+function isNoProviderChatError(error: unknown): error is OperatorChatErrorWithCode {
+  return error instanceof Error && String((error as OperatorChatErrorWithCode).code || '').trim() === 'no_provider';
 }
 
 type PendingWorkbenchChat = {
@@ -1258,6 +1266,7 @@ export function AutopilotWorkspace() {
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
   const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
+  const [chatNoProviderStatus, setChatNoProviderStatus] = useState(false);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
@@ -2007,12 +2016,18 @@ export function AutopilotWorkspace() {
     [selectedAgentRole, workbenchAgentChats],
   );
   const simpleChatProviderBanner = useMemo(() => {
-    if (setupStatus.accountConnected) return null;
+    if (setupStatus.accountConnected && !chatNoProviderStatus) return null;
     return {
-      text: 'No AI provider configured — go to Integrations to connect one',
+      text: 'No AI provider configured — connect one in Integrations',
       label: 'Go to Integrations',
       href: '/connectors',
     };
+  }, [chatNoProviderStatus, setupStatus.accountConnected]);
+
+  useEffect(() => {
+    if (setupStatus.accountConnected) {
+      setChatNoProviderStatus(false);
+    }
   }, [setupStatus.accountConnected]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
@@ -2110,6 +2125,36 @@ export function AutopilotWorkspace() {
     }));
   }, []);
 
+  const replaceSimpleChatMessage = useCallback((sessionId: string, messageId: string, nextMessage: WorkbenchAgentChatMessage) => {
+    setChatStore((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId
+          ? upsertSessionMessages(
+              session,
+              session.messages.map((message) => (message.id === messageId ? nextMessage : message)),
+              nextMessage.ts || new Date().toISOString(),
+            )
+          : session,
+      ),
+    }));
+  }, []);
+
+  const removeSimpleChatMessage = useCallback((sessionId: string, messageId: string) => {
+    setChatStore((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId
+          ? upsertSessionMessages(
+              session,
+              session.messages.filter((message) => message.id !== messageId),
+              new Date().toISOString(),
+            )
+          : session,
+      ),
+    }));
+  }, []);
+
   const handleSimpleChatMessageAction = useCallback(async (messageId: string, action: ChatMessageActionRecord) => {
     const sessionId = selectedChatSession?.id;
     if (!sessionId) return;
@@ -2118,6 +2163,7 @@ export function AutopilotWorkspace() {
       const actionId = String(action.action || '').trim();
       const input = String(action.input || '').trim();
       if (!connector || !actionId || !input) return;
+      const existingMessage = selectedChatMessages.find((message) => message.id === messageId) || null;
       const now = new Date().toISOString();
       patchSimpleChatMessage(sessionId, messageId, {
         status: 'running',
@@ -2154,6 +2200,7 @@ export function AutopilotWorkspace() {
             });
           },
         });
+        setChatNoProviderStatus(false);
         patchSimpleChatMessage(sessionId, messageId, {
           content: payload.reply || streamedReply || 'Action completed.',
           status: 'completed',
@@ -2163,6 +2210,13 @@ export function AutopilotWorkspace() {
           ts: new Date().toISOString(),
         });
       } catch (error) {
+        if (isNoProviderChatError(error)) {
+          setChatNoProviderStatus(true);
+          if (existingMessage) {
+            replaceSimpleChatMessage(sessionId, messageId, existingMessage);
+          }
+          return;
+        }
         patchSimpleChatMessage(sessionId, messageId, {
           content: error instanceof Error ? error.message : 'Failed to confirm and execute action.',
           status: 'error',
@@ -2238,9 +2292,12 @@ export function AutopilotWorkspace() {
     defaultAssistantProfile.label,
     defaultAssistantProfile.subtitle,
     patchSimpleChatMessage,
+    replaceSimpleChatMessage,
     router,
     sendOperatorChat,
+    selectedChatMessages,
     selectedChatSession?.id,
+    setChatNoProviderStatus,
     setPendingSimpleChat,
     simpleChatDepth,
     simpleChatRuntimeRole,
@@ -2614,6 +2671,7 @@ export function AutopilotWorkspace() {
           });
         },
       });
+      setChatNoProviderStatus(false);
       patchSimpleChatMessage(sessionId, placeholderId, {
         content: payload.reply || streamedReply || 'I couldn’t form a clean reply just now.',
         status: 'completed',
@@ -2623,6 +2681,11 @@ export function AutopilotWorkspace() {
         ts: new Date().toISOString(),
       });
     } catch (error) {
+      if (isNoProviderChatError(error)) {
+        setChatNoProviderStatus(true);
+        removeSimpleChatMessage(sessionId, placeholderId);
+        return;
+      }
       patchSimpleChatMessage(sessionId, placeholderId, {
         content: error instanceof Error ? error.message : 'Failed to get assistant reply.',
         status: 'error',
@@ -2634,7 +2697,18 @@ export function AutopilotWorkspace() {
     } finally {
       setPendingSimpleChat(null);
     }
-  }, [appendSimpleChatMessage, goal, patchSimpleChatMessage, selectedChatMessages, selectedChatSession?.id, sendOperatorChat, setGoal, simpleChatDepth]);
+  }, [
+    appendSimpleChatMessage,
+    goal,
+    patchSimpleChatMessage,
+    removeSimpleChatMessage,
+    selectedChatMessages,
+    selectedChatSession?.id,
+    sendOperatorChat,
+    setChatNoProviderStatus,
+    setGoal,
+    simpleChatDepth,
+  ]);
 
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();

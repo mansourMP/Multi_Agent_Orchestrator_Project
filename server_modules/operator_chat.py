@@ -3013,13 +3013,11 @@ def _parse_http_tool_output(output: str) -> Any:
 
 def _no_provider_reasoning_required_response() -> Dict[str, Any]:
     return {
-        "reply": (
-            "No AI provider is configured for chat right now. "
-            "I can still run explicit local, browser, and web tools, but this request needs model reasoning first."
-        ),
+        "reply": "",
+        "message": "No AI provider configured",
         "actions": [],
-        "mode": "answer",
-        "error": "ai_provider_not_configured",
+        "mode": "error",
+        "error": "no_provider",
     }
 
 

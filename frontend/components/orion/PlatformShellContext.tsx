@@ -69,6 +69,19 @@ export type PlatformChatTopControls = {
   artifactCount: number;
   artifactsOpen: boolean;
   onToggleArtifacts: () => void;
+  notices: Array<{
+    id: string;
+    tone: 'neutral' | 'accent' | 'warn' | 'error';
+    label: string;
+    detail?: string | null;
+    actions?: Array<{
+      id: string;
+      label: string;
+      tone?: 'default' | 'primary' | 'danger';
+      disabled?: boolean;
+      onClick: () => void;
+    }>;
+  }>;
 } | null;
 
 type PlatformShellContextValue = {
@@ -117,6 +130,34 @@ function areShellStatusEqual(left: PlatformShellStatus, right: PlatformShellStat
 function areChatTopControlsEqual(left: PlatformChatTopControls, right: PlatformChatTopControls): boolean {
   if (left === right) return true;
   if (!left || !right) return left === right;
+  if (left.notices.length !== right.notices.length) return false;
+  for (let index = 0; index < left.notices.length; index += 1) {
+    const leftNotice = left.notices[index]!;
+    const rightNotice = right.notices[index]!;
+    if (
+      leftNotice.id !== rightNotice.id
+      || leftNotice.tone !== rightNotice.tone
+      || leftNotice.label !== rightNotice.label
+      || leftNotice.detail !== rightNotice.detail
+    ) {
+      return false;
+    }
+    const leftActions = leftNotice.actions || [];
+    const rightActions = rightNotice.actions || [];
+    if (leftActions.length !== rightActions.length) return false;
+    for (let actionIndex = 0; actionIndex < leftActions.length; actionIndex += 1) {
+      const leftAction = leftActions[actionIndex]!;
+      const rightAction = rightActions[actionIndex]!;
+      if (
+        leftAction.id !== rightAction.id
+        || leftAction.label !== rightAction.label
+        || leftAction.tone !== rightAction.tone
+        || Boolean(leftAction.disabled) !== Boolean(rightAction.disabled)
+      ) {
+        return false;
+      }
+    }
+  }
   return left.assistantLabel === right.assistantLabel
     && left.artifactCount === right.artifactCount
     && left.artifactsOpen === right.artifactsOpen

@@ -5,22 +5,16 @@ import type { ComponentPropsWithoutRef, PointerEvent as ReactPointerEvent } from
 import { useRouter } from 'next/navigation';
 import {
   ArrowUp,
-  Camera,
   Check,
-  CheckCircle2,
   ChevronDown,
-  ChevronRight,
   Copy,
   FileText,
   LoaderCircle,
   Mic,
   Plus,
-  PlugZap,
   PanelLeft,
   Square,
   SlidersHorizontal,
-  Sparkles,
-  Terminal,
   Volume2,
   X,
 } from 'lucide-react';
@@ -34,9 +28,7 @@ import {
   sanitizeChatStore,
   type ChatMessageActionRecord,
   type ChatMessageRecord,
-  type ChatRunCardStatus,
   type ChatSessionRecord,
-  type ChatStepRecord,
 } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
@@ -612,23 +604,6 @@ function shouldSuppressAssistantBody(content: string, status: ChatMessageRecord[
   return (status === 'sending' || status === 'running') && (normalized === 'working on it...' || normalized === 'working on it…');
 }
 
-function renderRunCardStatusLabel(status: ChatRunCardStatus): string {
-  if (status === 'preparing') return 'Preparing';
-  if (status === 'running') return 'Running';
-  if (status === 'waiting') return 'Confirmation required';
-  if (status === 'completed') return 'Completed';
-  if (status === 'needs_attention') return 'Needs attention';
-  return 'Failed';
-}
-
-function renderChatStepIcon(step: ChatStepRecord) {
-  if (step.kind === 'thinking') return <Sparkles size={14} />;
-  if (step.kind === 'shell') return <Terminal size={14} />;
-  if (step.kind === 'connector') return <PlugZap size={14} />;
-  if (step.kind === 'screenshot') return <Camera size={14} />;
-  return <FileText size={14} />;
-}
-
 function formatChatHistoryTimestamp(value: string): string {
   const timestamp = String(value || '').trim();
   if (!timestamp) return 'No activity yet';
@@ -680,7 +655,6 @@ export function ChatSurface({
 }: ChatSurfaceProps) {
   const router = useRouter();
   const { setChatTopControls } = usePlatformShell();
-  const isLoading = chatBusy;
   const sendDisabled = chatBusy || goal.trim().length === 0;
   const threadRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -688,7 +662,6 @@ export function ChatSurface({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
-  const [expandedStepMessages, setExpandedStepMessages] = useState<Record<string, boolean>>({});
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [artifactPanelWidth, setArtifactPanelWidth] = useState(ARTIFACT_PANEL_DEFAULT_WIDTH);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
@@ -711,25 +684,7 @@ export function ChatSurface({
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioPlayerUrlRef = useRef<string | null>(null);
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const visibleMessages = useMemo(() => {
-    const lastMessage = messages[messages.length - 1];
-    const lastLifecycle = lastMessage?.role === 'assistant'
-      ? resolveAssistantLifecycle(lastMessage.status)
-      : null;
-    if (lastLifecycle && (lastLifecycle.tone === 'thinking' || lastLifecycle.tone === 'working')) {
-      return messages;
-    }
-    if (!chatBusy) return messages;
-    const syntheticThinkingMessage: ChatMessageRecord = {
-      id: 'synthetic:thinking',
-      role: 'assistant',
-      content: '',
-      ts: lastMessage?.ts || '',
-      status: 'sending',
-      run_id: null,
-    };
-    return [...messages, syntheticThinkingMessage];
-  }, [chatBusy, messages]);
+  const visibleMessages = useMemo(() => messages, [messages]);
   const hasMessages = visibleMessages.length > 0;
   const isFirstThread = visibleMessages.length > 0 && visibleMessages.length <= 2;
   const messageArtifacts = useMemo(() => {
@@ -744,6 +699,178 @@ export function ChatSurface({
     }
     return { byMessage, allArtifacts };
   }, [visibleMessages]);
+  const latestAssistantMessage = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant') || null,
+    [messages],
+  );
+  const latestAssistantLifecycle = useMemo(() => {
+    if (!latestAssistantMessage) return null;
+    const streamState = resolveAssistantStreamState(latestAssistantMessage);
+    return resolveAssistantLifecycle(streamState?.showLoading ? (latestAssistantMessage.status || 'running') : latestAssistantMessage.status);
+  }, [latestAssistantMessage]);
+  const latestAssistantError = useMemo(() => {
+    const failedMessage = [...messages].reverse().find((message) => message.role === 'assistant' && message.status === 'error');
+    if (!failedMessage) return null;
+    const displayContent = normalizeAssembledAssistantText(normalizeAssistantDisplayText(failedMessage.content));
+    return normalizeInlineErrorMessage(displayContent) || displayContent || null;
+  }, [messages]);
+  const latestAssistantSteps = useMemo(() => {
+    const stepMessage = [...messages].reverse().find(
+      (message) => message.role === 'assistant' && Array.isArray(message.steps) && message.steps.length > 0,
+    );
+    if (!stepMessage || !Array.isArray(stepMessage.steps) || stepMessage.steps.length === 0) return null;
+    const activeStep = stepMessage.steps.find((step) => step.status === 'active') || stepMessage.steps[stepMessage.steps.length - 1] || null;
+    return {
+      count: stepMessage.steps.length,
+      label: activeStep?.label || `${stepMessage.steps.length} steps`,
+      detail: activeStep?.detail || (activeStep?.status === 'done' ? 'Completed' : 'Recorded in this reply'),
+    };
+  }, [messages]);
+  const latestRunCard = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant' && message.runCard)?.runCard || null,
+    [messages],
+  );
+  const latestActionMessage = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant' && Array.isArray(message.actions) && message.actions.length > 0) || null,
+    [messages],
+  );
+  const topPanelNotices = useMemo(() => {
+    const notices: Array<NonNullable<ReturnType<typeof usePlatformShell>['chatTopControls']>['notices'][number]> = [];
+
+    if (providerBanner) {
+      notices.push({
+        id: 'provider',
+        tone: 'warn',
+        label: providerBanner.text,
+        actions: [{
+          id: 'provider:open',
+          label: providerBanner.label,
+          tone: 'primary',
+          onClick: () => router.push(providerBanner.href),
+        }],
+      });
+    }
+
+    if (voiceError) {
+      notices.push({
+        id: 'voice',
+        tone: 'error',
+        label: 'Voice unavailable',
+        detail: voiceError,
+      });
+    }
+
+    if (permissionPrompt) {
+      notices.push({
+        id: 'permission',
+        tone: 'warn',
+        label: permissionPrompt.title,
+        detail: permissionPrompt.prompt,
+        actions: [
+          {
+            id: 'permission:allow',
+            label: permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once',
+            tone: 'primary',
+            disabled: Boolean(permissionPrompt.busyKey),
+            onClick: permissionPrompt.onAllowOnce,
+          },
+          {
+            id: 'permission:deny',
+            label: permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline',
+            tone: 'danger',
+            disabled: Boolean(permissionPrompt.busyKey),
+            onClick: permissionPrompt.onDeny,
+          },
+        ],
+      });
+    } else if (latestRunCard?.approval && onRunApprovalDecision) {
+      notices.push({
+        id: 'run-approval',
+        tone: 'warn',
+        label: 'Confirmation required',
+        detail: latestRunCard.approval.prompt,
+        actions: [
+          {
+            id: 'run-approval:allow',
+            label: 'Confirm once',
+            tone: 'primary',
+            onClick: () => onRunApprovalDecision('once'),
+          },
+          {
+            id: 'run-approval:deny',
+            label: 'Decline',
+            tone: 'danger',
+            onClick: () => onRunApprovalDecision('deny'),
+          },
+        ],
+      });
+    }
+
+    if (latestAssistantLifecycle && (latestAssistantLifecycle.tone === 'thinking' || latestAssistantLifecycle.tone === 'working' || latestAssistantLifecycle.tone === 'confirmation')) {
+      notices.push({
+        id: 'lifecycle',
+        tone: latestAssistantLifecycle.tone === 'confirmation' ? 'warn' : 'neutral',
+        label: latestAssistantLifecycle.label,
+        detail: latestAssistantLifecycle.tone === 'working' ? 'Assistant is still processing this turn.' : null,
+      });
+    }
+
+    if (latestAssistantSteps) {
+      notices.push({
+        id: 'steps',
+        tone: 'neutral',
+        label: latestAssistantSteps.label,
+        detail: latestAssistantSteps.detail,
+      });
+    }
+
+    if (latestRunCard) {
+      notices.push({
+        id: 'run',
+        tone: latestRunCard.status === 'failed' || latestRunCard.status === 'needs_attention' ? 'warn' : 'accent',
+        label: latestRunCard.title,
+        detail: latestRunCard.summary || latestRunCard.status,
+      });
+    }
+
+    if (latestAssistantError) {
+      notices.push({
+        id: 'error',
+        tone: 'error',
+        label: 'Assistant error',
+        detail: latestAssistantError,
+      });
+    }
+
+    if (latestActionMessage?.actions && latestActionMessage.actions.length > 0 && onMessageAction) {
+      notices.push({
+        id: 'actions',
+        tone: 'accent',
+        label: 'Actions available',
+        detail: 'Use the latest assistant actions from here.',
+        actions: latestActionMessage.actions.map((action) => ({
+          id: action.id,
+          label: action.label,
+          tone: action.variant === 'primary' ? 'primary' : 'default',
+          onClick: () => onMessageAction(latestActionMessage.id, action),
+        })),
+      });
+    }
+
+    return notices;
+  }, [
+    latestActionMessage,
+    latestAssistantError,
+    latestAssistantLifecycle,
+    latestAssistantSteps,
+    latestRunCard,
+    onMessageAction,
+    onRunApprovalDecision,
+    permissionPrompt,
+    providerBanner,
+    router,
+    voiceError,
+  ]);
   const artifacts = messageArtifacts.allArtifacts;
   const selectedArtifact = useMemo(
     () => artifacts.find((artifact) => artifact.id === selectedArtifactId) || null,
@@ -1131,7 +1258,7 @@ export function ChatSurface({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [messages, isLoading]);
+  }, [messages, chatBusy]);
 
   useEffect(() => {
     if (isMobile) {
@@ -1223,6 +1350,7 @@ export function ChatSurface({
       artifactCount: artifacts.length,
       artifactsOpen: artifactPanelVisible,
       onToggleArtifacts: handleToggleArtifactsFromTopBar,
+      notices: topPanelNotices,
     });
   }, [
     artifactPanelVisible,
@@ -1231,6 +1359,7 @@ export function ChatSurface({
     handleToggleArtifactsFromTopBar,
     setChatTopControls,
     targetLabel,
+    topPanelNotices,
   ]);
 
   useEffect(() => {
@@ -1254,10 +1383,6 @@ export function ChatSurface({
       stopPlayback();
     };
   }, [releaseRecordedStream, stopPlayback]);
-
-  const composerStatusText = voiceError
-    ? `Voice unavailable: ${voiceError}`
-    : null;
 
   return (
     <section
@@ -1407,27 +1532,21 @@ export function ChatSurface({
               <div className="orion-chat-v2-thread" aria-live="polite">
                 {visibleMessages.map((message, index) => {
               const isUser = message.role === 'user';
-              const isError = message.status === 'error';
               const previousMessage = index > 0 ? visibleMessages[index - 1] : null;
               const followsUser = !isUser && previousMessage?.role === 'user';
-              const streamState = !isUser ? resolveAssistantStreamState(message) : null;
-              const lifecycle = !isUser ? resolveAssistantLifecycle(streamState?.showLoading ? (message.status || 'running') : message.status) : null;
-              const showLoadingIndicator = Boolean(streamState?.showLoading && lifecycle && (lifecycle.tone === 'thinking' || lifecycle.tone === 'working'));
               const displayContent = isUser ? message.content : normalizeAssembledAssistantText(normalizeAssistantDisplayText(message.content));
               const suppressBody = !isUser && shouldSuppressAssistantBody(displayContent, message.status);
-              const inlineError = isError ? normalizeInlineErrorMessage(displayContent) : '';
               const isFirstAssistantEntry = !isUser && isFirstThread && index <= 1;
-              const steps = !isUser && Array.isArray(message.steps) ? message.steps : [];
-              const hasSteps = steps.length > 0;
-              const activeStep = hasSteps ? steps.find((step) => step.status === 'active') || null : null;
-              const stepsExpanded = hasSteps ? (expandedStepMessages[message.id] ?? !Boolean(streamState?.terminal)) : false;
               const artifactsForMessage = !isUser ? messageArtifacts.byMessage.get(message.id) || [] : [];
               const codeArtifacts = artifactsForMessage.filter((artifact) => artifact.source === 'code');
+              if (!isUser && suppressBody && artifactsForMessage.length === 0) {
+                return null;
+              }
               let codeArtifactIndex = 0;
               return (
                 <article
                   key={message.id}
-                  className={`orion-chat-v2-turn${isUser ? ' is-user' : ' is-assistant'}${isError ? ' is-error' : ''}${isFirstAssistantEntry ? ' is-first-assistant-entry' : ''}${followsUser ? ' is-following-user' : ''}`}
+                  className={`orion-chat-v2-turn${isUser ? ' is-user' : ' is-assistant'}${isFirstAssistantEntry ? ' is-first-assistant-entry' : ''}${followsUser ? ' is-following-user' : ''}`}
                 >
                   {isUser ? (
                     <div className="orion-chat-v2-user-stack">
@@ -1443,88 +1562,7 @@ export function ChatSurface({
                     </div>
                   ) : (
                     <div className="orion-chat-v2-assistant">
-                      {showLoadingIndicator && lifecycle ? (
-                        <div className={`orion-chat-v2-loading is-${lifecycle.tone}`} role="status" aria-live="polite">
-                          <span className="orion-chat-v2-loading-orb" aria-hidden />
-                          <span className="orion-chat-v2-loading-copy">
-                            {lifecycle.tone === 'working' ? 'Working' : 'Thinking'}
-                          </span>
-                          <span className="orion-chat-v2-state-dots" aria-hidden>
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        </div>
-                      ) : null}
-                      {lifecycle && !showLoadingIndicator ? (
-                        <div className={`orion-chat-v2-state is-${lifecycle.tone}`}>
-                          <span className="orion-chat-v2-state-label">{lifecycle.label}</span>
-                          {(lifecycle.tone === 'thinking' || lifecycle.tone === 'working') ? (
-                            <span className="orion-chat-v2-state-dots" aria-hidden>
-                              <span />
-                              <span />
-                              <span />
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {hasSteps ? (
-                        <div className={`orion-chat-v2-steps${stepsExpanded ? ' is-expanded' : ''}`}>
-                          <button
-                            type="button"
-                            className="orion-chat-v2-steps-toggle"
-                            onClick={() => {
-                              setExpandedStepMessages((current) => ({
-                                ...current,
-                                [message.id]: !stepsExpanded,
-                              }));
-                            }}
-                            aria-expanded={stepsExpanded}
-                          >
-                            <div className="orion-chat-v2-steps-toggle-copy">
-                              <span className="orion-chat-v2-steps-toggle-title">
-                                {activeStep ? activeStep.label : `${steps.length} step${steps.length === 1 ? '' : 's'}`}
-                              </span>
-                              <span className="orion-chat-v2-steps-toggle-detail">
-                                {activeStep?.detail || (message.status === 'completed' ? 'Completed' : 'Click to inspect')}
-                              </span>
-                            </div>
-                            <span className="orion-chat-v2-steps-toggle-meta">
-                              <span>{stepsExpanded ? 'Hide' : 'Show'}</span>
-                              {stepsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            </span>
-                          </button>
-                          {stepsExpanded ? (
-                            <div className="orion-chat-v2-step-list">
-                              {steps.map((step) => (
-                                <div key={step.id} className={`orion-chat-v2-step is-${step.status}`}>
-                                  <div className="orion-chat-v2-step-icon" aria-hidden>
-                                    {renderChatStepIcon(step)}
-                                  </div>
-                                  <div className="orion-chat-v2-step-copy">
-                                    <div className="orion-chat-v2-step-label">{step.label}</div>
-                                    {step.detail ? (
-                                      <div className="orion-chat-v2-step-detail">{step.detail}</div>
-                                    ) : null}
-                                  </div>
-                                  <div className="orion-chat-v2-step-state" aria-hidden>
-                                    {step.status === 'done' ? (
-                                      <CheckCircle2 size={14} />
-                                    ) : step.status === 'active' ? (
-                                      <LoaderCircle size={14} className="spin" />
-                                    ) : (
-                                      <X size={14} />
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {isError && inlineError ? (
-                        <div className="orion-chat-v2-inline-error">⚠ {inlineError}</div>
-                      ) : !suppressBody ? (
+                      {!suppressBody ? (
                         <div className="orion-chat-v2-markdown">
                           <ReactMarkdown
                             components={{
@@ -1558,104 +1596,6 @@ export function ChatSurface({
                           </ReactMarkdown>
                         </div>
                       ) : null}
-                      {message.runCard ? (
-                        <div className={`orion-chat-v2-run-card is-${message.runCard.status}`}>
-                          <div className="orion-chat-v2-run-card-header">
-                            <div className="orion-chat-v2-run-card-title">{message.runCard.title}</div>
-                            <div className={`orion-chat-v2-run-card-status is-${message.runCard.status}`}>
-                              {renderRunCardStatusLabel(message.runCard.status)}
-                            </div>
-                          </div>
-                          {message.runCard.meta && message.runCard.meta.length > 0 ? (
-                            <div className="orion-chat-v2-run-card-meta">
-                              {message.runCard.meta.map((entry) => (
-                                <div key={entry.id} className="orion-chat-v2-run-card-meta-item">
-                                  <span className="orion-chat-v2-run-card-meta-label">{entry.label}</span>
-                                  <span className="orion-chat-v2-run-card-meta-value">{entry.value}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                          {message.runCard.summary ? (
-                            <div className="orion-chat-v2-run-card-summary">{message.runCard.summary}</div>
-                          ) : null}
-                          {message.runCard.evidence && message.runCard.evidence.length > 0 ? (
-                            <div className="orion-chat-v2-run-card-evidence">
-                              {message.runCard.evidence.map((entry) => (
-                                <div key={entry.id} className="orion-chat-v2-run-card-evidence-item">
-                                  <span className="orion-chat-v2-run-card-evidence-label">{entry.label}</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">{entry.value}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                          {message.runCard.approval ? (
-                            <div className="orion-chat-v2-run-card-approval">
-                              <div className="orion-chat-v2-run-card-approval-copy">{message.runCard.approval.prompt}</div>
-                              {message.runCard.approval.labels.length > 0 ? (
-                                <div className="orion-chat-v2-run-card-approval-tags">
-                                  {message.runCard.approval.labels.map((label) => (
-                                    <div key={label} className="orion-chat-v2-run-card-approval-tag">
-                                      <span className="orion-chat-v2-run-card-evidence-value">{label}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : null}
-                              <div className="orion-chat-v2-run-card-evidence">
-                                <div className="orion-chat-v2-run-card-evidence-item">
-                                  <span className="orion-chat-v2-run-card-evidence-label">Action</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">{message.runCard.approval.actions.join(', ') || 'Not recorded'}</span>
-                                </div>
-                                <div className="orion-chat-v2-run-card-evidence-item">
-                                  <span className="orion-chat-v2-run-card-evidence-label">Target</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">{message.runCard.approval.target || 'Not recorded'}</span>
-                                </div>
-                                <div className="orion-chat-v2-run-card-evidence-item">
-                                  <span className="orion-chat-v2-run-card-evidence-label">Scope</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">One-time for this pending step</span>
-                                </div>
-                                <div className="orion-chat-v2-run-card-evidence-item">
-                                  <span className="orion-chat-v2-run-card-evidence-label">Consequence</span>
-                                  <span className="orion-chat-v2-run-card-evidence-value">{message.runCard.approval.consequence || 'This confirmation applies only to this pending step in this run.'}</span>
-                                </div>
-                              </div>
-                              <div className="orion-chat-v2-actions">
-                                <button
-                                  type="button"
-                                  className="orion-chat-v2-action is-primary"
-                                  onClick={() => onRunApprovalDecision?.('once')}
-                                  disabled={!onRunApprovalDecision}
-                                >
-                                  Confirm once
-                                </button>
-                                <button
-                                  type="button"
-                                  className="orion-chat-v2-action is-danger"
-                                  onClick={() => onRunApprovalDecision?.('deny')}
-                                  disabled={!onRunApprovalDecision}
-                                >
-                                  Decline
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {message.actions && message.actions.length > 0 ? (
-                        <div className="orion-chat-v2-actions">
-                          {message.actions.map((action) => (
-                            <button
-                              key={action.id}
-                              type="button"
-                              className={`orion-chat-v2-action${action.variant === 'primary' ? ' is-primary' : ''}${action.kind === 'connect' ? ' is-connect' : ''}`}
-                              onClick={() => onMessageAction?.(message.id, action)}
-                              disabled={!onMessageAction}
-                            >
-                              {action.label}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
                       <ChatMessageToolbar
                         copied={copiedMessageId === message.id}
                         onCopy={() => handleCopyMessage(message.id, displayContent)}
@@ -1675,56 +1615,6 @@ export function ChatSurface({
             ) : null}
             <div className={`orion-chat-v2-composer-shell${hasMessages ? ' is-docked' : ' is-empty'}`}>
               <div className="orion-chat-v2-composer-frame">
-            {permissionPrompt ? (
-              <div className="orion-chat-v2-permission-card" role="status" aria-live="polite">
-                <div className="orion-chat-v2-permission-header">
-                  <div className="orion-chat-v2-permission-title">Confirmation required</div>
-                  <div className="orion-chat-v2-permission-copy">{permissionPrompt.prompt}</div>
-                </div>
-                {permissionPrompt.labels.length > 0 ? (
-                  <div className="orion-chat-v2-permission-chips">
-                    {permissionPrompt.labels.map((label) => (
-                      <span key={`label:${label}`} className="orion-chat-v2-permission-chip">{label}</span>
-                    ))}
-                  </div>
-                ) : null}
-                {permissionPrompt.capabilities.length > 0 ? (
-                  <div className="orion-chat-v2-permission-detail">Requested: {permissionPrompt.capabilities.join(', ')}</div>
-                ) : null}
-                <div className="orion-chat-v2-permission-detail">Action: {permissionPrompt.actions.join(', ') || 'Not recorded'}</div>
-                <div className="orion-chat-v2-permission-detail">Target: {permissionPrompt.target || 'Not recorded'}</div>
-                <div className="orion-chat-v2-permission-detail">Scope: One-time for this pending step</div>
-                <div className="orion-chat-v2-permission-detail">{permissionPrompt.consequence || 'This confirmation applies only to this pending step in this run.'}</div>
-                <div className="orion-chat-v2-permission-actions">
-                  <button
-                    type="button"
-                    className="orion-chat-v2-permission-action is-primary"
-                    onClick={permissionPrompt.onAllowOnce}
-                    disabled={Boolean(permissionPrompt.busyKey)}
-                  >
-                    {permissionPrompt.busyKey === 'Proceed:once' ? 'Confirming…' : 'Confirm once'}
-                  </button>
-                  <button
-                    type="button"
-                    className="orion-chat-v2-permission-action is-danger"
-                    onClick={permissionPrompt.onDeny}
-                    disabled={Boolean(permissionPrompt.busyKey)}
-                  >
-                    {permissionPrompt.busyKey === 'Hold:once' ? 'Declining…' : 'Decline'}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {providerBanner ? (
-              <div className="orion-chat-v2-status-line">
-                <span>{providerBanner.text}</span>
-                <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(providerBanner.href)}>
-                  {providerBanner.label}
-                </button>
-              </div>
-            ) : null}
-
             <div className="orion-chat-v2-composer">
               <textarea
                 ref={primaryGoalRef}
@@ -1891,12 +1781,6 @@ export function ChatSurface({
                 </div>
               </div>
             </div>
-
-            {composerStatusText ? (
-              <div className="orion-chat-v2-status-line">
-                <span>{composerStatusText}</span>
-              </div>
-            ) : null}
               </div>
             </div>
           </div>

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
@@ -648,6 +648,22 @@ def _chat_stream_error_payload(message: str) -> dict[str, Any]:
     }
 
 
+def _extract_direct_chat_error_response(raw_event: Any) -> Optional[dict[str, str]]:
+    if not isinstance(raw_event, dict):
+        return None
+    if str(raw_event.get("type") or "").strip().lower() != "final":
+        return None
+    payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
+    error_code = str(payload.get("error") or "").strip()
+    if error_code != "no_provider":
+        return None
+    message = str(payload.get("message") or "").strip() or "No AI provider configured"
+    return {
+        "error": "no_provider",
+        "message": message,
+    }
+
+
 def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:
     condition = session.get("condition")
     if not isinstance(condition, threading.Condition):
@@ -1171,12 +1187,6 @@ def register_run_routes(app) -> None:
 
         workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
         session_key, thread_id, client_request_id = _chat_stream_key(current_user, body)
-        session = _get_or_create_chat_stream_session(
-            session_key,
-            thread_id=thread_id,
-            request_id=client_request_id,
-            workspace_id=workspace_id,
-        )
         replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
 
         def producer():
@@ -1190,7 +1200,34 @@ def register_run_routes(app) -> None:
                 client_request_id=client_request_id,
             )
 
-        _start_chat_stream_producer(session, producer)
+        existing_state = get_chat_stream_state(_chat_stream_state_db_path(), session_key)
+        session = _get_or_create_chat_stream_session(
+            session_key,
+            thread_id=thread_id,
+            request_id=client_request_id,
+            workspace_id=workspace_id,
+        )
+        if not bool(session.get("producer_started")) and not isinstance(existing_state, dict):
+            producer_iter = producer()
+            try:
+                first_event = next(producer_iter)
+            except StopIteration:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "chat_unavailable", "message": "Chat ended before producing a response."},
+                )
+            immediate_error = _extract_direct_chat_error_response(first_event)
+            if isinstance(immediate_error, dict):
+                return JSONResponse(status_code=409, content=immediate_error)
+
+            def replaying_producer():
+                yield first_event
+                for item in producer_iter:
+                    yield item
+
+            _start_chat_stream_producer(session, replaying_producer)
+        else:
+            _start_chat_stream_producer(session, producer)
 
         return StreamingResponse(
             _iter_chat_stream_events(session, replay_cursor),

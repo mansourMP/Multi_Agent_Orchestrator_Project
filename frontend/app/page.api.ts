@@ -179,6 +179,21 @@ export async function readResponseMessage(response: Response, fallback: string):
   return raw;
 }
 
+async function readResponseError(response: Response, fallback: string): Promise<{ message: string; code?: string }> {
+  const raw = await response.text().catch(() => '');
+  if (!raw) return { message: fallback };
+  const parsed = parseJson(raw);
+  if (parsed && typeof parsed === 'object') {
+    const record = parsed as { detail?: unknown; message?: unknown; error?: unknown };
+    const message = typeof (record.detail ?? record.message) === 'string' && String(record.detail ?? record.message).trim()
+      ? String(record.detail ?? record.message).trim()
+      : fallback;
+    const code = typeof record.error === 'string' && record.error.trim() ? record.error.trim() : undefined;
+    return { message, code };
+  }
+  return { message: raw };
+}
+
 type RuntimeAccountAvailabilityItem = {
   provider: ProviderId;
   ready: boolean;
@@ -2093,8 +2108,12 @@ export function usePlatformApi(state: PageState, streamRef: MutableRefObject<Aut
           signal: controller.signal,
         });
         if (!res.ok) {
-          const error = new Error(await readResponseMessage(res, 'Failed to get assistant reply.'));
+          const responseError = await readResponseError(res, 'Failed to get assistant reply.');
+          const error = new Error(responseError.message) as Error & { code?: string };
           error.name = 'OperatorChatHttpError';
+          if (responseError.code) {
+            error.code = responseError.code;
+          }
           throw error;
         }
         const contentType = res.headers.get('content-type') || '';

@@ -321,8 +321,10 @@ class OperatorChatTests(unittest.TestCase):
             availability={"ai_ready": True},
         )
 
-        self.assertEqual(payload["mode"], "answer")
-        self.assertIn("No AI provider is configured for chat right now", payload["reply"])
+        self.assertEqual(payload["mode"], "error")
+        self.assertEqual(payload["error"], "no_provider")
+        self.assertEqual(payload["message"], "No AI provider configured")
+        self.assertEqual(payload["reply"], "")
         self.assertFalse(payload["context_used"]["provider_overridden"])
         self.assertTrue(payload["context_used"]["fallback_used"])
         self.assertEqual(payload["context_used"].get("fallback_reason"), "provider_unavailable")

@@ -281,7 +281,8 @@ class OperatorChatNoProviderTests(unittest.TestCase):
             availability={"ai_ready": False},
         )
 
-        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["mode"], "error")
         self.assertEqual(payload["actions"], [])
-        self.assertEqual(payload["error"], "ai_provider_not_configured")
-        self.assertIn("needs model reasoning", payload["reply"])
+        self.assertEqual(payload["error"], "no_provider")
+        self.assertEqual(payload["message"], "No AI provider configured")
+        self.assertEqual(payload["reply"], "")

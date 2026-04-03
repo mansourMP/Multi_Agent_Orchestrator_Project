@@ -33,14 +33,13 @@ export default function PlatformTopBar() {
   const router = useRouter();
   const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { chatTopControls } = usePlatformShell();
-  const hasChatPanel = Boolean(chatTopControls && (chatTopControls.notices.length > 0 || chatTopControls.artifactCount > 0));
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : hasChatPanel ? '126px' : '56px');
+    document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
     return () => {
       document.documentElement.style.setProperty('--topbar-height', '56px');
     };
-  }, [hasChatPanel, hideShellChrome]);
+  }, [hideShellChrome]);
 
   if (hideShellChrome) {
     return null;
@@ -60,9 +59,17 @@ export default function PlatformTopBar() {
     <header
       className="orion-shellbar"
       onWheel={forwardWheelToMainScroll}
-      style={hasChatPanel ? { gridTemplateColumns: '1fr', gridTemplateRows: '56px auto', alignItems: 'stretch' } : undefined}
+      style={{ minHeight: 56 }}
     >
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto', alignItems: 'center', minHeight: 56 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+          alignItems: 'center',
+          minHeight: 56,
+          gap: 12,
+        }}
+      >
         <div className="orion-shellbar-section orion-shellbar-section-left">
           <div className="orion-shellbar-page">
             <div className="orion-shellbar-page-row">
@@ -70,26 +77,17 @@ export default function PlatformTopBar() {
             </div>
           </div>
         </div>
-        <div className="orion-shellbar-section orion-shellbar-section-center" aria-hidden="true" />
-        <div className="orion-shellbar-section orion-shellbar-section-right">
-          <button type="button" className="orion-shellbar-icon-btn" aria-label="Notifications">
-            <Bell size={18} strokeWidth={2.2} />
-          </button>
-          <button type="button" className="orion-shellbar-action" onClick={handleNewChat}>
-            <Edit3 size={13} />
-            <span>New chat</span>
-          </button>
-        </div>
-      </div>
-      {hasChatPanel ? (
         <div
+          className="orion-shellbar-section orion-shellbar-section-center"
           style={{
+            minWidth: 0,
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            flexWrap: 'wrap',
-            padding: '0 0 10px',
-            minWidth: 0,
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            scrollbarWidth: 'none',
+            whiteSpace: 'nowrap',
           }}
         >
           {chatTopControls ? (
@@ -119,20 +117,20 @@ export default function PlatformTopBar() {
                           : 'is-neutral'
                   }`}
                   style={{
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    flexWrap: 'wrap',
+                    gap: 8,
+                    flexWrap: 'nowrap',
                     minWidth: 0,
+                    whiteSpace: 'nowrap',
                   }}
                 >
-                  <span style={{ minWidth: 0 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     <span style={{ fontWeight: 600 }}>{notice.label}</span>
                     {notice.detail ? <span style={{ color: 'var(--text-secondary)' }}> {notice.detail}</span> : null}
                   </span>
                   {notice.actions && notice.actions.length > 0 ? (
-                    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'nowrap' }}>
                       {notice.actions.map((action) => (
                         <button
                           key={action.id}
@@ -157,7 +155,16 @@ export default function PlatformTopBar() {
             </>
           ) : null}
         </div>
-      ) : null}
+        <div className="orion-shellbar-section orion-shellbar-section-right">
+          <button type="button" className="orion-shellbar-icon-btn" aria-label="Notifications">
+            <Bell size={18} strokeWidth={2.2} />
+          </button>
+          <button type="button" className="orion-shellbar-action" onClick={handleNewChat}>
+            <Edit3 size={13} />
+            <span>New chat</span>
+          </button>
+        </div>
+      </div>
     </header>
   );
 }

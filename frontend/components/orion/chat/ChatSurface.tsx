@@ -111,6 +111,19 @@ type ChatSurfaceProps = {
   onCloseIdentityDrawer: () => void;
   identitySections: ChatIdentitySection[];
   identityActions: ChatIdentityAction[];
+  shellNotice?: {
+    id: string;
+    tone: 'neutral' | 'accent' | 'warn' | 'error';
+    label: string;
+    detail?: string | null;
+    actions?: Array<{
+      id: string;
+      label: string;
+      tone?: 'default' | 'primary' | 'danger';
+      disabled?: boolean;
+      onClick: () => void;
+    }>;
+  } | null;
 };
 
 type BrowserSpeechRecognitionAlternative = {
@@ -652,6 +665,7 @@ export function ChatSurface({
   onCloseIdentityDrawer,
   identitySections,
   identityActions,
+  shellNotice = null,
 }: ChatSurfaceProps) {
   const router = useRouter();
   const { setChatTopControls } = usePlatformShell();
@@ -749,6 +763,10 @@ export function ChatSurface({
           onClick: () => router.push(providerBanner.href),
         }],
       });
+    }
+
+    if (shellNotice) {
+      notices.push(shellNotice);
     }
 
     if (voiceError) {
@@ -869,6 +887,7 @@ export function ChatSurface({
     permissionPrompt,
     providerBanner,
     router,
+    shellNotice,
     voiceError,
   ]);
   const artifacts = messageArtifacts.allArtifacts;

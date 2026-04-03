@@ -57,12 +57,10 @@ export function useExecutionSocket(options: UseExecutionSocketOptions = {}) {
         });
 
         socketRef.current.on('connect', () => {
-            console.log('[Socket] Connected to executions namespace');
             setIsConnected(true);
         });
 
         socketRef.current.on('disconnect', () => {
-            console.log('[Socket] Disconnected');
             setIsConnected(false);
         });
 

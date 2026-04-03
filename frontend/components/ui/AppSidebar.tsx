@@ -79,9 +79,9 @@ function SidebarLink({
         borderRadius: 12,
         color: 'var(--sidebar-foreground)',
         background: active ? 'var(--sidebar-accent)' : 'transparent',
-        boxShadow: active ? 'inset 0 0 0 1px var(--sidebar-border)' : 'none',
+        boxShadow: active ? 'inset 2px 0 0 var(--primary), inset 0 0 0 1px var(--sidebar-border)' : 'none',
         fontSize: 13,
-        fontWeight: 500,
+        fontWeight: active ? 600 : 500,
         letterSpacing: '-0.01em',
         transition: 'background 150ms ease, box-shadow 150ms ease',
       }}

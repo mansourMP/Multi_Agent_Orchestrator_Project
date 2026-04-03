@@ -132,6 +132,8 @@ export const EMPTY_CHAT_SESSION_TITLE = 'New chat';
 
 const DEPRECATED_SYSTEM_CHAT_CONTENT = new Set([
   'no ai provider is configured for chat right now. i can still run explicit local, browser, and web tools, but this request needs model reasoning first.',
+  'continue in your browser to sign in.',
+  'sign in required.',
 ]);
 
 export function createChatId(prefix: string): string {

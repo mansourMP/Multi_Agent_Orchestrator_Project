@@ -54,7 +54,6 @@ const PROVIDER_POLL_MIN_INTERVAL_MS = 30_000;
 const MODEL_ALIAS_DEBOUNCE_MS = 120;
 const PROVIDER_CATALOG_DEBOUNCE_MS = 260;
 const PROVIDER_MODELS_DEBOUNCE_MS = 420;
-let agentProfileConfigWarningShown = false;
 
 type TimedResourceCache<T> = {
   value: T | null;
@@ -152,10 +151,6 @@ function resolveAgentProfileSkills(agentRole: string | null | undefined): Return
   const roleId = String(agentRole || '').trim();
   if (!roleId || typeof window === 'undefined') {
     return { ids: [], skills: [], promptAppend: '' };
-  }
-  if (!agentProfileConfigWarningShown) {
-    agentProfileConfigWarningShown = true;
-    console.warn('agent profile config is local-only — backend sync not implemented');
   }
   try {
     const raw = window.localStorage.getItem(AGENT_CONFIG_STORAGE_KEY);

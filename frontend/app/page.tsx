@@ -57,7 +57,7 @@ import {
 } from '@/lib/commandRegistry';
 import { BRAND } from '@/lib/brand';
 import { SINGLE_AGENT_MODE } from '@/lib/appFlags';
-import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
+import { controlPlaneSignInUrl, ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 import { buildSetupRoute, fetchSetupReadiness } from '@/lib/setupReadiness';
 
 const WORKBENCH_DECK_MODE_STORAGE_KEY = 'orion_workbench_deck_mode_v1';
@@ -70,7 +70,6 @@ const WORKBENCH_PRELOAD_QUERY_KEYS = ['pack', 'goal', 'primary', 'secondary', 't
 const LOCAL_EXECUTION_DEFAULT_GOAL =
   OUTCOME_PACKS.find((item) => item.id === 'local-execution-v1')?.defaultGoal?.trim().toLowerCase() || '';
 const CHAT_SESSION_LIMIT = 24;
-let agentProfileConfigWarningShown = false;
 
 type StoredAgentProfileConfig = {
   name?: string;
@@ -136,6 +135,29 @@ function truncateChatContext(value: string, limit = 84): string {
 
 function isNoProviderChatError(error: unknown): error is OperatorChatErrorWithCode {
   return error instanceof Error && String((error as OperatorChatErrorWithCode).code || '').trim() === 'no_provider';
+}
+
+function isAuthRequiredChatError(error: unknown): error is OperatorChatErrorWithCode {
+  return error instanceof Error && String((error as OperatorChatErrorWithCode).code || '').trim() === 'auth_required';
+}
+
+function formatShellTopError(message: string | null): string | null {
+  const text = String(message || '').trim();
+  if (!text) return null;
+  const normalized = text.toLowerCase();
+  if (normalized.includes('provider profiles path is not writable')) {
+    return 'Local companion setup issue: provider profile storage is not writable.';
+  }
+  if (normalized.includes('setup is not complete')) {
+    return 'Setup is incomplete. Finish setup before running tasks.';
+  }
+  if (normalized.includes('failed to load live workspace snapshot')) {
+    return 'Live platform status is temporarily unavailable.';
+  }
+  if (normalized.includes('continue in your browser to sign in') || normalized.includes('sign in required')) {
+    return null;
+  }
+  return text;
 }
 
 type PendingWorkbenchChat = {
@@ -1269,6 +1291,7 @@ export function AutopilotWorkspace() {
   const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
   const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
   const [chatNoProviderStatus, setChatNoProviderStatus] = useState(false);
+  const [chatAuthRequiredMessage, setChatAuthRequiredMessage] = useState<string | null>(null);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
@@ -1749,10 +1772,6 @@ export function AutopilotWorkspace() {
       }
       const storedConfigs = window.localStorage.getItem(AGENT_CONFIG_STORAGE_KEY);
       if (storedConfigs) {
-        if (!agentProfileConfigWarningShown) {
-          agentProfileConfigWarningShown = true;
-          console.warn('agent profile config is local-only — backend sync not implemented');
-        }
         const parsed = JSON.parse(storedConfigs) as Partial<Record<AgentRoleId, StoredAgentProfileConfig>>;
         if (parsed && typeof parsed === 'object') setWorkbenchAgentConfigs(parsed);
       }
@@ -2018,19 +2037,32 @@ export function AutopilotWorkspace() {
     [selectedAgentRole, workbenchAgentChats],
   );
   const simpleChatProviderBanner = useMemo(() => {
+    const authMessage = String(chatAuthRequiredMessage || shellStatus.authMessage || '').trim();
+    if (authMessage) {
+      return {
+        text: authMessage,
+        label: 'Sign in',
+        href: controlPlaneSignInUrl(),
+      };
+    }
     if (setupStatus.accountConnected && !chatNoProviderStatus) return null;
     return {
       text: 'No AI provider configured — connect one in Integrations',
       label: 'Go to Integrations',
       href: '/connectors',
     };
-  }, [chatNoProviderStatus, setupStatus.accountConnected]);
+  }, [chatAuthRequiredMessage, chatNoProviderStatus, setupStatus.accountConnected, shellStatus.authMessage]);
 
   useEffect(() => {
     if (setupStatus.accountConnected) {
       setChatNoProviderStatus(false);
     }
   }, [setupStatus.accountConnected]);
+  useEffect(() => {
+    if (!shellStatus.authRequired) {
+      setChatAuthRequiredMessage(null);
+    }
+  }, [shellStatus.authRequired]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
     return 'Connect Telegram to activate alerts.';
@@ -2046,6 +2078,24 @@ export function AutopilotWorkspace() {
     if (metricsUnavailable || workersUnavailable) return 'Status unavailable.';
     return null;
   }, [metricsUnavailable, workersUnavailable]);
+  const shellTopNotice = useMemo(() => {
+    const formattedTopError = formatShellTopError(topError);
+    if (formattedTopError) {
+      return {
+        id: 'shell-error',
+        tone: 'error' as const,
+        label: formattedTopError,
+      };
+    }
+    if (shellStatusNotice) {
+      return {
+        id: 'shell-status',
+        tone: 'neutral' as const,
+        label: shellStatusNotice,
+      };
+    }
+    return null;
+  }, [shellStatusNotice, topError]);
   useEffect(() => {
     const activeRunId = pendingSimpleRun?.runId || runId;
     const isActiveRun = Boolean(activeRunId) && ['queued_local', 'running', 'waiting'].includes(status);
@@ -2202,6 +2252,7 @@ export function AutopilotWorkspace() {
             });
           },
         });
+        setChatAuthRequiredMessage(null);
         setChatNoProviderStatus(false);
         patchSimpleChatMessage(sessionId, messageId, {
           content: payload.reply || streamedReply || 'Action completed.',
@@ -2214,6 +2265,13 @@ export function AutopilotWorkspace() {
       } catch (error) {
         if (isNoProviderChatError(error)) {
           setChatNoProviderStatus(true);
+          if (existingMessage) {
+            replaceSimpleChatMessage(sessionId, messageId, existingMessage);
+          }
+          return;
+        }
+        if (isAuthRequiredChatError(error)) {
+          setChatAuthRequiredMessage(error.message || 'Continue in your browser to sign in.');
           if (existingMessage) {
             replaceSimpleChatMessage(sessionId, messageId, existingMessage);
           }
@@ -2673,6 +2731,7 @@ export function AutopilotWorkspace() {
           });
         },
       });
+      setChatAuthRequiredMessage(null);
       setChatNoProviderStatus(false);
       patchSimpleChatMessage(sessionId, placeholderId, {
         content: payload.reply || streamedReply || 'I couldn’t form a clean reply just now.',
@@ -2685,6 +2744,11 @@ export function AutopilotWorkspace() {
     } catch (error) {
       if (isNoProviderChatError(error)) {
         setChatNoProviderStatus(true);
+        removeSimpleChatMessage(sessionId, placeholderId);
+        return;
+      }
+      if (isAuthRequiredChatError(error)) {
+        setChatAuthRequiredMessage(error.message || 'Continue in your browser to sign in.');
         removeSimpleChatMessage(sessionId, placeholderId);
         return;
       }
@@ -2800,6 +2864,7 @@ export function AutopilotWorkspace() {
           onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}
           identitySections={sessionIdentitySections}
           identityActions={sessionIdentityActions}
+          shellNotice={shellTopNotice}
         />
       </div>
     </WorkbenchShell>

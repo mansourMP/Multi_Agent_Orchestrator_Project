@@ -19,6 +19,13 @@ function clearControlPlaneFailure() {
   lastControlPlaneFailure = null;
 }
 
+function buildAuthRequiredError(message: string): Error & { code?: string } {
+  const error = new Error(message) as Error & { code?: string };
+  error.name = 'ControlPlaneAuthRequiredError';
+  error.code = 'auth_required';
+  return error;
+}
+
 function currentReturnPath(): string {
   if (typeof window === 'undefined') return '/';
   const path = `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`;
@@ -178,7 +185,7 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
           if (!isSignInRoute()) {
             window.location.assign(controlPlaneSignInUrl());
           }
-          throw new Error(message);
+          throw buildAuthRequiredError(message);
         }
         if (forcePrompt) {
           await openControlPlaneBrowserSignIn();
@@ -187,7 +194,7 @@ export async function ensureControlPlaneSession(options?: { forcePrompt?: boolea
             return;
           }
         }
-        throw new Error(message);
+        throw buildAuthRequiredError(message);
       }
 
       throw new Error(detail);

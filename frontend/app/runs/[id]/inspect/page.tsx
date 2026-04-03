@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import {
@@ -611,11 +612,16 @@ function ArtifactImagePreview({ path, alt }: { path: string; alt: string }) {
   }
 
   return (
-    <img
-      src={objectUrl}
-      alt={alt}
-      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <Image
+        src={objectUrl}
+        alt={alt}
+        unoptimized
+        fill
+        sizes="100vw"
+        style={{ objectFit: 'cover', display: 'block' }}
+      />
+    </div>
   );
 }
 

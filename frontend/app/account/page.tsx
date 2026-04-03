@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
-import { Settings, UserRound } from 'lucide-react';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
+import { Settings } from 'lucide-react';
+import { PageHero } from '@/components/orion/page/PageHero';
 import {
   displayNameFromEmail,
   readAccountProfilePreferences,
@@ -34,6 +35,7 @@ function initialsForName(name: string): string {
 export default function AccountPage() {
   const [draft, setDraft] = useState<AccountProfile>(DEFAULT_PROFILE);
   const [authEmail, setAuthEmail] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
   const [saveError, setSaveError] = useState('');
 
@@ -54,6 +56,7 @@ export default function AccountPage() {
         }
         const email = String(payload?.user?.email || '').trim();
         setAuthEmail(email);
+        setLoadError('');
         const name = String(payload?.user?.name || '').trim();
         const avatarUrl = String(payload?.user?.avatar_url || '').trim();
         setDraft({
@@ -64,6 +67,7 @@ export default function AccountPage() {
       } catch {
         if (cancelled) return;
         const stored = readAccountProfilePreferences();
+        setLoadError('Could not load profile. Showing local data.');
         setDraft({
           displayName: stored.displayName || DEFAULT_PROFILE.displayName,
           email: '',
@@ -129,10 +133,10 @@ export default function AccountPage() {
 
   return (
     <div className="orion-page-shell narrow orion-animate-in">
-      <OsPageHeader
-        icon={<UserRound size={18} />}
+      <PageHero
+        kicker="Account"
         title="Profile"
-        subtitle="Manage your account details."
+        copy="Manage your account details."
         actions={
           <Link href="/settings" className="orion-btn orion-btn-ghost" style={{ minHeight: 44, paddingInline: 12 }}>
             <Settings size={13} />
@@ -140,6 +144,22 @@ export default function AccountPage() {
           </Link>
         }
       />
+
+      {loadError ? (
+        <section
+          className="orion-panel muted"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: 'var(--warning-fg)',
+            borderColor: 'var(--warning-border)',
+            background: 'color-mix(in srgb, var(--warning-bg) 74%, var(--bg-surface) 26%)',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 500 }}>{loadError}</div>
+        </section>
+      ) : null}
 
       <section className="orion-panel">
         <div className="orion-panel-header" style={{ marginBottom: 18 }}>
@@ -163,15 +183,17 @@ export default function AccountPage() {
               display: 'grid',
               gap: 14,
               padding: 18,
-              borderRadius: 18,
               margin: 0,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               {draft.photoUrl ? (
-                <img
+                <Image
                   src={draft.photoUrl}
                   alt={draft.displayName}
+                  unoptimized
+                  width={72}
+                  height={72}
                   style={{
                     width: 72,
                     height: 72,
@@ -224,7 +246,7 @@ export default function AccountPage() {
                 value={draft.displayName}
                 onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
                 placeholder="Account owner"
-                style={{ height: 44, borderRadius: 12 }}
+                style={{ height: 44 }}
               />
             </div>
 
@@ -238,7 +260,7 @@ export default function AccountPage() {
                 value={effectiveEmail}
                 readOnly
                 placeholder="No signed-in email available"
-                style={{ height: 44, borderRadius: 12, opacity: 0.85 }}
+                style={{ height: 44, opacity: 0.85 }}
               />
             </div>
 
@@ -252,7 +274,7 @@ export default function AccountPage() {
                 value={draft.photoUrl || ''}
                 onChange={(event) => setDraft((current) => ({ ...current, photoUrl: event.target.value }))}
                 placeholder="Optional image URL"
-                style={{ height: 44, borderRadius: 12 }}
+                style={{ height: 44 }}
               />
               <div className="orion-panel-copy" style={{ margin: '6px 0 0' }}>
                 Add an image URL if you want a custom avatar.

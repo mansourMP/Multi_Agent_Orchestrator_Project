@@ -7,15 +7,14 @@ import {
   Download,
   ExternalLink,
   Eye,
-  Library,
   Package,
   Power,
   RefreshCw,
   Trash2,
   Upload,
 } from 'lucide-react';
+import { PageHero } from '@/components/orion/page/PageHero';
 import { MetricStrip } from '@/components/ui/MetricStrip';
-import { OsPageHeader } from '@/components/ui/OsPageHeader';
 import { ensureControlPlaneSession } from '@/lib/controlPlaneSession';
 
 type InstalledSkill = {
@@ -65,6 +64,32 @@ type InstalledResponse = {
   items?: InstalledSkill[];
   count?: number;
 };
+
+function LibraryEmptyState({ title, copy }: { title: string; copy: string }) {
+  return (
+    <div className="orion-empty" style={{ display: 'grid', justifyItems: 'center', gap: 10, padding: 28 }}>
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: 12,
+          border: '1px solid var(--border-subtle)',
+          background: 'color-mix(in srgb, var(--bg-element) 82%, var(--bg-surface) 18%)',
+          color: 'var(--text-secondary)',
+        }}
+      >
+        <BookOpen size={18} />
+      </div>
+      <div className="orion-empty-title" style={{ marginBottom: 0 }}>
+        {title}
+      </div>
+      <div className="orion-empty-copy">{copy}</div>
+    </div>
+  );
+}
 
 export default function LibraryPage() {
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
@@ -220,24 +245,15 @@ export default function LibraryPage() {
 
   return (
     <div className="orion-page-shell orion-animate-in">
-      <OsPageHeader
-        icon={<Library size={18} />}
-        title="Skill Library"
-        subtitle="Browse marketplace skills, install them into this workspace, and package your own for sharing."
-        meta={
-          <>
-            <span>{stats.installed} installed</span>
-            <span>{stats.enabled} enabled</span>
-            <span>{stats.marketplace} marketplace</span>
-          </>
-        }
+      <PageHero
+        kicker="Library"
+        title="Skill library"
+        copy="Browse marketplace skills, install them into this workspace, and package your own for sharing."
         actions={
-          <>
-            <button className="orion-btn orion-btn-ghost" onClick={() => { void refreshInstalled(); void refreshRegistry(); }}>
-              <RefreshCw size={14} />
-              Refresh
-            </button>
-          </>
+          <button className="orion-btn orion-btn-ghost" onClick={() => { void refreshInstalled(); void refreshRegistry(); }}>
+            <RefreshCw size={14} />
+            Refresh
+          </button>
         }
       />
 
@@ -280,9 +296,10 @@ export default function LibraryPage() {
                 <div className="orion-list-row-subtitle">Loading installed skills…</div>
               </div>
             ) : installedSkills.length === 0 ? (
-              <div className="orion-list-row">
-                <div className="orion-list-row-subtitle">No installed skills found.</div>
-              </div>
+              <LibraryEmptyState
+                title="No installed skills found."
+                copy="Install or publish a skill to populate this library."
+              />
             ) : (
               installedSkills.map((skill) => {
                 const busy = busySkillId === skill.id;
@@ -451,9 +468,10 @@ export default function LibraryPage() {
               <div className="orion-list-row-subtitle">Loading skills…</div>
             </div>
           ) : installedSkills.length === 0 ? (
-            <div className="orion-list-row">
-              <div className="orion-list-row-subtitle">No installed skills found.</div>
-            </div>
+            <LibraryEmptyState
+              title="No installed skills found."
+              copy="Installed skills will appear here once you add one to the workspace."
+            />
           ) : (
             installedSkills.map((skill) => (
               <article key={`library-skill-${skill.id}`} className="orion-list-row">

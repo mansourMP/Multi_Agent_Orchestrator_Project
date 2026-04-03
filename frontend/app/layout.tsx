@@ -44,7 +44,7 @@ export const viewport: Viewport = {
 
 const CRITICAL_SHELL_CSS = `
 :root {
-  --shell-sidebar-width: 64px;
+  --shell-sidebar-width: 56px;
   --topbar-height: 56px;
   --critical-bg-shell: var(--bg-shell);
   --critical-bg-app: var(--bg-app);
@@ -149,7 +149,7 @@ html[data-sidebar-collapsed='0'] body:not(.orion-chat-home):not(.orion-builder-f
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid var(--critical-border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--critical-bg-surface);
   color: var(--critical-text);
   font: inherit;
@@ -173,7 +173,7 @@ const THEME_BOOTSTRAP_SCRIPT = `
     root.style.colorScheme = resolved;
     const sidebarCollapsed = localStorage.getItem('empyralist:sidebar-collapsed') === '1';
     root.setAttribute('data-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '64px' : '228px');
+    root.style.setProperty('--shell-sidebar-width', hideShellChrome ? '0px' : sidebarCollapsed ? '56px' : '220px');
     root.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
     document.body?.style?.setProperty('background', 'var(--critical-bg-app)');
   } catch {}
@@ -206,8 +206,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const sidebarStyle = {
-    "--sidebar-width": "228px",
-    "--sidebar-width-icon": "64px",
+    "--sidebar-width": "220px",
+    "--sidebar-width-icon": "56px",
     "--sidebar": "var(--bg-sidebar)",
     "--sidebar-foreground": "var(--text-primary)",
     "--sidebar-primary": "var(--text-primary)",

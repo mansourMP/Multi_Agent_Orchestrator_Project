@@ -17,7 +17,7 @@ from server_modules.provider_profiles import (
 from server_modules.shared import PROFILES_LOCK, PROVIDER_PROFILES
 
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-4o"
 OPENAI_CHAT_COMPLETIONS_URL = os.getenv("OPENAI_CHAT_COMPLETIONS_URL", "https://api.openai.com/v1/chat/completions")
 ANTHROPIC_MESSAGES_URL = os.getenv("ANTHROPIC_MESSAGES_URL", "https://api.anthropic.com/v1/messages")
 OPENAI_EMBEDDINGS_URL = os.getenv("OPENAI_EMBEDDINGS_URL", "https://api.openai.com/v1/embeddings")
@@ -28,9 +28,9 @@ MODEL_ALIASES = {
     "gpt-4.1-mini": "gpt-4.1-mini",
     "claude-sonnet": "anthropic/claude-3-5-sonnet-20241022",
     "claude-haiku": "anthropic/claude-3-haiku-20240307",
-    "gemini-flash": "gemini/gemini-2.0-flash",
+    "gemini-flash": "gemini/gemini-1.5-flash",
     "gemini-pro": "gemini/gemini-1.5-pro",
-    "vertex-gemini-flash": "vertex_ai/gemini-2.0-flash-001",
+    "vertex-gemini-pro": "vertex_ai/gemini-1.5-pro",
 }
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 

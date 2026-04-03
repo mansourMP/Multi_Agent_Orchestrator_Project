@@ -65,13 +65,6 @@ type ProviderProfileRow = {
   updated_at?: string;
 };
 
-type ProviderProfilesHealth = {
-  healthy: number;
-  cooldown: number;
-  disabled: number;
-  total: number;
-};
-
 type RuntimeAvailabilityItem = {
   provider: ProviderId;
   label: string;
@@ -102,6 +95,7 @@ type ProviderAccountFormState = {
   secret: string;
   projectId: string;
   location: string;
+  baseUrl: string;
   model: string;
   enableRuntime: boolean;
 };
@@ -178,6 +172,13 @@ type ProviderCardState = {
   errorMessage: string | null;
 };
 
+type ProviderHealthCheckState = Partial<Record<ProviderId, string>>;
+
+type ProviderProbeResult = {
+  tone: 'success' | 'error';
+  message: string;
+};
+
 const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   provider: 'anthropic',
   label: 'My Anthropic Key',
@@ -185,6 +186,7 @@ const DEFAULT_PROVIDER_FORM: ProviderAccountFormState = {
   secret: '',
   projectId: '',
   location: 'us-central1',
+  baseUrl: 'http://localhost:11434',
   model: 'claude-sonnet',
   enableRuntime: true,
 };
@@ -442,9 +444,10 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
     };
   }
   if (state.provider === 'ollama') {
+    const rawBaseUrl = String(state.baseUrl || '').trim().replace(/\/+$/, '') || 'http://localhost:11434';
     return {
       auth_mode: state.authMode || 'none',
-      base_url: 'http://localhost:11434/v1',
+      base_url: rawBaseUrl.endsWith('/v1') ? rawBaseUrl : `${rawBaseUrl}/v1`,
     };
   }
   const token = state.secret.trim();
@@ -455,6 +458,12 @@ function buildProviderCredentialPayload(state: ProviderAccountFormState): Record
     return { oauth_token: token, auth_mode: 'oauth_token' };
   }
   return { api_key: token, auth_mode: 'api_key' };
+}
+
+function providerConfigureLabel(provider: ProviderId): string {
+  if (provider === 'vertex') return 'Add credential';
+  if (provider === 'ollama') return 'Connect';
+  return 'Add API Key';
 }
 
 function providerSetupGuidance(provider: ProviderId, authMode: string, option: ProviderOption): string {
@@ -540,7 +549,7 @@ function normalizeClaudeCliError(message: string): string {
 
 function simpleProviderAuthLabel(provider: ProviderId): string {
   if (provider === 'ollama') return 'Use local Ollama';
-  return provider === 'vertex' ? 'Add access token' : 'Add API key';
+  return provider === 'vertex' ? 'Add credential' : 'Add API key';
 }
 
 function simpleProviderSecretPlaceholder(provider: ProviderId): string {
@@ -550,6 +559,7 @@ function simpleProviderSecretPlaceholder(provider: ProviderId): string {
   if (provider === 'qwen') return 'DashScope API key';
   if (provider === 'deepseek') return 'sk-...';
   if (provider === 'mistral') return 'Mistral API key';
+  if (provider === 'vertex') return 'Vertex credential';
   return 'Access token';
 }
 
@@ -589,8 +599,10 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
   const [modelAliases, setModelAliases] = useState<ModelAliasOption[]>(DEFAULT_MODEL_ALIAS_OPTIONS);
   const [providerCredentials, setProviderCredentials] = useState<ProviderCredentialRow[]>([]);
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileRow[]>([]);
-  const [providerHealth, setProviderHealth] = useState<ProviderProfilesHealth>({ healthy: 0, cooldown: 0, disabled: 0, total: 0 });
   const [runtimeAvailability, setRuntimeAvailability] = useState<RuntimeAvailabilityItem[]>([]);
+  const [providerHealthCheck, setProviderHealthCheck] = useState<ProviderHealthCheckState>({});
+  const [providerHealthUnavailable, setProviderHealthUnavailable] = useState(false);
+  const [providerProbeResults, setProviderProbeResults] = useState<Partial<Record<ProviderId, ProviderProbeResult>>>({});
   const [localOpenAiAuth, setLocalOpenAiAuth] = useState<LocalOpenAiAuthStatus | null>(null);
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerError, setProviderError] = useState('');
@@ -615,6 +627,37 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       cache: 'no-store',
     });
   }, []);
+
+  const loadProviderHealthSnapshot = useCallback(async (): Promise<{ statuses: ProviderHealthCheckState; unavailable: boolean }> => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = typeof window !== 'undefined' && controller
+      ? window.setTimeout(() => controller.abort(), 3000)
+      : null;
+    try {
+      const res = await controlPlaneFetch(
+        `/api/control-plane/providers/health-check?workspace_id=${encodeURIComponent(workspaceId)}`,
+        controller ? { signal: controller.signal } : undefined,
+      );
+      const raw = await res.text().catch(() => '');
+      const body = raw ? JSON.parse(raw) : {};
+      if (!res.ok || !body || typeof body !== 'object' || Array.isArray(body)) {
+        return { statuses: {}, unavailable: true };
+      }
+      const statuses: ProviderHealthCheckState = {};
+      for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+        const provider = knownProviderId(key);
+        if (!provider || typeof value !== 'string') continue;
+        statuses[provider] = value;
+      }
+      return { statuses, unavailable: false };
+    } catch {
+      return { statuses: {}, unavailable: true };
+    } finally {
+      if (timeoutId && typeof window !== 'undefined') {
+        window.clearTimeout(timeoutId);
+      }
+    }
+  }, [controlPlaneFetch, workspaceId]);
 
   const selectedProviderOption = useMemo(
     () => providerOptionFor(providerForm.provider, providerOptions),
@@ -689,7 +732,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
           id: 'qwen_api_key',
           provider: 'qwen',
           label: 'Add API key',
-          description: 'Paste a direct Qwen API key and store it in the encrypted vault.',
+          description: 'Use your DashScope API key from console.aliyun.com and store it in the encrypted vault.',
           authMode: 'api_key',
           action: 'manual',
         },
@@ -724,8 +767,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         {
           id: 'ollama_local',
           provider: 'ollama',
-          label: 'Use local Ollama',
-          description: 'Connect the local Ollama OpenAI-compatible endpoint running on this machine.',
+          label: 'Connect Ollama',
+          description: 'Connect the local Ollama endpoint running on this machine and set its base URL.',
           authMode: 'none',
           action: 'manual',
         },
@@ -735,8 +778,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       {
         id: 'vertex_access_token',
         provider: 'vertex',
-        label: 'Add access token',
-        description: 'Paste a Vertex access token and provide the project and region it should use.',
+        label: 'Add credential',
+        description: 'Paste the Vertex credential and provide the project and region it should use.',
         authMode: 'access_token',
         action: 'manual',
       },
@@ -892,25 +935,33 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     runtimeAvailabilityByProvider,
     runtimeProfileGroups,
   ]);
-  const hasProviderCardError = useMemo(
-    () => providerCards.some((card) => Boolean(String(card.errorMessage || '').trim())),
-    [providerCards],
-  );
+  const providerCardStatusByProvider = useMemo(() => {
+    const map = new Map<ProviderId, { tone: 'success' | 'error' | 'neutral'; text: string }>();
+    for (const card of providerCards) {
+      const configured = Boolean(card.credential);
+      if (!configured) {
+        map.set(card.provider, { tone: 'neutral', text: 'Not configured' });
+        continue;
+      }
+      const health = providerHealthCheck[card.provider];
+      if (health === 'ok') {
+        map.set(card.provider, { tone: 'success', text: 'Connected' });
+        continue;
+      }
+      if (typeof health === 'string' && health.startsWith('failed:')) {
+        const rawDetail = health.replace(/^failed:\s*/i, '') || 'Connection failed';
+        const detail = rawDetail.length > 56 ? `${rawDetail.slice(0, 56).trimEnd()}…` : rawDetail;
+        map.set(card.provider, { tone: 'error', text: detail });
+        continue;
+      }
+      map.set(card.provider, { tone: 'neutral', text: 'Status unavailable' });
+    }
+    return map;
+  }, [providerCards, providerHealthCheck, providerHealthUnavailable]);
   const readyProviderCard = useMemo(
     () => providerCards.find((card) => card.enabled && !String(card.errorMessage || '').trim()) || null,
     [providerCards],
   );
-  const connectedAccounts = useMemo(() => {
-    return providerCredentials.map((credential) => {
-      const linkedProfiles = [...(providerProfilesByCredential.get(credential.id) || [])].sort(sortProviderProfiles);
-      const primaryProfile = linkedProfiles.find((profile) => profile.enabled && profile.health !== 'cooldown') || linkedProfiles[0] || null;
-      return {
-        credential,
-        primaryProfile,
-        enabled: linkedProfiles.some((profile) => profile.enabled),
-      };
-    });
-  }, [providerCredentials, providerProfilesByCredential]);
 
   const connectMode = mode === 'connect';
 
@@ -937,6 +988,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       secret: '',
       projectId: '',
       location: 'us-central1',
+      baseUrl: 'http://localhost:11434',
       model: defaultProviderModel(nextProvider, nextAuthMode, providerOptions),
       enableRuntime: true,
     });
@@ -953,6 +1005,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       secret: '',
       projectId: '',
       location: 'us-central1',
+      baseUrl: 'http://localhost:11434',
       model: defaultProviderModel(nextProvider, nextAuthMode, providerOptions),
       enableRuntime: true,
     });
@@ -978,12 +1031,13 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setProviderError('');
     setProviderNotice('');
     try {
-      const [providersRes, modelAliasesRes, credentialsRes, profilesRes, runtimeAvailabilityRes] = await Promise.all([
+      const [providersRes, modelAliasesRes, credentialsRes, profilesRes, runtimeAvailabilityRes, healthSnapshot] = await Promise.all([
         controlPlaneFetch('/api/control-plane/providers'),
         controlPlaneFetch('/api/control-plane/providers/model-aliases'),
         controlPlaneFetch(`/api/control-plane/credentials?workspace_id=${encodeURIComponent(workspaceId)}`),
         controlPlaneFetch(`/api/control-plane/providers/profiles/health?workspace_id=${encodeURIComponent(workspaceId)}`),
         controlPlaneFetch(`/api/control-plane/providers/runtime-availability?workspace_id=${encodeURIComponent(workspaceId)}`),
+        loadProviderHealthSnapshot(),
       ]);
 
       const providersRaw = await providersRes.text().catch(() => '');
@@ -1116,15 +1170,8 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         });
       setProviderProfiles(normalizedProfiles);
 
-      const summary = profilesBody?.summary && typeof profilesBody.summary === 'object'
-        ? profilesBody.summary as Record<string, unknown>
-        : {};
-      setProviderHealth({
-        healthy: typeof summary.healthy === 'number' ? summary.healthy : 0,
-        cooldown: typeof summary.cooldown === 'number' ? summary.cooldown : 0,
-        disabled: typeof summary.disabled === 'number' ? summary.disabled : 0,
-        total: typeof summary.total === 'number' ? summary.total : normalizedProfiles.length,
-      });
+      setProviderHealthCheck(healthSnapshot.statuses);
+      setProviderHealthUnavailable(healthSnapshot.unavailable);
 
       const availabilityItems = runtimeAvailabilityRes.ok && Array.isArray(runtimeAvailabilityBody?.items)
         ? runtimeAvailabilityBody.items
@@ -1151,7 +1198,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     } finally {
       setProviderLoading(false);
     }
-  }, [controlPlaneFetch, workspaceId]);
+  }, [controlPlaneFetch, loadProviderHealthSnapshot, workspaceId]);
 
   const loadLocalOpenAiAuth = useCallback(async () => {
     try {
@@ -1211,6 +1258,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
         secret: '',
         projectId: '',
         location: nextMethod.provider === 'vertex' ? 'us-central1' : prev.location,
+        baseUrl: nextMethod.provider === 'ollama' ? 'http://localhost:11434' : prev.baseUrl,
       }));
     }
   }, [providerConnectMethods, providerForm.provider, providerOptions, selectedConnectMethod]);
@@ -1423,6 +1471,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
     setProviderActionBusy(credential.id, 'test');
     setProviderError('');
     setProviderNotice('');
+    setProviderProbeResults((prev) => {
+      const next = { ...prev };
+      delete next[credential.provider];
+      return next;
+    });
     try {
       const providerId = encodeURIComponent(String(credential.rawProvider || credential.provider).trim());
       const res = await controlPlaneFetch(`/api/control-plane/providers/${providerId}/probe?workspace_id=${encodeURIComponent(workspaceId)}&credential_id=${encodeURIComponent(credential.id)}`, {
@@ -1434,6 +1487,12 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       const model = String(body?.model || '').trim();
       const reply = String(body?.reply || '').replace(/\s+/g, ' ').trim();
       const replyPreview = reply.length > 72 ? `${reply.slice(0, 72).trimEnd()}…` : reply;
+      setProviderHealthCheck((prev) => ({ ...prev, [credential.provider]: 'ok' }));
+      setProviderHealthUnavailable(false);
+      setProviderProbeResults((prev) => ({
+        ...prev,
+        [credential.provider]: { tone: 'success', message: 'Working' },
+      }));
       setProviderNotice(
         [
           String(body?.message || 'Live probe succeeded.').trim(),
@@ -1443,6 +1502,11 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI account live probe failed.';
+      setProviderHealthCheck((prev) => ({ ...prev, [credential.provider]: `failed: ${message}` }));
+      setProviderProbeResults((prev) => ({
+        ...prev,
+        [credential.provider]: { tone: 'error', message: `Failed: ${message}` },
+      }));
       setProviderError(credential.provider === 'anthropic' && credential.authMode === 'local_cli' ? normalizeClaudeCliError(message) : message);
     } finally {
       setProviderActionBusy(credential.id, null);
@@ -1909,41 +1973,31 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
             <div className="orion-empty-title">Loading AI accounts</div>
             <div className="orion-empty-copy">Loading connected accounts and runtime availability.</div>
           </section>
-        ) : connectedAccounts.length === 0 ? (
-          <section className="orion-empty" style={{ minHeight: 220, gap: 12 }}>
-            <div className="orion-empty-title">No AI accounts connected yet</div>
-            <div className="orion-empty-copy">
-              Add one provider account to start using AI inside Empyralis.
-            </div>
-            <button
-              className="orion-btn orion-btn-primary"
-              style={{ minHeight: 38, paddingInline: 14 }}
-              onClick={() => {
-                openProviderFormForMethod(providerForm.provider, providerConnectMethod);
-              }}
-            >
-              <Plus size={14} />
-              Add account
-            </button>
-          </section>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
-            {connectedAccounts.map(({ credential, primaryProfile, enabled }) => {
-              const busyAction = providerBusy[credential.id] || '';
-              const wasJustConnected = recentlyConnectedCredentialId === credential.id;
-              const statusTone = enabled
+            {providerCards.map((card) => {
+              const credential = card.credential;
+              const configured = Boolean(credential);
+              const busyAction = credential ? (providerBusy[credential.id] || '') : '';
+              const wasJustConnected = credential ? recentlyConnectedCredentialId === credential.id : false;
+              const status = providerCardStatusByProvider.get(card.provider) || { tone: 'neutral' as const, text: 'Status unavailable' };
+              const probeResult = providerProbeResults[card.provider] || null;
+              const providerOption = providerOptionFor(card.provider, providerOptions);
+              const statusTone = status.tone === 'success'
                 ? { color: 'var(--success-fg)', border: '1px solid var(--success-border)', background: 'var(--success-bg)' }
-                : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
+                : status.tone === 'error'
+                  ? { color: 'var(--error-fg)', border: '1px solid var(--error-border)', background: 'var(--error-bg)' }
+                  : { color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', background: 'var(--bg-element)' };
 
               return (
                 <div
-                  key={credential.id}
+                  key={card.provider}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: 'minmax(0, 1fr) auto',
                     gap: 12,
-                    alignItems: 'center',
-                    borderRadius: 0,
+                    alignItems: 'start',
+                    borderRadius: 12,
                     border: '1px solid var(--border-subtle)',
                     background: 'var(--bg-surface)',
                     padding: '14px 16px',
@@ -1951,19 +2005,34 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                 >
                   <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                      <ProviderMark provider={credential.provider} size={32} />
+                      <ProviderMark provider={card.provider} size={32} />
                       <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>
-                          {providerLabel(credential.provider, providerOptions)}
+                          {providerLabel(card.provider, providerOptions)}
                         </div>
                         <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.45, wordBreak: 'break-word' }}>
-                          {credential.label}
+                          {configured ? credential?.label : providerOption.note}
                         </div>
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                       <span className="orion-chip" style={statusTone}>
-                        {enabled ? 'Enabled' : 'Disabled'}
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: 999,
+                            background: status.tone === 'success'
+                              ? 'var(--success-base)'
+                              : status.tone === 'error'
+                                ? 'var(--error-base)'
+                                : 'var(--text-secondary)',
+                            display: 'inline-block',
+                            marginRight: 6,
+                          }}
+                        />
+                        {status.text}
                       </span>
                       {wasJustConnected ? (
                         <span
@@ -1981,30 +2050,62 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
                           Connected
                         </span>
                       ) : null}
-                      {primaryProfile?.model ? (
-                        <span className="orion-chip">{primaryProfile.model}</span>
+                      {card.profile?.model ? (
+                        <span className="orion-chip">{card.profile.model}</span>
+                      ) : null}
+                      {card.isActiveProfile ? (
+                        <span className="orion-chip">Runtime enabled</span>
                       ) : null}
                     </div>
+                    {probeResult ? (
+                      <div
+                        style={{
+                          fontSize: 12.5,
+                          color: probeResult.tone === 'success' ? 'var(--success-fg)' : 'var(--error-fg)',
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {probeResult.tone === 'success' ? '✓ ' : '✗ '}
+                        {probeResult.message}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <button
-                      className="orion-btn orion-btn-ghost"
-                      style={{ minHeight: 34, paddingInline: 12 }}
-                      onClick={() => void handleTestProviderCredential(credential)}
-                      disabled={busyAction === 'test'}
-                    >
-                      {busyAction === 'test' ? 'Testing…' : 'Test'}
-                    </button>
-                    <button
-                      className="orion-btn orion-btn-danger"
-                      style={{ minHeight: 34, paddingInline: 12 }}
-                      onClick={() => void handleRemoveProviderCredential(credential)}
-                      disabled={busyAction === 'remove'}
-                    >
-                      <Trash2 size={13} />
-                      {busyAction === 'remove' ? 'Removing…' : 'Remove'}
-                    </button>
+                    {configured && credential ? (
+                      <>
+                        <button
+                          className="orion-btn orion-btn-ghost"
+                          style={{ minHeight: 34, paddingInline: 12 }}
+                          onClick={() => void handleTestProviderCredential(credential)}
+                          disabled={busyAction === 'test'}
+                        >
+                          {busyAction === 'test' ? (
+                            <>
+                              <RefreshCw size={13} className="animate-spin" />
+                              Testing…
+                            </>
+                          ) : 'Test Connection'}
+                        </button>
+                        <button
+                          className="orion-btn orion-btn-danger"
+                          style={{ minHeight: 34, paddingInline: 12 }}
+                          onClick={() => void handleRemoveProviderCredential(credential)}
+                          disabled={busyAction === 'remove'}
+                        >
+                          <Trash2 size={13} />
+                          {busyAction === 'remove' ? 'Removing…' : 'Remove'}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="orion-btn orion-btn-ghost"
+                        style={{ minHeight: 34, paddingInline: 12 }}
+                        onClick={() => openProviderFormForMethod(card.provider)}
+                      >
+                        {providerConfigureLabel(card.provider)}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -2165,13 +2266,36 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               </div>
 
               {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) && providerForm.provider === 'vertex' ? (
+                <>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
+                    <input
+                      className="input"
+                      value={providerForm.projectId}
+                      onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
+                      placeholder="my-gcp-project"
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Location</span>
+                    <input
+                      className="input"
+                      value={providerForm.location}
+                      onChange={(event) => setProviderForm((prev) => ({ ...prev, location: event.target.value }))}
+                      placeholder="us-central1"
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) && providerForm.provider === 'ollama' ? (
                 <label style={{ display: 'grid', gap: 6 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Project ID</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Base URL</span>
                   <input
                     className="input"
-                    value={providerForm.projectId}
-                    onChange={(event) => setProviderForm((prev) => ({ ...prev, projectId: event.target.value }))}
-                    placeholder="my-gcp-project"
+                    value={providerForm.baseUrl}
+                    onChange={(event) => setProviderForm((prev) => ({ ...prev, baseUrl: event.target.value }))}
+                    placeholder="http://localhost:11434"
                   />
                 </label>
               ) : null}
@@ -2179,7 +2303,7 @@ export default function AiAccountsPanel({ workspaceId, mode = 'manage', returnTo
               {selectedConnectMethod && isManualConnectMethod(selectedConnectMethod.action) && selectedConnectNeedsSecret ? (
                 <label style={{ display: 'grid', gap: 6 }}>
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {providerForm.provider === 'vertex' ? 'Access token' : 'API key'}
+                    {providerForm.provider === 'vertex' ? 'API key or access token' : 'API key'}
                   </span>
                   <input
                     className="input"

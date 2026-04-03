@@ -204,7 +204,7 @@ PROVIDER_CATALOG = {
             {"id": "api_key", "label": "API Key", "secret_required": True},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "gpt-5.4",
+        "default_model": "gpt-4o",
         "note": "Direct OpenAI credentials only. Empyralis does not provide an in-product ChatGPT or Codex sign-in flow yet.",
     },
     "openai-codex": {
@@ -258,7 +258,7 @@ PROVIDER_CATALOG = {
             {"id": "access_token", "label": "Access Token", "secret_required": True},
         ],
         "default_auth_mode": "access_token",
-        "default_model": "gemini-2.0-flash-001",
+        "default_model": "gemini-1.5-pro",
         "note": "Direct Vertex AI access token with project and region.",
     },
     "qwen": {
@@ -268,9 +268,9 @@ PROVIDER_CATALOG = {
             {"id": "api_key", "label": "API Key", "secret_required": True},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "qwen-turbo",
+        "default_model": "qwen-plus",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": ["qwen-turbo", "qwen-plus", "qwen-max"],
+        "models": ["qwen-plus", "qwen-turbo", "qwen-max"],
         "note": "Direct Qwen API key using Alibaba DashScope's OpenAI-compatible endpoint.",
     },
     "deepseek": {
@@ -292,9 +292,9 @@ PROVIDER_CATALOG = {
             {"id": "api_key", "label": "API Key", "secret_required": True},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "mistral-small-latest",
+        "default_model": "mistral-large-latest",
         "base_url": "https://api.mistral.ai/v1",
-        "models": ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"],
+        "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
         "note": "Direct Mistral API key using the OpenAI-compatible endpoint.",
     },
     "ollama": {
@@ -304,9 +304,9 @@ PROVIDER_CATALOG = {
             {"id": "none", "label": "No auth required", "secret_required": False},
         ],
         "default_auth_mode": "none",
-        "default_model": "llama3",
+        "default_model": "llama3.2",
         "base_url": "http://localhost:11434/v1",
-        "models": ["llama3", "mistral", "gemma", "phi3"],
+        "models": ["llama3.2", "llama3", "mistral", "gemma", "phi3"],
         "note": "Local Ollama endpoint on this machine. No credential is required.",
     },
 }

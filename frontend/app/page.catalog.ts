@@ -888,6 +888,13 @@ export const BUSINESS_PRESETS: BusinessPreset[] = [
 
 export const DEFAULT_BUSINESS_PRESET_ID = BUSINESS_PRESETS[0].id;
 
+export const DEFAULT_OPENAI_MODELS = [
+  'gpt-4o',
+  'gpt-4.1',
+  'gpt-4o-mini',
+  'gpt-4.1-mini',
+] as const;
+
 export const DEFAULT_OPENAI_CODEX_MODELS = [
   'gpt-5.4',
   'gpt-5.3-codex',
@@ -901,7 +908,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'openai',
     label: 'OpenAI',
-    defaultModel: DEFAULT_OPENAI_CODEX_MODELS[0],
+    defaultModel: DEFAULT_OPENAI_MODELS[0],
     auth: ['api_key', 'access_token', 'oauth_token'],
     defaultAuthMode: 'api_key',
     authModes: [
@@ -935,20 +942,20 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'vertex',
     label: 'Google Vertex AI',
-    defaultModel: 'vertex-gemini-flash',
+    defaultModel: 'vertex-gemini-pro',
     auth: ['access_token', 'project_id', 'location'],
     defaultAuthMode: 'access_token',
     authModes: [{ id: 'access_token', label: 'Access Token', secretRequired: true }],
-    note: 'Direct Vertex AI access token with project and region.',
+    note: 'Direct Vertex AI credential with project and region.',
   },
   {
     id: 'qwen',
     label: 'Qwen',
-    defaultModel: 'qwen-turbo',
+    defaultModel: 'qwen-plus',
     auth: ['api_key'],
     defaultAuthMode: 'api_key',
     authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
-    note: 'Direct Qwen API key using Alibaba DashScope.',
+    note: 'Use your DashScope API key from console.aliyun.com.',
   },
   {
     id: 'deepseek',
@@ -962,7 +969,7 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'mistral',
     label: 'Mistral',
-    defaultModel: 'mistral-small-latest',
+    defaultModel: 'mistral-large-latest',
     auth: ['api_key'],
     defaultAuthMode: 'api_key',
     authModes: [{ id: 'api_key', label: 'API Key', secretRequired: true }],
@@ -971,33 +978,33 @@ export const DEFAULT_PROVIDER_OPTIONS: ProviderOption[] = [
   {
     id: 'ollama',
     label: 'Ollama',
-    defaultModel: 'llama3',
+    defaultModel: 'llama3.2',
     auth: ['none'],
     defaultAuthMode: 'none',
     authModes: [{ id: 'none', label: 'No auth required', secretRequired: false }],
-    note: 'Use a local Ollama server running on this machine.',
+    note: 'Use a local Ollama server running on this machine. Default base URL: http://localhost:11434.',
   },
 ];
 
 export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string[]> = {
-  openai: [...DEFAULT_OPENAI_CODEX_MODELS],
+  openai: [...DEFAULT_OPENAI_MODELS],
   'openai-codex': [...DEFAULT_OPENAI_CODEX_MODELS],
   anthropic: ['claude-sonnet', 'claude-haiku'],
   claude_code_cli: ['sonnet', 'opus'],
   gemini: ['gemini-flash', 'gemini-pro'],
-  vertex: ['vertex-gemini-flash'],
-  qwen: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
+  vertex: ['vertex-gemini-pro'],
+  qwen: ['qwen-plus', 'qwen-turbo', 'qwen-max'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
-  mistral: ['mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest'],
-  ollama: ['llama3', 'mistral', 'gemma', 'phi3'],
+  mistral: ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'],
+  ollama: ['llama3.2', 'llama3', 'mistral', 'gemma', 'phi3'],
 };
 
 export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
   {
-    alias: 'gpt-5.4',
+    alias: 'gpt-4o',
     provider: 'openai',
-    model: 'gpt-5.4',
-    resolvedModel: 'gpt-5.4',
+    model: 'gpt-4o',
+    resolvedModel: 'gpt-4o',
     isGlobalDefault: true,
     isProviderDefault: true,
   },
@@ -1050,14 +1057,6 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isProviderDefault: false,
   },
   {
-    alias: 'gpt-4o',
-    provider: 'openai',
-    model: 'gpt-4o',
-    resolvedModel: 'gpt-4o',
-    isGlobalDefault: false,
-    isProviderDefault: false,
-  },
-  {
     alias: 'gpt-4o-mini',
     provider: 'openai',
     model: 'gpt-4o-mini',
@@ -1092,8 +1091,8 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
   {
     alias: 'gemini-flash',
     provider: 'gemini',
-    model: 'gemini/gemini-2.0-flash',
-    resolvedModel: 'gemini/gemini-2.0-flash',
+    model: 'gemini/gemini-1.5-flash',
+    resolvedModel: 'gemini/gemini-1.5-flash',
     isGlobalDefault: false,
     isProviderDefault: true,
   },
@@ -1106,18 +1105,10 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isProviderDefault: false,
   },
   {
-    alias: 'vertex-gemini-flash',
+    alias: 'vertex-gemini-pro',
     provider: 'vertex',
-    model: 'vertex_ai/gemini-2.0-flash-001',
-    resolvedModel: 'vertex_ai/gemini-2.0-flash-001',
-    isGlobalDefault: false,
-    isProviderDefault: true,
-  },
-  {
-    alias: 'qwen-turbo',
-    provider: 'qwen',
-    model: 'qwen-turbo',
-    resolvedModel: 'qwen-turbo',
+    model: 'vertex_ai/gemini-1.5-pro',
+    resolvedModel: 'vertex_ai/gemini-1.5-pro',
     isGlobalDefault: false,
     isProviderDefault: true,
   },
@@ -1126,6 +1117,14 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     provider: 'qwen',
     model: 'qwen-plus',
     resolvedModel: 'qwen-plus',
+    isGlobalDefault: false,
+    isProviderDefault: true,
+  },
+  {
+    alias: 'qwen-turbo',
+    provider: 'qwen',
+    model: 'qwen-turbo',
+    resolvedModel: 'qwen-turbo',
     isGlobalDefault: false,
     isProviderDefault: false,
   },
@@ -1154,10 +1153,10 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isProviderDefault: false,
   },
   {
-    alias: 'mistral-small-latest',
+    alias: 'mistral-large-latest',
     provider: 'mistral',
-    model: 'mistral-small-latest',
-    resolvedModel: 'mistral-small-latest',
+    model: 'mistral-large-latest',
+    resolvedModel: 'mistral-large-latest',
     isGlobalDefault: false,
     isProviderDefault: true,
   },
@@ -1170,12 +1169,20 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     isProviderDefault: false,
   },
   {
-    alias: 'mistral-large-latest',
+    alias: 'mistral-small-latest',
     provider: 'mistral',
-    model: 'mistral-large-latest',
-    resolvedModel: 'mistral-large-latest',
+    model: 'mistral-small-latest',
+    resolvedModel: 'mistral-small-latest',
     isGlobalDefault: false,
     isProviderDefault: false,
+  },
+  {
+    alias: 'llama3.2',
+    provider: 'ollama',
+    model: 'llama3.2',
+    resolvedModel: 'llama3.2',
+    isGlobalDefault: false,
+    isProviderDefault: true,
   },
   {
     alias: 'llama3',
@@ -1183,7 +1190,7 @@ export const DEFAULT_MODEL_ALIAS_OPTIONS: ModelAliasOption[] = [
     model: 'llama3',
     resolvedModel: 'llama3',
     isGlobalDefault: false,
-    isProviderDefault: true,
+    isProviderDefault: false,
   },
   {
     alias: 'mistral',

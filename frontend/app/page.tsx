@@ -25,6 +25,7 @@ import {
   createChatId,
   createEmptyChatSession,
   dedupeChatMessages,
+  isDeprecatedSystemChatMessage,
   normalizeChatContent,
   sanitizeChatStore,
   upsertSessionMessages,
@@ -262,10 +263,11 @@ function sanitizePersistedWorkbenchChats(chats: Record<string, WorkbenchAgentCha
       const hasAutoFilledLocalPrompt = messages.some(
         (message) => message.role === 'user' && message.content.trim().toLowerCase() === LOCAL_EXECUTION_DEFAULT_GOAL,
       );
-      if (!hasAutoFilledLocalPrompt) return [agentRole, messages];
+      const sanitizedMessages = messages.filter((message) => !isDeprecatedSystemChatMessage(message.role === 'user' ? 'user' : 'assistant', message.content));
+      if (!hasAutoFilledLocalPrompt) return [agentRole, sanitizedMessages];
       return [
         agentRole,
-        messages.filter((message) => {
+        sanitizedMessages.filter((message) => {
           const normalized = message.content.trim().toLowerCase();
           if (message.role === 'user' && normalized === LOCAL_EXECUTION_DEFAULT_GOAL) return false;
           if (message.role !== 'user' && normalized.includes('provider profiles path is not writable')) return false;

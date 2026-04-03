@@ -130,6 +130,10 @@ export const CHAT_STORE_UPDATED_EVENT = 'empyralis:chat-store-updated';
 export const CHAT_SESSION_SELECT_EVENT = 'empyralis:chat-session-select';
 export const EMPTY_CHAT_SESSION_TITLE = 'New chat';
 
+const DEPRECATED_SYSTEM_CHAT_CONTENT = new Set([
+  'no ai provider is configured for chat right now. i can still run explicit local, browser, and web tools, but this request needs model reasoning first.',
+]);
+
 export function createChatId(prefix: string): string {
   return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -152,6 +156,11 @@ export function normalizeChatContent(value: string): string {
   return cleaned;
 }
 
+export function isDeprecatedSystemChatMessage(role: ChatMessageRole, content: string): boolean {
+  if (normalizeChatRole(role) !== 'assistant') return false;
+  return DEPRECATED_SYSTEM_CHAT_CONTENT.has(normalizeChatContent(content).toLowerCase());
+}
+
 export function dedupeChatMessages(messages: ChatMessageRecord[]): ChatMessageRecord[] {
   const normalized: ChatMessageRecord[] = [];
   for (const message of messages) {
@@ -160,6 +169,9 @@ export function dedupeChatMessages(messages: ChatMessageRecord[]): ChatMessageRe
       role: normalizeChatRole(message.role),
       content: normalizeChatContent(message.content),
     };
+    if (isDeprecatedSystemChatMessage(nextMessage.role, nextMessage.content)) {
+      continue;
+    }
     const previous = normalized[normalized.length - 1];
     if (
       previous &&

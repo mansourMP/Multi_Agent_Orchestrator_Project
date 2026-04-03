@@ -68,12 +68,6 @@ export type ChatDepthOption = {
   description?: string;
 };
 
-type ChatEmptyState = {
-  title: string;
-  suggestions: string[];
-  onSelectSuggestion: (value: string) => void;
-};
-
 type ChatPermissionPrompt = {
   title: string;
   prompt: string;
@@ -103,13 +97,8 @@ type ChatSurfaceProps = {
   onRunApprovalDecision?: (scope: 'once' | 'deny') => void;
   chatBusy: boolean;
   messages: ChatMessageRecord[];
-  emptyState?: ChatEmptyState | null;
-  inlineStatus: string | null;
-  inlineAction?: {
-    label: string;
-    href: string;
-  } | null;
-  emptyAction?: {
+  providerBanner?: {
+    text: string;
     label: string;
     href: string;
   } | null;
@@ -670,10 +659,7 @@ export function ChatSurface({
   onRunApprovalDecision,
   chatBusy,
   messages,
-  emptyState = null,
-  inlineStatus,
-  inlineAction = null,
-  emptyAction = null,
+  providerBanner = null,
   permissionPrompt = null,
   targetLabel,
   targetHref = '/agents',
@@ -1271,7 +1257,7 @@ export function ChatSurface({
 
   const composerStatusText = voiceError
     ? `Voice unavailable: ${voiceError}`
-    : (inlineStatus ? `⚠ ${inlineStatus}` : null);
+    : null;
 
   return (
     <section
@@ -1417,24 +1403,6 @@ export function ChatSurface({
           style={artifactPanelVisible ? { width: `${100 - artifactPanelWidth}%` } : undefined}
         >
           <div className="orion-chat-v2-thread-shell" ref={threadRef}>
-            {!hasMessages && emptyState ? (
-              <div className="orion-chat-v2-compact-empty" aria-live="polite">
-                <h1 className="orion-chat-v2-compact-title">{emptyState.title}</h1>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-                  {emptyState.suggestions.slice(0, 3).map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      type="button"
-                      className="orion-chip orion-chip-action"
-                      onClick={() => emptyState.onSelectSuggestion(suggestion)}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
             {visibleMessages.length > 0 ? (
               <div className="orion-chat-v2-thread" aria-live="polite">
                 {visibleMessages.map((message, index) => {
@@ -1748,6 +1716,15 @@ export function ChatSurface({
               </div>
             ) : null}
 
+            {providerBanner ? (
+              <div className="orion-chat-v2-status-line">
+                <span>{providerBanner.text}</span>
+                <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(providerBanner.href)}>
+                  {providerBanner.label}
+                </button>
+              </div>
+            ) : null}
+
             <div className="orion-chat-v2-composer">
               <textarea
                 ref={primaryGoalRef}
@@ -1915,18 +1892,9 @@ export function ChatSurface({
               </div>
             </div>
 
-            {composerStatusText || emptyAction ? (
+            {composerStatusText ? (
               <div className="orion-chat-v2-status-line">
-                <span>{composerStatusText || 'Connect an AI account to start chatting.'}</span>
-                {inlineAction ? (
-                  <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(inlineAction.href)}>
-                    {inlineAction.label}
-                  </button>
-                ) : emptyAction ? (
-                  <button type="button" className="orion-chat-v2-status-action" onClick={() => router.push(emptyAction.href)}>
-                    {emptyAction.label}
-                  </button>
-                ) : null}
+                <span>{composerStatusText}</span>
               </div>
             ) : null}
               </div>

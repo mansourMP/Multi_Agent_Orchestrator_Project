@@ -115,13 +115,6 @@ const CHAT_DEPTH_OPTIONS: Array<{ value: ChatDepthValue; label: string; descript
   { value: 'high', label: 'Deep', description: 'More reasoning' },
 ];
 
-const EMPTY_CHAT_PROMPTS = [
-  'Summarize my emails from today',
-  'Draft a message to my team about the sprint',
-  'Check what ran yesterday and flag anything that failed',
-  'Set up a daily digest for my Slack',
-] as const;
-
 function normalizeAssistantProfileId(value: unknown): StoredAssistantProfileId {
   return ASSISTANT_PROFILE_LIBRARY.some((item) => item.id === value) ? (value as StoredAssistantProfileId) : 'custom';
 }
@@ -1265,8 +1258,6 @@ export function AutopilotWorkspace() {
   const [chatIdentityDrawerOpen, setChatIdentityDrawerOpen] = useState(false);
   const [pendingSimpleChat, setPendingSimpleChat] = useState<PendingSimpleChatResponse | null>(null);
   const [pendingSimpleRun, setPendingSimpleRun] = useState<PendingSimpleRun | null>(null);
-  const [chatBootstrapSuggestions, setChatBootstrapSuggestions] = useState<Record<string, string[]>>({});
-  const [hasAttemptedSimpleChatOrTask, setHasAttemptedSimpleChatOrTask] = useState(false);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
   const [, setSimplePermissionActionBusy] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
@@ -1852,16 +1843,6 @@ export function AutopilotWorkspace() {
   const latestDirectChatContext = useMemo<ChatContextUsedRecord | null>(() => {
     return [...selectedChatMessages].reverse().find((message) => message.role === 'assistant' && message.contextUsed)?.contextUsed || null;
   }, [selectedChatMessages]);
-  const selectedChatSuggestions = useMemo(() => {
-    const sessionId = selectedChatSession?.id;
-    if (!sessionId) return [...EMPTY_CHAT_PROMPTS];
-    const suggestions = chatBootstrapSuggestions[sessionId];
-    if (Array.isArray(suggestions) && suggestions.length > 0) {
-      return suggestions.slice(0, 3);
-    }
-    return [...EMPTY_CHAT_PROMPTS];
-  }, [chatBootstrapSuggestions, selectedChatSession?.id]);
-
   useEffect(() => {
     let active = true;
     if (selectedChatMessages.length > 0) return;
@@ -1882,36 +1863,6 @@ export function AutopilotWorkspace() {
       active = false;
     };
   }, [router, selectedChatMessages.length]);
-
-  useEffect(() => {
-    const sessionId = selectedChatSession?.id;
-    if (!sessionId) return;
-    if (selectedChatMessages.length > 0) return;
-    if (Array.isArray(chatBootstrapSuggestions[sessionId]) && chatBootstrapSuggestions[sessionId].length > 0) return;
-    let active = true;
-
-    const loadSuggestions = async () => {
-      try {
-        const payload = await sendOperatorChat('', {
-          threadId: sessionId,
-          priorMessages: [],
-        });
-        if (!active) return;
-        const nextSuggestions = Array.isArray(payload.suggestions) && payload.suggestions.length > 0
-          ? payload.suggestions.slice(0, 3)
-          : [...EMPTY_CHAT_PROMPTS];
-        setChatBootstrapSuggestions((current) => ({ ...current, [sessionId]: nextSuggestions }));
-      } catch {
-        if (!active) return;
-        setChatBootstrapSuggestions((current) => ({ ...current, [sessionId]: [...EMPTY_CHAT_PROMPTS] }));
-      }
-    };
-
-    void loadSuggestions();
-    return () => {
-      active = false;
-    };
-  }, [chatBootstrapSuggestions, selectedChatMessages.length, selectedChatSession?.id, sendOperatorChat]);
   const activeProviderOption = useMemo(
     () => providerOptions.find((item) => item.id === provider) || providerOptions[0] || null,
     [provider, providerOptions],
@@ -2055,88 +2006,14 @@ export function AutopilotWorkspace() {
     () => workbenchAgentChats[selectedAgentRole] || [],
     [selectedAgentRole, workbenchAgentChats],
   );
-  const inlineSimpleChatStatus = useMemo(() => {
-    const providerError = [...selectedChatMessages]
-      .reverse()
-      .find((message) => message.status === 'error' && message.content.toLowerCase().includes('provider profiles path is not writable'));
-    if (providerError) return null;
-    if (topError && topError.toLowerCase().includes('provider profiles path is not writable')) return null;
-    if (!hasAttemptedSimpleChatOrTask) return null;
-    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
-    const providerLabel = providerOptions.find((item) => item.id === provider)?.label || provider;
-    if (!setupStatus.accountConnected) {
-      return connectionMode === 'managed'
-        ? `${providerLabel} runtime account is not ready yet.`
-        : 'Connect an AI account to start chatting.';
-    }
-    if (!setupStatus.connectionTested) {
-      return connectionMode === 'managed'
-        ? 'Verify the workspace runtime account before running tasks.'
-        : 'Verify your AI account before running tasks.';
-    }
-    if (!derivedSetupReady) return 'Finish setup before starting live work.';
-    return null;
-  }, [
-    connectionMode,
-    derivedSetupReady,
-    hasAttemptedSimpleChatOrTask,
-    provider,
-    providerOptions,
-    selectedChatMessages,
-    setupStatus.accountConnected,
-    setupStatus.connectionTested,
-    shellStatus.localRuntimeOnline,
-    topError,
-  ]);
-  const inlineSimpleChatAction = useMemo(() => {
-    if (!hasAttemptedSimpleChatOrTask) return null;
-    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
-    if (!setupStatus.accountConnected) {
-      return {
-        label: 'Connect AI account →',
-        href: '/connect-ai',
-      };
-    }
-    if (!setupStatus.connectionTested) {
-      return {
-        label: 'Verify AI account →',
-        href: '/connect-ai',
-      };
-    }
-    if (derivedSetupReady) return null;
+  const simpleChatProviderBanner = useMemo(() => {
+    if (setupStatus.accountConnected) return null;
     return {
-      label: 'Open setup →',
-      href: '/setup',
+      text: 'No AI provider configured — go to Integrations to connect one',
+      label: 'Go to Integrations',
+      href: '/connectors',
     };
-  }, [
-    derivedSetupReady,
-    hasAttemptedSimpleChatOrTask,
-    setupStatus.accountConnected,
-    setupStatus.connectionTested,
-    shellStatus.localRuntimeOnline,
-  ]);
-  const emptySimpleChatAction = useMemo(() => {
-    if (!hasAttemptedSimpleChatOrTask) return null;
-    if (setupStatus.accountConnected && shellStatus.localRuntimeOnline) return null;
-    if (!setupStatus.accountConnected) {
-      return {
-        label: 'Connect AI account',
-        href: '/connect-ai',
-      };
-    }
-    if (!setupStatus.connectionTested) {
-      return {
-        label: 'Verify AI account',
-        href: '/connect-ai',
-      };
-    }
-    return null;
-  }, [
-    hasAttemptedSimpleChatOrTask,
-    setupStatus.accountConnected,
-    setupStatus.connectionTested,
-    shellStatus.localRuntimeOnline,
-  ]);
+  }, [setupStatus.accountConnected]);
   const inlineWorkbenchChatStatus = useMemo(() => {
     if (derivedSetupReady) return null;
     return 'Connect Telegram to activate alerts.';
@@ -2375,7 +2252,6 @@ export function AutopilotWorkspace() {
     const raw = String(input ?? goal).trim();
     if (!raw) return;
     const command = raw.toLowerCase();
-    setHasAttemptedSimpleChatOrTask(true);
     setGoal('');
 
     if (!raw.startsWith('/')) {
@@ -2467,7 +2343,6 @@ export function AutopilotWorkspace() {
       }
 
       if (detail.type === 'run_autopilot') {
-        setHasAttemptedSimpleChatOrTask(true);
         if (!derivedSetupReady) {
           setTopError(null);
           return;
@@ -2679,7 +2554,6 @@ export function AutopilotWorkspace() {
     const text = goal.trim();
     const sessionId = selectedChatSession?.id;
     if (!text || !sessionId) return;
-    setHasAttemptedSimpleChatOrTask(true);
     const priorMessages = selectedChatMessages
       .filter((message) => {
         const content = normalizeChatContent(message.content);
@@ -2762,21 +2636,9 @@ export function AutopilotWorkspace() {
     }
   }, [appendSimpleChatMessage, goal, patchSimpleChatMessage, selectedChatMessages, selectedChatSession?.id, sendOperatorChat, setGoal, simpleChatDepth]);
 
-  const handleSelectEmptyPrompt = useCallback((nextGoal: string) => {
-    setGoal(nextGoal);
-    requestAnimationFrame(() => {
-      const element = primaryGoalRef.current;
-      if (!element) return;
-      element.focus();
-      const cursor = nextGoal.length;
-      element.setSelectionRange(cursor, cursor);
-    });
-  }, [setGoal]);
-
   const sendWorkbenchAgentChat = useCallback(async () => {
     const text = goal.trim();
     if (!text) return;
-    setHasAttemptedSimpleChatOrTask(true);
     const now = new Date().toISOString();
     const userMessage: WorkbenchAgentChatMessage = {
       id: createWorkbenchChatId('user'),
@@ -2842,14 +2704,7 @@ export function AutopilotWorkspace() {
           }}
           chatBusy={Boolean(pendingSimpleChat)}
           messages={selectedChatMessages}
-          emptyState={{
-            title: 'What do you want to get done?',
-            suggestions: selectedChatSuggestions,
-            onSelectSuggestion: handleSelectEmptyPrompt,
-          }}
-          inlineStatus={inlineSimpleChatStatus}
-          inlineAction={inlineSimpleChatAction}
-          emptyAction={emptySimpleChatAction}
+          providerBanner={simpleChatProviderBanner}
           targetLabel={defaultAssistantProfile.label}
           targetHref="/agents"
           selectedModel={model}

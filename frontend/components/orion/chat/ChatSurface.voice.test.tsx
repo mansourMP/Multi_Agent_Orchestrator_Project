@@ -18,10 +18,7 @@ test('chat composer includes the microphone button', () => {
       onSend={() => undefined}
       chatBusy={false}
       messages={[]}
-      emptyState={null}
-      inlineStatus={null}
-      inlineAction={null}
-      emptyAction={null}
+      providerBanner={null}
       permissionPrompt={null}
       targetLabel="Orion"
       targetHref="/agents"

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -13,6 +13,7 @@ from server_modules.runtime_models import (
 )
 from server_modules import connectors_core as core
 from server_modules import connectors_actions as actions
+from server_modules.provider_profiles import normalize_provider_id, resolve_provider_adapter, resolve_vault_credential
 from server_modules.schemas import ConnectorCreate, ConnectorDocumentCreateRequest, ConnectorSpreadsheetCreateRequest
 
 router = APIRouter()
@@ -41,6 +42,32 @@ async def provider_profiles_health(
 ):
     workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
     return await core.provider_profiles_health(workspace_id=workspace_id)
+
+
+async def providers_health_check(
+    request: Request,
+    current_user=Depends(require_admin_api_key),
+):
+    workspace_id = enforce_workspace_access(current_user, request.query_params.get("workspace_id"))
+    payload = await core.list_credentials_vault(workspace_id=workspace_id)
+    items = payload.get("items") if isinstance(payload, dict) else []
+    results: Dict[str, str] = {}
+    for item in items if isinstance(items, list) else []:
+        provider_id = normalize_provider_id(item.get("provider"))
+        credential_id = str(item.get("id") or "").strip()
+        if not provider_id or not credential_id:
+            continue
+        try:
+            credentials = resolve_vault_credential(credential_id, workspace_id)
+            _provider, _adapter_key, adapter = resolve_provider_adapter(provider_id, credentials)
+            check = adapter.validate(credentials)
+            status = int(check.get("status") or 500)
+            state = "ok" if bool(check.get("ok")) else f"failed: {status}"
+        except Exception as exc:
+            state = f"failed: {str(exc).strip() or 'validation error'}"
+        if state == "ok" or provider_id not in results:
+            results[provider_id] = state
+    return results
 
 
 async def list_credentials_vault(
@@ -205,6 +232,7 @@ router.add_api_route("/providers/anthropic/local-cli/status", core.get_anthropic
 router.add_api_route("/providers/anthropic/local-cli/login", core.start_anthropic_local_cli_login, methods=['POST'], dependencies=admin_deps)
 router.add_api_route("/providers/gemini/local-cli/status", core.get_gemini_local_cli_status, methods=['GET'], dependencies=admin_deps)
 router.add_api_route("/providers/test", core.test_provider_credentials, methods=['POST'], dependencies=admin_deps)
+router.add_api_route("/providers/health-check", providers_health_check, methods=['GET'], dependencies=admin_deps)
 router.add_api_route("/providers/model-aliases", core.get_model_alias_catalog, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/{provider}/probe", core.probe_provider, methods=['POST'], dependencies=admin_deps)
 router.add_api_route("/providers/{provider}/models", core.get_provider_models, methods=['GET'], dependencies=admin_deps)

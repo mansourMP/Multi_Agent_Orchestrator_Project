@@ -196,7 +196,7 @@ PROVIDER_CATALOG = {
             {"id": "gemini_cli_oauth", "label": "Gemini CLI OAuth", "secret_required": False},
         ],
         "default_auth_mode": "api_key",
-        "default_model": "gemini-2.0-flash",
+        "default_model": "gemini-1.5-flash",
         "note": "Direct Gemini API key or Gemini CLI OAuth.",
     },
     "vertex": {
@@ -578,7 +578,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         return headers
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        res = http_json_request(f"{self._base_url(credentials)}/models", headers=self._headers(credentials))
+        base_url = self._base_url(credentials)
+        try:
+            res = http_json_request(f"{base_url}/models", headers=self._headers(credentials))
+        except Exception as exc:
+            if self.provider_id == "ollama":
+                raise RuntimeError(f"Ollama is not running at {base_url}") from exc
+            raise
         return _validation_result(self.provider_label, res)
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
@@ -732,6 +738,7 @@ class OpenAICodexAdapter(ProviderAdapter):
 
 class AnthropicAdapter(ProviderAdapter):
     provider_id = "anthropic"
+    _validate_model = "claude-3-5-sonnet-20241022"
 
     def _headers(self, credentials: Dict[str, Any]) -> Dict[str, str]:
         key = credentials.get("api_key") or ""
@@ -744,8 +751,30 @@ class AnthropicAdapter(ProviderAdapter):
         }
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
-        return _validation_result("Anthropic", res)
+        res = http_json_request(
+            "https://api.anthropic.com/v1/messages",
+            method="POST",
+            headers=self._headers(credentials),
+            payload={
+                "model": self._validate_model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        status = int(res.get("status") or 500)
+        if status in {200, 400}:
+            return {
+                "ok": True,
+                "status": status,
+                "message": "Anthropic credential is valid.",
+            }
+        if status == 401:
+            return {
+                "ok": False,
+                "status": status,
+                "message": "Anthropic API key is invalid.",
+            }
+        raise RuntimeError(f"Anthropic credential validation failed with status {status}.")
 
     def list_models(self, credentials: Dict[str, Any]) -> List[str]:
         res = http_json_request("https://api.anthropic.com/v1/models", headers=self._headers(credentials))
@@ -892,7 +921,7 @@ class VertexAdapter(ProviderAdapter):
         if not token:
             raise RuntimeError("Vertex access_token is required.")
         if not project:
-            raise RuntimeError("Vertex project_id is required.")
+            raise RuntimeError("Vertex requires project_id and location")
         return str(token), str(project), str(location)
 
     def validate(self, credentials: Dict[str, Any]) -> Dict[str, Any]:

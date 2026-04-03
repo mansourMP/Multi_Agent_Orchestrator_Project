@@ -1353,8 +1353,6 @@ export function ChatSurface({
     }
     if (latest.id !== latestArtifactId) {
       setSelectedArtifactId(latest.id);
-      setArtifactPanelOpen(true);
-      setArtifactPanelWidth(ARTIFACT_PANEL_DEFAULT_WIDTH);
       setLatestArtifactId(latest.id);
     }
   }, [artifacts, isMobile, latestArtifactId, selectedArtifactId]);

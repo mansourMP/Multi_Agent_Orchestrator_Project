@@ -1552,44 +1552,50 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
             </button>
           </>
         }
-        aside={
-          <>
-            <PageHeroCard label="Current access">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
-                  <div className="orion-home-side-note">Connected tools</div>
-                </div>
-                <div>
-                  <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
-                  <div className="orion-home-side-note">Ready to connect</div>
-                </div>
-              </div>
-              <div className="orion-runs-overview-side-note">
-                {integrationOverview.connectedSuiteCount > 0
-                  ? `${integrationOverview.connectedSuiteCount} core suite${integrationOverview.connectedSuiteCount === 1 ? '' : 's'} already connected.`
-                  : 'No core suites connected yet. Start with Google Workspace or Microsoft 365.'}
-              </div>
-            </PageHeroCard>
-            <PageHeroCard label="Best first tools">
-              <div className="orion-home-mini-list">
-                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
-                  <span>Google Workspace</span>
-                  <ArrowUpRight size={13} />
-                </button>
-                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('microsoft_365', 'Microsoft 365')}>
-                  <span>Microsoft 365</span>
-                  <ArrowUpRight size={13} />
-                </button>
-                <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
-                  <span>Telegram alerts</span>
-                  <ArrowUpRight size={13} />
-                </button>
-              </div>
-            </PageHeroCard>
-          </>
-        }
       />
+
+      <section
+        style={{
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          marginBottom: 12,
+        }}
+      >
+        <PageHeroCard label="Current access">
+          <div className="orion-home-side-stats">
+            <div>
+              <div className="orion-home-side-value">{integrationOverview.activeCount}</div>
+              <div className="orion-home-side-note">Connected tools</div>
+            </div>
+            <div>
+              <div className="orion-home-side-value">{integrationOverview.availableCount}</div>
+              <div className="orion-home-side-note">Ready to connect</div>
+            </div>
+          </div>
+          <div className="orion-runs-overview-side-note">
+            {integrationOverview.connectedSuiteCount > 0
+              ? `${integrationOverview.connectedSuiteCount} core suite${integrationOverview.connectedSuiteCount === 1 ? '' : 's'} already connected.`
+              : 'No core suites connected yet. Start with Google Workspace or Microsoft 365.'}
+          </div>
+        </PageHeroCard>
+        <PageHeroCard label="Best first tools">
+          <div className="orion-home-mini-list">
+            <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('google_workspace', 'Google Workspace')}>
+              <span>Google Workspace</span>
+              <ArrowUpRight size={13} />
+            </button>
+            <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('microsoft_365', 'Microsoft 365')}>
+              <span>Microsoft 365</span>
+              <ArrowUpRight size={13} />
+            </button>
+            <button type="button" className="orion-home-mini-link" onClick={() => openCreateModal('telegram_bot', 'Telegram')}>
+              <span>Telegram alerts</span>
+              <ArrowUpRight size={13} />
+            </button>
+          </div>
+        </PageHeroCard>
+      </section>
 
       <PageFilterBar
         title="Tool directory"

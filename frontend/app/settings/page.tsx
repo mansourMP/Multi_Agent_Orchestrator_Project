@@ -102,23 +102,22 @@ export default function SettingsPage() {
         kicker="Settings"
         title="Manage your workspace, account, and connected tool access."
         copy="Use this page for device-level account details and a quick view of the shared tools available to your agents."
-        aside={
-          <>
-            <PageHeroCard label="Workspace account">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{connectedCount}</div>
-                  <div className="orion-home-side-note">Connected tools</div>
-                </div>
-                <div>
-                  <div className="orion-home-side-value">{profileName}</div>
-                  <div className="orion-home-side-note">Profile</div>
-                </div>
-              </div>
-            </PageHeroCard>
-          </>
-        }
       />
+
+      <section style={{ display: 'grid', gap: 12, marginBottom: 12 }}>
+        <PageHeroCard label="Workspace account">
+          <div className="orion-home-side-stats">
+            <div>
+              <div className="orion-home-side-value">{connectedCount}</div>
+              <div className="orion-home-side-note">Connected tools</div>
+            </div>
+            <div>
+              <div className="orion-home-side-value">{profileName}</div>
+              <div className="orion-home-side-note">Profile</div>
+            </div>
+          </div>
+        </PageHeroCard>
+      </section>
 
       <PageSection title="Profile" description="Open profile details and account preferences.">
         <div className="orion-list-row">

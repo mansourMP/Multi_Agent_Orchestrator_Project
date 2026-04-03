@@ -152,52 +152,58 @@ export default function HomePage() {
             </Link>
           </>
         }
-        aside={
-          <>
-            <PageHeroCard label="Continue recent work">
-              {loading ? (
-                <div className="orion-home-side-empty">Loading workflows…</div>
-              ) : error ? (
-                <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
-              ) : featuredWorkflow ? (
-                <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
-                  <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
-                  <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
-                  <div className="orion-home-featured-meta">
-                    {runtimeProfileLabel(featuredWorkflow) ? <span>{runtimeProfileLabel(featuredWorkflow)}</span> : null}
-                    <span>Updated {formatDate(featuredWorkflow.updatedAt || featuredWorkflow.updated_at)}</span>
-                  </div>
-                </Link>
-              ) : (
-                <div className="orion-home-side-empty">No workflows yet.</div>
-              )}
-            </PageHeroCard>
-
-            <PageHeroCard label="Saved workflows">
-              <div className="orion-home-side-stats">
-                <div>
-                  <div className="orion-home-side-value">{workflows.length}</div>
-                  <div className="orion-home-side-note">Saved workflows</div>
-                </div>
-                <div>
-                  <div className="orion-home-side-value">{recentWorkflows.length}</div>
-                  <div className="orion-home-side-note">Recently updated workflows</div>
-                </div>
-              </div>
-              {supportingWorkflows.length > 0 ? (
-                <div className="orion-home-mini-list">
-                  {supportingWorkflows.map((workflow) => (
-                    <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
-                      <span>{workflow.name || 'Untitled Workflow'}</span>
-                      <ArrowRight size={13} />
-                    </Link>
-                  ))}
-                </div>
-              ) : null}
-            </PageHeroCard>
-          </>
-        }
       />
+
+      <section
+        style={{
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          marginBottom: 12,
+        }}
+      >
+        <PageHeroCard label="Continue recent work">
+          {loading ? (
+            <div className="orion-home-side-empty">Loading workflows…</div>
+          ) : error ? (
+            <div className="orion-home-side-empty">Couldn&apos;t load workflows.</div>
+          ) : featuredWorkflow ? (
+            <Link href={`/workflows/${featuredWorkflow.id}`} className="orion-home-featured-link">
+              <div className="orion-home-featured-title">{featuredWorkflow.name || 'Untitled Workflow'}</div>
+              <div className="orion-home-featured-copy">{compactText(featuredWorkflow.description, 72)}</div>
+              <div className="orion-home-featured-meta">
+                {runtimeProfileLabel(featuredWorkflow) ? <span>{runtimeProfileLabel(featuredWorkflow)}</span> : null}
+                <span>Updated {formatDate(featuredWorkflow.updatedAt || featuredWorkflow.updated_at)}</span>
+              </div>
+            </Link>
+          ) : (
+            <div className="orion-home-side-empty">No workflows yet.</div>
+          )}
+        </PageHeroCard>
+
+        <PageHeroCard label="Saved workflows">
+          <div className="orion-home-side-stats">
+            <div>
+              <div className="orion-home-side-value">{workflows.length}</div>
+              <div className="orion-home-side-note">Saved workflows</div>
+            </div>
+            <div>
+              <div className="orion-home-side-value">{recentWorkflows.length}</div>
+              <div className="orion-home-side-note">Recently updated workflows</div>
+            </div>
+          </div>
+          {supportingWorkflows.length > 0 ? (
+            <div className="orion-home-mini-list">
+              {supportingWorkflows.map((workflow) => (
+                <Link key={workflow.id} href={`/workflows/${workflow.id}`} className="orion-home-mini-link">
+                  <span>{workflow.name || 'Untitled Workflow'}</span>
+                  <ArrowRight size={13} />
+                </Link>
+              ))}
+            </div>
+          ) : null}
+        </PageHeroCard>
+      </section>
 
       <PageSection
         title="Recent workflows"

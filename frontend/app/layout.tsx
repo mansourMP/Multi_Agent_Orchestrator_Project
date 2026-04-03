@@ -15,17 +15,12 @@ import { BRAND } from "@/lib/brand";
 import "@xyflow/react/dist/style.css";
 import "../components/reactflow-override.css";
 import "./globals.css";
-import "@fontsource/plus-jakarta-sans/400.css";
-import "@fontsource/plus-jakarta-sans/500.css";
-import "@fontsource/plus-jakarta-sans/600.css";
-import "@fontsource/outfit/400.css";
-import "@fontsource/outfit/600.css";
 import "@fontsource/space-mono/400.css";
 import "@fontsource/space-mono/700.css";
-import { Geist } from "next/font/google";
+import { Inter } from "next/font/google";
 import { cn } from "@/lib/utils";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 
 export const metadata: Metadata = {
   title: `${BRAND.company} - Outcome Autopilot for Business`,
@@ -39,7 +34,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#f7f7f7',
+  themeColor: '#f5f5f4',
 };
 
 const CRITICAL_SHELL_CSS = `
@@ -77,8 +72,8 @@ body {
   overflow: hidden;
   background: var(--critical-bg-app);
   color: var(--critical-text);
-  font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 15px;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -230,7 +225,7 @@ export default function RootLayout({
   } as CSSProperties;
 
   return (
-    <html lang="en" suppressHydrationWarning className={cn("font-sans", geist.variable)}>
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", inter.variable)}>
       <head>
         <style dangerouslySetInnerHTML={{ __html: CRITICAL_SHELL_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: LOCALHOST_CACHE_CLEANUP_SCRIPT }} />

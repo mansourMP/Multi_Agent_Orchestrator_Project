@@ -188,20 +188,21 @@ export default function AgentsPage() {
             Create agent
           </Link>
         }
-        aside={
-          <PageHeroCard label="Agent library">
-            <div className="orion-home-side-stats">
-              <div>
-                <div className="orion-home-side-value">{draftAgents.length}</div>
-                <div className="orion-home-side-note">Draft agents</div>
-              </div>
-            </div>
-            <div className="orion-runs-overview-side-note">
-              Keep reusable agent systems here. Use chat when you want to talk to an assistant directly.
-            </div>
-          </PageHeroCard>
-        }
       />
+
+      <section style={{ display: 'grid', gap: 12, marginBottom: 12 }}>
+        <PageHeroCard label="Agent library">
+          <div className="orion-home-side-stats">
+            <div>
+              <div className="orion-home-side-value">{draftAgents.length}</div>
+              <div className="orion-home-side-note">Draft agents</div>
+            </div>
+          </div>
+          <div className="orion-runs-overview-side-note">
+            Keep reusable agent systems here. Use chat when you want to talk to an assistant directly.
+          </div>
+        </PageHeroCard>
+      </section>
 
       <PageCollection
         title="Agent library"

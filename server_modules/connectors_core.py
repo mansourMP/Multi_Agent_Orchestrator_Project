@@ -186,10 +186,19 @@ async def get_tool_contracts():
                 "allowlist_roles": contract.get("allowlist_roles", []),
                 "denylist_roles": contract.get("denylist_roles", []),
                 "input_schema": contract.get("input_schema", {}),
+                "enabled": bool(is_tool_enabled(tool_id)),
             }
         )
     items.sort(key=lambda item: str(item.get("tool_id") or ""))
     return {"items": items}
+
+
+async def update_tool_contract_state(tool_id: str, enabled: bool):
+    normalized = normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
+    if not normalized or normalized not in TOOL_CONTRACTS:
+        raise HTTPException(status_code=404, detail="Tool contract not found.")
+    set_tool_enabled(normalized, bool(enabled))
+    return {"ok": True, "tool_id": normalized, "enabled": bool(is_tool_enabled(normalized))}
 
 async def evaluate_tools_policy(body: ToolPolicyEvaluateRequest):
     body.validate_fields()
@@ -473,6 +482,7 @@ async def list_connectors():
                 "id": connector_id,
                 "label": info.get("label", connector_id),
                 "auth": info.get("auth", []),
+                "parent": info.get("parent"),
             }
         )
     return {"connectors": items}

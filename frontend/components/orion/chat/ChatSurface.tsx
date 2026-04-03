@@ -29,6 +29,7 @@ import {
   type ChatMessageActionRecord,
   type ChatMessageRecord,
   type ChatSessionRecord,
+  type ChatStepRecord,
 } from './chatSchema';
 import { normalizeAssistantDisplayText, normalizeInlineErrorMessage } from './displayText';
 import { resolveAssistantStreamState } from '@/lib/useStreamProcessor';
@@ -617,6 +618,37 @@ function shouldSuppressAssistantBody(content: string, status: ChatMessageRecord[
   return (status === 'sending' || status === 'running') && (normalized === 'working on it...' || normalized === 'working on it…');
 }
 
+function formatPendingToolLabel(step: ChatStepRecord | null): string | null {
+  if (!step) return null;
+  const kind = String(step.kind || '').toLowerCase();
+  const label = String(step.label || '').toLowerCase();
+  const detail = String(step.detail || '').toLowerCase();
+  if (kind === 'file') return 'Reading file...';
+  if (kind === 'shell') return 'Running command...';
+  if (kind === 'screenshot') return 'Capturing screenshot...';
+  if (kind === 'connector') {
+    if (label.includes('search') || detail.includes('search') || label.includes('web') || detail.includes('web')) {
+      return 'Searching the web...';
+    }
+    if (
+      label.includes('browser')
+      || detail.includes('browser')
+      || label.includes('page')
+      || detail.includes('page')
+      || label.includes('navigate')
+      || detail.includes('navigate')
+      || label.includes('url')
+      || detail.includes('url')
+    ) {
+      return 'Loading page...';
+    }
+    return 'Using tool...';
+  }
+  if (kind === 'thinking') return 'Working...';
+  if (!kind && (label || detail)) return 'Working...';
+  return null;
+}
+
 function formatChatHistoryTimestamp(value: string): string {
   const timestamp = String(value || '').trim();
   if (!timestamp) return 'No activity yet';
@@ -738,8 +770,33 @@ export function ChatSurface({
       count: stepMessage.steps.length,
       label: activeStep?.label || `${stepMessage.steps.length} steps`,
       detail: activeStep?.detail || (activeStep?.status === 'done' ? 'Completed' : 'Recorded in this reply'),
+      kind: activeStep?.kind || null,
+      status: activeStep?.status || null,
     };
   }, [messages]);
+  const pendingAssistantMessage = latestAssistantMessage;
+  const pendingAssistantContent = pendingAssistantMessage
+    ? normalizeAssembledAssistantText(normalizeAssistantDisplayText(pendingAssistantMessage.content))
+    : '';
+  const pendingAssistantSuppressed = pendingAssistantMessage
+    ? shouldSuppressAssistantBody(pendingAssistantContent, pendingAssistantMessage.status)
+    : false;
+  const shouldShowPendingRow = Boolean(
+    pendingAssistantMessage
+      && (pendingAssistantMessage.status === 'sending' || pendingAssistantMessage.status === 'running')
+      && pendingAssistantSuppressed,
+  );
+  const pendingStep = latestAssistantSteps && latestAssistantSteps.label
+    ? ({
+        id: latestAssistantSteps.label,
+        label: latestAssistantSteps.label,
+        detail: latestAssistantSteps.detail,
+        status: latestAssistantSteps.status || 'active',
+        kind: latestAssistantSteps.kind || null,
+      } as ChatStepRecord)
+    : null;
+  const pendingStepLabel = formatPendingToolLabel(pendingStep);
+  const pendingStepActive = pendingStep?.status === 'active';
   const latestRunCard = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant' && message.runCard)?.runCard || null,
     [messages],
@@ -1646,6 +1703,21 @@ export function ChatSurface({
                 </article>
               );
                 })}
+                {shouldShowPendingRow ? (
+                  <article className="orion-chat-v2-turn is-assistant is-pending">
+                    <div className="orion-chat-v2-assistant">
+                      {pendingStepLabel ? (
+                        <div className="orion-chat-v2-pending-label">{pendingStepLabel}</div>
+                      ) : null}
+                      {pendingStepActive ? <div className="orion-skeleton-line" /> : null}
+                      <div className="orion-thinking-indicator">
+                        <div className="orion-thinking-dot"></div>
+                        <div className="orion-thinking-dot"></div>
+                        <div className="orion-thinking-dot"></div>
+                      </div>
+                    </div>
+                  </article>
+                ) : null}
                 <div ref={bottomRef} />
               </div>
             ) : null}

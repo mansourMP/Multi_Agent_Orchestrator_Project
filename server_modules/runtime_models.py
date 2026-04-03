@@ -347,6 +347,10 @@ class ToolPolicyEvaluateRequest(BaseModel):
                 raise HTTPException(status_code=400, detail=f"Invalid tool_id '{raw}'.")
 
 
+class ToolContractUpdateRequest(BaseModel):
+    enabled: bool
+
+
 class RuntimeSkillsStateUpsertRequest(BaseModel):
     custom_skills: Optional[List[Dict[str, Any]]] = None
     bindings: Optional[Dict[str, List[str]]] = None

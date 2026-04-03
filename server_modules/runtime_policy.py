@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, time, uuid, queue, re, hashlib, sys
+import os, json, time, uuid, queue, re, hashlib, sys, threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Set
 from pathlib import Path
@@ -16,6 +16,86 @@ def _init():
         if not k.startswith("__") and k not in globals():
             globals()[k] = v
 
+
+TOOL_STATE_LOCK = threading.Lock()
+TOOL_STATE: Dict[str, Any] = {
+    "version": 1,
+    "enabled": {},
+    "updated_at": None,
+}
+_TOOL_STATE_LOADED = False
+
+
+def _load_tool_state() -> None:
+    _init()
+    global _TOOL_STATE_LOADED
+    if _TOOL_STATE_LOADED:
+        return
+    path_value = str(globals().get("ORION_TOOL_STATE_FILE") or "").strip()
+    if not path_value:
+        _TOOL_STATE_LOADED = True
+        return
+    try:
+        path = Path(path_value).expanduser()
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                enabled = payload.get("enabled") if isinstance(payload.get("enabled"), dict) else {}
+                TOOL_STATE["version"] = int(payload.get("version") or 1)
+                TOOL_STATE["enabled"] = {
+                    str(key).strip(): bool(value)
+                    for key, value in enabled.items()
+                    if str(key).strip()
+                }
+                TOOL_STATE["updated_at"] = str(payload.get("updated_at") or "").strip() or None
+    except Exception:
+        # Keep defaults if state load fails.
+        pass
+    _TOOL_STATE_LOADED = True
+
+
+def _persist_tool_state() -> None:
+    _init()
+    path_value = str(globals().get("ORION_TOOL_STATE_FILE") or "").strip()
+    if not path_value:
+        return
+    try:
+        path = Path(path_value).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": TOOL_STATE.get("version", 1),
+            "enabled": dict(TOOL_STATE.get("enabled") or {}),
+            "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def is_tool_enabled(tool_id: str) -> bool:
+    _load_tool_state()
+    normalized = normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
+    if not normalized:
+        return True
+    enabled_map = TOOL_STATE.get("enabled") if isinstance(TOOL_STATE.get("enabled"), dict) else {}
+    if normalized in enabled_map:
+        return bool(enabled_map[normalized])
+    return True
+
+
+def set_tool_enabled(tool_id: str, enabled: bool) -> bool:
+    _load_tool_state()
+    normalized = normalize_action_id(tool_id) or str(tool_id or "").strip().lower()
+    if not normalized:
+        return False
+    with TOOL_STATE_LOCK:
+        enabled_map = TOOL_STATE.get("enabled") if isinstance(TOOL_STATE.get("enabled"), dict) else {}
+        enabled_map = dict(enabled_map)
+        enabled_map[normalized] = bool(enabled)
+        TOOL_STATE["enabled"] = enabled_map
+    _persist_tool_state()
+    return True
+
 RISKY_ACTION_KEYWORDS = [
     "delete",
     "remove",
@@ -30,6 +110,102 @@ RISKY_ACTION_KEYWORDS = [
     "cancel",
     "refund",
 ]
+
+SAFE_SHELL_COMMANDS = (
+    "echo",
+    "ls",
+    "cat",
+    "pwd",
+    "grep",
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "py",
+)
+SAFE_SHELL_BLOCKED_TOKENS = (
+    "&&",
+    "||",
+    ";",
+    "|",
+    ">",
+    ">>",
+    "<",
+    "$(",
+    "`",
+    "\n",
+    "\r",
+)
+SAFE_SHELL_RISKY_MARKERS = (
+    "rm ",
+    "rm-",
+    "dd ",
+    "mkfs",
+    "diskutil erase",
+    "shutdown",
+    "reboot",
+    "killall",
+    "sudo ",
+    "apt ",
+    "apt-get ",
+    "yum ",
+    "dnf ",
+    "brew install",
+    "brew upgrade",
+    "npm install",
+    "npm uninstall",
+)
+
+
+def _iter_raw_shell_operations(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
+    operations = pack_inputs.get("operations") if isinstance(pack_inputs.get("operations"), list) else []
+    collected: List[Dict[str, Any]] = []
+    for item in operations:
+        if not isinstance(item, dict):
+            continue
+        tool = normalize_action_id(item.get("tool") or item.get("action"))
+        if tool == "execute_shell_command":
+            collected.append(item)
+    if collected:
+        return collected
+    command = str(metadata.get("raw_shell_command") or "").strip()
+    argv = metadata.get("raw_shell_argv") if isinstance(metadata.get("raw_shell_argv"), list) else None
+    if command or argv:
+        return [{"tool": "execute_shell_command", "command": command or None, "argv": argv}]
+    return []
+
+
+def _raw_shell_command_text(operation: Dict[str, Any]) -> str:
+    command = str(operation.get("command") or "").strip()
+    if command:
+        return command
+    argv = operation.get("argv") if isinstance(operation.get("argv"), list) else []
+    return " ".join(str(item or "").strip() for item in argv if str(item or "").strip()).strip()
+
+
+def _is_safe_raw_shell_command(operation: Dict[str, Any]) -> bool:
+    command = _raw_shell_command_text(operation)
+    compact = re.sub(r"\s+", " ", command).strip().lower()
+    if not compact:
+        return False
+    if any(token in command for token in SAFE_SHELL_BLOCKED_TOKENS):
+        return False
+    if any(marker in compact for marker in SAFE_SHELL_RISKY_MARKERS):
+        return False
+    first_token = compact.split(" ", 1)[0]
+    if first_token not in SAFE_SHELL_COMMANDS:
+        return False
+    if first_token == "py":
+        return compact.startswith("py -3") or compact == "py"
+    return True
+
+
+def _metadata_allows_safe_raw_shell(metadata: Dict[str, Any]) -> bool:
+    operations = _iter_raw_shell_operations(metadata)
+    if not operations:
+        return False
+    return all(_is_safe_raw_shell_command(item) for item in operations)
 
 
 def _browser_action_plan_row(raw_action: Any) -> Dict[str, Any]:
@@ -303,6 +479,7 @@ ACTION_RISK_LEVELS: Dict[str, str] = {
     "read_write_files": "medium",
     "browser_automation": "medium",
     "capture_screenshot": "medium",
+    "computer_control": "critical",
     "execute_shell_command": "critical",
     "delete_files": "critical",
     "delete_records": "critical",
@@ -429,6 +606,18 @@ ACTION_SIGNAL_PATTERNS: Dict[str, List[str]] = {
         "capture screenshot",
         "screen capture",
         "grab screenshot",
+    ],
+    "computer_control": [
+        "read screen text",
+        "ocr the screen",
+        "click on screen",
+        "type into app",
+        "read clipboard",
+        "write clipboard",
+        "run applescript",
+        "send notification",
+        "launch app",
+        "list running apps",
     ],
     "execute_shell_command": [
         "shell command",
@@ -1018,6 +1207,29 @@ TOOL_CONTRACTS: Dict[str, Dict[str, Any]] = {
             "additionalProperties": True,
         },
     },
+    "computer_control": {
+        "tool_id": "computer_control",
+        "description": "Control the local computer via OCR, mouse, keyboard, clipboard, notifications, AppleScript, and app launch helpers.",
+        "optional": True,
+        "allowlist_roles": ["orion_operator"],
+        "denylist_roles": [],
+        "input_schema": {
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "action": {"type": "string"},
+                "region": {"type": "object"},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "text": {"type": "string"},
+                "script": {"type": "string"},
+                "title": {"type": "string"},
+                "message": {"type": "string"},
+                "name_or_path": {"type": "string"},
+            },
+            "additionalProperties": True,
+        },
+    },
     "execute_shell_command": {
         "tool_id": "execute_shell_command",
         "description": "Run an allowlisted local command without shell interpolation.",
@@ -1094,6 +1306,8 @@ def validate_tool_contract(tool_id: str, role: str, payload: Any):
     contract = TOOL_CONTRACTS.get(tool_id)
     if not isinstance(contract, dict):
         raise RuntimeError(f"Tool contract missing for '{tool_id}'.")
+    if not is_tool_enabled(tool_id):
+        raise RuntimeError(f"Tool '{tool_id}' is disabled.")
     allowlist = contract.get("allowlist_roles") if isinstance(contract.get("allowlist_roles"), list) else []
     denylist = contract.get("denylist_roles") if isinstance(contract.get("denylist_roles"), list) else []
     role_name = str(role or "").strip().lower()
@@ -1150,7 +1364,7 @@ def validate_pack_tool_contracts(pack_id: str, result_data: Dict[str, Any], role
             if not isinstance(item, dict):
                 continue
             tool_id = normalize_action_id(item.get("action"))
-            if tool_id in {"execute_shell_command", "read_write_files", "browser_automation", "capture_screenshot"}:
+            if tool_id in {"execute_shell_command", "read_write_files", "browser_automation", "capture_screenshot", "computer_control"}:
                 validate_tool_contract(tool_id, role, item)
         return
 
@@ -1376,6 +1590,13 @@ def classify_runtime_action(
         },
         "capture_screenshot": {
             "action_type": ACTION_TYPE_READ,
+            "target_system": "local_device",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+        },
+        "computer_control": {
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
             "target_system": "local_device",
             "reversibility": True,
             "external_visibility": False,
@@ -2351,6 +2572,7 @@ TOOL_POLICY.register_sensitive("presentation_create")
 TOOL_POLICY.register_sensitive("presentation_update")
 TOOL_POLICY.register_sensitive("read_write_files")
 TOOL_POLICY.register_sensitive("capture_screenshot")
+TOOL_POLICY.register_critical("computer_control")
 TOOL_POLICY.register_critical("execute_shell_command")
 TOOL_POLICY.register_critical("delete_files")
 TOOL_POLICY.register_critical("delete_records")
@@ -2403,17 +2625,31 @@ def evaluate_tool_policy_decision(
         None,
     )
 
+    safe_raw_shell_command = uses_raw_command_path and _metadata_allows_safe_raw_shell(metadata)
     classification = classify_runtime_action(clean_tool_id, count=1, target=effective_target)
+    if clean_tool_id == "execute_shell_command" and safe_raw_shell_command:
+        classification = {
+            **classification,
+            "action_type": ACTION_TYPE_REVERSIBLE_WRITE,
+            "target_system": "local_device",
+            "reversibility": True,
+            "external_visibility": False,
+            "destructive_risk": False,
+            "safe_raw_shell_command": True,
+        }
     execution_decision = "allow"
     reason = "policy_allow_default"
 
-    if unsupported_capability:
+    if clean_tool_id in TOOL_CONTRACTS and not is_tool_enabled(clean_tool_id):
+        execution_decision = "deny"
+        reason = "tool_disabled"
+    elif unsupported_capability:
         execution_decision = "deny"
         reason = "blocked_unsupported_capability"
-    elif uses_raw_command_path:
+    elif uses_raw_command_path and not safe_raw_shell_command:
         execution_decision = "deny"
         reason = "blocked_raw_shell_command"
-    elif clean_tool_id in blocked_actions and not uses_capability_path:
+    elif clean_tool_id in blocked_actions and not uses_capability_path and not safe_raw_shell_command:
         execution_decision = "deny"
         reason = "blocked_by_action_policy"
     elif effective_target == EXECUTION_TARGET_CLOUD and TOOL_POLICY.is_critical(clean_tool_id) and block_cloud_critical:
@@ -2484,6 +2720,7 @@ def evaluate_tool_policy_decision(
         "classification": classification,
         "uses_capability_path": uses_capability_path,
         "uses_raw_command_path": uses_raw_command_path,
+        "safe_raw_shell_command": safe_raw_shell_command,
         "unsupported_capability": unsupported_capability.get("id") if isinstance(unsupported_capability, dict) else None,
         "browser_security_profile": browser_profile or None,
         "browser_requires_approval": browser_requires_approval,

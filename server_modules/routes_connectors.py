@@ -8,6 +8,7 @@ from server_modules.runtime_models import (
     ConnectorPatchRequest,
     CredentialUpsertRequest,
     ProviderProfileUpsertRequest,
+    ToolContractUpdateRequest,
     VaultExportRequest,
     VaultImportRequest,
 )
@@ -68,6 +69,17 @@ async def providers_health_check(
         if state == "ok" or provider_id not in results:
             results[provider_id] = state
     return results
+
+
+async def update_tool_contract(
+    request: Request,
+    tool_id: str,
+    body: ToolContractUpdateRequest,
+    current_user=Depends(require_admin_api_key),
+):
+    if body is None:
+        raise HTTPException(status_code=422, detail="Tool contract payload is required.")
+    return await core.update_tool_contract_state(tool_id, body.enabled)
 
 
 async def list_credentials_vault(
@@ -226,6 +238,7 @@ router.add_api_route("/providers/profiles/{profile_id}/disable", core.disable_pr
 router.add_api_route("/providers/profiles/{profile_id}", core.delete_provider_profile, methods=['DELETE'], dependencies=admin_deps)
 router.add_api_route("/providers/profiles/health", provider_profiles_health, methods=['GET'])
 router.add_api_route("/tools/contracts", core.get_tool_contracts, methods=['GET'], dependencies=[Depends(require_api_key)])
+router.add_api_route("/tools/contracts/{tool_id}", update_tool_contract, methods=['PUT'], dependencies=admin_deps)
 router.add_api_route("/tools/policy/evaluate", core.evaluate_tools_policy, methods=['POST'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers", core.list_providers, methods=['GET'], dependencies=[Depends(require_api_key)])
 router.add_api_route("/providers/anthropic/local-cli/status", core.get_anthropic_local_cli_status, methods=['GET'], dependencies=admin_deps)

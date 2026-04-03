@@ -398,6 +398,7 @@ ORION_PROVIDER_PROFILES_FILE = _resolve_state_file(
     ".orion_provider_profiles.json",
 )
 ORION_RUNTIME_SKILLS_FILE = _resolve_state_file("ORION_RUNTIME_SKILLS_FILE", "runtime/skills.json", ".orion_runtime_skills.json")
+ORION_TOOL_STATE_FILE = _resolve_state_file("ORION_TOOL_STATE_FILE", "runtime/tools_state.json", ".orion_tool_state.json")
 ORION_APP_REGISTRY_FILE = _resolve_state_file("ORION_APP_REGISTRY_FILE", "apps/registry.json", ".orion_app_registry.json")
 ORION_PROFILE_ROOT = _resolve_state_dir("ORION_PROFILE_ROOT", "profiles", ".orion_profiles")
 ORION_PROFILE_DEFAULT_FILE = _resolve_state_file("ORION_PROFILE_DEFAULT_FILE", "profiles/default.json", ".orion_default_profile.json")
@@ -572,9 +573,34 @@ CONNECTOR_CATALOG = {
         "label": "Google Workspace",
         "auth": ["access_token"],
     },
+    "gmail": {
+        "label": "Gmail",
+        "auth": ["access_token"],
+        "parent": "google_workspace",
+    },
+    "google_calendar": {
+        "label": "Google Calendar",
+        "auth": ["access_token"],
+        "parent": "google_workspace",
+    },
+    "google_drive": {
+        "label": "Google Drive",
+        "auth": ["access_token"],
+        "parent": "google_workspace",
+    },
     "microsoft_365": {
         "label": "Microsoft 365",
         "auth": ["access_token"],
+    },
+    "outlook": {
+        "label": "Outlook",
+        "auth": ["access_token"],
+        "parent": "microsoft_365",
+    },
+    "outlook_calendar": {
+        "label": "Outlook Calendar",
+        "auth": ["access_token"],
+        "parent": "microsoft_365",
     },
     "smtp": {
         "label": "SMTP Email",

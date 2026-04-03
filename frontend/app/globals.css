@@ -4280,7 +4280,8 @@ input:focus-visible {
   position: static;
   margin-top: auto;
   padding-top: 0;
-  background: transparent;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
 }
 
 .orion-chat-v2-compact-empty {
@@ -4899,7 +4900,8 @@ input:focus-visible {
   margin-top: auto;
   z-index: 10;
   padding: 12px 0 18px;
-  background: linear-gradient(to top, var(--bg-shell) 68%, transparent);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
 }
 
 .orion-chat-v2-drawer-backdrop {
@@ -5093,6 +5095,66 @@ input:focus-visible {
 
 .orion-chat-v2-live-pill.is-working {
   color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary) 28%);
+}
+
+.orion-thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0;
+  height: 48px;
+}
+
+.orion-thinking-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  animation: thinkingPulse 1.4s ease-in-out infinite;
+}
+
+.orion-thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.orion-thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.orion-skeleton-line {
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--bg-element) 25%, var(--bg-hover) 50%, var(--bg-element) 75%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
+  max-width: 240px;
+}
+
+.orion-chat-v2-pending-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+@keyframes thinkingPulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes skeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 [data-theme='dark'] .orion-chat-v2-composer {
@@ -5783,9 +5845,7 @@ input:focus-visible {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 10px 0 0;
-  background:
-    radial-gradient(circle at top, color-mix(in srgb, var(--surface-muted) 92%, transparent 8%), transparent 46%),
-    var(--surface);
+  background: transparent;
 }
 
 .orion-chat-v2--deer .orion-chat-v2-compact-empty {
@@ -6107,7 +6167,8 @@ input:focus-visible {
 
 .orion-chat-v2--deer .orion-chat-v2-composer-shell {
   padding: 16px 0 22px;
-  background: linear-gradient(to top, color-mix(in srgb, var(--surface) 96%, transparent 4%) 74%, transparent);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
 }
 
 .orion-chat-v2--deer .orion-chat-v2-composer-frame,
@@ -7525,6 +7586,111 @@ body.orion-modal-open .orion-page-shell {
 
 .orion-integration-card-meta-sep {
   color: var(--text-tertiary);
+}
+
+.orion-flat-section {
+  display: grid;
+  gap: 8px;
+}
+
+.orion-flat-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.orion-flat-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  overflow: hidden;
+  display: grid;
+}
+
+.orion-flat-row {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.orion-flat-row:last-child {
+  border-bottom: 0;
+}
+
+.orion-flat-row-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--bg-element);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.orion-flat-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.orion-flat-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.orion-flat-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.orion-flat-row-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.orion-flat-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.orion-flat-row-status {
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+}
+
+.orion-flat-row-status.is-success {
+  background: #e8f5ee;
+  color: #2a7a4f;
+  border-color: color-mix(in srgb, #2a7a4f 20%, #e8f5ee 80%);
+}
+
+.orion-flat-row-status.is-neutral {
+  background: var(--bg-element);
+  color: var(--text-tertiary);
+  border-color: var(--border);
 }
 
 .orion-integration-card-actions {

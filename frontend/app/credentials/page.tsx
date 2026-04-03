@@ -1,7 +1,6 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -11,9 +10,11 @@ import {
   PauseCircle,
   PlayCircle,
   Plus,
+  Puzzle,
   RefreshCw,
   ShieldCheck,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -47,6 +48,38 @@ type ConnectorRow = {
   metadata?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
+};
+
+type InstalledSkill = {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string;
+  enabled?: boolean;
+  uninstallable?: boolean;
+};
+
+type RegistrySkill = {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string;
+  installed?: boolean;
+};
+
+type SkillRow = {
+  id: string;
+  name: string;
+  description: string;
+  source?: string;
+  installed: boolean;
+  uninstallable?: boolean;
+};
+
+type ToolContractRow = {
+  tool_id: string;
+  description?: string;
+  enabled?: boolean;
 };
 
 type ConnectModalState = {
@@ -211,6 +244,21 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
   },
+  gmail: {
+    assetSrc: '/connector-logos/gmail-balanced.png',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  google_calendar: {
+    assetSrc: '/connector-logos/google-workspace.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  google_drive: {
+    assetSrc: '/connector-logos/google-workspace.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
   telegram_bot: {
     assetSrc: '/connector-logos/telegram.svg',
     bg: ASSET_TILE_BG,
@@ -237,6 +285,16 @@ const CONNECTOR_VISUALS: Record<string, ConnectorVisual> = {
     border: ASSET_TILE_BORDER,
   },
   microsoft_365: {
+    assetSrc: '/connector-logos/microsoft-365.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  outlook: {
+    assetSrc: '/connector-logos/microsoft-365.svg',
+    bg: ASSET_TILE_BG,
+    border: ASSET_TILE_BORDER,
+  },
+  outlook_calendar: {
     assetSrc: '/connector-logos/microsoft-365.svg',
     bg: ASSET_TILE_BG,
     border: ASSET_TILE_BORDER,
@@ -356,17 +414,17 @@ function ConnectorMark({ id, size }: { id: string; size: number }) {
         overflow: 'hidden',
       }}
     >
-      <Image
+      <img
         src={visual.assetSrc}
         alt=""
         aria-hidden="true"
-        unoptimized
-        width={innerSize}
-        height={innerSize}
+        loading="eager"
         style={{
           width: innerSize,
           height: innerSize,
           objectFit: 'contain',
+          display: 'block',
+          flexShrink: 0,
         }}
       />
     </div>
@@ -797,6 +855,14 @@ function CredentialsPageContent() {
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [driveBrowsers, setDriveBrowsers] = useState<Record<string, MicrosoftDriveBrowserState>>({});
   const [googleDriveBrowsers, setGoogleDriveBrowsers] = useState<Record<string, GoogleDriveBrowserState>>({});
+  const [skills, setSkills] = useState<SkillRow[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState('');
+  const [skillsBusy, setSkillsBusy] = useState<Record<string, string>>({});
+  const [tools, setTools] = useState<ToolContractRow[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [toolsError, setToolsError] = useState('');
+  const [toolsBusy, setToolsBusy] = useState<Record<string, string>>({});
   const [configuredRowId, setConfiguredRowId] = useState('');
   const [focusedCatalogId, setFocusedCatalogId] = useState<string>('');
   const [showTelegramAdvanced, setShowTelegramAdvanced] = useState(false);
@@ -862,6 +928,104 @@ function CredentialsPageContent() {
   useEffect(() => {
     void loadConnectors();
   }, [loadConnectors]);
+
+  const loadSkills = useCallback(async () => {
+    setSkillsLoading(true);
+    setSkillsError('');
+    try {
+      const [installedRes, registryRes] = await Promise.all([
+        controlPlaneFetch('/api/skills'),
+        controlPlaneFetch('/api/skills/registry'),
+      ]);
+      const installedPayload = (await installedRes.json().catch(() => null)) as { items?: InstalledSkill[] } | null;
+      const registryPayload = (await registryRes.json().catch(() => null)) as { items?: RegistrySkill[] } | null;
+      if (!installedRes.ok) {
+        throw new Error('Failed to load installed skills.');
+      }
+      if (!registryRes.ok) {
+        throw new Error('Failed to load skill registry.');
+      }
+      const installedItems = Array.isArray(installedPayload?.items) ? installedPayload.items : [];
+      const registryItems = Array.isArray(registryPayload?.items) ? registryPayload.items : [];
+      const merged = new Map<string, SkillRow>();
+      installedItems.forEach((item) => {
+        const id = String(item.id || '').trim();
+        if (!id) return;
+        merged.set(id, {
+          id,
+          name: String(item.name || id),
+          description: String(item.description || '').trim() || 'Installed skill',
+          source: item.source ? String(item.source) : undefined,
+          installed: true,
+          uninstallable: item.uninstallable !== false,
+        });
+      });
+      registryItems.forEach((item) => {
+        const id = String(item.id || '').trim();
+        if (!id) return;
+        const existing = merged.get(id);
+        if (existing) {
+          merged.set(id, {
+            ...existing,
+            name: existing.name || String(item.name || id),
+            description: existing.description || String(item.description || '').trim() || existing.description,
+            source: existing.source || (item.source ? String(item.source) : undefined),
+            installed: true,
+          });
+        } else {
+          merged.set(id, {
+            id,
+            name: String(item.name || id),
+            description: String(item.description || '').trim() || 'Skill available for install',
+            source: item.source ? String(item.source) : undefined,
+            installed: Boolean(item.installed),
+          });
+        }
+      });
+      const rows = Array.from(merged.values()).sort((a, b) => {
+        if (a.installed !== b.installed) return a.installed ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      setSkills(rows);
+    } catch (error) {
+      setSkillsError(error instanceof Error ? error.message : 'Failed to load skills.');
+      setSkills([]);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, [controlPlaneFetch]);
+
+  const loadTools = useCallback(async () => {
+    setToolsLoading(true);
+    setToolsError('');
+    try {
+      const res = await controlPlaneFetch('/api/tools/contracts');
+      const payload = (await res.json().catch(() => null)) as { items?: ToolContractRow[] } | null;
+      if (!res.ok) {
+        throw new Error('Failed to load tools.');
+      }
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const normalized = items
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+          tool_id: String(item.tool_id || '').trim(),
+          description: typeof item.description === 'string' ? item.description : undefined,
+          enabled: item.enabled !== false,
+        }))
+        .filter((item) => item.tool_id);
+      setTools(normalized);
+    } catch (error) {
+      setToolsError(error instanceof Error ? error.message : 'Failed to load tools.');
+      setTools([]);
+    } finally {
+      setToolsLoading(false);
+    }
+  }, [controlPlaneFetch]);
+
+  useEffect(() => {
+    void loadSkills();
+    void loadTools();
+  }, [loadSkills, loadTools]);
 
   const summary = useMemo(() => {
     return connectors.reduce(
@@ -1103,6 +1267,87 @@ function CredentialsPageContent() {
       }));
     } finally {
       setBusy(row.id, null);
+    }
+  }
+
+  function setSkillBusy(id: string, action: string | null) {
+    setSkillsBusy((prev) => {
+      const next = { ...prev };
+      if (!action) delete next[id];
+      else next[id] = action;
+      return next;
+    });
+  }
+
+  async function handleInstallSkill(skill: SkillRow) {
+    if (!skill.source) {
+      setSkillsError('Skill source is missing for install.');
+      return;
+    }
+    setSkillBusy(skill.id, 'install');
+    setSkillsError('');
+    try {
+      const res = await controlPlaneFetch('/api/skills/install', {
+        method: 'POST',
+        body: JSON.stringify({ source_url: skill.source }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String((payload as { detail?: string }).detail || 'Failed to install skill.'));
+      }
+      await loadSkills();
+    } catch (error) {
+      setSkillsError(error instanceof Error ? error.message : 'Failed to install skill.');
+    } finally {
+      setSkillBusy(skill.id, null);
+    }
+  }
+
+  async function handleUninstallSkill(skill: SkillRow) {
+    setSkillBusy(skill.id, 'uninstall');
+    setSkillsError('');
+    try {
+      const res = await controlPlaneFetch(`/api/skills/${encodeURIComponent(skill.id)}`, {
+        method: 'DELETE',
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String((payload as { detail?: string }).detail || 'Failed to uninstall skill.'));
+      }
+      await loadSkills();
+    } catch (error) {
+      setSkillsError(error instanceof Error ? error.message : 'Failed to uninstall skill.');
+    } finally {
+      setSkillBusy(skill.id, null);
+    }
+  }
+
+  function setToolBusy(id: string, action: string | null) {
+    setToolsBusy((prev) => {
+      const next = { ...prev };
+      if (!action) delete next[id];
+      else next[id] = action;
+      return next;
+    });
+  }
+
+  async function handleToggleTool(tool: ToolContractRow) {
+    setToolBusy(tool.tool_id, 'toggle');
+    setToolsError('');
+    try {
+      const res = await controlPlaneFetch(`/api/tools/contracts/${encodeURIComponent(tool.tool_id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !tool.enabled }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(String((payload as { detail?: string }).detail || 'Failed to update tool.'));
+      }
+      setTools((prev) => prev.map((item) => (item.tool_id === tool.tool_id ? { ...item, enabled: !tool.enabled } : item)));
+    } catch (error) {
+      setToolsError(error instanceof Error ? error.message : 'Failed to update tool.');
+    } finally {
+      setToolBusy(tool.tool_id, null);
     }
   }
 
@@ -1961,6 +2206,118 @@ function buildCredentialsPayload(state: ConnectModalState): Record<string, unkno
       >
         <AiAccountsPanel workspaceId={WORKSPACE_ID} />
       </PageSection>
+
+      <div className="orion-flat-section">
+        <div className="orion-flat-section-label">Skills</div>
+        <div className="orion-flat-list">
+          {skillsLoading ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">Loading skills...</div>
+            </div>
+          ) : skillsError ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">{skillsError}</div>
+            </div>
+          ) : skills.length === 0 ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">No skills available.</div>
+            </div>
+          ) : (
+            skills.map((skill) => {
+              const busyAction = skillsBusy[skill.id] || '';
+              const installed = skill.installed;
+              return (
+                <div key={skill.id} className="orion-flat-row">
+                  <div className="orion-flat-row-main">
+                    <div className="orion-flat-row-icon">
+                      <Puzzle size={14} />
+                    </div>
+                    <div className="orion-flat-row-text">
+                      <div className="orion-flat-row-title">{skill.name}</div>
+                      <div className="orion-flat-row-desc">{skill.description}</div>
+                    </div>
+                  </div>
+                  <div className="orion-flat-row-right">
+                    <span className={`orion-flat-row-status ${installed ? 'is-success' : 'is-neutral'}`}>
+                      {installed ? 'Installed' : 'Not installed'}
+                    </span>
+                    {installed ? (
+                      <button
+                        className="btn-secondary"
+                        style={{ minHeight: 32, paddingInline: 10 }}
+                        onClick={() => void handleUninstallSkill(skill)}
+                        disabled={busyAction === 'uninstall' || skill.uninstallable === false}
+                      >
+                        {busyAction === 'uninstall' ? 'Removing…' : 'Uninstall'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-secondary"
+                        style={{ minHeight: 32, paddingInline: 10 }}
+                        onClick={() => void handleInstallSkill(skill)}
+                        disabled={busyAction === 'install' || !skill.source}
+                        title={!skill.source ? 'No install source available.' : undefined}
+                      >
+                        {busyAction === 'install' ? 'Installing…' : 'Install'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div className="orion-flat-section">
+        <div className="orion-flat-section-label">Tools</div>
+        <div className="orion-flat-list">
+          {toolsLoading ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">Loading tools...</div>
+            </div>
+          ) : toolsError ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">{toolsError}</div>
+            </div>
+          ) : tools.length === 0 ? (
+            <div className="orion-flat-row">
+              <div className="orion-flat-row-desc">No tools registered.</div>
+            </div>
+          ) : (
+            tools.map((tool) => {
+              const busyAction = toolsBusy[tool.tool_id] || '';
+              const enabled = tool.enabled !== false;
+              return (
+                <div key={tool.tool_id} className="orion-flat-row">
+                  <div className="orion-flat-row-main">
+                    <div className="orion-flat-row-icon">
+                      <Wrench size={14} />
+                    </div>
+                    <div className="orion-flat-row-text">
+                      <div className="orion-flat-row-title">{tool.tool_id}</div>
+                      <div className="orion-flat-row-desc">{tool.description || 'Tool registered in runtime.'}</div>
+                    </div>
+                  </div>
+                  <div className="orion-flat-row-right">
+                    <span className={`orion-flat-row-status ${enabled ? 'is-success' : 'is-neutral'}`}>
+                      {enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    <button
+                      className="btn-secondary"
+                      style={{ minHeight: 32, paddingInline: 10 }}
+                      onClick={() => void handleToggleTool(tool)}
+                      disabled={busyAction === 'toggle'}
+                    >
+                      {busyAction === 'toggle' ? 'Updating…' : enabled ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
 
       {pageError && connectors.length > 0 ? (
         <PageStatePanel

@@ -8,6 +8,7 @@ from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
+from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
 from server_modules.connectors.autopilot_runtime_support_service import AutopilotRuntimeSupportService
@@ -222,6 +223,7 @@ _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
 _TELEGRAM_CONNECTOR_SUPPORT_SERVICE: Optional[TelegramConnectorSupportService] = None
+_AUTOPILOT_COMMON_SUPPORT_SERVICE: Optional[AutopilotCommonSupportService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -570,10 +572,10 @@ def _autopilot_approval_service() -> AutopilotApprovalService:
     if _AUTOPILOT_APPROVAL_SERVICE is None:
         _AUTOPILOT_APPROVAL_SERVICE = AutopilotApprovalService(
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
-            cognitive_module=lambda: _cognitive_module(),
-            cognitive_defaults=lambda: _cognitive_defaults(),
+            cognitive_module=lambda: _autopilot_common_support_service().cognitive_module(),
+            cognitive_defaults=lambda: _autopilot_common_support_service().cognitive_defaults(),
             truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            normalize_string_list=lambda value: _normalize_string_list(value),
+            normalize_string_list=lambda value: _autopilot_common_support_service().normalize_string_list(value),
             utc_now_iso=lambda: _utc_now_iso(),
             send_message=lambda **kwargs: _telegram_send_message(**kwargs),
         )
@@ -601,7 +603,7 @@ def _telegram_terminal_service() -> TelegramTerminalService:
     if _TELEGRAM_TERMINAL_SERVICE is None:
         _TELEGRAM_TERMINAL_SERVICE = TelegramTerminalService(
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
-            chat_id_from_session_key=lambda key: _chat_id_from_session_key(key),
+            chat_id_from_session_key=lambda key: _autopilot_common_support_service().chat_id_from_session_key(key),
             list_connector_entries=lambda: _list_telegram_connector_entries(),
             get_secret=lambda entry: _telegram_get_secret(entry),
             resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
@@ -625,6 +627,21 @@ def _telegram_terminal_service() -> TelegramTerminalService:
             utc_now_iso=lambda: _utc_now_iso(),
         )
     return _TELEGRAM_TERMINAL_SERVICE
+
+
+def _autopilot_common_support_service() -> AutopilotCommonSupportService:
+    global _AUTOPILOT_COMMON_SUPPORT_SERVICE
+    if _AUTOPILOT_COMMON_SUPPORT_SERVICE is None:
+        def _import_cognitive_module():
+            from python_engine import cognitive_daemon as _cd  # type: ignore
+            return _cd
+
+        _AUTOPILOT_COMMON_SUPPORT_SERVICE = AutopilotCommonSupportService(
+            project_root=PROJECT_ROOT,
+            env_get=lambda key, default="": os.getenv(key, default),
+            import_cognitive_module=_import_cognitive_module,
+        )
+    return _AUTOPILOT_COMMON_SUPPORT_SERVICE
 
 
 def _autopilot_run_entry_service() -> AutopilotRunEntryService:
@@ -1738,22 +1755,11 @@ def _autopilot_run_reply_text(status: str, run_id: str, summary: str) -> str:
 
 
 def _cognitive_defaults() -> Dict[str, str]:
-    niche_id = str(os.getenv("ORION_COGNITIVE_NICHE_ID") or "astronomy").strip() or "astronomy"
-    db_override = str(os.getenv("ORION_COGNITIVE_DB_PATH") or "").strip()
-    if db_override:
-        db_path = db_override
-    else:
-        root_dir = Path(__file__).resolve().parents[1]
-        db_path = str(root_dir / "python_engine" / "agency_memory.db")
-    return {"niche_id": niche_id, "db_path": db_path}
+    return _autopilot_common_support_service().cognitive_defaults()
 
 
 def _cognitive_module():
-    try:
-        from python_engine import cognitive_daemon as _cd  # type: ignore
-        return _cd
-    except Exception:
-        return None
+    return _autopilot_common_support_service().cognitive_module()
 
 
 def _autopilot_approvals_list(limit: int = 5) -> Dict[str, Any]:
@@ -1844,23 +1850,11 @@ def _telegram_edit_message(
 
 
 def _chat_id_from_session_key(session_key: str) -> str:
-    key = str(session_key or "").strip()
-    if not key:
-        return ""
-    if key.startswith("telegram:"):
-        return key.split(":", 1)[1].strip()
-    return ""
+    return _autopilot_common_support_service().chat_id_from_session_key(session_key)
 
 
 def _normalize_string_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        out: List[str] = []
-        for item in value:
-            token = str(item or "").strip()
-            if token:
-                out.append(token)
-        return out
-    return []
+    return _autopilot_common_support_service().normalize_string_list(value)
 
 
 def _pending_approval_event_id(item: Dict[str, Any]) -> str:

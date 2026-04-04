@@ -1305,6 +1305,62 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Approval And Terminal Common Helpers Moved Behind Common Support Service
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The remaining shared approval and terminal helper slice for cognitive defaults, cognitive module loading, string-list normalization, and Telegram session-key parsing no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a smaller cut than the runtime-support and connector-support moves, but it is still real helper ownership that fed both the approval service and the Telegram terminal path.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_common_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_common_support_service.py) with:
+  - cognitive defaults resolution
+  - cognitive module loading
+  - string-list normalization
+  - Telegram `session_key -> chat_id` parsing
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py) now receives cognitive defaults/module and string-list normalization through the common-support service
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py) now receives `chat_id_from_session_key` through the common-support service
+  - these wrappers now delegate instead of owning logic inline:
+    - `_cognitive_defaults()`
+    - `_cognitive_module()`
+    - `_chat_id_from_session_key()`
+    - `_normalize_string_list()`
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_common_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_common_support_service.py)
+
+#### Current Truth
+
+- Shared approval and terminal helper behavior now has a dedicated service boundary instead of staying embedded in the connector monolith.
+- The public wrappers and downstream services still behave the same, but the common helper logic is no longer inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2108` lines to `2102` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns a remaining band of transport wrappers, endpoint entry functions, and other thin bridge helpers.
+- The file is materially smaller now, but it is still not only transport/composition glue.
+- Some of the remaining wrappers are already thin, so future reductions will need to target the last meaningful grouped seams rather than individual one-line delegates.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by targeting the last grouped bridge/helper seams instead of isolated wrappers.
+2. Keep common helper logic in dedicated services when that logic is shared across approval, terminal, or channel flows.
+3. Preserve focused service-level verification for the smaller helper boundaries instead of relying only on integration coverage.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_common_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_common_support_service.py)
+  - [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_common_support_service`
+  - `server_modules.tests.test_autopilot_approval_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+
 ### 2026-04-05 - Telegram Connector Support Helpers Moved Behind Support Service
 
 #### Stage

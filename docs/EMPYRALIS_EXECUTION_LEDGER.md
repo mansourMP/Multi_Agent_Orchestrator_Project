@@ -1364,6 +1364,76 @@ This is shared infrastructure, not channel-specific behavior. The goal of this c
   - `server_modules.tests.test_whatsapp_webhook_service`
   - `server_modules.tests.test_whatsapp_run_dispatch_service`
 
+### 2026-04-05 - Shared Runtime Metrics And Run Summary Flow Moved Behind Runtime Support Service
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The shared runtime-support block for metrics, local companion state, worker-online detection, and run summary/error shaping no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut targets shared runtime support, not channel-specific behavior. The status surface and Telegram run-dispatch path still behave the same, but they now consume a dedicated service boundary instead of inline helper ownership.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_runtime_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_support_service.py) with:
+  - runtime metrics snapshot
+  - latest runtime run summary
+  - worker-online detection with fallback logic
+  - local companion snapshot
+  - run error extraction and last-error resolution
+  - non-retryable error detection
+  - friendly run-error text shaping
+  - Telegram-facing run-summary humanization
+  - final terminal-run summary shaping
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these helpers now delegate into the runtime-support service:
+  - `_latest_runtime_run_summary()`
+  - `_current_runtime_metrics()`
+  - `_autopilot_is_worker_online()`
+  - `_local_companion_snapshot()`
+  - `_extract_run_error_messages()`
+  - `_latest_run_error_message()`
+  - `_is_non_retryable_run_error()`
+  - `_friendly_autopilot_run_error()`
+  - `_humanize_telegram_run_summary()`
+  - `_summarize_run_terminal_result()`
+- Updated the live composition path so:
+  - [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py) now reads runtime metrics and companion state through the runtime-support service wiring
+  - [server_modules/connectors/telegram_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_dispatch_service.py) continues using the same dependencies, but those dependencies are now service-owned under the wrappers
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_runtime_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_support_service.py)
+
+#### Current Truth
+
+- Shared runtime support now has its own service boundary instead of staying embedded in the connector monolith.
+- Runtime status text and Telegram run waiting/error behavior still use the same public wrappers, but the underlying shared logic is no longer inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2278` lines to `2176` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns remaining shared runtime/helper wrappers such as cognitive-approval defaults, transport wrappers, and some connector utility functions.
+- Shared support is thinner now, but [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is still not only transport/composition glue.
+- Some remaining helper groups are still mixed between channel-specific wrappers and shared runtime concerns.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared helper groups that do not belong to a channel entry module.
+2. Keep shared runtime behavior in dedicated services and keep channel registries consuming those services through stable wrappers.
+3. Preserve direct service-level tests for runtime support paths, especially where Telegram run dispatch depends on shared state and error shaping.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_runtime_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_support_service.py)
+  - [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py)
+  - [server_modules/connectors/telegram_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_dispatch_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_runtime_support_service`
+  - `server_modules.tests.test_runtime_status_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_auto_approves_matching_owner_confirmation`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_does_not_auto_approve_owner_mismatch`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_does_not_auto_approve_workflow_human_node`
+
 ### 2026-04-05 - WhatsApp Transport And Connector Matching Moved Behind Service Registry
 
 #### Stage

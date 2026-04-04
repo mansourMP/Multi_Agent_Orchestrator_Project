@@ -10,6 +10,7 @@ from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
+from server_modules.connectors.autopilot_runtime_support_service import AutopilotRuntimeSupportService
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
@@ -218,6 +219,7 @@ _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
+_AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -494,33 +496,20 @@ def _autopilot_profile_service() -> AutopilotProfileService:
 
 
 def _latest_runtime_run_summary() -> str:
-    recent_line = "none"
-    with RUN_HISTORY_LOCK:
-        if RUN_HISTORY:
-            latest = RUN_HISTORY[0] if isinstance(RUN_HISTORY[0], dict) else {}
-            rid = str(latest.get("run_id") or "")[:8]
-            status = str(latest.get("status") or "unknown")
-            recent_line = f"{rid} {status}" if rid else status
-    return recent_line
+    return _autopilot_runtime_support_service().latest_runtime_run_summary()
 
 
 def _current_runtime_metrics() -> Dict[str, int]:
-    with METRICS_LOCK:
-        return {
-            "runs_started": int(RUNTIME_METRICS.get("runs_started") or 0),
-            "runs_completed": int(RUNTIME_METRICS.get("runs_completed") or 0),
-            "runs_failed": int(RUNTIME_METRICS.get("runs_failed") or 0),
-            "runs_timeout": int(RUNTIME_METRICS.get("runs_timeout") or 0),
-        }
+    return _autopilot_runtime_support_service().current_runtime_metrics()
 
 
 def _runtime_status_service() -> RuntimeStatusService:
     global _RUNTIME_STATUS_SERVICE
     if _RUNTIME_STATUS_SERVICE is None:
         _RUNTIME_STATUS_SERVICE = RuntimeStatusService(
-            local_companion_snapshot=lambda: _local_companion_snapshot(),
-            current_metrics=lambda: _current_runtime_metrics(),
-            latest_run_summary=lambda: _latest_runtime_run_summary(),
+            local_companion_snapshot=lambda: _autopilot_runtime_support_service().local_companion_snapshot(),
+            current_metrics=lambda: _autopilot_runtime_support_service().current_runtime_metrics(),
+            latest_run_summary=lambda: _autopilot_runtime_support_service().latest_runtime_run_summary(),
             runtime_valid=lambda: not ORION_ENGINE_VALIDATION_ERRORS,
         )
     return _RUNTIME_STATUS_SERVICE
@@ -650,6 +639,28 @@ def _autopilot_run_entry_service() -> AutopilotRunEntryService:
             ),
         )
     return _AUTOPILOT_RUN_ENTRY_SERVICE
+
+
+def _autopilot_runtime_support_service() -> AutopilotRuntimeSupportService:
+    global _AUTOPILOT_RUNTIME_SUPPORT_SERVICE
+    if _AUTOPILOT_RUNTIME_SUPPORT_SERVICE is None:
+        _AUTOPILOT_RUNTIME_SUPPORT_SERVICE = AutopilotRuntimeSupportService(
+            run_history=RUN_HISTORY,
+            run_history_lock=RUN_HISTORY_LOCK,
+            runtime_metrics=RUNTIME_METRICS,
+            metrics_lock=METRICS_LOCK,
+            utc_now=lambda: _utc_now(),
+            parse_utc_ts=lambda value: _parse_utc_ts(value),
+            worker_online_helper=lambda record, now=None: bool((globals().get("_is_worker_online") or (lambda *_args, **_kwargs: False))(record, now)),
+            local_lease_seconds=ORION_LOCAL_LEASE_SECONDS,
+            local_queue_lock=LOCAL_QUEUE_LOCK,
+            local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
+            local_claimed_runs=LOCAL_CLAIMED_RUNS,
+            local_worker_registry=LOCAL_WORKER_REGISTRY,
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            non_retryable_run_error_hints=list(_AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS),
+        )
+    return _AUTOPILOT_RUNTIME_SUPPORT_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -1714,40 +1725,11 @@ def _runtime_status_text(workspace_id: str) -> str:
 
 
 def _autopilot_is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
-    helper = globals().get("_is_worker_online")
-    if callable(helper):
-        try:
-            return bool(helper(record, now))
-        except Exception:
-            pass
-
-    ref = now or _utc_now()
-    seen_at = _parse_utc_ts(record.get("last_seen_at"))
-    if seen_at is None:
-        return False
-    lease_seconds = int(record.get("lease_seconds") or ORION_LOCAL_LEASE_SECONDS)
-    # Match local_queue semantics when helper is unavailable.
-    online_window_seconds = max(20, lease_seconds * 2)
-    return (ref - seen_at).total_seconds() <= online_window_seconds
+    return _autopilot_runtime_support_service().worker_online(record, now)
 
 
 def _local_companion_snapshot() -> Dict[str, int]:
-    now = _utc_now()
-    with LOCAL_QUEUE_LOCK:
-        pending_runs = len(LOCAL_PENDING_RUN_IDS)
-        claimed_runs = len(LOCAL_CLAIMED_RUNS)
-        online_workers = len(
-            [
-                record
-                for record in LOCAL_WORKER_REGISTRY.values()
-                if isinstance(record, dict) and _autopilot_is_worker_online(record, now)
-            ]
-        )
-    return {
-        "online_workers": int(online_workers),
-        "pending_runs": int(pending_runs),
-        "claimed_runs": int(claimed_runs),
-    }
+    return _autopilot_runtime_support_service().local_companion_snapshot()
 
 
 def _telegram_runtime_status_text(workspace_id: str) -> str:
@@ -1791,111 +1773,27 @@ def _truncate_one_line(text: str, limit: int) -> str:
 
 
 def _extract_run_error_messages(run: Dict[str, Any]) -> List[str]:
-    messages: List[str] = []
-    events = run.get("events") if isinstance(run.get("events"), list) else []
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        event_name = str(event.get("event") or "").strip().lower()
-        if event_name != "run_error":
-            continue
-        message = str(event.get("message") or "").strip()
-        if message:
-            messages.append(message)
-    for key in ("error", "last_error"):
-        message = str(run.get(key) or "").strip()
-        if message:
-            messages.append(message)
-    deduped: List[str] = []
-    seen: set[str] = set()
-    for message in messages:
-        marker = message.lower()
-        if marker in seen:
-            continue
-        seen.add(marker)
-        deduped.append(message)
-    return deduped
+    return _autopilot_runtime_support_service().extract_run_error_messages(run)
 
 
 def _latest_run_error_message(run: Dict[str, Any]) -> str:
-    messages = _extract_run_error_messages(run)
-    if not messages:
-        return ""
-    return messages[-1]
+    return _autopilot_runtime_support_service().latest_run_error_message(run)
 
 
 def _is_non_retryable_run_error(detail: str) -> bool:
-    text = str(detail or "").strip().lower()
-    if not text:
-        return False
-    return any(marker in text for marker in _AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS)
+    return _autopilot_runtime_support_service().is_non_retryable_run_error(detail)
 
 
 def _friendly_autopilot_run_error(detail: str) -> str:
-    text = str(detail or "").strip()
-    lower = text.lower()
-    if "missing scopes" in lower or "api.responses.write" in lower:
-        return "AI account authorization failed. Missing required scope: api.responses.write. Open Setup and reconnect your AI account."
-    if (
-        "invalid api key" in lower
-        or "incorrect api key" in lower
-        or "unauthorized" in lower
-        or "forbidden" in lower
-    ):
-        return "AI account authorization failed. Open Setup and reconnect your AI account."
-    if "no credentials available" in lower or "api key is required" in lower or "api_key is required" in lower:
-        return "No valid AI account is connected. Open Setup and connect an account."
-    return text or "Run failed."
+    return _autopilot_runtime_support_service().friendly_run_error(detail)
 
 
 def _humanize_telegram_run_summary(summary: str) -> str:
-    text = str(summary or "").strip()
-    if not text:
-        return "Something went wrong. Please try again."
-
-    lower = text.lower()
-    if "run timed out waiting on local companion" in lower:
-        return "Still working on it, but the local helper is taking too long. Give me a moment and try again."
-    if "local companion is offline" in lower:
-        return "The local helper is offline right now. Start it in Setup and try again."
-    if lower == "run not found." or "run not found" in lower:
-        return "I lost track of that request. Please send it again."
-    if "missing required scope" in lower or "api.responses.write" in lower:
-        return "I couldn’t get a model reply right now. Please retry in a moment."
-    if (
-        "ai account authorization failed" in lower
-        or "invalid api key" in lower
-        or "incorrect api key" in lower
-        or "unauthorized" in lower
-        or "forbidden" in lower
-    ):
-        return "I couldn’t get a model reply right now. Please retry in a moment."
-    if "no valid ai account is connected" in lower or "no credentials available" in lower:
-        return "I don’t have a working model connection right now. Please retry in a moment."
-    if "approval window timed out" in lower or "approval timeout" in lower:
-        return "I waited too long for approval. Please send the request again and approve it when prompted."
-    if "requires local companion execution" in lower:
-        return "That task needs local execution first. Start the local helper in Setup and try again."
-    if "run blocked by safety policy" in lower or "action policy blocked" in lower:
-        return "That action is blocked by your current safety settings. Review approvals or trust settings and try again."
-    if lower == "run failed." or "run failed on attempt" in lower:
-        return "Something went wrong while I was handling that. Please try again."
-    if "run timed out while waiting for completion" in lower:
-        return "I am taking longer than expected. Please try again in a moment."
-    return text
+    return _autopilot_runtime_support_service().humanize_telegram_run_summary(summary)
 
 
 def _summarize_run_terminal_result(run: Dict[str, Any], summary_limit: int) -> str:
-    summary = str(run.get("result") or "").strip()
-    if not summary and isinstance(run.get("result_data"), dict):
-        summary = _truncate_one_line(json.dumps(run.get("result_data")), summary_limit)
-    if not summary:
-        latest_error = _latest_run_error_message(run)
-        if latest_error:
-            summary = _friendly_autopilot_run_error(latest_error)
-    if not summary:
-        summary = "Run finished."
-    return _truncate_one_line(summary, summary_limit)
+    return _autopilot_runtime_support_service().summarize_run_terminal_result(run, summary_limit)
 
 
 def _autopilot_include_run_meta() -> bool:

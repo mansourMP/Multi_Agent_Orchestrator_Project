@@ -8,6 +8,7 @@ from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
 from scripts.platform_execution import stack_start_command_hint
 from server_modules.automation_intents import classify_automation_intent
+from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
 from server_modules.connectors.telegram_profile_service import (
     TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
     TelegramProfileService,
@@ -175,11 +176,6 @@ ORION_TELEGRAM_ONBOARDING_STATE_FILE = _resolve_state_file(
     "channels/telegram/chat_onboarding.json",
     ".orion_telegram_chat_onboarding.json",
 )
-_TELEGRAM_CAMERA_SETUP_LOCK = threading.Lock()
-_TELEGRAM_CAMERA_SETUP_STATE: Dict[str, Any] = {
-    "loaded": False,
-    "items": {},
-}
 _TELEGRAM_QUICK_GOAL_TEMPLATES: Dict[str, str] = {
     "project update": "Give me a concise update for my current project with top priorities, blockers, and next 3 actions.",
     "today priorities": "Set my top priorities for today with a realistic execution order and time blocks.",
@@ -209,6 +205,13 @@ _TELEGRAM_PROFILE_SERVICE = TelegramProfileService(
     write_json=lambda path, payload: _safe_write_json(path, payload),
     now_iso=lambda: _utc_now_iso(),
     truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+)
+_TELEGRAM_CAMERA_SETUP_SERVICE = TelegramCameraSetupService(
+    state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
+    read_json=lambda path, default: _safe_read_json(path, default),
+    write_json=lambda path, payload: _safe_write_json(path, payload),
+    now_iso=lambda: _utc_now_iso(),
+    session_key_builder=lambda workspace_id, chat_id: _telegram_profile_key(workspace_id, chat_id),
 )
 
 
@@ -597,65 +600,23 @@ def _advance_telegram_onboarding(workspace_id: str, chat_id: str, step_index: in
 
 
 def _telegram_camera_setup_key(workspace_id: str, chat_id: str) -> str:
-    return _telegram_profile_key(workspace_id, chat_id)
+    return _TELEGRAM_CAMERA_SETUP_SERVICE.camera_setup_key(workspace_id, chat_id)
 
 
 def _load_telegram_camera_setup_state() -> None:
-    _init()
-    payload = _safe_read_json(
-        ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
-        {"version": 1, "items": {}},
-    )
-    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
-    parsed: Dict[str, Dict[str, Any]] = {}
-    for key, value in items.items():
-        if not isinstance(value, dict):
-            continue
-        stage = str(value.get("stage") or "").strip().lower()
-        if stage not in {"awaiting_summary_target", "awaiting_followup_target"}:
-            continue
-        parsed[str(key)] = {
-            "stage": stage,
-            "original_prompt": str(value.get("original_prompt") or "").strip(),
-            "updated_at": str(value.get("updated_at") or "").strip() or _utc_now_iso(),
-            "intent": str(value.get("intent") or "").strip().upper(),
-        }
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        _TELEGRAM_CAMERA_SETUP_STATE["items"] = parsed
-        _TELEGRAM_CAMERA_SETUP_STATE["loaded"] = True
+    _TELEGRAM_CAMERA_SETUP_SERVICE.load_state()
 
 
 def _ensure_telegram_camera_setup_state_loaded() -> None:
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        loaded = bool(_TELEGRAM_CAMERA_SETUP_STATE.get("loaded"))
-    if not loaded:
-        _load_telegram_camera_setup_state()
+    _TELEGRAM_CAMERA_SETUP_SERVICE.ensure_state_loaded()
 
 
 def _persist_telegram_camera_setup_state() -> None:
-    _init()
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
-        data = dict(items) if isinstance(items, dict) else {}
-    _safe_write_json(
-        ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
-        {"version": 1, "items": data},
-    )
+    _TELEGRAM_CAMERA_SETUP_SERVICE.persist_state()
 
 
 def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    _ensure_telegram_camera_setup_state_loaded()
-    key = _telegram_camera_setup_key(workspace_id, chat_id)
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        item = _TELEGRAM_CAMERA_SETUP_STATE.get("items", {}).get(key)
-        out = dict(item) if isinstance(item, dict) else {}
-    return {
-        "active": bool(out.get("stage")),
-        "intent": str(out.get("intent") or "").strip().upper(),
-        "stage": str(out.get("stage") or "").strip(),
-        "original_prompt": str(out.get("original_prompt") or "").strip(),
-        "updated_at": str(out.get("updated_at") or "").strip(),
-    }
+    return _TELEGRAM_CAMERA_SETUP_SERVICE.get_state(workspace_id, chat_id)
 
 
 def _set_telegram_camera_setup_state(
@@ -665,32 +626,11 @@ def _set_telegram_camera_setup_state(
     original_prompt: str,
     intent: str = "",
 ) -> Dict[str, Any]:
-    _ensure_telegram_camera_setup_state_loaded()
-    key = _telegram_camera_setup_key(workspace_id, chat_id)
-    now = _utc_now_iso()
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
-        if not isinstance(items, dict):
-            items = {}
-            _TELEGRAM_CAMERA_SETUP_STATE["items"] = items
-        items[key] = {
-            "intent": str(intent or "").strip().upper(),
-            "stage": stage,
-            "original_prompt": str(original_prompt or "").strip(),
-            "updated_at": now,
-        }
-    _persist_telegram_camera_setup_state()
-    return _get_telegram_camera_setup_state(workspace_id, chat_id)
+    return _TELEGRAM_CAMERA_SETUP_SERVICE.set_state(workspace_id, chat_id, stage, original_prompt, intent=intent)
 
 
 def _clear_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> None:
-    _ensure_telegram_camera_setup_state_loaded()
-    key = _telegram_camera_setup_key(workspace_id, chat_id)
-    with _TELEGRAM_CAMERA_SETUP_LOCK:
-        items = _TELEGRAM_CAMERA_SETUP_STATE.get("items")
-        if isinstance(items, dict):
-            items.pop(key, None)
-    _persist_telegram_camera_setup_state()
+    _TELEGRAM_CAMERA_SETUP_SERVICE.clear_state(workspace_id, chat_id)
 
 
 def _runtime_api_headers() -> Dict[str, str]:
@@ -1061,92 +1001,20 @@ def _telegram_handle_guided_automation_setup(
     chat_id: str,
     message_text: str,
 ) -> Dict[str, Any]:
-    if not ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED:
-        return {"handled": False, "reply": ""}
-    active_state = _get_telegram_camera_setup_state(workspace_id, chat_id)
-    normalized_text = str(message_text or "").strip()
-    active_intent = str(active_state.get("intent") or "").strip().upper()
-    connector_flags = _workspace_connector_flags(workspace_id)
-
-    if active_state.get("active"):
-        stage = str(active_state.get("stage") or "").strip()
-        if active_intent == "EMAIL_SUMMARY" and stage == "awaiting_summary_target":
-            if not normalized_text:
-                return {"handled": True, "reply": "Which inbox should I summarize? (e.g. Work inbox, Support inbox)"}
-            try:
-                workflow_id = _create_email_summary_visibility_record(
-                    normalized_text,
-                    telegram_connected=connector_flags["telegram"],
-                )
-                schedule_count = _create_email_summary_execution_schedules(workspace_id, normalized_text) if connector_flags["email"] else 0
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": _email_summary_completion_text(
-                        normalized_text,
-                        schedule_count=schedule_count,
-                        email_connected=connector_flags["email"],
-                        workflow_id=workflow_id,
-                    ),
-                }
-            except Exception as exc:
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the summary automation.'}",
-                }
-        if active_intent == "LEAD_FOLLOWUP" and stage == "awaiting_followup_target":
-            if not normalized_text:
-                return {"handled": True, "reply": "What should I call this lead flow? (e.g. Website leads, Telegram inquiries)"}
-            try:
-                workflow_id = _create_lead_followup_visibility_record(
-                    normalized_text,
-                    email_connected=connector_flags["email"],
-                    telegram_connected=connector_flags["telegram"],
-                )
-                schedule_count = _create_lead_followup_execution_schedules(workspace_id, normalized_text) if connector_flags["email"] else 0
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": _lead_followup_completion_text(
-                        normalized_text,
-                        schedule_count=schedule_count,
-                        email_connected=connector_flags["email"],
-                        workflow_id=workflow_id,
-                    ),
-                }
-            except Exception as exc:
-                _clear_telegram_camera_setup_state(workspace_id, chat_id)
-                return {
-                    "handled": True,
-                    "reply": f"I couldn't finish the setup.\n\n{str(exc).strip() or 'Failed to create the follow-up automation.'}",
-                }
-    if classify_automation_intent(normalized_text) == "EMAIL_SUMMARY":
-        _set_telegram_camera_setup_state(
-            workspace_id,
-            chat_id,
-            "awaiting_summary_target",
-            original_prompt=normalized_text,
-            intent="EMAIL_SUMMARY",
-        )
-        return {
-            "handled": True,
-            "reply": "I'll set up a daily email summary for you.\n\nWhich inbox should I summarize?\n\n(e.g. Work inbox, Support inbox)",
-        }
-    if classify_automation_intent(normalized_text) == "LEAD_FOLLOWUP":
-        _set_telegram_camera_setup_state(
-            workspace_id,
-            chat_id,
-            "awaiting_followup_target",
-            original_prompt=normalized_text,
-            intent="LEAD_FOLLOWUP",
-        )
-        return {
-            "handled": True,
-            "reply": "I'll set up lead follow-up for you.\n\nWhat should I call this lead flow?\n\n(e.g. Website leads, Telegram inquiries)",
-        }
-
-    return {"handled": False, "reply": ""}
+    return _TELEGRAM_CAMERA_SETUP_SERVICE.handle_guided_automation_setup(
+        workspace_id=workspace_id,
+        chat_id=chat_id,
+        message_text=message_text,
+        enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
+        classify_intent=classify_automation_intent,
+        workspace_connector_flags=_workspace_connector_flags,
+        create_email_summary_visibility_record=_create_email_summary_visibility_record,
+        create_email_summary_execution_schedules=_create_email_summary_execution_schedules,
+        email_summary_completion_text=_email_summary_completion_text,
+        create_lead_followup_visibility_record=_create_lead_followup_visibility_record,
+        create_lead_followup_execution_schedules=_create_lead_followup_execution_schedules,
+        lead_followup_completion_text=_lead_followup_completion_text,
+    )
 
 
 def _telegram_profile_has_context(profile_data: Dict[str, str]) -> bool:

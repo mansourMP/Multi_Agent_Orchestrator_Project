@@ -767,6 +767,56 @@ This keeps the live Telegram loop stable while moving another stateful subsystem
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `server_modules.tests.test_telegram_space_service`
 
+### 2026-04-04 - Telegram Guided Automation Camera-Setup Flow Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector decomposition continued with the Telegram guided automation setup bridge.
+
+This moves the file-backed camera-setup state and the guided automation handoff flow behind a dedicated connector service while keeping the live Telegram loop stable.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_camera_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_camera_setup_service.py) as the dedicated boundary for:
+  - camera-setup state load, persist, get, set, and clear
+  - guided automation setup handling for email summary and lead follow-up flows
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the Telegram guided automation path now delegates into the service instead of owning that state and branch logic inline.
+- Removed the old inline camera-setup state ownership block from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_camera_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_camera_setup_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the main Telegram action loop, but it no longer owns the guided automation setup state machine.
+- The guided automation setup path is now directly testable without going through the full Telegram polling flow.
+- The connector monolith has now lost three bounded Telegram slices:
+  - MCP-backed space status
+  - profile and onboarding state
+  - guided automation camera-setup flow
+
+#### Open Gaps
+
+- Telegram message routing, media handling, and camera/media attachment behavior still remain in the monolith.
+- WhatsApp behavior is still co-located in the same file.
+- Channel adapter normalization is still not separated from the polling loop.
+
+#### Next Required Work
+
+1. Continue extracting bounded Telegram slices from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially media attachment handling or message parsing.
+2. Keep adding direct service tests for each extracted connector subsystem.
+3. Only after more bounded slices are removed should the top-level Telegram loop be broken apart.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_camera_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_camera_setup_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_camera_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_camera_setup_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+
 ### 2026-04-04 - Direct Chat Runtime Loop Moved Behind Dedicated Runtime Service
 
 #### Stage

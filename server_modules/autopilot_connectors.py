@@ -16,6 +16,7 @@ from server_modules.connectors.telegram_profile_service import (
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
+from server_modules.connectors.telegram_autopilot_state_service import TelegramAutopilotStateService
 from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
 from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
@@ -246,6 +247,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
 _AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
+_TELEGRAM_AUTOPILOT_STATE_SERVICE: Optional[TelegramAutopilotStateService] = None
 _WHATSAPP_AUTOPILOT_STATE_SERVICE: Optional[WhatsAppAutopilotStateService] = None
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
@@ -330,6 +332,37 @@ def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
             max_reply_chars=ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS,
         )
     return _WHATSAPP_AUTOPILOT_STATE_SERVICE
+
+
+def _telegram_autopilot_state_service() -> TelegramAutopilotStateService:
+    global _TELEGRAM_AUTOPILOT_STATE_SERVICE
+    if _TELEGRAM_AUTOPILOT_STATE_SERVICE is None:
+        _TELEGRAM_AUTOPILOT_STATE_SERVICE = TelegramAutopilotStateService(
+            state=TELEGRAM_AUTOPILOT_STATE,
+            lock=TELEGRAM_AUTOPILOT_LOCK,
+            read_json=lambda path, default: _safe_read_json(path, default),
+            write_json=lambda path, payload: _safe_write_json(path, payload),
+            state_file=ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
+            utc_now_iso=lambda: _utc_now_iso(),
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            load_vault=lambda: load_vault(),
+            workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
+            connector_paused=lambda item: _connector_paused(item),
+            resolve_secret=lambda entry: _telegram_get_secret(entry),
+            enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+            default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
+            require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
+            prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
+            run_timeout_seconds=ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS,
+            max_reply_chars=ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS,
+            thread_alive=lambda: bool(
+                (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD)
+                and (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD).is_alive()
+            ),
+        )
+    return _TELEGRAM_AUTOPILOT_STATE_SERVICE
 
 
 def _telegram_sender_filter_service() -> TelegramSenderFilterService:
@@ -1712,123 +1745,17 @@ def _telegram_reply_keyboard(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_telegram_autopilot_state():
     _init()
-    payload = _safe_read_json(
-        ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
-        {
-            "version": 1,
-            "state": {
-                "connectors": {},
-                "processed_updates": 0,
-                "runs_started": 0,
-                "last_poll_at": None,
-                "last_error": None,
-                "last_error_at": None,
-                "last_error_category": None,
-                "last_error_source": None,
-                "error_count": 0,
-                "consecutive_errors": 0,
-                "retry_count": 0,
-                "last_retry_at": None,
-                "backoff_seconds": 0.0,
-                "next_retry_at": None,
-                "last_success_at": None,
-            },
-        },
-    )
-    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
-    connectors = state.get("connectors") if isinstance(state.get("connectors"), dict) else {}
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["connectors"] = connectors
-        TELEGRAM_AUTOPILOT_STATE["processed_updates"] = int(state.get("processed_updates") or 0)
-        TELEGRAM_AUTOPILOT_STATE["runs_started"] = int(state.get("runs_started") or 0)
-        TELEGRAM_AUTOPILOT_STATE["last_poll_at"] = state.get("last_poll_at")
-        TELEGRAM_AUTOPILOT_STATE["last_error"] = state.get("last_error")
-        TELEGRAM_AUTOPILOT_STATE["last_error_at"] = state.get("last_error_at")
-        TELEGRAM_AUTOPILOT_STATE["last_error_category"] = state.get("last_error_category")
-        TELEGRAM_AUTOPILOT_STATE["last_error_source"] = state.get("last_error_source")
-        TELEGRAM_AUTOPILOT_STATE["error_count"] = int(state.get("error_count") or 0)
-        TELEGRAM_AUTOPILOT_STATE["consecutive_errors"] = int(state.get("consecutive_errors") or 0)
-        TELEGRAM_AUTOPILOT_STATE["retry_count"] = int(state.get("retry_count") or 0)
-        TELEGRAM_AUTOPILOT_STATE["last_retry_at"] = state.get("last_retry_at")
-        TELEGRAM_AUTOPILOT_STATE["backoff_seconds"] = float(state.get("backoff_seconds") or 0.0)
-        TELEGRAM_AUTOPILOT_STATE["next_retry_at"] = state.get("next_retry_at")
-        TELEGRAM_AUTOPILOT_STATE["last_success_at"] = state.get("last_success_at")
+    _telegram_autopilot_state_service().load_state()
 
 
 def _persist_telegram_autopilot_state():
     _init()
-    with TELEGRAM_AUTOPILOT_LOCK:
-        payload = {
-            "version": 1,
-            "state": {
-                "connectors": TELEGRAM_AUTOPILOT_STATE.get("connectors", {}),
-                "processed_updates": int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0),
-                "runs_started": int(TELEGRAM_AUTOPILOT_STATE.get("runs_started") or 0),
-                "last_poll_at": TELEGRAM_AUTOPILOT_STATE.get("last_poll_at"),
-                "last_error": TELEGRAM_AUTOPILOT_STATE.get("last_error"),
-                "last_error_at": TELEGRAM_AUTOPILOT_STATE.get("last_error_at"),
-                "last_error_category": TELEGRAM_AUTOPILOT_STATE.get("last_error_category"),
-                "last_error_source": TELEGRAM_AUTOPILOT_STATE.get("last_error_source"),
-                "error_count": int(TELEGRAM_AUTOPILOT_STATE.get("error_count") or 0),
-                "consecutive_errors": int(TELEGRAM_AUTOPILOT_STATE.get("consecutive_errors") or 0),
-                "retry_count": int(TELEGRAM_AUTOPILOT_STATE.get("retry_count") or 0),
-                "last_retry_at": TELEGRAM_AUTOPILOT_STATE.get("last_retry_at"),
-                "backoff_seconds": float(TELEGRAM_AUTOPILOT_STATE.get("backoff_seconds") or 0.0),
-                "next_retry_at": TELEGRAM_AUTOPILOT_STATE.get("next_retry_at"),
-                "last_success_at": TELEGRAM_AUTOPILOT_STATE.get("last_success_at"),
-            },
-        }
-    _safe_write_json(ORION_TELEGRAM_AUTOPILOT_STATE_FILE, payload)
+    _telegram_autopilot_state_service().persist_state()
 
 
 def _telegram_autopilot_snapshot(include_connectors: bool = False) -> Dict[str, Any]:
     _init()
-    thread_ref = getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD
-    with TELEGRAM_AUTOPILOT_LOCK:
-        connectors_raw = TELEGRAM_AUTOPILOT_STATE.get("connectors", {})
-        connectors = dict(connectors_raw) if isinstance(connectors_raw, dict) else {}
-        snapshot: Dict[str, Any] = {
-            "enabled": bool(ORION_TELEGRAM_AUTOPILOT_ENABLED),
-            "active": bool(TELEGRAM_AUTOPILOT_STATE.get("active")),
-            "started_at": TELEGRAM_AUTOPILOT_STATE.get("started_at"),
-            "last_poll_at": TELEGRAM_AUTOPILOT_STATE.get("last_poll_at"),
-            "last_error": TELEGRAM_AUTOPILOT_STATE.get("last_error"),
-            "last_error_at": TELEGRAM_AUTOPILOT_STATE.get("last_error_at"),
-            "last_error_category": TELEGRAM_AUTOPILOT_STATE.get("last_error_category"),
-            "last_error_source": TELEGRAM_AUTOPILOT_STATE.get("last_error_source"),
-            "error_count": int(TELEGRAM_AUTOPILOT_STATE.get("error_count") or 0),
-            "consecutive_errors": int(TELEGRAM_AUTOPILOT_STATE.get("consecutive_errors") or 0),
-            "retry_count": int(TELEGRAM_AUTOPILOT_STATE.get("retry_count") or 0),
-            "last_retry_at": TELEGRAM_AUTOPILOT_STATE.get("last_retry_at"),
-            "backoff_seconds": float(TELEGRAM_AUTOPILOT_STATE.get("backoff_seconds") or 0.0),
-            "next_retry_at": TELEGRAM_AUTOPILOT_STATE.get("next_retry_at"),
-            "last_success_at": TELEGRAM_AUTOPILOT_STATE.get("last_success_at"),
-            "connectors_seen": int(TELEGRAM_AUTOPILOT_STATE.get("connectors_seen") or 0),
-            "processed_updates": int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0),
-            "runs_started": int(TELEGRAM_AUTOPILOT_STATE.get("runs_started") or 0),
-            "poll_seconds": ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            "max_updates": ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
-            "run_timeout_seconds": ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS,
-            "max_reply_chars": ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS,
-            "require_prefix": bool(ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX),
-            "prefix": ORION_TELEGRAM_AUTOPILOT_PREFIX,
-            "default_profile": ORION_TELEGRAM_AUTOPILOT_PROFILE,
-            "state_file": str(ORION_TELEGRAM_AUTOPILOT_STATE_FILE),
-            "thread_alive": bool(thread_ref and thread_ref.is_alive()),
-        }
-    connector_error_count = 0
-    dropped_sender_count = 0
-    for connector_state in connectors.values():
-        if isinstance(connector_state, dict):
-            if connector_state.get("last_error"):
-                connector_error_count += 1
-            dropped_sender_count += int(connector_state.get("dropped_sender_count") or 0)
-    snapshot["connector_state_count"] = len(connectors)
-    snapshot["connector_error_count"] = connector_error_count
-    snapshot["dropped_sender_count"] = dropped_sender_count
-    if include_connectors:
-        snapshot["connectors"] = connectors
-    return snapshot
+    return _telegram_autopilot_state_service().snapshot(include_connectors=include_connectors)
 
 
 def _whatsapp_autopilot_log(message: str):
@@ -1934,56 +1861,17 @@ def _telegram_autopilot_mark_poll(clear_error: bool = True):
 
 def _telegram_connector_state(credential_id: str) -> Dict[str, Any]:
     _init()
-    with TELEGRAM_AUTOPILOT_LOCK:
-        connectors = TELEGRAM_AUTOPILOT_STATE.setdefault("connectors", {})
-        raw = connectors.get(credential_id)
-        if not isinstance(raw, dict):
-            raw = {}
-        connectors[credential_id] = raw
-        return raw
+    return _telegram_autopilot_state_service().connector_state(credential_id)
 
 
 def _set_telegram_connector_state(credential_id: str, patch: Dict[str, Any]):
     _init()
-    with TELEGRAM_AUTOPILOT_LOCK:
-        connectors = TELEGRAM_AUTOPILOT_STATE.setdefault("connectors", {})
-        current = connectors.get(credential_id)
-        if not isinstance(current, dict):
-            current = {}
-        for key, value in patch.items():
-            current[key] = value
-        connectors[credential_id] = current
-    _persist_telegram_autopilot_state()
+    _telegram_autopilot_state_service().set_connector_state(credential_id, patch)
 
 
 def _list_telegram_connector_entries() -> List[Dict[str, Any]]:
     _init()
-    requested_ws = _normalize_workspace_id(ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID)
-    entries: List[Dict[str, Any]] = []
-    seen_identities: set[str] = set()
-    for item in load_vault().get("credentials", []):
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("provider") or "").strip().lower() != "telegram_bot":
-            continue
-        if not _workspace_visible(item.get("workspace_id"), requested_ws):
-            continue
-        if _connector_paused(item):
-            continue
-        try:
-            secret = _telegram_get_secret(item)
-        except Exception:
-            continue
-        bot_token = str(secret.get("bot_token") or "").strip()
-        chat_id = str(secret.get("chat_id") or "").strip()
-        identity = f"{bot_token}:{chat_id}" if bot_token and chat_id else ""
-        if identity:
-            if identity in seen_identities:
-                continue
-            seen_identities.add(identity)
-        entries.append(item)
-    entries.sort(key=lambda item: str(item.get("label") or "").lower())
-    return entries
+    return _telegram_autopilot_state_service().list_connector_entries(ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID)
 
 
 def _telegram_get_secret(entry: Dict[str, Any]) -> Dict[str, Any]:

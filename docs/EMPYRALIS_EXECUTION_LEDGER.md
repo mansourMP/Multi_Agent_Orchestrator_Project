@@ -678,6 +678,75 @@ This is a heavier cut than the recent endpoint extractions. The WhatsApp state p
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-05 - Telegram Autopilot State And Registry Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram runtime-state and connector-registry block no longer lives inline in the monolith.
+
+This completes the same move already done for WhatsApp: both channel runtime-state surfaces are now service-owned instead of being implemented as long inline helper clusters in `server_modules/autopilot_connectors.py`.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_state_service.py).
+- Moved Telegram autopilot runtime-state behavior behind that service:
+  - state load from disk
+  - state persist to disk
+  - per-connector state lookup and patching
+  - vault-backed connector entry listing with identity de-duplication
+  - snapshot assembly including thread liveness and dropped-sender counts
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the existing Telegram helper names now delegate to the new service boundary.
+- Added focused coverage in [server_modules/tests/test_telegram_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_autopilot_state_service.py).
+
+#### Current Truth
+
+- Telegram connector behavior is mostly service-owned.
+- WhatsApp connector behavior is also mostly service-owned.
+- Both channel runtime-state and registry blocks are now outside the monolith.
+- `server_modules/autopilot_connectors.py` still contains shared autopilot helpers and some remaining runtime glue, but the large channel-specific state blocks are no longer concentrated there.
+
+#### Open Gaps
+
+- Shared autopilot helper logic is still mixed into `server_modules/autopilot_connectors.py`.
+- Some remaining runtime glue and endpoint registration logic still lives in the monolith.
+- The file is much smaller, but it is still not yet just a thin composition layer.
+
+#### Next Required Work
+
+1. Continue extracting the remaining shared autopilot helper/runtime glue from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+2. Reassess whether the shared autopilot logic should split into dedicated supervisor/runtime modules now that both channel state surfaces are already service-owned.
+3. Keep shrinking the monolith toward composition and endpoint registration only.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_state_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_autopilot_state_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

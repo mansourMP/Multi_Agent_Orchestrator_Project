@@ -1305,6 +1305,67 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Shared Telegram And WhatsApp Run Entry Flow Moved Behind Run Entry Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The shared Telegram/WhatsApp run-entry and machine-trust helper block no longer lives inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a shared runtime-bridge cut, not a channel-parser cut. The public wrappers still exist, but run metadata assembly, owner inheritance, route application, run-start event emission, and wait-auto-approval logic now belong to a dedicated service instead of the connector monolith.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_run_entry_service.py).
+- Moved shared run-entry ownership behind that service:
+  - Telegram run creation metadata assembly
+  - WhatsApp run creation metadata assembly
+  - owner-user inheritance for agent machine mode
+  - full-trust run detection
+  - pending confirmation payload resolution
+  - wait auto-approval eligibility logic
+  - route application and run-start event emission
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these wrappers now delegate through the new service:
+  - `_create_telegram_run()`
+  - `_create_whatsapp_run()`
+  - `_agent_machine_owned_entrypoint_owner_user_id()`
+  - `_agent_machine_full_trust_for_run()`
+  - `_pending_confirmation_payload()`
+  - `_autopilot_can_auto_approve_wait()`
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_run_entry_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2552` lines to `2382` lines in this cut.
+- The connector monolith no longer owns the shared Telegram/WhatsApp run-entry implementation inline.
+- Machine-mode wrapper compatibility is still preserved through the existing public helper names, but the underlying ownership is now service-based.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns remaining shared connector/runtime bridge logic such as WhatsApp connector matching and some top-level webhook/runtime helpers.
+- The shared run-entry service is still injected from monolith-owned wrappers rather than from a broader canonical runtime composition layer.
+- The broader connector architecture still needs more explicit thin-adapter boundaries around the remaining non-service helper blocks.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared connector-selection and webhook/runtime bridge helpers.
+2. Decide whether `_whatsapp_connector_match()` or the remaining endpoint-level webhook/runtime helpers are the strongest next boundary cut.
+3. Keep verifying new service boundaries directly, and keep wrapper-level machine-mode checks in place where the public compatibility surface still matters.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_run_entry_service.py)
+  - [server_modules/tests/test_autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_run_entry_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_run_entry_service`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_telegram_autopilot_run_inherits_machine_owner`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_whatsapp_autopilot_run_inherits_machine_owner`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_auto_approves_matching_owner_confirmation`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_does_not_auto_approve_owner_mismatch`
+  - `server_modules.tests.test_agent_machine_mode.AgentMachineModeTests.test_wait_for_run_terminal_status_does_not_auto_approve_workflow_human_node`
+
 ### 2026-04-05 - Telegram Terminal Send And Autopilot Test Flow Moved Behind Terminal Service
 
 #### Stage

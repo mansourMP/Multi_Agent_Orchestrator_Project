@@ -9,6 +9,7 @@ from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
+from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
@@ -216,6 +217,7 @@ _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] =
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
+_AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -608,6 +610,39 @@ def _telegram_terminal_service() -> TelegramTerminalService:
             utc_now_iso=lambda: _utc_now_iso(),
         )
     return _TELEGRAM_TERMINAL_SERVICE
+
+
+def _autopilot_run_entry_service() -> AutopilotRunEntryService:
+    global _AUTOPILOT_RUN_ENTRY_SERVICE
+    if _AUTOPILOT_RUN_ENTRY_SERVICE is None:
+        from server_modules import runtime_config
+
+        _AUTOPILOT_RUN_ENTRY_SERVICE = AutopilotRunEntryService(
+            telegram_profile_fields=list(_TELEGRAM_PROFILE_FIELDS),
+            telegram_engine=ORION_TELEGRAM_AUTOPILOT_ENGINE if ORION_TELEGRAM_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion",
+            whatsapp_engine=ORION_WHATSAPP_AUTOPILOT_ENGINE if ORION_WHATSAPP_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion",
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            assigned_agent_role=lambda entry: _connector_assigned_agent_role(entry),
+            normalize_trust_mode=lambda value: normalize_trust_mode(value),
+            normalize_execution_target=lambda value: normalize_execution_target(value),
+            decide_execution_target=lambda metadata: decide_execution_target(metadata),
+            apply_execution_route_metadata=lambda metadata, route: apply_execution_route_metadata(metadata, route),
+            create_run=lambda **kwargs: create_run(**kwargs),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            telegram_session_key=lambda chat_id: _telegram_session_key(chat_id),
+            whatsapp_session_key=lambda from_number, to_number: _whatsapp_session_key(from_number, to_number),
+            inherit_owner_user_id=lambda owner_user_id=None: runtime_config.agent_machine_inherited_owner_user_id(owner_user_id),
+            agent_machine_full_trust_enabled=lambda owner_user_id: runtime_config.agent_machine_full_trust_enabled(owner_user_id),
+            telegram_runs_started=lambda: (
+                TELEGRAM_AUTOPILOT_STATE.__setitem__("runs_started", int(TELEGRAM_AUTOPILOT_STATE.get("runs_started") or 0) + 1),
+                _persist_telegram_autopilot_state(),
+            ),
+            whatsapp_runs_started=lambda: (
+                WHATSAPP_AUTOPILOT_STATE.__setitem__("runs_started", int(WHATSAPP_AUTOPILOT_STATE.get("runs_started") or 0) + 1),
+                _persist_whatsapp_autopilot_state(),
+            ),
+        )
+    return _AUTOPILOT_RUN_ENTRY_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -2153,192 +2188,45 @@ def _create_telegram_run(
     connector_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     _init()
-    resolved_trace_id = str(trace_id or "").strip() or _telegram_trace_id(chat_id, update_id, message_id or "")
-    metadata: Dict[str, Any] = {
-        "source": "telegram_autopilot",
-        "channel": "telegram",
-        "source_channel": "telegram",
-        "connector_credential_id": connector_id,
-        "source_connector_credential_id": connector_id,
-        "trace_id": resolved_trace_id,
-        "source_event_id": str(source_event_id or "").strip(),
-        "delivery_status": "pending",
-        "telegram": {
-            "chat_id": chat_id,
-            "sender_id": sender_id,
-            "update_id": update_id,
-            "message_id": str(message_id or "").strip(),
-        },
-    }
-    owner_user_id = _agent_machine_owned_entrypoint_owner_user_id()
-    if owner_user_id:
-        metadata["owner_user_id"] = owner_user_id
-    if isinstance(connector_context, dict):
-        available_connectors = (
-            connector_context.get("available_connectors")
-            if isinstance(connector_context.get("available_connectors"), list)
-            else []
-        )
-        if available_connectors:
-            metadata["available_connectors"] = available_connectors
-        channel_connectors = (
-            connector_context.get("channel_connectors")
-            if isinstance(connector_context.get("channel_connectors"), list)
-            else []
-        )
-        if channel_connectors:
-            metadata["channel_connectors"] = channel_connectors
-        selected_connector_id = str(connector_context.get("connector_credential_id") or "").strip()
-        if selected_connector_id:
-            metadata["connector_credential_id"] = selected_connector_id
-        selected_connector_provider = str(connector_context.get("connector_provider") or "").strip()
-        if selected_connector_provider:
-            metadata["connector_provider"] = selected_connector_provider
-        connector_prompt_append = str(connector_context.get("prompt_append") or "").strip()
-        if connector_prompt_append:
-            metadata["connector_prompt_append"] = connector_prompt_append[:12000]
-    if isinstance(profile_context, dict):
-        profile_payload: Dict[str, str] = {}
-        for field_name in _TELEGRAM_PROFILE_FIELDS:
-            raw_value = str(profile_context.get(field_name) or "").strip()
-            if raw_value:
-                profile_payload[field_name] = raw_value[:2000]
-        if profile_payload:
-            metadata["telegram"]["profile_context"] = profile_payload
-    if isinstance(media_attachments, list) and media_attachments:
-        compact_media: List[Dict[str, Any]] = []
-        for item in media_attachments[:ORION_TELEGRAM_MEDIA_MAX_ITEMS]:
-            if not isinstance(item, dict):
-                continue
-            path = str(item.get("relative_path") or item.get("path") or "").strip()
-            if not path:
-                continue
-            compact_media.append(
-                {
-                    "kind": str(item.get("kind") or "").strip(),
-                    "mime_type": str(item.get("mime_type") or "").strip(),
-                    "path": path[:2000],
-                    "bytes": int(item.get("bytes") or 0),
-                }
-            )
-        if compact_media:
-            metadata["telegram"]["attachments"] = compact_media
-    if isinstance(skill_override, dict):
-        skill_id = str(skill_override.get("id") or "").strip().lower()
-        skill_title = str(skill_override.get("title") or "").strip()
-        skill_intent = str(skill_override.get("intent") or "").strip()
-        if skill_id and skill_title and skill_intent:
-            tools_raw = skill_override.get("tools") if isinstance(skill_override.get("tools"), list) else []
-            tools = [str(item).strip()[:120] for item in tools_raw if str(item).strip()][:30]
-            guardrail = str(skill_override.get("guardrail") or "").strip()[:1000]
-            skill_payload = {
-                "id": skill_id[:80],
-                "title": skill_title[:120],
-                "intent": skill_intent[:1200],
-                "tools": tools,
-                "guardrail": guardrail,
-            }
-            metadata["skill_scope"] = "assistant_defaults"
-            metadata["skill_bundle"] = {
-                "skill_ids": [skill_payload["id"]],
-                "skills": [skill_payload],
-            }
-            metadata["skill_prompt_append"] = (
-                "Active skill directives (follow unless user overrides explicitly):\n"
-                f"- {skill_payload['title']}: {skill_payload['intent']} "
-                f"Guardrail: {skill_payload['guardrail'] or 'none'}. "
-                f"Tools: {', '.join(skill_payload['tools']) or 'none'}."
-            )[:6000]
-    assigned_role = _connector_assigned_agent_role(connector_entry or {})
-    if assigned_role:
-        metadata["agent_role"] = assigned_role
-        metadata["agent_role_source"] = "connector_assignment"
-    metadata["trust_mode"] = normalize_trust_mode(ORION_TELEGRAM_AUTOPILOT_TRUST_MODE)
-    selected_target = normalize_execution_target(ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET)
-    metadata["execution_target"] = selected_target
-    route = decide_execution_target(metadata)
-    metadata = apply_execution_route_metadata(metadata, route)
-
-    engine = ORION_TELEGRAM_AUTOPILOT_ENGINE if ORION_TELEGRAM_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion"
-    run_id = create_run(
-        engine=engine,
-        context={
-            "workflow_id": None,
-            "workspace_id": workspace_id,
-            "user_goal": goal,
-            "business_plan": None,
-            "provider": None,
-            "model": None,
-            "credential_id": None,
-            "agents": [],
-            "metadata": metadata,
-        },
-    )
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["runs_started"] = int(TELEGRAM_AUTOPILOT_STATE.get("runs_started") or 0) + 1
-    _persist_telegram_autopilot_state()
-    _record_channel_event(
-        channel="telegram",
-        direction="system",
-        event_type="run_started",
-        text=f"Run started for chat {chat_id}",
+    return _autopilot_run_entry_service().create_telegram_run(
+        goal=goal,
         workspace_id=workspace_id,
-        session_key=_telegram_session_key(chat_id),
-        session_id=_telegram_session_key(chat_id),
-        parent_id=str(message_id or "").strip() or None,
-        run_id=run_id,
-        action="run",
-        metadata={
-            "connector_id": connector_id,
-            "sender_id": sender_id,
-            "update_id": int(update_id or 0),
-            "message_id": str(message_id or "").strip(),
-            "trace_id": resolved_trace_id,
-            "source_event_id": str(source_event_id or "").strip(),
-            "delivery_status": "pending",
-            "agent_role": assigned_role or None,
-        },
+        connector_id=connector_id,
+        chat_id=chat_id,
+        sender_id=sender_id,
+        update_id=update_id,
+        message_id=message_id,
+        profile_context=profile_context,
+        media_attachments=media_attachments,
+        skill_override=skill_override,
+        trace_id=trace_id or _telegram_trace_id(chat_id, update_id, message_id or ""),
+        source_event_id=source_event_id,
+        connector_entry=connector_entry,
+        connector_context=connector_context,
+        media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+        trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+        execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
     )
-    return {"run_id": run_id, "route": route}
 
 
 def _agent_machine_owned_entrypoint_owner_user_id(owner_user_id: Optional[str] = None) -> str:
-    from server_modules import runtime_config
-
-    return runtime_config.agent_machine_inherited_owner_user_id(owner_user_id)
+    _init()
+    return _autopilot_run_entry_service().inherit_owner_user_id(owner_user_id)
 
 
 def _agent_machine_full_trust_for_run(run: Dict[str, Any]) -> bool:
-    from server_modules import runtime_config
-
-    context = run.get("context") if isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    return runtime_config.agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip())
+    _init()
+    return _autopilot_run_entry_service().full_trust_for_run(run)
 
 
 def _pending_confirmation_payload(run: Dict[str, Any]) -> Dict[str, Any]:
-    pending = run.get("pending_confirmation")
-    if isinstance(pending, dict) and pending:
-        return pending
-    pending = run.get("pending_approval")
-    if isinstance(pending, dict):
-        return pending
-    return {}
+    _init()
+    return _autopilot_run_entry_service().pending_confirmation_payload(run)
 
 
 def _autopilot_can_auto_approve_wait(run: Dict[str, Any]) -> bool:
-    if not _agent_machine_full_trust_for_run(run):
-        return False
-    pending = _pending_confirmation_payload(run)
-    approval_id = str(pending.get("approval_id") or "").strip()
-    if not approval_id:
-        return False
-    source = str(pending.get("source") or "").strip().lower()
-    if source in {"runtime_wait", "local_execution_start"}:
-        return True
-    context = run.get("context") if isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    return bool(metadata.get("local_execution_waiting_confirmation") or metadata.get("local_execution_waiting_approval"))
+    _init()
+    return _autopilot_run_entry_service().can_auto_approve_wait(run)
 
 
 def _wait_for_run_terminal_status(
@@ -2365,76 +2253,18 @@ def _create_whatsapp_run(
     connector_entry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     _init()
-    trace_id = f"wa:{_telegram_safe_path_token(to_number or 'to')}:{_telegram_safe_path_token(message_sid or str(uuid.uuid4())[:10])}"
-    metadata: Dict[str, Any] = {
-        "source": "whatsapp_autopilot",
-        "channel": "whatsapp",
-        "source_channel": "whatsapp",
-        "connector_credential_id": connector_id,
-        "trace_id": trace_id,
-        "source_event_id": str(message_sid or "").strip(),
-        "delivery_status": "pending",
-        "whatsapp": {
-            "from": from_number,
-            "to": to_number,
-            "message_sid": message_sid,
-            "account_sid": account_sid,
-        },
-    }
-    owner_user_id = _agent_machine_owned_entrypoint_owner_user_id()
-    if owner_user_id:
-        metadata["owner_user_id"] = owner_user_id
-    assigned_role = _connector_assigned_agent_role(connector_entry or {})
-    if assigned_role:
-        metadata["agent_role"] = assigned_role
-        metadata["agent_role_source"] = "connector_assignment"
-    metadata["trust_mode"] = normalize_trust_mode(ORION_WHATSAPP_AUTOPILOT_TRUST_MODE)
-    selected_target = normalize_execution_target(ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET)
-    metadata["execution_target"] = selected_target
-    route = decide_execution_target(metadata)
-    metadata = apply_execution_route_metadata(metadata, route)
-
-    engine = ORION_WHATSAPP_AUTOPILOT_ENGINE if ORION_WHATSAPP_AUTOPILOT_ENGINE in ENGINE_REGISTRY else "orion"
-    run_id = create_run(
-        engine=engine,
-        context={
-            "workflow_id": None,
-            "workspace_id": workspace_id,
-            "user_goal": goal,
-            "business_plan": None,
-            "provider": None,
-            "model": None,
-            "credential_id": None,
-            "agents": [],
-            "metadata": metadata,
-        },
-    )
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["runs_started"] = int(WHATSAPP_AUTOPILOT_STATE.get("runs_started") or 0) + 1
-    _persist_whatsapp_autopilot_state()
-    _record_channel_event(
-        channel="whatsapp",
-        direction="system",
-        event_type="run_started",
-        text=f"Run started for WhatsApp inbound {from_number}",
+    return _autopilot_run_entry_service().create_whatsapp_run(
+        goal=goal,
         workspace_id=workspace_id,
-        session_key=_whatsapp_session_key(from_number, to_number),
-        session_id=_whatsapp_session_key(from_number, to_number),
-        parent_id=str(message_sid or "").strip() or None,
-        run_id=run_id,
-        action="run",
-        metadata={
-            "connector_id": connector_id,
-            "message_sid": message_sid,
-            "account_sid": account_sid,
-            "to_number": to_number,
-            "trace_id": trace_id,
-            "source_event_id": str(message_sid or "").strip(),
-            "agent_role": assigned_role or None,
-            "delivery_status": "pending",
-        },
+        connector_id=connector_id,
+        from_number=from_number,
+        to_number=to_number,
+        message_sid=message_sid,
+        account_sid=account_sid,
+        connector_entry=connector_entry,
+        trust_mode_value=ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
+        execution_target_value=ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
     )
-    return {"run_id": run_id, "route": route}
 
 
 def _whatsapp_connector_match(

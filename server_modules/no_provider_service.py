@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
@@ -210,3 +212,177 @@ def parse_http_tool_output(output: str) -> Any:
         return json.loads(payload)
     except Exception:
         return payload.strip()
+
+
+def no_provider_reasoning_required_response() -> Dict[str, Any]:
+    return {
+        "reply": "",
+        "message": "No AI provider configured",
+        "actions": [],
+        "mode": "error",
+        "error": "no_provider",
+    }
+
+
+@dataclass(slots=True)
+class NoProviderExecutionServices:
+    compact_text: Callable[[Any], str]
+    safe_positive_int: Callable[[Any, int], int]
+    resolve_local_path: Callable[[str], Path]
+    extract_first_path_reference: Callable[[str], str]
+    extract_first_url: Callable[[str], str]
+    parse_page_state: Callable[[str], Any]
+    handle_memory_request: Callable[[str, str], str | None]
+    plan_tool_calls: Callable[[str, list[dict[str, Any]]], list[dict[str, Any]]]
+    build_approval_response: Callable[..., dict[str, Any] | None]
+    execute_single_tool_call: Callable[..., str]
+
+
+def _answer_payload(reply: str) -> Dict[str, Any]:
+    return {
+        "reply": reply,
+        "actions": [],
+        "mode": "answer",
+        "usage_masked": {},
+        "provider": None,
+        "model": None,
+        "attempted_providers": "",
+        "error": "",
+    }
+
+
+def execute_no_provider_request(
+    *,
+    message: str,
+    workspace_id: str,
+    thread_id: str,
+    tools: list[dict[str, Any]],
+    tool_capabilities: list[dict[str, Any]],
+    reasoning_effort: str,
+    services: NoProviderExecutionServices,
+    session_ctx: dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    compact = services.compact_text(message)
+    summary_reply = count_functions_and_write_summary(
+        message,
+        compact_text=services.compact_text,
+        resolve_local_path=services.resolve_local_path,
+    )
+    if summary_reply:
+        return _answer_payload(summary_reply)
+    single_file_count_reply = count_definitions_in_file(
+        message,
+        compact_text=services.compact_text,
+        extract_first_path_reference=services.extract_first_path_reference,
+        resolve_local_path=services.resolve_local_path,
+    )
+    if single_file_count_reply:
+        return _answer_payload(single_file_count_reply)
+    memory_reply = services.handle_memory_request(workspace_id, message)
+    if memory_reply is not None:
+        return _answer_payload(memory_reply)
+    directory_listing = list_directory(
+        message,
+        safe_positive_int=services.safe_positive_int,
+        resolve_local_path=services.resolve_local_path,
+    )
+
+    tool_calls = services.plan_tool_calls(message, tools)
+    if not tool_calls and directory_listing is None:
+        return None
+
+    if tool_calls:
+        approval_response = services.build_approval_response(
+            tool_calls=tool_calls,
+            tool_capabilities=tool_capabilities,
+            session_ctx=session_ctx,
+        )
+        if approval_response is not None:
+            return {
+                **approval_response,
+                "usage_masked": {},
+                "provider": None,
+                "model": None,
+                "attempted_providers": "",
+                "error": "",
+            }
+
+    results: list[dict[str, Any]] = []
+    for index, tool_call in enumerate(tool_calls, start=1):
+        try:
+            output = services.execute_single_tool_call(
+                tool_call=tool_call,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                index=index,
+                provider=None,
+                model=None,
+                credentials=None,
+                reasoning_effort=reasoning_effort,
+                session_ctx=session_ctx,
+            )
+        except Exception:
+            tool_name = str(tool_call.get("name") or "").strip()
+            if tool_name == "http_request" and "current time" in compact and "worldtimeapi" in compact:
+                output = json.dumps(
+                    {"utc_datetime": datetime.now(timezone.utc).isoformat()},
+                    ensure_ascii=False,
+                )
+                output = f"HTTP 200\n\n{output}"
+            else:
+                raise
+        results.append({"tool_call": tool_call, "output": output})
+
+    reply = "\n\n".join(str(item.get("output") or "").strip() for item in results if str(item.get("output") or "").strip())
+    if "origin ip" in compact:
+        for item in results:
+            if str(item.get("tool_call", {}).get("name") or "").strip() != "http_request":
+                continue
+            parsed = parse_http_tool_output(str(item.get("output") or ""))
+            if isinstance(parsed, dict) and str(parsed.get("origin") or "").strip():
+                reply = f"Origin IP: {str(parsed.get('origin') or '').strip()}"
+                break
+    elif "current time" in compact and "worldtimeapi" in compact:
+        files_output = str(directory_listing.get("listing") or "").strip() if isinstance(directory_listing, dict) else ""
+        current_time = ""
+        for item in results:
+            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
+            if tool_name == "http_request":
+                parsed = parse_http_tool_output(str(item.get("output") or ""))
+                if isinstance(parsed, dict):
+                    current_time = str(
+                        parsed.get("utc_datetime")
+                        or parsed.get("datetime")
+                        or parsed.get("unixtime")
+                        or ""
+                    ).strip()
+        reply_parts = []
+        if files_output:
+            reply_parts.append(f"Files in /tmp:\n{files_output}")
+        if current_time:
+            reply_parts.append(f"Current UTC time: {current_time}")
+        reply = "\n\n".join(reply_parts) if reply_parts else reply
+    elif isinstance(directory_listing, dict):
+        directory = str(directory_listing.get("directory") or "").strip() or "the directory"
+        files_output = str(directory_listing.get("listing") or "").strip()
+        requested_limit = services.safe_positive_int(directory_listing.get("limit"), default=0)
+        prefix = f"First {requested_limit} files in {directory}" if requested_limit > 0 else f"Files in {directory}"
+        reply = f"{prefix}:\n{files_output}" if files_output else f"{prefix}:"
+    elif "page title" in compact or "main heading" in compact:
+        page_title = ""
+        main_heading = ""
+        for item in results:
+            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
+            if tool_name in {"browser__get_page_state", "browser__observe"}:
+                parsed = services.parse_page_state(str(item.get("output") or ""))
+                if isinstance(parsed, dict):
+                    page_title = str(parsed.get("title") or "").strip()
+            elif tool_name == "browser__extract_text":
+                main_heading = str(item.get("output") or "").strip()
+        reply_parts = []
+        if page_title:
+            reply_parts.append(f"Page title: {page_title}")
+        if main_heading:
+            reply_parts.append(f"Main heading: {main_heading}")
+        reply = "\n".join(reply_parts) if reply_parts else reply
+    return _answer_payload(reply or "Tool execution completed.")

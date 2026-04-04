@@ -3147,186 +3147,19 @@ def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> L
     return planned
 
 
-def _no_provider_reasoning_required_response() -> Dict[str, Any]:
-    return {
-        "reply": "",
-        "message": "No AI provider configured",
-        "actions": [],
-        "mode": "error",
-        "error": "no_provider",
-    }
-
-
-def _execute_no_provider_request(
-    *,
-    message: str,
-    workspace_id: str,
-    thread_id: str,
-    tools: List[Dict[str, Any]],
-    tool_capabilities: List[Dict[str, Any]],
-    reasoning_effort: str,
-    session_ctx: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    compact = _compact_text(message)
-    summary_reply = no_provider_service.count_functions_and_write_summary(
-        message,
+def _no_provider_execution_services() -> no_provider_service.NoProviderExecutionServices:
+    return no_provider_service.NoProviderExecutionServices(
         compact_text=_compact_text,
-        resolve_local_path=_resolve_chat_local_path,
-    )
-    if summary_reply:
-        return {
-            "reply": summary_reply,
-            "actions": [],
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": "",
-        }
-    single_file_count_reply = no_provider_service.count_definitions_in_file(
-        message,
-        compact_text=_compact_text,
-        extract_first_path_reference=_extract_first_path_reference,
-        resolve_local_path=_resolve_chat_local_path,
-    )
-    if single_file_count_reply:
-        return {
-            "reply": single_file_count_reply,
-            "actions": [],
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": "",
-        }
-    memory_reply = memory_service.handle_no_provider_memory_request(workspace_id, message)
-    if memory_reply is not None:
-        return {
-            "reply": memory_reply,
-            "actions": [],
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": "",
-        }
-    directory_listing = no_provider_service.list_directory(
-        message,
         safe_positive_int=_safe_positive_int,
         resolve_local_path=_resolve_chat_local_path,
+        extract_first_path_reference=_extract_first_path_reference,
+        extract_first_url=_extract_first_url,
+        parse_page_state=parse_json_object_loose,
+        handle_memory_request=memory_service.handle_no_provider_memory_request,
+        plan_tool_calls=_plan_no_provider_tool_calls,
+        build_approval_response=_build_direct_tool_approval_response,
+        execute_single_tool_call=_execute_single_direct_tool_call,
     )
-
-    tool_calls = _plan_no_provider_tool_calls(message, tools)
-    if not tool_calls and directory_listing is None:
-        return None
-
-    if tool_calls:
-        approval_response = _build_direct_tool_approval_response(
-            tool_calls=tool_calls,
-            tool_capabilities=tool_capabilities,
-            session_ctx=session_ctx,
-        )
-        if approval_response is not None:
-            return {
-                **approval_response,
-                "usage_masked": {},
-                "provider": None,
-                "model": None,
-                "attempted_providers": "",
-                "error": "",
-            }
-
-    results: List[Dict[str, Any]] = []
-    for index, tool_call in enumerate(tool_calls, start=1):
-        try:
-            output = _execute_single_direct_tool_call(
-                tool_call=tool_call,
-                workspace_id=workspace_id,
-                thread_id=thread_id,
-                index=index,
-                provider=None,
-                model=None,
-                credentials=None,
-                reasoning_effort=reasoning_effort,
-                session_ctx=session_ctx,
-            )
-        except Exception:
-            tool_name = str(tool_call.get("name") or "").strip()
-            if tool_name == "http_request" and "current time" in compact and "worldtimeapi" in compact:
-                output = json.dumps(
-                    {"utc_datetime": datetime.now(timezone.utc).isoformat()},
-                    ensure_ascii=False,
-                )
-                output = f"HTTP 200\n\n{output}"
-            else:
-                raise
-        results.append({"tool_call": tool_call, "output": output})
-
-    reply = "\n\n".join(str(item.get("output") or "").strip() for item in results if str(item.get("output") or "").strip())
-    if "origin ip" in compact:
-        for item in results:
-            if str(item.get("tool_call", {}).get("name") or "").strip() != "http_request":
-                continue
-            parsed = no_provider_service.parse_http_tool_output(str(item.get("output") or ""))
-            if isinstance(parsed, dict) and str(parsed.get("origin") or "").strip():
-                reply = f"Origin IP: {str(parsed.get('origin') or '').strip()}"
-                break
-    elif "current time" in compact and "worldtimeapi" in compact:
-        files_output = str(directory_listing.get("listing") or "").strip() if isinstance(directory_listing, dict) else ""
-        current_time = ""
-        for item in results:
-            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
-            if tool_name == "http_request":
-                parsed = no_provider_service.parse_http_tool_output(str(item.get("output") or ""))
-                if isinstance(parsed, dict):
-                    current_time = str(
-                        parsed.get("utc_datetime")
-                        or parsed.get("datetime")
-                        or parsed.get("unixtime")
-                        or ""
-                    ).strip()
-        reply_parts = []
-        if files_output:
-            reply_parts.append(f"Files in /tmp:\n{files_output}")
-        if current_time:
-            reply_parts.append(f"Current UTC time: {current_time}")
-        reply = "\n\n".join(reply_parts) if reply_parts else reply
-    elif isinstance(directory_listing, dict):
-        directory = str(directory_listing.get("directory") or "").strip() or "the directory"
-        files_output = str(directory_listing.get("listing") or "").strip()
-        requested_limit = _safe_positive_int(directory_listing.get("limit"), default=0)
-        prefix = f"First {requested_limit} files in {directory}" if requested_limit > 0 else f"Files in {directory}"
-        reply = f"{prefix}:\n{files_output}" if files_output else f"{prefix}:"
-    elif "page title" in compact or "main heading" in compact:
-        page_title = ""
-        main_heading = ""
-        for item in results:
-            tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
-            if tool_name in {"browser__get_page_state", "browser__observe"}:
-                parsed = parse_json_object_loose(str(item.get("output") or ""))
-                if isinstance(parsed, dict):
-                    page_title = str(parsed.get("title") or "").strip()
-            elif tool_name == "browser__extract_text":
-                main_heading = str(item.get("output") or "").strip()
-        reply_parts = []
-        if page_title:
-            reply_parts.append(f"Page title: {page_title}")
-        if main_heading:
-            reply_parts.append(f"Main heading: {main_heading}")
-        reply = "\n".join(reply_parts) if reply_parts else reply
-    return {
-        "reply": reply or "Tool execution completed.",
-        "actions": [],
-        "mode": "answer",
-        "usage_masked": {},
-        "provider": None,
-        "model": None,
-        "attempted_providers": "",
-        "error": "",
-    }
 
 
 def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, Any]]) -> bool:
@@ -4124,13 +3957,14 @@ def build_direct_operator_reply(
             "kind": "thinking",
             "id": "direct-tools:auto",
         }
-        direct_payload = _execute_no_provider_request(
+        direct_payload = no_provider_service.execute_no_provider_request(
             message=normalized_message,
             workspace_id=normalized_workspace_id,
             thread_id=normalized_thread_id,
             tools=tools,
             tool_capabilities=tool_capabilities,
             reasoning_effort=normalized_reasoning_effort,
+            services=_no_provider_execution_services(),
             session_ctx=session_ctx,
         )
         if direct_payload is not None:
@@ -4294,13 +4128,14 @@ def build_direct_operator_reply(
             "kind": "thinking",
             "id": "direct-tools:fallback",
         }
-        fallback_payload = _execute_no_provider_request(
+        fallback_payload = no_provider_service.execute_no_provider_request(
             message=normalized_message,
             workspace_id=normalized_workspace_id,
             thread_id=normalized_thread_id,
             tools=tools,
             tool_capabilities=tool_capabilities,
             reasoning_effort=normalized_reasoning_effort,
+            services=_no_provider_execution_services(),
             session_ctx=session_ctx,
         )
         if fallback_payload is not None:
@@ -4337,7 +4172,7 @@ def build_direct_operator_reply(
         yield {
             "type": "final",
             "payload": _with_context_used(
-                {**_no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
+                {**no_provider_service.no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
                 _build_context_used(
                     workspace_id=normalized_workspace_id,
                     requested_provider=normalized_requested_provider,
@@ -4365,13 +4200,14 @@ def build_direct_operator_reply(
             "kind": "thinking",
             "id": "direct-tools:fallback",
         }
-        fallback_payload = _execute_no_provider_request(
+        fallback_payload = no_provider_service.execute_no_provider_request(
             message=normalized_message,
             workspace_id=normalized_workspace_id,
             thread_id=normalized_thread_id,
             tools=tools,
             tool_capabilities=tool_capabilities,
             reasoning_effort=normalized_reasoning_effort,
+            services=_no_provider_execution_services(),
             session_ctx=session_ctx,
         )
         if fallback_payload is not None:
@@ -4408,7 +4244,7 @@ def build_direct_operator_reply(
         yield {
             "type": "final",
             "payload": _with_context_used(
-                {**_no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
+                {**no_provider_service.no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
                 _build_context_used(
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,

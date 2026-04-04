@@ -796,6 +796,67 @@ This is a real subtraction step. The chat module still orchestrates the no-provi
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - No-Provider Fallback Executor Moved Behind Dedicated Service Boundary
+
+#### Stage
+
+Stage 1 continues. The top-level no-provider fallback executor no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is a bigger architectural move than the earlier helper extraction. The chat module still decides when to enter the no-provider path, but the actual fallback execution branch is now owned by [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py).
+
+#### Completed Work
+
+- Expanded [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) with:
+  - `NoProviderExecutionServices`
+  - `execute_no_provider_request()`
+  - `no_provider_reasoning_required_response()`
+- Removed the inline fallback executor body from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py):
+  - deleted `_execute_no_provider_request()`
+  - deleted `_no_provider_reasoning_required_response()`
+  - replaced them with a thin dependency bundle helper: `_no_provider_execution_services()`
+- Updated the direct-chat runtime flow in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so both:
+  - obvious direct-tool execution
+  - no-provider fallback execution
+  now delegate to [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py)
+- Expanded focused service coverage in:
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+
+#### Current Truth
+
+- The no-provider fallback path now has a real execution service boundary, not just helper extraction.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns entrypoint orchestration, but it no longer owns the fallback executor implementation.
+- [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) now owns:
+  - lightweight fallback helpers
+  - the no-provider reasoning-required payload
+  - the actual no-provider execution branch with injected dependencies
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much high-level direct-chat orchestration, including provider routing, prompt assembly, and approval control flow.
+- The fallback service still depends on injected callbacks from the chat module for planning, approvals, and tool execution.
+- The direct-chat engine is still not yet reduced to a thin orchestrator around fully separated services.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting more of the direct-chat orchestration surface, not just fallback behavior.
+2. Decide whether direct-tool planning and approval shaping should move behind a dedicated service boundary as well.
+3. Keep matching the architecture paper by turning `operator_chat.py` into coordination code instead of subsystem ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Chat Memory Extraction Flow Moved Behind Memory Service
 
 #### Stage

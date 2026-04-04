@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from server_modules import no_provider_service
 
@@ -110,6 +111,68 @@ class NoProviderServiceTests(unittest.TestCase):
             no_provider_service.looks_like_directory_listing_request("List the first 2 files in /tmp/does-not-need-to-exist")
         )
         self.assertFalse(no_provider_service.looks_like_directory_listing_request("Explain the tradeoffs between SQLite and Postgres"))
+
+    def test_no_provider_reasoning_required_response_is_stable(self) -> None:
+        payload = no_provider_service.no_provider_reasoning_required_response()
+        self.assertEqual(payload["mode"], "error")
+        self.assertEqual(payload["error"], "no_provider")
+
+    def test_execute_no_provider_request_handles_memory_reply_before_tool_path(self) -> None:
+        services = no_provider_service.NoProviderExecutionServices(
+            compact_text=_compact_text,
+            safe_positive_int=_safe_positive_int,
+            resolve_local_path=Path,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+            parse_page_state=lambda value: value,
+            handle_memory_request=lambda workspace_id, message: "name = TestUser",
+            plan_tool_calls=lambda message, tools: [],
+            build_approval_response=lambda **kwargs: None,
+            execute_single_tool_call=lambda **kwargs: "unused",
+        )
+
+        payload = no_provider_service.execute_no_provider_request(
+            message="What is my name",
+            workspace_id="default",
+            thread_id="thread-1",
+            tools=[],
+            tool_capabilities=[],
+            reasoning_effort="medium",
+            services=services,
+        )
+
+        self.assertEqual(payload["reply"], "name = TestUser")
+        self.assertEqual(payload["mode"], "answer")
+
+    def test_execute_no_provider_request_handles_tool_execution_and_origin_ip_format(self) -> None:
+        build_approval_response = Mock(return_value=None)
+        execute_single_tool_call = Mock(return_value='HTTP 200\n\n{"origin":"203.0.113.9"}')
+        services = no_provider_service.NoProviderExecutionServices(
+            compact_text=_compact_text,
+            safe_positive_int=_safe_positive_int,
+            resolve_local_path=Path,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+            parse_page_state=lambda value: value,
+            handle_memory_request=lambda workspace_id, message: None,
+            plan_tool_calls=lambda message, tools: [{"name": "http_request", "arguments": {"url": "https://httpbin.org/get"}}],
+            build_approval_response=build_approval_response,
+            execute_single_tool_call=execute_single_tool_call,
+        )
+
+        payload = no_provider_service.execute_no_provider_request(
+            message="Fetch https://httpbin.org/get and tell me the origin IP",
+            workspace_id="default",
+            thread_id="thread-1",
+            tools=[{"name": "http_request"}],
+            tool_capabilities=[],
+            reasoning_effort="medium",
+            services=services,
+        )
+
+        self.assertEqual(payload["reply"], "Origin IP: 203.0.113.9")
+        build_approval_response.assert_called_once()
+        execute_single_tool_call.assert_called_once()
 
 
 if __name__ == "__main__":

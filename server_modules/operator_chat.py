@@ -40,7 +40,7 @@ except Exception:
     _tool_availability_spec.loader.exec_module(_tool_availability_module)
     resolve_workspace_tool_capabilities = _tool_availability_module.resolve_workspace_tool_capabilities
 
-from server_modules.agent_memory import (
+from server_modules.memory_service import (
     delete_memory,
     get_memory_notebook_excerpt,
     get_memory,

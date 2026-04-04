@@ -430,3 +430,56 @@ The direct-chat branch is no longer primarily owned by the transport route file.
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Workspace Memory Path Moved Behind Memory Service
+
+#### Stage
+
+Stage 1 continues. The canonical memory service now owns the active workspace/notebook memory boundary used by the live API and direct chat path.
+
+This is a partial memory convergence step. The older `agent_memory.py` implementation still exists under the service layer, and the separate `runtime_memory.py` subsystem is not yet unified into the same canonical service.
+
+#### Completed Work
+
+- Expanded [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) from scaffolding into a usable service boundary with:
+  - workspace ID normalization
+  - workspace memory snapshot payload construction
+  - semantic/query result mapping
+  - wrapper ownership for memory listing, memory text export, memory write/delete, daily logs, notebook search, and notebook excerpt reads
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the direct-chat engine imports notebook/workspace memory behavior from [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) instead of reaching directly into `agent_memory.py`.
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so the live workspace memory endpoints use the memory service boundary, including `workspace_memory_snapshot()`.
+- Updated [server_modules/tests/test_agent_memory_notebook.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_memory_notebook.py) so notebook coverage now targets the service boundary rather than the raw memory implementation.
+- Added focused service coverage in:
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+
+#### Current Truth
+
+- The live workspace/notebook memory path is now routed through [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py).
+- `agent_memory.py` still contains the underlying notebook/database implementation, but it is now behind the service layer for the converged call sites.
+- `runtime_memory.py` is still a separate subsystem and has not yet been folded into the canonical memory service.
+- Direct chat and the runtime API are using the service boundary, but health/memory management surfaces outside this cut may still depend on older paths.
+
+#### Open Gaps
+
+- The canonical memory service is still a facade over `agent_memory.py`, not yet a full replacement implementation.
+- `runtime_memory.py` remains separate from the converged workspace/notebook memory path.
+- Health and admin memory endpoints still need to be audited for raw memory-path usage.
+- Memory policy, artifact recall, and durable run recall are not yet unified behind one service contract.
+
+#### Next Required Work
+
+1. Audit the remaining runtime and health surfaces for raw memory-path usage and move them behind [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py).
+2. Decide how [server_modules/runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py) should be folded into the canonical memory service without breaking existing durable-run behavior.
+3. Keep shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so memory access stays declarative at the service boundary instead of mixed into inner engine logic.
+4. Continue recording each convergence step here as append-only fact.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the updated memory service, runtime files, and memory-focused tests.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_agent_memory_notebook`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

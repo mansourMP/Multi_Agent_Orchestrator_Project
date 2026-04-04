@@ -1051,7 +1051,7 @@ def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
 def register_run_routes(app) -> None:
     import server as _server
     from server_modules.autopilot_connectors import handle_telegram_send_message
-    from server_modules.agent_memory import delete_memory, get_memory, list_memory_entries
+    from server_modules.memory_service import delete_memory, workspace_memory_snapshot
     from server_modules.runtime_models import RunStartRequest
     from server_modules.workspace_context import (
         read_workspace_context_files,
@@ -1235,11 +1235,7 @@ def register_run_routes(app) -> None:
     async def list_workspace_memory(workspace_id: str, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-        return {
-            "workspace_id": normalized_workspace_id,
-            "entries": list_memory_entries(normalized_workspace_id),
-            "text": get_memory(normalized_workspace_id),
-        }
+        return workspace_memory_snapshot(normalized_workspace_id).as_payload()
 
     @app.delete("/memory/{workspace_id}/{key}", dependencies=[Depends(require_api_key)])
     async def delete_workspace_memory(workspace_id: str, key: str, current_user=Depends(require_api_key)):

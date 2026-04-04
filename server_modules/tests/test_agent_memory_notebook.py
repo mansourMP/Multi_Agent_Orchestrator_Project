@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from server_modules import agent_memory, workspace_context
+from server_modules import memory_service, workspace_context
 
 
 class AgentMemoryNotebookTests(unittest.TestCase):
@@ -21,27 +21,27 @@ class AgentMemoryNotebookTests(unittest.TestCase):
             "MEMORY.md",
             "# Curated Memory\n\n- favorite_food: sushi\n- timezone: Asia/Shanghai\n",
         )
-        notes_dir = agent_memory._memory_notebook_dir("default")
+        notes_dir = memory_service.agent_memory._memory_notebook_dir("default")
         (notes_dir / "2026-04-02.md").write_text(
             "# 2026-04-02\n\nUser prefers night owl work sessions.\n",
             encoding="utf-8",
         )
 
-        sushi_results = agent_memory.search_memory_notebook("default", "favorite_food")
+        sushi_results = memory_service.search_memory_notebook("default", "favorite_food")
         self.assertTrue(any(item["path"] == "MEMORY.md" for item in sushi_results))
 
-        session_results = agent_memory.search_memory_notebook("default", "night owl")
+        session_results = memory_service.search_memory_notebook("default", "night owl")
         self.assertEqual(session_results[0]["path"], "memory/2026-04-02.md")
         self.assertIn("night owl", session_results[0]["snippet"].lower())
 
     def test_get_memory_notebook_excerpt_reads_requested_line_window(self) -> None:
-        notes_dir = agent_memory._memory_notebook_dir("default")
+        notes_dir = memory_service.agent_memory._memory_notebook_dir("default")
         (notes_dir / "people.md").write_text(
             "# People\n\nAlice likes structured updates.\nBob prefers async check-ins.\n",
             encoding="utf-8",
         )
 
-        excerpt = agent_memory.get_memory_notebook_excerpt(
+        excerpt = memory_service.get_memory_notebook_excerpt(
             "default",
             "memory/people.md",
             from_line=2,

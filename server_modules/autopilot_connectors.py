@@ -31,6 +31,7 @@ from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.connectors.telegram_terminal_service import TelegramTerminalService
 from server_modules.connectors.telegram_transport_service import TelegramTransportService
+from server_modules.connectors.whatsapp_webhook_bridge_service import WhatsAppWebhookBridgeService
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 from server_modules.installed_skills import query_active_installed_skills
 try:
@@ -226,6 +227,7 @@ _AUTOPILOT_EVENT_BRIDGE_SERVICE: Optional[AutopilotEventBridgeService] = None
 _AUTOPILOT_STATE_BRIDGE_SERVICE: Optional[AutopilotStateBridgeService] = None
 _AUTOPILOT_TERMINAL_BRIDGE_SERVICE: Optional[AutopilotTerminalBridgeService] = None
 _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE: Optional[TelegramCompatibilityBridgeService] = None
+_WHATSAPP_WEBHOOK_BRIDGE_SERVICE: Optional[WhatsAppWebhookBridgeService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
@@ -911,6 +913,22 @@ def _telegram_compatibility_bridge_service() -> TelegramCompatibilityBridgeServi
         )
     return _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE
 
+
+def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
+    global _WHATSAPP_WEBHOOK_BRIDGE_SERVICE
+    if _WHATSAPP_WEBHOOK_BRIDGE_SERVICE is None:
+        _WHATSAPP_WEBHOOK_BRIDGE_SERVICE = WhatsAppWebhookBridgeService(
+            init_runtime=lambda: _init(),
+            parse_form_urlencoded=lambda raw: _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
+            webhook_result=lambda **kwargs: _autopilot_endpoint_service().whatsapp_webhook_result(**kwargs),
+            handle_inbound=lambda payload: _whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(payload),
+            twiml_response=lambda text: _whatsapp_service_registry().whatsapp_transport_service().twiml_response(text),
+            forbidden_response=lambda content: Response(status_code=403, content=content),
+            enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+            configured_secret=ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET,
+        )
+    return _WHATSAPP_WEBHOOK_BRIDGE_SERVICE
+
 def _load_telegram_autopilot_state() -> None:
     _autopilot_state_bridge_service().load_telegram_autopilot_state()
 
@@ -1129,23 +1147,11 @@ async def handle_telegram_autopilot_test_message(
 
 # --- COPIED ENDPOINTS ---
 async def handle_whatsapp_twilio_webhook(request: Request):
-    _init()
-    form = _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(await request.body())
-    provided_secret = str(
-        request.query_params.get("secret")
-        or request.headers.get("x-orion-webhook-secret")
-        or ""
-    ).strip()
-    result = _autopilot_endpoint_service().whatsapp_webhook_result(
-        enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
-        configured_secret=ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET,
-        provided_secret=provided_secret,
-        form=form,
-        handle_inbound=lambda payload: _whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(payload),
+    return _whatsapp_webhook_bridge_service().handle_webhook(
+        raw_body=await request.body(),
+        query_secret=str(request.query_params.get("secret") or ""),
+        header_secret=str(request.headers.get("x-orion-webhook-secret") or ""),
     )
-    if int(result.get("status_code") or 200) == 403:
-        return Response(status_code=403, content=str(result.get("content") or "forbidden"))
-    return _whatsapp_service_registry().whatsapp_transport_service().twiml_response(str(result.get("text") or ""))
 
 
 def _run_telegram_autopilot_forever():

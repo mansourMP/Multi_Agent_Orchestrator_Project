@@ -2928,6 +2928,62 @@ This is a compatibility-surface extraction, not a behavior rewrite. The historic
   - `server_modules.tests.test_telegram_media_service`
   - `server_modules.tests.test_telegram_profile_service`
 
+### 2026-04-05 - WhatsApp Webhook Shell Moved Behind Dedicated Webhook Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The top-level WhatsApp Twilio webhook shell no longer owns request parsing, secret selection, endpoint-service dispatch, and response shaping inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a bounded runtime-bridge extraction. The exported async webhook entrypoint stays in place, but its owned request-handling body now crosses a dedicated webhook bridge service first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_bridge_service.py) to own:
+  - runtime-init bridging for the webhook path
+  - form-urlencoded request parsing
+  - configured/provided secret selection
+  - autopilot endpoint-service webhook dispatch
+  - forbidden-response shaping
+  - TwiML success-response shaping
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so `handle_whatsapp_twilio_webhook()` now delegates through the webhook bridge service instead of owning that request-handling body inline.
+- Added focused coverage in:
+  - [server_modules/tests/test_whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_webhook_bridge_service.py)
+
+#### Current Truth
+
+- WhatsApp webhook-shell ownership is now explicit in [server_modules/connectors/whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_bridge_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports `handle_whatsapp_twilio_webhook()` for runtime compatibility, but it no longer owns the request parsing and response-shaping body inline.
+- The underlying endpoint, webhook-service, and transport layers still pass after this cut:
+  - [server_modules/tests/test_autopilot_endpoint_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_endpoint_service.py)
+  - [server_modules/tests/test_whatsapp_webhook_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_webhook_service.py)
+  - [server_modules/tests/test_whatsapp_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_transport_service.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1170` lines versus `1164` after the previous cut.
+  This increase is expected because the exported webhook entrypoint remains while the new cached bridge service was added.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the large service-composition block and several exported compatibility wrappers.
+- The remaining inline wrapper surface is now mostly compatibility and service-factory glue rather than owned runtime behavior.
+- More consolidation is still needed before the file is reduced to thin adapter/export glue only.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by targeting another real ownership cluster in the remaining service-composition surface.
+2. Keep verifying public wrapper entrypoints and the underlying service tests together whenever runtime-init bridges move out of the monolith.
+3. Preserve exported runtime entrypoints until their import surface is intentionally migrated.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_bridge_service.py)
+  - [server_modules/tests/test_whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_webhook_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_webhook_bridge_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `server_modules.tests.test_whatsapp_transport_service`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

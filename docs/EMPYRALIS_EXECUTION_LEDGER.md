@@ -856,6 +856,70 @@ The legacy modules still own their own request-preparation logic and final resul
   - `server_modules.tests.test_agent_machine_mode`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
 
+### 2026-04-04 - Shared Local-Execution Helper Block Moved Behind Run Service
+
+#### Stage
+
+Stage 2 continues. The duplicated local-execution helper block that both legacy run modules used is now centralized in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+This covers the small but high-churn helper surface around local execution gating and browser metadata, which had still been duplicated in both [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py).
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with shared helpers for:
+  - `safe_int()`
+  - `normalize_requested_max_iterations()`
+  - `local_execution_requires_start_confirmation()`
+  - `precheck_human_action_labels()`
+  - `local_execution_confirmation_prompt()`
+  - `local_execution_block_prompt()`
+  - `mark_local_execution_tools_approved()`
+  - `apply_browser_execution_metadata()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so the legacy helper names now delegate into the run service.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so the same helper names also delegate into the run service.
+- Expanded focused coverage in:
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+
+#### Current Truth
+
+- Durable-run convergence now covers:
+  - run-start preparation
+  - prepared-request creation
+  - the duplicated local-execution helper block
+- The legacy run modules still expose the old helper names, but the implementation now belongs to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+- The durable-run layer is increasingly moving from duplicated implementation to compatibility wrappers over a shared service boundary.
+
+#### Open Gaps
+
+- Deeper lifecycle and orchestration still remain spread across:
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/runs_execution.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_execution.py)
+- Delegation planning and retry orchestration are still not service-owned.
+- The connector monolith split is still the next major architecture phase after this durable-run cleanup.
+
+#### Next Required Work
+
+1. Choose the next durable-run ownership slice:
+   - delegation planning and retry orchestration
+   - replay/delegated request assembly
+   - deeper run execution orchestration
+2. Once durable ownership is sufficiently centered, start the connector monolith split in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+3. Keep [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) as the only place new durable-run logic is added.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+
 ### 2026-04-04 - Shared Run-Start Preparation Moved Behind Run Service
 
 #### Stage

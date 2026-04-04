@@ -115,19 +115,15 @@ def normalize_agent_role(value: Any) -> str:
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return int(default)
+    from server_modules.run_service import safe_int
+
+    return safe_int(value, default)
 
 
 def _normalize_requested_max_iterations(value: Any) -> Optional[int]:
-    if value in {None, ""}:
-        return None
-    parsed = _safe_int(value, 0)
-    if parsed <= 0:
-        raise HTTPException(status_code=400, detail="max_iterations must be greater than zero.")
-    return parsed
+    from server_modules.run_service import normalize_requested_max_iterations
+
+    return normalize_requested_max_iterations(value)
 
 
 def _failure_status(status: Any) -> bool:
@@ -460,120 +456,44 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
 
 
 def _local_execution_requires_start_confirmation(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
-    target = str(metadata.get("execution_target_selected") or metadata.get("execution_target") or "").strip().lower()
-    outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
-    if target != EXECUTION_TARGET_LOCAL_COMPANION:
-        return False
-    if outcome_pack != LOCAL_EXECUTION_PACK_ID:
-        return False
-    return bool(precheck.get("require_confirmation_count") or precheck.get("approval_required_count"))
+    from server_modules.run_service import local_execution_requires_start_confirmation
+
+    return local_execution_requires_start_confirmation(
+        metadata,
+        precheck,
+        local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
+        local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+    )
 
 
 def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "require_confirmation") -> List[str]:
-    items = precheck.get("items") if isinstance(precheck.get("items"), list) else []
-    labels: List[str] = []
-    seen: Set[str] = set()
-    accepted = {str(decision or "").strip().lower()}
-    if "require_confirmation" in accepted:
-        accepted.add("approval_required")
-    if "deny" in accepted:
-        accepted.add("blocked")
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_decision = str(item.get("execution_decision") or item.get("decision") or "").strip().lower()
-        if item_decision not in accepted:
-            continue
-        capabilities = item.get("capabilities") if isinstance(item.get("capabilities"), list) else []
-        capability_labels = [
-            str(cap.get("title") or "").strip()
-            for cap in capabilities
-            if isinstance(cap, dict) and str(cap.get("title") or "").strip()
-        ]
-        raw_label = (
-            capability_labels[0]
-            if capability_labels
-            else str(item.get("tool_id") or "").strip().replace("_", " ")
-        )
-        clean = raw_label.strip()
-        if clean and clean.lower() not in seen:
-            seen.add(clean.lower())
-            labels.append(clean)
-    return labels
+    from server_modules.run_service import precheck_human_action_labels
+
+    return precheck_human_action_labels(precheck, decision=decision)
 
 
 def _local_execution_confirmation_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="require_confirmation")
-    if labels:
-        return f"Confirmation required before local companion execution: {', '.join(labels)}."
-    return "Confirmation required before local companion execution."
+    from server_modules.run_service import local_execution_confirmation_prompt
+
+    return local_execution_confirmation_prompt(precheck)
 
 
 def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
-    labels = _precheck_human_action_labels(precheck, decision="deny")
-    if labels:
-        return f"Run blocked by local execution policy: {', '.join(labels)}."
-    return "Run blocked by local execution policy."
+    from server_modules.run_service import local_execution_block_prompt
+
+    return local_execution_block_prompt(precheck)
 
 
 def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
-    precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else None
-    if not isinstance(precheck, dict):
-        return
+    from server_modules.run_service import mark_local_execution_tools_approved
 
-    approved_tools = [
-        str(item).strip().lower()
-        for item in (precheck.get("require_confirmation") or precheck.get("approval_required") or [])
-        if str(item).strip()
-    ]
-    if not approved_tools:
-        return
-
-    allowed = [
-        str(item).strip().lower()
-        for item in (precheck.get("allowed") or [])
-        if str(item).strip()
-    ]
-    allowed_set = set(allowed)
-    for tool in approved_tools:
-        allowed_set.add(tool)
-
-    items = precheck.get("items") if isinstance(precheck.get("items"), list) else []
-    rewritten_items: List[Dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        next_item = dict(item)
-        tool_id = str(next_item.get("tool_id") or "").strip().lower()
-        if tool_id in approved_tools:
-            next_item["execution_decision"] = "allow"
-            next_item["decision"] = "allow"
-            next_item["reason"] = "confirmed_for_local_execution"
-        rewritten_items.append(next_item)
-
-    precheck["require_confirmation"] = []
-    precheck["require_confirmation_count"] = 0
-    precheck["approval_required"] = []
-    precheck["approval_required_count"] = 0
-    precheck["allowed"] = sorted(allowed_set)
-    precheck["allow_count"] = len(precheck["allowed"])
-    precheck["items"] = rewritten_items
-    metadata["tool_policy_precheck"] = precheck
+    mark_local_execution_tools_approved(metadata)
 
 
 def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
-    precheck = metadata.get("tool_policy_precheck") if isinstance(metadata.get("tool_policy_precheck"), dict) else {}
-    browser_policy = precheck.get("browser_automation_policy") if isinstance(precheck.get("browser_automation_policy"), dict) else {}
-    session_profiles = list(browser_policy.get("session_profiles") or []) if isinstance(browser_policy, dict) else []
-    immutable_plan_hash = str(browser_policy.get("immutable_plan_hash") or "").strip() if isinstance(browser_policy, dict) else ""
-    if session_profiles:
-        metadata["browser_session_profile"] = session_profiles[0]
-    if immutable_plan_hash:
-        metadata["browser_immutable_plan_hash"] = immutable_plan_hash
-    if bool(browser_policy.get("reviewed_approval_required")):
-        metadata["browser_reviewed_approval_required"] = True
-    elif "browser_reviewed_approval_required" in metadata:
-        metadata.pop("browser_reviewed_approval_required", None)
+    from server_modules.run_service import apply_browser_execution_metadata
+
+    apply_browser_execution_metadata(metadata)
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:

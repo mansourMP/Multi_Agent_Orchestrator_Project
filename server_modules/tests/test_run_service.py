@@ -6,10 +6,18 @@ from fastapi import HTTPException
 
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
+    apply_browser_execution_metadata,
+    local_execution_block_prompt,
+    local_execution_confirmation_prompt,
+    local_execution_requires_start_confirmation,
+    mark_local_execution_tools_approved,
+    normalize_requested_max_iterations,
+    precheck_human_action_labels,
     PreparedRunCreationServices,
     RunPreparationServices,
     RunCreationServices,
     RunExecutionServices,
+    safe_int,
     build_run_start_request_from_turn,
     create_run_from_prepared_request,
     create_run_result_from_request,
@@ -20,6 +28,12 @@ from server_modules.runtime_models import RunStartRequest
 
 
 class RunServiceTests(unittest.TestCase):
+    def test_safe_int_and_normalize_requested_max_iterations(self):
+        self.assertEqual(safe_int("7", 0), 7)
+        self.assertEqual(safe_int("bad", 5), 5)
+        self.assertEqual(normalize_requested_max_iterations("9"), 9)
+        self.assertIsNone(normalize_requested_max_iterations(""))
+
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(
             engine="orion",
@@ -219,6 +233,54 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(prepared["metadata"]["agent_role_source"], "detected")
         self.assertEqual(prepared["metadata"]["workflow_name"], "Workflow")
         self.assertEqual(prepared["metadata"]["postprocessed"], True)
+
+    def test_local_execution_helper_block(self):
+        precheck = {
+            "require_confirmation_count": 1,
+            "approval_required_count": 0,
+            "require_confirmation": ["computer__click"],
+            "allowed": ["file__read"],
+            "items": [
+                {
+                    "tool_id": "computer__click",
+                    "execution_decision": "require_confirmation",
+                    "capabilities": [{"title": "Computer Click"}],
+                }
+            ],
+            "browser_automation_policy": {
+                "session_profiles": ["profile-1"],
+                "immutable_plan_hash": "hash-1",
+                "reviewed_approval_required": True,
+            },
+        }
+        metadata = {
+            "execution_target_selected": "local_companion",
+            "outcome_pack": "local_execution",
+            "tool_policy_precheck": precheck,
+        }
+
+        self.assertTrue(
+            local_execution_requires_start_confirmation(
+                metadata,
+                precheck,
+                local_execution_target="local_companion",
+                local_execution_pack_id="local_execution",
+            )
+        )
+        self.assertEqual(precheck_human_action_labels(precheck), ["Computer Click"])
+        self.assertIn("Confirmation required", local_execution_confirmation_prompt(precheck))
+        precheck["items"][0]["execution_decision"] = "deny"
+        precheck["items"][0]["decision"] = "deny"
+        self.assertIn("Run blocked", local_execution_block_prompt(precheck))
+        precheck["items"][0]["execution_decision"] = "require_confirmation"
+        precheck["items"][0]["decision"] = "require_confirmation"
+        mark_local_execution_tools_approved(metadata)
+        self.assertEqual(metadata["tool_policy_precheck"]["require_confirmation_count"], 0)
+        self.assertIn("computer__click", metadata["tool_policy_precheck"]["allowed"])
+        apply_browser_execution_metadata(metadata)
+        self.assertEqual(metadata["browser_session_profile"], "profile-1")
+        self.assertEqual(metadata["browser_immutable_plan_hash"], "hash-1")
+        self.assertTrue(metadata["browser_reviewed_approval_required"])
 
 
 if __name__ == "__main__":

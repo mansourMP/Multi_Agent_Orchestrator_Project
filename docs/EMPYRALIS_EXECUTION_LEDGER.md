@@ -1305,6 +1305,107 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
+
+#### Stage
+
+Stage 2 connector convergence continues.
+
+This entry exists to preserve append-only ordering. The full factual entry for the connector-context and guided-workflow-setup extraction already exists earlier in this file, but it landed out of sequence during editing. This note records the same milestone at the end of the ledger without deleting earlier history.
+
+#### Current Truth
+
+- [server_modules/connectors/telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_connector_context_service.py) now owns Telegram connector-context and installed-skill query helpers.
+- [server_modules/connectors/autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_workflow_setup_service.py) now owns guided automation workflow-setup helpers.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `3261` lines to `2903` lines in that cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the extracted services and updated connector module.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_connector_context_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+
+### 2026-04-05 - Connector Context And Guided Workflow Setup Moved Behind Shared Connector Services
+
+#### Stage
+
+Stage 2 connector convergence continues. The shared Telegram connector-context helpers and the guided automation workflow-setup block no longer live inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a real monolith-reduction cut, not just wiring. The top-level connector module still exposes compatibility wrappers, but the helper ownership for connector-aware goal shaping, installed-skill query handling, workflow-definition creation, and guided automation setup now belongs to dedicated services.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_connector_context_service.py).
+- Moved the Telegram connector-context helpers behind that service:
+  - connector capability summaries
+  - recent-email request detection
+  - workspace connector discovery and prompt assembly
+  - connector-context goal append behavior
+  - installed-skill query fallback behavior
+- Added [server_modules/connectors/autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_workflow_setup_service.py).
+- Moved the guided automation workflow-setup helpers behind that service:
+  - workspace connector-flag discovery
+  - primary email connector selection
+  - email-summary workflow definition and visibility creation
+  - lead-follow-up workflow definition and visibility creation
+  - schedule creation for both workflow types
+  - completion text rendering
+  - guided automation setup delegation into the Telegram camera-setup service
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the old inline helper block now delegates through service getters instead of owning those implementations.
+- Added focused service coverage in:
+  - [server_modules/tests/test_telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_connector_context_service.py)
+  - [server_modules/tests/test_autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_workflow_setup_service.py)
+
+#### Current Truth
+
+- Telegram connector behavior is now split further into dedicated service boundaries for:
+  - inbound context
+  - routing
+  - profile/onboarding
+  - guided camera setup
+  - media handling
+  - run dispatch
+  - poll lifecycle
+  - runtime state
+  - connector context and installed-skill query bridging
+  - guided workflow setup
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `3261` lines to `2903` lines in this cut.
+- The connector monolith is still not finished, but one of the biggest remaining shared helper blocks is now service-owned instead of inline.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns too much shared transport and composition glue.
+- The remaining helper mass is increasingly concentrated in top-level endpoint/runtime coordination instead of bounded Telegram behavior.
+- The broader connector architecture still needs more explicit thin-adapter boundaries across the non-Telegram and non-WhatsApp surfaces.
+
+#### Next Required Work
+
+1. Keep reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared transport and composition helpers.
+2. Decide whether the next strongest cut is the shared connector endpoint/runtime glue or a broader split of the remaining non-Telegram channel helpers.
+3. Continue verifying against both direct service tests and the older terminal Telegram connector-context tests so the extracted contracts stay stable.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_connector_context_service.py)
+  - [server_modules/connectors/autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_workflow_setup_service.py)
+  - [server_modules/tests/test_telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_connector_context_service.py)
+  - [server_modules/tests/test_autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_workflow_setup_service.py)
+  - [scripts/orion_terminal/tests/test_telegram_connector_context.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_terminal/tests/test_telegram_connector_context.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_connector_context_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+
 ### 2026-04-05 - Telegram Autopilot Service Graph Moved Behind Dedicated Registry
 
 #### Stage

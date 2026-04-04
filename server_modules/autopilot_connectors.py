@@ -7,10 +7,12 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
+from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
+from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
 from server_modules.connectors.telegram_media_service import telegram_safe_path_token
@@ -206,6 +208,8 @@ _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY: Optional[WhatsAppAutopilotServiceRegistry]
 _TELEGRAM_AUTOPILOT_HELPER_REGISTRY: Optional[TelegramAutopilotHelperRegistry] = None
 _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
+_AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
+_TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -505,6 +509,37 @@ def _runtime_status_service() -> RuntimeStatusService:
             runtime_valid=lambda: not ORION_ENGINE_VALIDATION_ERRORS,
         )
     return _RUNTIME_STATUS_SERVICE
+
+
+def _autopilot_workflow_setup_service() -> AutopilotWorkflowSetupService:
+    global _AUTOPILOT_WORKFLOW_SETUP_SERVICE
+    if _AUTOPILOT_WORKFLOW_SETUP_SERVICE is None:
+        _AUTOPILOT_WORKFLOW_SETUP_SERVICE = AutopilotWorkflowSetupService(
+            workflow_api_url=EMPYRALIST_WORKFLOW_API_URL,
+            runtime_url=EMPYRALIST_RUNTIME_URL,
+            web_url=EMPYRALIST_WEB_URL,
+            init_runtime=lambda: _init(),
+            classify_automation_intent=lambda text: classify_automation_intent(text),
+            list_vault_connectors=lambda workspace_id: list_vault_connectors(workspace_id),
+            http_json_request=lambda *args, **kwargs: http_json_request(*args, **kwargs),
+            runtime_api_headers=lambda: _runtime_api_headers(),
+            camera_setup_service=lambda: _telegram_helper_registry().camera_setup_service(),
+        )
+    return _AUTOPILOT_WORKFLOW_SETUP_SERVICE
+
+
+def _telegram_connector_context_service() -> TelegramConnectorContextService:
+    global _TELEGRAM_CONNECTOR_CONTEXT_SERVICE
+    if _TELEGRAM_CONNECTOR_CONTEXT_SERVICE is None:
+        _TELEGRAM_CONNECTOR_CONTEXT_SERVICE = TelegramConnectorContextService(
+            installed_skills_enabled=ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED,
+            init_runtime=lambda: _init(),
+            list_vault_connectors=lambda workspace_id: list_vault_connectors(workspace_id),
+            resolve_vault_credential=lambda credential_id, workspace_id: resolve_vault_credential(credential_id, workspace_id),
+            list_recent_connector_messages=lambda credentials, limit: list_recent_connector_messages(credentials, limit=limit),
+            query_active_installed_skills=lambda **kwargs: query_active_installed_skills(**kwargs),
+        )
+    return _TELEGRAM_CONNECTOR_CONTEXT_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -1025,296 +1060,52 @@ def _data_url_from_local_file(path_value: str, mime_type: str = "") -> str:
 
 
 def _workspace_connector_flags(workspace_id: str) -> Dict[str, bool]:
-    _init()
-    list_fn = globals().get("list_vault_connectors")
-    if not callable(list_fn):
-        return {"telegram": False, "email": False}
-    try:
-        rows = list_fn(str(workspace_id or "").strip() or "default")
-    except Exception:
-        rows = []
-    flags = {"telegram": False, "email": False}
-    if not isinstance(rows, list):
-        return flags
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        connector = str(row.get("connector") or row.get("provider") or "").strip().lower()
-        if connector == "telegram_bot":
-            flags["telegram"] = True
-        if connector in {"google_workspace", "microsoft_365"}:
-            flags["email"] = True
-    return flags
+    return _autopilot_workflow_setup_service().workspace_connector_flags(workspace_id)
 
 
 def _primary_email_connector_id(workspace_id: str) -> Optional[str]:
-    _init()
-    list_fn = globals().get("list_vault_connectors")
-    if not callable(list_fn):
-        return None
-    try:
-        rows = list_fn(str(workspace_id or "").strip() or "default")
-    except Exception:
-        rows = []
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        connector = str(row.get("connector") or row.get("provider") or "").strip().lower()
-        if connector in {"google_workspace", "microsoft_365"}:
-            connector_id = str(row.get("id") or "").strip()
-            if connector_id:
-                return connector_id
-    return None
+    return _autopilot_workflow_setup_service().primary_email_connector_id(workspace_id)
 
 
 def _email_summary_workflow_definition(target_label: str, *, telegram_connected: bool) -> Dict[str, Any]:
-    label = str(target_label or "").strip() or "Inbox"
-    return {
-        "nodes": [
-            {
-                "id": "trigger-daily",
-                "type": "trigger",
-                "position": {"x": 265, "y": 50},
-                "data": {"label": "Daily Summary", "triggerType": "schedule"},
-            },
-            {
-                "id": "agent-summary",
-                "type": "agent",
-                "position": {"x": 265, "y": 220},
-                "data": {
-                    "label": "Inbox Summary",
-                    "modelId": "gpt-4o",
-                    "prompt": f"Summarize important messages from {label} and highlight what needs action.",
-                    "tools": ["email"],
-                    "provider": "openai",
-                    "role": "Summary",
-                    "duty": f"Review {label} and produce a concise daily summary.",
-                    "status": "ready",
-                    "description": f"{label} daily summary",
-                },
-            },
-            {
-                "id": "action-summary",
-                "type": "action",
-                "position": {"x": 265, "y": 390},
-                "data": {
-                    "label": "Send Telegram" if telegram_connected else "Write Report",
-                    "actionType": "send_telegram" if telegram_connected else "write_file",
-                },
-            },
-        ],
-        "edges": [
-            {
-                "id": "edge-daily-summary",
-                "source": "trigger-daily",
-                "target": "agent-summary",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-            {
-                "id": "edge-summary-action",
-                "source": "agent-summary",
-                "target": "action-summary",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-        ],
-        "meta": {"automationMode": "scheduled", "created_from": "email_summary_chat_bridge"},
-    }
+    return _autopilot_workflow_setup_service().email_summary_workflow_definition(
+        target_label,
+        telegram_connected=telegram_connected,
+    )
 
 
 def _lead_followup_workflow_definition(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Dict[str, Any]:
-    label = str(flow_label or "").strip() or "Leads"
-    action_type = "send_email" if email_connected else "send_telegram" if telegram_connected else "write_file"
-    action_label = "Send Email" if email_connected else "Send Telegram" if telegram_connected else "Write Draft"
-    return {
-        "nodes": [
-            {
-                "id": "trigger-followup",
-                "type": "trigger",
-                "position": {"x": 265, "y": 50},
-                "data": {"label": "Follow-up Review", "triggerType": "schedule"},
-            },
-            {
-                "id": "agent-followup",
-                "type": "agent",
-                "position": {"x": 265, "y": 220},
-                "data": {
-                    "label": "Lead Follow-up",
-                    "modelId": "gpt-4o",
-                    "prompt": f"Review {label} and draft concise follow-up messages for the leads that need attention.",
-                    "tools": ["crm"],
-                    "provider": "openai",
-                    "role": "Follow-up",
-                    "duty": f"Prepare next-step follow-up messages for {label}.",
-                    "status": "ready",
-                    "description": f"{label} lead follow-up",
-                },
-            },
-            {
-                "id": "action-followup",
-                "type": "action",
-                "position": {"x": 265, "y": 390},
-                "data": {"label": action_label, "actionType": action_type},
-            },
-        ],
-        "edges": [
-            {
-                "id": "edge-followup-agent",
-                "source": "trigger-followup",
-                "target": "agent-followup",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-            {
-                "id": "edge-followup-action",
-                "source": "agent-followup",
-                "target": "action-followup",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "type": "smoothstep",
-            },
-        ],
-        "meta": {"automationMode": "scheduled", "created_from": "lead_followup_chat_bridge"},
-    }
+    return _autopilot_workflow_setup_service().lead_followup_workflow_definition(
+        flow_label,
+        email_connected=email_connected,
+        telegram_connected=telegram_connected,
+    )
 
 
 def _create_published_workflow_record(name: str, description: str, definition: Dict[str, Any]) -> Optional[str]:
-    _init()
-    create_res = http_json_request(
-        f"{EMPYRALIST_WORKFLOW_API_URL}/workflows?workspaceId=default",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        payload={
-            "name": name,
-            "description": description,
-            "definition": definition,
-        },
-        timeout=20,
-    )
-    create_json = create_res.get("json") if isinstance(create_res.get("json"), dict) else {}
-    workflow_id = str(create_json.get("id") or "").strip()
-    if workflow_id:
-        try:
-            http_json_request(
-                f"{EMPYRALIST_WORKFLOW_API_URL}/workflows/{quote_plus(workflow_id)}/publish",
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                timeout=20,
-            )
-        except Exception:
-            pass
-    return workflow_id or None
+    return _autopilot_workflow_setup_service().create_published_workflow_record(name, description, definition)
 
 
 def _create_email_summary_visibility_record(target_label: str, *, telegram_connected: bool) -> Optional[str]:
-    label = str(target_label or "").strip() or "Inbox"
-    return _create_published_workflow_record(
-        f"Summarize {label} Daily",
-        f"Daily inbox summary for {label}",
-        _email_summary_workflow_definition(label, telegram_connected=telegram_connected),
+    return _autopilot_workflow_setup_service().create_email_summary_visibility_record(
+        target_label,
+        telegram_connected=telegram_connected,
     )
 
 
 def _create_email_summary_execution_schedules(workspace_id: str, target_label: str) -> int:
-    connector_id = _primary_email_connector_id(workspace_id)
-    if not connector_id:
-        return 0
-    label = str(target_label or "").strip() or "Inbox"
-    run_request = {
-        "engine": "orion",
-        "workspace_id": str(workspace_id or "").strip() or "default",
-        "user_goal": f"Summarize the most recent emails from {label} and highlight what needs attention.",
-        "agent_role": "support",
-        "metadata": {
-            "source": "scheduled",
-            "execution_target": "cloud",
-            "outcome_pack": "customer-ops-autopilot",
-            "outcome_pack_label": "Client Workflow Autopilot",
-            "outcome_scope": ["Inbox triage"],
-            "connector_credential_id": connector_id,
-            "pack_inputs": {"inbox": "", "leads": "", "slots": ""},
-            "automation_kind": "email_summary_recent",
-            "automation_label": label,
-            "summary_limit": 5,
-        },
-    }
-    created = 0
-    for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
-        http_json_request(
-            f"{EMPYRALIST_RUNTIME_URL}/schedules/weekly",
-            method="POST",
-            headers=_runtime_api_headers(),
-            payload={
-                "name": f"Email Summary · {label} · {day}",
-                "workspace_id": str(workspace_id or "").strip() or "default",
-                "enabled": True,
-                "day_of_week": day,
-                "time_hhmm": "08:00",
-                "timezone": "local",
-                "run_request": run_request,
-            },
-            timeout=20,
-        )
-        created += 1
-    return created
+    return _autopilot_workflow_setup_service().create_email_summary_execution_schedules(workspace_id, target_label)
 
 
 def _create_lead_followup_execution_schedules(workspace_id: str, flow_label: str) -> int:
-    connector_id = _primary_email_connector_id(workspace_id)
-    if not connector_id:
-        return 0
-    label = str(flow_label or "").strip() or "Leads"
-    run_request = {
-        "engine": "orion",
-        "workspace_id": str(workspace_id or "").strip() or "default",
-        "user_goal": f"Review the most recent leads from {label} and draft the next outbound follow-ups.",
-        "agent_role": "support",
-        "metadata": {
-            "source": "scheduled",
-            "execution_target": "cloud",
-            "outcome_pack": "customer-ops-autopilot",
-            "outcome_pack_label": "Client Workflow Autopilot",
-            "outcome_scope": ["Lead follow-up"],
-            "connector_credential_id": connector_id,
-            "pack_inputs": {"inbox": "", "leads": "", "slots": ""},
-            "automation_kind": "lead_followup_recent",
-            "automation_label": label,
-            "summary_limit": 5,
-        },
-    }
-    created = 0
-    for day in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"):
-        http_json_request(
-            f"{EMPYRALIST_RUNTIME_URL}/schedules/weekly",
-            method="POST",
-            headers=_runtime_api_headers(),
-            payload={
-                "name": f"Lead Follow-up · {label} · {day}",
-                "workspace_id": str(workspace_id or "").strip() or "default",
-                "enabled": True,
-                "day_of_week": day,
-                "time_hhmm": "09:00",
-                "timezone": "local",
-                "run_request": run_request,
-            },
-            timeout=20,
-        )
-        created += 1
-    return created
+    return _autopilot_workflow_setup_service().create_lead_followup_execution_schedules(workspace_id, flow_label)
 
 
 def _create_lead_followup_visibility_record(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Optional[str]:
-    label = str(flow_label or "").strip() or "Leads"
-    return _create_published_workflow_record(
-        f"Follow up {label}",
-        f"Lead follow-up automation for {label}",
-        _lead_followup_workflow_definition(label, email_connected=email_connected, telegram_connected=telegram_connected),
+    return _autopilot_workflow_setup_service().create_lead_followup_visibility_record(
+        flow_label,
+        email_connected=email_connected,
+        telegram_connected=telegram_connected,
     )
 
 
@@ -1325,22 +1116,12 @@ def _email_summary_completion_text(
     email_connected: bool,
     workflow_id: Optional[str] = None,
 ) -> str:
-    label = str(target_label or "").strip() or "Inbox"
-    is_active = schedule_count > 0
-    lines = [
-        f"Done. Your {label} daily summary is {'active' if is_active else 'ready'}.",
-        "It will run every morning and add results to your activity feed." if is_active else (
-            "Finish setup to run daily summaries automatically." if email_connected else "Connect Google Workspace or Microsoft 365 to start daily summaries."
-        ),
-        f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
-    ]
-    if workflow_id:
-        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
-    if not email_connected:
-        lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
-    if email_connected and not is_active:
-        lines.append(f"Finish setup → {EMPYRALIST_WEB_URL}/setup")
-    return "\n\n".join(lines)
+    return _autopilot_workflow_setup_service().email_summary_completion_text(
+        target_label,
+        schedule_count=schedule_count,
+        email_connected=email_connected,
+        workflow_id=workflow_id,
+    )
 
 
 def _lead_followup_completion_text(
@@ -1350,22 +1131,12 @@ def _lead_followup_completion_text(
     email_connected: bool,
     workflow_id: Optional[str] = None,
 ) -> str:
-    label = str(flow_label or "").strip() or "Leads"
-    is_active = schedule_count > 0
-    lines = [
-        f"Done. Your {label} follow-up automation is {'active' if is_active else 'ready'}.",
-        "It will review recent leads every morning and prepare outbound follow-ups." if is_active else (
-            "Finish setup to run follow-ups automatically." if email_connected else "Connect an email account to send follow-ups automatically."
-        ),
-        f"Open automations: {EMPYRALIST_WEB_URL}/workflows",
-    ]
-    if workflow_id:
-        lines.append(f"Open automation: {EMPYRALIST_WEB_URL}/workflows/{workflow_id}")
-    if not email_connected:
-        lines.append(f"Connect email → {EMPYRALIST_WEB_URL}/credentials")
-    if email_connected and not is_active:
-        lines.append(f"Finish setup → {EMPYRALIST_WEB_URL}/setup")
-    return "\n\n".join(lines)
+    return _autopilot_workflow_setup_service().lead_followup_completion_text(
+        flow_label,
+        schedule_count=schedule_count,
+        email_connected=email_connected,
+        workflow_id=workflow_id,
+    )
 
 
 def _telegram_handle_guided_automation_setup(
@@ -1374,19 +1145,11 @@ def _telegram_handle_guided_automation_setup(
     chat_id: str,
     message_text: str,
 ) -> Dict[str, Any]:
-    return _telegram_helper_registry().camera_setup_service().handle_guided_automation_setup(
+    return _autopilot_workflow_setup_service().handle_telegram_guided_automation_setup(
         workspace_id=workspace_id,
         chat_id=chat_id,
         message_text=message_text,
         enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
-        classify_intent=classify_automation_intent,
-        workspace_connector_flags=_workspace_connector_flags,
-        create_email_summary_visibility_record=_create_email_summary_visibility_record,
-        create_email_summary_execution_schedules=_create_email_summary_execution_schedules,
-        email_summary_completion_text=_email_summary_completion_text,
-        create_lead_followup_visibility_record=_create_lead_followup_visibility_record,
-        create_lead_followup_execution_schedules=_create_lead_followup_execution_schedules,
-        lead_followup_completion_text=_lead_followup_completion_text,
     )
 
 
@@ -1431,35 +1194,11 @@ def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -
 
 
 def _connector_capability_summary(connector_id: str) -> str:
-    provider = str(connector_id or "").strip().lower()
-    if provider == "google_workspace":
-        return "email, calendar, drive"
-    if provider == "microsoft_365":
-        return "email, calendar, files"
-    if provider == "telegram_bot":
-        return "telegram chat"
-    if provider == "whatsapp_twilio":
-        return "whatsapp chat"
-    if provider == "discord_bot":
-        return "discord chat"
-    return "connected tool"
+    return _telegram_connector_context_service().connector_capability_summary(connector_id)
 
 
 def _telegram_requested_recent_email_limit(goal: str) -> int:
-    raw = str(goal or "").strip().lower()
-    if not raw:
-        return 0
-    if not any(token in raw for token in ("email", "emails", "gmail", "inbox", "mailbox")):
-        return 0
-    if not any(token in raw for token in ("read", "summarize", "summary", "show", "latest", "recent", "last")):
-        return 0
-    match = re.search(r"\b(?:last|latest|recent)\s+(\d+)\s+emails?\b", raw)
-    if match:
-        try:
-            return max(1, min(int(match.group(1)), 10))
-        except Exception:
-            return 3
-    return 3
+    return _telegram_connector_context_service().requested_recent_email_limit(goal)
 
 
 def _telegram_workspace_connector_context(
@@ -1467,94 +1206,15 @@ def _telegram_workspace_connector_context(
     workspace_id: str,
     current_connector_id: str,
 ) -> Dict[str, Any]:
-    _init()
-    raw_goal = str(goal or "").strip().lower()
-    entries = list_vault_connectors(workspace_id)
-    summaries: List[Dict[str, Any]] = []
-    preferred_email_entry: Optional[Dict[str, Any]] = None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        connector_id = str(entry.get("id") or "").strip()
-        provider = str(entry.get("connector") or "").strip().lower()
-        label = str(entry.get("label") or provider or "Connector").strip()
-        summaries.append(
-            {
-                "id": connector_id,
-                "connector": provider,
-                "label": label,
-                "capabilities": _connector_capability_summary(provider),
-                "session_connector": connector_id == str(current_connector_id or "").strip(),
-            }
-        )
-        if provider in {"google_workspace", "microsoft_365"} and preferred_email_entry is None:
-            preferred_email_entry = entry
-
-    email_limit = _telegram_requested_recent_email_limit(goal)
-    needs_prompt = bool(
-        email_limit > 0
-        or any(token in raw_goal for token in ("connector", "email", "gmail", "inbox", "calendar", "drive", "document", "spreadsheet", "sheet"))
+    return _telegram_connector_context_service().workspace_connector_context(
+        goal,
+        workspace_id,
+        current_connector_id,
     )
-
-    prompt_lines: List[str] = []
-    if summaries and needs_prompt:
-        prompt_lines.append("Workspace connectors available for this request:")
-        for item in summaries:
-            label = str(item.get("label") or "Connector").strip()
-            capabilities = str(item.get("capabilities") or "connected tool").strip()
-            prompt_lines.append(f"- {label}: {capabilities}")
-
-    selected_connector_id = ""
-    selected_connector_provider = ""
-    if email_limit > 0 and isinstance(preferred_email_entry, dict):
-        selected_connector_id = str(preferred_email_entry.get("id") or "").strip()
-        selected_connector_provider = str(preferred_email_entry.get("connector") or "").strip().lower()
-        try:
-            secret = resolve_vault_credential(selected_connector_id, workspace_id)
-            messages = list_recent_connector_messages(secret, limit=email_limit)
-        except Exception as exc:
-            prompt_lines.append(f"Connector fetch warning: {str(exc).strip()}")
-            messages = []
-        if messages:
-            prompt_lines.append("")
-            prompt_lines.append(
-                f"Recent emails fetched from {preferred_email_entry.get('label') or selected_connector_provider}:"
-            )
-            for idx, message in enumerate(messages, start=1):
-                subject = str(message.get("subject") or "(no subject)").strip()
-                sender = str(message.get("from") or "unknown sender").strip()
-                date = str(message.get("date") or "").strip()
-                snippet = re.sub(r"\s+", " ", str(message.get("snippet") or "").strip())
-                if len(snippet) > 280:
-                    snippet = snippet[:277] + "..."
-                line = f"{idx}. From: {sender} | Subject: {subject}"
-                if date:
-                    line += f" | Date: {date}"
-                prompt_lines.append(line)
-                if snippet:
-                    prompt_lines.append(f"   Snippet: {snippet}")
-
-    return {
-        "channel_connectors": [
-            {"connector": str(item.get("connector") or "").strip(), "credential_id": str(item.get("id") or "").strip()}
-            for item in summaries
-            if str(item.get("connector") or "").strip() and str(item.get("id") or "").strip()
-        ],
-        "available_connectors": summaries,
-        "connector_credential_id": selected_connector_id or None,
-        "connector_provider": selected_connector_provider or None,
-        "prompt_append": "\n".join(prompt_lines).strip(),
-    }
 
 
 def _telegram_build_goal_with_connector_context(goal: str, connector_prompt: str) -> str:
-    request_text = str(goal or "").strip()
-    prompt = str(connector_prompt or "").strip()
-    if not prompt:
-        return request_text
-    if not request_text:
-        return prompt
-    return f"{request_text}\n\n{prompt}"
+    return _telegram_connector_context_service().build_goal_with_connector_context(goal, connector_prompt)
 
 
 def _telegram_installed_skill_query(
@@ -1564,31 +1224,13 @@ def _telegram_installed_skill_query(
     chat_id: str,
     session_key: str,
 ) -> Dict[str, Any]:
-    if not ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED:
-        return {
-            "handled": False,
-            "response": "",
-            "prompt_append": "",
-            "active_skill_ids": [],
-            "errors": [],
-        }
-    try:
-        return query_active_installed_skills(
-            query=goal,
-            channel="telegram",
-            workspace_id=workspace_id,
-            connector_id=connector_id,
-            chat_id=chat_id,
-            session_key=session_key,
-        )
-    except Exception as exc:
-        return {
-            "handled": False,
-            "response": "",
-            "prompt_append": "",
-            "active_skill_ids": [],
-            "errors": [{"skill_id": "installed_skills", "error": str(exc)}],
-        }
+    return _telegram_connector_context_service().installed_skill_query(
+        goal=goal,
+        workspace_id=workspace_id,
+        connector_id=connector_id,
+        chat_id=chat_id,
+        session_key=session_key,
+    )
 
 
 def _telegram_prefixed_command(profile: Dict[str, Any], command_text: str) -> str:

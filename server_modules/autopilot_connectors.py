@@ -767,15 +767,6 @@ def _autopilot_runtime_support_service() -> AutopilotRuntimeSupportService:
         )
     return _AUTOPILOT_RUNTIME_SUPPORT_SERVICE
 
-
-def _whatsapp_autopilot_state_service():
-    return _whatsapp_service_registry().whatsapp_autopilot_state_service()
-
-
-def _telegram_autopilot_state_service():
-    return _telegram_service_registry().telegram_autopilot_state_service()
-
-
 def _load_telegram_autopilot_state() -> None:
     _telegram_service_registry().telegram_autopilot_state_service().load_state()
 
@@ -795,35 +786,6 @@ def _whatsapp_autopilot_snapshot() -> Dict[str, Any]:
 def _whatsapp_autopilot_activate() -> None:
     _whatsapp_service_registry().whatsapp_autopilot_state_service().activate()
 
-
-def _telegram_autopilot_runtime_service():
-    return _telegram_service_registry().telegram_autopilot_runtime_service()
-
-
-def _telegram_sender_filter_service():
-    return _telegram_service_registry().telegram_sender_filter_service()
-
-
-def _telegram_action_service():
-    return _telegram_service_registry().telegram_action_service()
-
-
-def _telegram_inbound_context_service():
-    return _telegram_service_registry().telegram_inbound_context_service()
-
-
-def _telegram_autopilot_loop_service():
-    return _telegram_service_registry().telegram_autopilot_loop_service()
-
-
-def _telegram_poll_cycle_service():
-    return _telegram_service_registry().telegram_poll_cycle_service()
-
-
-def _telegram_poll_dispatch_service():
-    return _telegram_service_registry().telegram_poll_dispatch_service()
-
-
 def _telegram_increment_processed_updates() -> None:
     _telegram_service_registry().telegram_autopilot_runtime_service().increment_processed_updates()
 
@@ -832,36 +794,11 @@ def _telegram_set_connectors_seen(count: int) -> None:
     _telegram_service_registry().telegram_autopilot_runtime_service().set_connectors_seen(count)
 
 
-def _telegram_poll_state_service():
-    return _telegram_service_registry().telegram_poll_state_service()
-
-
-def _telegram_run_action_service():
-    return _telegram_service_registry().telegram_run_action_service()
-
-
-def _telegram_connector_poll_service():
-    return _telegram_service_registry().telegram_connector_poll_service()
-
-
 def _mark_telegram_autopilot_started(started_at: str) -> None:
     with TELEGRAM_AUTOPILOT_LOCK:
         TELEGRAM_AUTOPILOT_STATE["active"] = True
         TELEGRAM_AUTOPILOT_STATE["started_at"] = started_at
         TELEGRAM_AUTOPILOT_STATE["enabled"] = True
-
-
-def _telegram_autopilot_supervisor_service():
-    return _telegram_service_registry().telegram_autopilot_supervisor_service()
-
-
-def _whatsapp_run_dispatch_service():
-    return _whatsapp_service_registry().whatsapp_run_dispatch_service()
-
-
-def _whatsapp_webhook_service():
-    return _whatsapp_service_registry().whatsapp_webhook_service()
-
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
     _init()
@@ -1489,7 +1426,7 @@ def _whatsapp_connector_match(
 # --- COPIED ENDPOINTS ---
 async def handle_whatsapp_twilio_webhook(request: Request):
     _init()
-    form = _whatsapp_webhook_service().parse_form_urlencoded(await request.body())
+    form = _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(await request.body())
     provided_secret = str(
         request.query_params.get("secret")
         or request.headers.get("x-orion-webhook-secret")
@@ -1500,7 +1437,7 @@ async def handle_whatsapp_twilio_webhook(request: Request):
         configured_secret=ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET,
         provided_secret=provided_secret,
         form=form,
-        handle_inbound=lambda payload: _whatsapp_webhook_service().handle_inbound(payload),
+        handle_inbound=lambda payload: _whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(payload),
     )
     if int(result.get("status_code") or 200) == 403:
         return Response(status_code=403, content=str(result.get("content") or "forbidden"))
@@ -1509,7 +1446,7 @@ async def handle_whatsapp_twilio_webhook(request: Request):
 
 def _run_telegram_autopilot_forever():
     _init()
-    _telegram_autopilot_supervisor_service().run_forever()
+    _telegram_service_registry().telegram_autopilot_supervisor_service().run_forever()
 
 
 async def handle_telegram_autopilot_status():

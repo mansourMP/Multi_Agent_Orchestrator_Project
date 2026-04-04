@@ -1359,6 +1359,54 @@ This was a real subtraction cut, not another service add. The monolith now relie
   - `server_modules.tests.test_telegram_autopilot_service_registry`
   - `server_modules.tests.test_telegram_run_dispatch_service`
 
+### 2026-04-05 - Dead Internal Service-Accessor Band Removed From Autopilot Connectors
+
+#### Stage
+
+Stage 2 connector convergence continues. Another dead compatibility strip is gone from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut removed internal-only service-accessor functions that no longer represented runtime contract and were no longer used outside their own definitions. The top-level module now calls the registries directly at the only remaining live callsites.
+
+#### Completed Work
+
+- Removed the dead internal accessor band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including definition-only wrappers for:
+  - Telegram runtime, sender-filter, action, inbound-context, loop, poll-cycle, poll-dispatch, poll-state, run-action, connector-poll, and supervisor services
+  - WhatsApp state, run-dispatch, and webhook services
+- Inlined the only remaining live uses:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now calls the WhatsApp webhook service directly through the WhatsApp registry inside `handle_whatsapp_twilio_webhook()`
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now calls the Telegram supervisor service directly through the Telegram registry inside `_run_telegram_autopilot_forever()`
+- Confirmed that none of those deleted internal accessor names remain referenced inside the module.
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1472` lines.
+- The removed service-accessor names were not part of the runtime import surface from:
+  - [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py)
+  - [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py)
+- The remaining file is increasingly concentrated around the real runtime-facing entrypoints, service construction, and the smaller set of helper logic still not yet moved elsewhere.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a non-trivial helper layer around workflow setup, runtime skill shaping, event recording, and transport/context support.
+- The runtime export shell still needs a stricter audit so only true public entrypoints remain.
+- Connector convergence is ahead of some other architecture tracks, especially durable runs and remaining direct-chat ownership.
+
+#### Next Required Work
+
+1. Keep auditing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) for dead wrapper and helper bands that are no longer part of the runtime surface.
+2. Preserve the stable runtime imports used by [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py) and [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py), but remove internal-only names aggressively once they are no longer referenced.
+3. After the connector shell is tighter, shift more effort back toward the larger remaining convergence work on the direct-chat and durable-run sides.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_autopilot_supervisor_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+
 ### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
 
 #### Stage

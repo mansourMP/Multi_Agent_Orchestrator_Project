@@ -1305,6 +1305,76 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Connector Monolith State Bridge Wrappers Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer owns the thin Telegram and WhatsApp state-bridge wrapper band that only forwarded into already-extracted state and runtime services.
+
+This cut is intentionally subtractive. The goal was not to add another service, but to stop [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) from pretending to own state helpers that were already implemented elsewhere.
+
+#### Completed Work
+
+- Rewired the Telegram lazy service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so internal callers now hit the extracted services directly for:
+  - state persistence
+  - connector entry listing
+  - connector state lookup and patching
+  - error marking
+  - poll bookkeeping
+- Rewired the shared autopilot registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so Telegram and WhatsApp snapshots and connector listings now go straight through the extracted channel state services.
+- Rewired the Telegram terminal and run-entry service bundles in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so run-count persistence and connector-state interactions go directly to the extracted Telegram and WhatsApp state services.
+- Removed the now-dead wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_load_telegram_autopilot_state()`
+  - `_persist_telegram_autopilot_state()`
+  - `_telegram_autopilot_snapshot()`
+  - `_load_whatsapp_autopilot_state()`
+  - `_persist_whatsapp_autopilot_state()`
+  - `_whatsapp_autopilot_mark_error()`
+  - `_whatsapp_autopilot_activate()`
+  - `_whatsapp_autopilot_mark_inbound()`
+  - `_whatsapp_autopilot_increment_processed()`
+  - `_whatsapp_connector_state()`
+  - `_set_whatsapp_connector_state()`
+  - `_list_whatsapp_connector_entries()`
+  - `_whatsapp_autopilot_snapshot()`
+  - `_telegram_autopilot_mark_error()`
+  - `_telegram_autopilot_mark_poll()`
+  - `_telegram_connector_state()`
+  - `_set_telegram_connector_state()`
+  - `_list_telegram_connector_entries()`
+  - `_whatsapp_autopilot_log()`
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now calls the extracted Telegram and WhatsApp state/runtime services directly instead of routing through local wrapper aliases first.
+- The monolith line count dropped from `2015` to `1936` in this cut.
+- The remaining code in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now more honestly a transport and composition shell than a fake owner of channel state.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the last thin bridge layer for transport wrappers, endpoint handlers, and cross-channel runtime coordination.
+- Some service construction still happens inside the monolith rather than through cleaner composition roots.
+- The file is much smaller, but it is not yet reduced to a pure endpoint and registry shell.
+
+#### Next Required Work
+
+1. Continue thinning the last bridge layer in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially endpoint and transport wrappers that still only delegate.
+2. Decide how far to collapse the remaining composition shell without making the service graph harder to understand.
+3. Keep favoring deletion over compatibility aliases unless a stable external import path truly requires the wrapper.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_runtime_status_service`
+
 ### 2026-04-05 - Telegram Menu And Keyboard Flow Moved Behind Menu Service
 
 #### Stage

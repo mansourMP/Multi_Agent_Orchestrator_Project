@@ -9,6 +9,7 @@ from urllib import request as urlrequest, error as urlerror
 from scripts.platform_execution import stack_start_command_hint
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
+from server_modules.connectors.telegram_media_service import TelegramMediaService, telegram_safe_path_token
 from server_modules.connectors.telegram_profile_service import (
     TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
     TelegramProfileService,
@@ -212,6 +213,14 @@ _TELEGRAM_CAMERA_SETUP_SERVICE = TelegramCameraSetupService(
     write_json=lambda path, payload: _safe_write_json(path, payload),
     now_iso=lambda: _utc_now_iso(),
     session_key_builder=lambda workspace_id, chat_id: _telegram_profile_key(workspace_id, chat_id),
+)
+_TELEGRAM_MEDIA_SERVICE = TelegramMediaService(
+    media_dir=ORION_TELEGRAM_MEDIA_DIR,
+    media_enabled=ORION_TELEGRAM_MEDIA_ENABLED,
+    media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+    media_max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
+    media_include_in_goal=ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL,
+    telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
 )
 
 
@@ -1881,118 +1890,19 @@ def _telegram_sender_allowed(sender: Dict[str, Any], allow_from: List[str]) -> b
 
 
 def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if not isinstance(update, dict):
-        return None
-    # Accept classic + newer Bot API message update envelopes.
-    for key in (
-        "message",
-        "edited_message",
-        "channel_post",
-        "edited_channel_post",
-        "business_message",
-        "edited_business_message",
-    ):
-        candidate = update.get(key)
-        if isinstance(candidate, dict):
-            text = str(candidate.get("text") or candidate.get("caption") or "").strip()
-            reply_to = candidate.get("reply_to_message") if isinstance(candidate.get("reply_to_message"), dict) else {}
-            attachments: List[Dict[str, Any]] = []
-            photos = candidate.get("photo") if isinstance(candidate.get("photo"), list) else []
-            if photos:
-                best_photo: Optional[Dict[str, Any]] = None
-                for photo in photos:
-                    if not isinstance(photo, dict):
-                        continue
-                    if best_photo is None:
-                        best_photo = photo
-                        continue
-                    best_size = int(best_photo.get("file_size") or 0)
-                    best_area = int(best_photo.get("width") or 0) * int(best_photo.get("height") or 0)
-                    cur_size = int(photo.get("file_size") or 0)
-                    cur_area = int(photo.get("width") or 0) * int(photo.get("height") or 0)
-                    if cur_size > best_size or cur_area > best_area:
-                        best_photo = photo
-                if isinstance(best_photo, dict):
-                    file_id = str(best_photo.get("file_id") or "").strip()
-                    if file_id:
-                        attachments.append(
-                            {
-                                "kind": "photo",
-                                "file_id": file_id,
-                                "file_unique_id": str(best_photo.get("file_unique_id") or "").strip(),
-                                "file_size": int(best_photo.get("file_size") or 0),
-                                "mime_type": "image/jpeg",
-                                "width": int(best_photo.get("width") or 0),
-                                "height": int(best_photo.get("height") or 0),
-                            }
-                        )
-
-            document = candidate.get("document") if isinstance(candidate.get("document"), dict) else None
-            if isinstance(document, dict):
-                mime_type = str(document.get("mime_type") or "").strip().lower()
-                if mime_type.startswith("image/"):
-                    file_id = str(document.get("file_id") or "").strip()
-                    if file_id:
-                        attachments.append(
-                            {
-                                "kind": "document_image",
-                                "file_id": file_id,
-                                "file_unique_id": str(document.get("file_unique_id") or "").strip(),
-                                "file_size": int(document.get("file_size") or 0),
-                                "mime_type": mime_type or "application/octet-stream",
-                                "file_name": str(document.get("file_name") or "").strip(),
-                            }
-                        )
-            return {
-                "text": text,
-                "chat": candidate.get("chat") if isinstance(candidate.get("chat"), dict) else {},
-                "from": candidate.get("from") if isinstance(candidate.get("from"), dict) else {},
-                "message_id": candidate.get("message_id"),
-                "reply_to_message_id": reply_to.get("message_id"),
-                "date": candidate.get("date"),
-                "kind": key,
-                "attachments": attachments,
-            }
-    return None
+    return _TELEGRAM_MEDIA_SERVICE.extract_message(update)
 
 
 def _telegram_safe_path_token(value: Any) -> str:
-    token = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(value or "").strip())
-    return token.strip("._-") or "unknown"
+    return telegram_safe_path_token(value)
 
 
 def _telegram_extension_from_attachment(attachment: Dict[str, Any], remote_file_path: str) -> str:
-    suffix = Path(str(remote_file_path or "")).suffix.strip().lower()
-    if suffix:
-        return suffix[:12]
-    file_name = str(attachment.get("file_name") or "").strip()
-    if file_name:
-        name_suffix = Path(file_name).suffix.strip().lower()
-        if name_suffix:
-            return name_suffix[:12]
-    mime_type = str(attachment.get("mime_type") or "").strip().lower()
-    guessed = mimetypes.guess_extension(mime_type) if mime_type else None
-    if guessed:
-        return str(guessed).strip().lower()[:12]
-    return ".bin"
+    return _TELEGRAM_MEDIA_SERVICE.extension_from_attachment(attachment, remote_file_path)
 
 
 def _telegram_download_file(bot_token: str, remote_file_path: str, dest_path: Path, max_bytes: int) -> int:
-    file_url = f"https://api.telegram.org/file/bot{bot_token}/{remote_file_path}"
-    req = urlrequest.Request(file_url, method="GET")
-    context = ssl.create_default_context(cafile=certifi.where())
-    total = 0
-    with urlrequest.urlopen(req, timeout=20, context=context) as resp:
-        with dest_path.open("wb") as handle:
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_bytes:
-                    raise RuntimeError(f"Attachment exceeds max size ({max_bytes} bytes).")
-                handle.write(chunk)
-    return total
+    return _TELEGRAM_MEDIA_SERVICE.download_file(bot_token, remote_file_path, dest_path, max_bytes)
 
 
 def _telegram_store_attachments(
@@ -2004,90 +1914,18 @@ def _telegram_store_attachments(
     message_id: str,
     attachments: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    if not ORION_TELEGRAM_MEDIA_ENABLED:
-        return []
-    if not isinstance(attachments, list) or not attachments:
-        return []
-
-    workspace_token = _telegram_safe_path_token(workspace_id or "default")
-    chat_token = _telegram_safe_path_token(chat_id or "unknown")
-    message_token = _telegram_safe_path_token(message_id or str(update_id))
-    base_dir = ORION_TELEGRAM_MEDIA_DIR / workspace_token / chat_token
-    try:
-        base_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(base_dir, 0o700)
-        except Exception:
-            pass
-    except Exception:
-        return []
-
-    stored: List[Dict[str, Any]] = []
-    for idx, attachment in enumerate(attachments[:ORION_TELEGRAM_MEDIA_MAX_ITEMS], start=1):
-        if not isinstance(attachment, dict):
-            continue
-        file_id = str(attachment.get("file_id") or "").strip()
-        if not file_id:
-            continue
-        try:
-            meta = _telegram_api_request(bot_token, "getFile", params={"file_id": file_id})
-            remote_path = str(meta.get("file_path") or "").strip()
-            if not remote_path:
-                continue
-            ext = _telegram_extension_from_attachment(attachment, remote_path)
-            filename = f"{_telegram_safe_path_token(update_id)}_{message_token}_{idx}{ext}"
-            destination = base_dir / filename
-            size_bytes = _telegram_download_file(
-                bot_token=bot_token,
-                remote_file_path=remote_path,
-                dest_path=destination,
-                max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
-            )
-            try:
-                os.chmod(destination, 0o600)
-            except Exception:
-                pass
-            relative_path = str(destination).replace(str(Path.cwd()) + os.sep, "")
-            stored.append(
-                {
-                    "kind": str(attachment.get("kind") or "").strip() or "attachment",
-                    "mime_type": str(attachment.get("mime_type") or "").strip(),
-                    "file_id": file_id,
-                    "file_unique_id": str(attachment.get("file_unique_id") or "").strip(),
-                    "bytes": int(size_bytes),
-                    "path": str(destination),
-                    "relative_path": relative_path,
-                }
-            )
-        except Exception:
-            continue
-    return stored
+    return _TELEGRAM_MEDIA_SERVICE.store_attachments(
+        bot_token=bot_token,
+        workspace_id=workspace_id,
+        chat_id=chat_id,
+        update_id=update_id,
+        message_id=message_id,
+        attachments=attachments,
+    )
 
 
 def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str, Any]]) -> str:
-    request = str(goal or "").strip()
-    if not request:
-        request = "Please help with the attached image(s)."
-    if not ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL:
-        return request
-    if not isinstance(attachments, list) or not attachments:
-        return request
-    lines = []
-    for item in attachments[:ORION_TELEGRAM_MEDIA_MAX_ITEMS]:
-        if not isinstance(item, dict):
-            continue
-        path = str(item.get("relative_path") or item.get("path") or "").strip()
-        if not path:
-            continue
-        mime = str(item.get("mime_type") or "").strip()
-        lines.append(f"- {path}" + (f" ({mime})" if mime else ""))
-    if not lines:
-        return request
-    return (
-        f"{request}\n\n"
-        "Attached image files were saved locally in the workspace. If needed, inspect them before answering:\n"
-        + "\n".join(lines)
-    )
+    return _TELEGRAM_MEDIA_SERVICE.build_goal_with_attachments(goal, attachments)
 
 
 def _bool_from_any(value: Any, default: bool = False) -> bool:

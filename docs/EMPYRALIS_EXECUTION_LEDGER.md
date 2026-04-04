@@ -732,6 +732,67 @@ Stage 1 continues. Direct-chat provider routing, credential lookup, native-chat 
   - `server_modules.tests.test_agent_machine_mode`
   - second provider-service-focused rerun after the Codex-forcing extraction: `91 tests`, `OK`
 
+### 2026-04-04 - Direct Chat Tool And Handoff Routing Moved Behind Dedicated Routing Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat execution loop no longer owns the entire inline policy block that decides between direct tool execution and durable run handoff.
+
+This cut does not remove the streaming loop itself from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), but it does move the routing policy that was previously embedded inside that loop.
+
+#### Completed Work
+
+- Added a new routing boundary in [server_modules/direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_routing_service.py) for:
+  - `DirectChatRouteDecision`
+  - `plan_direct_chat_route()`
+- Moved the following direct-chat routing decisions behind the service boundary:
+  - whether the message should prefer durable run handoff
+  - whether a preview-backed connector request disables builtin direct tools
+  - whether connector, local, and builtin direct tools are allowed
+  - whether direct tool execution is disabled in favor of durable run handoff
+  - whether the preview should auto-start a durable run immediately
+- Replaced the inline policy block in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with `_plan_direct_chat_route()`, which delegates into [server_modules/direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_routing_service.py)
+- Preserved the existing handoff behavior for complex local tasks by moving the fallback preview synthesis into the routing service instead of leaving it in the chat loop
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_routing_service.py)
+
+#### Current Truth
+
+- The direct-chat loop still owns streaming, run kickoff, final payload emission, and higher-level orchestration.
+- The decision policy that determines whether direct tools are allowed or whether the request should move toward durable run handoff is now service-owned.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) now composes provider selection, prompt assembly, fallback execution, memory behaviors, and route planning through extracted service boundaries instead of owning all of those inline.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns the actual streaming execution loop and the run-start / stream-yield orchestration.
+- The routing service currently depends on injected callables from the chat module rather than owning a richer explicit dependency bundle.
+- Compatibility wrappers in the chat module still remain the main patch surface for several older tests.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the remaining streaming execution and final payload assembly logic.
+2. Decide whether the direct-chat run handoff start/stream path should become its own service boundary next.
+3. Keep deleting inline policy from the chat module rather than letting new orchestration accumulate there.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_routing_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_routing_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - final rerun after the route-planning regression fix: `94 tests`, `OK`
+
 ### 2026-04-04 - No-Provider Memory Parsing Moved Behind Memory Service
 
 #### Stage

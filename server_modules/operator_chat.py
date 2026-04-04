@@ -25,6 +25,7 @@ from scripts.orion_local_worker_llm import (
 from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_prompt_service
+from server_modules import direct_chat_routing_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -563,6 +564,48 @@ def _resolve_provider_for_direct_chat_message(
         google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
         telegram_keywords=TELEGRAM_KEYWORDS,
         slack_keywords=SLACK_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+    )
+
+
+def _plan_direct_chat_route(
+    *,
+    message: str,
+    availability: Dict[str, Any],
+    provider: str,
+    tools: List[Dict[str, Any]],
+) -> direct_chat_routing_service.DirectChatRouteDecision:
+    return direct_chat_routing_service.plan_direct_chat_route(
+        message=message,
+        availability=availability,
+        provider=provider,
+        tools=tools,
+        compact_text_fn=_compact_text,
+        mentions_any_fn=_mentions_any,
+        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+        preview_run_response_fn=_preview_run_response,
+        prefer_durable_run_handoff_fn=_prefer_durable_run_handoff,
+        durable_run_preferred_response_fn=_durable_run_preferred_response,
+        message_can_use_direct_connector_tools_fn=lambda message: _message_can_use_direct_connector_tools(
+            message,
+            provider=provider,
+            tools=tools,
+        ),
+        message_can_use_direct_local_tools_fn=lambda message: _message_can_use_direct_local_tools(
+            message,
+            provider=provider,
+            tools=tools,
+        ),
+        message_can_use_builtin_direct_tools_fn=lambda message: _message_can_use_builtin_direct_tools(
+            message,
+            tools=tools,
+        ),
+        can_auto_start_run_handoff_fn=_can_auto_start_run_handoff,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        discord_keywords=DISCORD_KEYWORDS,
         dropbox_keywords=DROPBOX_KEYWORDS,
         s3_keywords=S3_KEYWORDS,
     )
@@ -3804,48 +3847,17 @@ def build_direct_operator_reply(
         normalized_message,
         tools_present=bool(tools),
     )
-    compact_message = _compact_text(normalized_message)
-    prefer_durable_run_handoff = _prefer_durable_run_handoff(normalized_message, availability_payload)
-    preview = _preview_run_response(normalized_message, availability_payload)
-    connector_preview_requested = bool(preview) and (
-        _mentions_any(compact_message, GOOGLE_WORKSPACE_KEYWORDS)
-        or _is_obvious_smtp_write_request(compact_message)
-        or _mentions_any(compact_message, TELEGRAM_KEYWORDS)
-        or _mentions_any(compact_message, SLACK_KEYWORDS)
-        or _mentions_any(compact_message, DISCORD_KEYWORDS)
-        or _mentions_any(compact_message, DROPBOX_KEYWORDS)
-        or _mentions_any(compact_message, S3_KEYWORDS)
-    )
-    allow_connector_direct_tools = _message_can_use_direct_connector_tools(
-        normalized_message,
+    route_decision = _plan_direct_chat_route(
+        message=normalized_message,
+        availability=availability_payload,
         provider=provider,
         tools=tools,
     )
-    allow_local_direct_tools = _message_can_use_direct_local_tools(
-        normalized_message,
-        provider=provider,
-        tools=tools,
-    )
-    allow_builtin_direct_tools = _message_can_use_builtin_direct_tools(
-        normalized_message,
-        tools=tools,
-    )
-    if connector_preview_requested and not allow_connector_direct_tools and not allow_local_direct_tools:
-        allow_builtin_direct_tools = False
-    allow_direct_tool_calls = allow_connector_direct_tools or allow_local_direct_tools or allow_builtin_direct_tools
-    if prefer_durable_run_handoff:
-        allow_direct_tool_calls = False
     fallback_reason = None
-    if not allow_direct_tool_calls:
-        if preview is None and prefer_durable_run_handoff:
-            preview = _durable_run_preferred_response(normalized_message)
+    if not route_decision.allow_direct_tool_calls:
+        preview = route_decision.preview
         if preview is not None:
-            preview_actions = preview.get("actions") if isinstance(preview.get("actions"), list) else []
-            should_auto_start_run = any(
-                isinstance(action, dict) and str(action.get("kind") or "").strip().lower() == "run"
-                for action in preview_actions
-            )
-            if should_auto_start_run and _can_auto_start_run_handoff(availability_payload):
+            if route_decision.should_auto_start_run:
                 yield {
                     "type": "step",
                     "label": "Starting durable run",

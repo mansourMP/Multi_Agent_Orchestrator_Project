@@ -657,50 +657,6 @@ def _direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str 
     return memory_service.direct_chat_workspace_context_text(workspace_id, memory_query=memory_query)
 
 
-def _parse_direct_chat_memory_facts(raw_text: str) -> List[str]:
-    text = str(raw_text or "").strip()
-    if not text:
-        return []
-    candidate = text
-    fenced = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text, re.IGNORECASE)
-    if fenced:
-        candidate = str(fenced.group(1) or "").strip()
-    else:
-        array_match = re.search(r"\[[\s\S]*\]", text)
-        if array_match:
-            candidate = str(array_match.group(0) or "").strip()
-    parsed: Any = None
-    try:
-        parsed = json.loads(candidate)
-    except Exception:
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            parsed = None
-    if isinstance(parsed, dict):
-        facts_value = parsed.get("facts")
-        if isinstance(facts_value, list):
-            parsed = facts_value
-    if not isinstance(parsed, list):
-        return []
-    normalized: List[str] = []
-    seen: set[str] = set()
-    for item in parsed:
-        fact = re.sub(r"\s+", " ", str(item or "").strip())
-        if not fact:
-            continue
-        normalized_key = fact.lower()
-        if normalized_key in seen:
-            continue
-        seen.add(normalized_key)
-        normalized.append(fact)
-    return normalized
-
-
-def _save_direct_chat_memory_fact(workspace_id: str, fact: str) -> None:
-    memory_service.store_direct_chat_memory_fact(workspace_id, fact)
-
-
 def _build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
     return memory_service.build_direct_chat_daily_log_summary(
         user_message=user_message,
@@ -719,50 +675,19 @@ def _persist_direct_chat_memory_best_effort(
     user_message: str,
     assistant_reply: str,
 ) -> None:
-    normalized_user_message = str(user_message or "").strip()
-    normalized_assistant_reply = str(assistant_reply or "").strip()
-    if not normalized_user_message or not normalized_assistant_reply:
-        return
-    daily_log_summary = memory_service.save_direct_chat_daily_log_summary(
+    memory_service.persist_direct_chat_memory_best_effort(
         workspace_id=workspace_id,
-        user_message=normalized_user_message,
-        assistant_reply=normalized_assistant_reply,
+        provider=provider,
+        model=model,
+        credentials=credentials,
+        reasoning_effort=reasoning_effort,
+        prior_messages=prior_messages,
+        user_message=user_message,
+        assistant_reply=assistant_reply,
+        generate_reply=generate_chat_reply_with_provider_fallback,
+        extraction_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
+        extraction_system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
     )
-    extraction_prior_messages: List[Dict[str, str]] = list(prior_messages or [])
-    extraction_prior_messages.append({"role": "user", "content": normalized_user_message})
-    extraction_prior_messages.append({"role": "assistant", "content": normalized_assistant_reply})
-    extraction_context = {
-        "workspace_id": workspace_id,
-        "provider": provider,
-        "model": model,
-        "source": "chat_direct_memory_extract",
-        "reasoning_effort": reasoning_effort,
-        "tools": [],
-    }
-    extraction_metadata: Dict[str, Any] = {
-        "provider": provider,
-        "model": model,
-        "source": "chat_direct_memory_extract",
-        "reasoning_effort": reasoning_effort,
-        "tools": [],
-    }
-    if isinstance(credentials, dict) and credentials:
-        extraction_metadata["credentials"] = credentials
-    try:
-        extraction_reply, _usage, _attempted, extraction_error = generate_chat_reply_with_provider_fallback(
-            context=extraction_context,
-            metadata=extraction_metadata,
-            user_goal=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
-            system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
-            prior_messages=extraction_prior_messages,
-        )
-        if extraction_error or not extraction_reply:
-            return
-        extracted_facts = _parse_direct_chat_memory_facts(extraction_reply)
-        for fact in extracted_facts:
-            _save_direct_chat_memory_fact(workspace_id, fact)
-    except Exception:
-        return
 
 
 def _persist_direct_chat_transcript_best_effort(

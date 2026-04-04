@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 import hashlib
+import json
 import re
 from typing import Any, Dict, List
 
@@ -239,6 +240,109 @@ def save_direct_chat_daily_log_summary(*, workspace_id: str, user_message: str, 
     if summary:
         save_daily_log(workspace_id, summary)
     return summary
+
+
+def parse_direct_chat_memory_facts(raw_text: str) -> List[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+    candidate = text
+    fenced = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text, re.IGNORECASE)
+    if fenced:
+        candidate = str(fenced.group(1) or "").strip()
+    else:
+        array_match = re.search(r"\[[\s\S]*\]", text)
+        if array_match:
+            candidate = str(array_match.group(0) or "").strip()
+    parsed: Any = None
+    try:
+        parsed = json.loads(candidate)
+    except Exception:
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+    if isinstance(parsed, dict):
+        facts_value = parsed.get("facts")
+        if isinstance(facts_value, list):
+            parsed = facts_value
+    if not isinstance(parsed, list):
+        return []
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        fact = re.sub(r"\s+", " ", str(item or "").strip())
+        if not fact:
+            continue
+        normalized_key = fact.lower()
+        if normalized_key in seen:
+            continue
+        seen.add(normalized_key)
+        normalized.append(fact)
+    return normalized
+
+
+def persist_direct_chat_memory_best_effort(
+    *,
+    workspace_id: str,
+    provider: str | None,
+    model: str | None,
+    credentials: Dict[str, Any] | None,
+    reasoning_effort: str,
+    prior_messages: List[Dict[str, str]],
+    user_message: str,
+    assistant_reply: str,
+    generate_reply: Any,
+    extraction_prompt: str,
+    extraction_system_prompt: str,
+) -> None:
+    normalized_user_message = str(user_message or "").strip()
+    normalized_assistant_reply = str(assistant_reply or "").strip()
+    if not normalized_user_message or not normalized_assistant_reply:
+        return
+    try:
+        save_direct_chat_daily_log_summary(
+            workspace_id=workspace_id,
+            user_message=normalized_user_message,
+            assistant_reply=normalized_assistant_reply,
+        )
+    except Exception:
+        pass
+    extraction_prior_messages: List[Dict[str, str]] = list(prior_messages or [])
+    extraction_prior_messages.append({"role": "user", "content": normalized_user_message})
+    extraction_prior_messages.append({"role": "assistant", "content": normalized_assistant_reply})
+    extraction_context = {
+        "workspace_id": workspace_id,
+        "provider": provider,
+        "model": model,
+        "source": "chat_direct_memory_extract",
+        "reasoning_effort": reasoning_effort,
+        "tools": [],
+    }
+    extraction_metadata: Dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "source": "chat_direct_memory_extract",
+        "reasoning_effort": reasoning_effort,
+        "tools": [],
+    }
+    if isinstance(credentials, dict) and credentials:
+        extraction_metadata["credentials"] = credentials
+    try:
+        extraction_reply, _usage, _attempted, extraction_error = generate_reply(
+            context=extraction_context,
+            metadata=extraction_metadata,
+            user_goal=extraction_prompt,
+            system_prompt=extraction_system_prompt,
+            prior_messages=extraction_prior_messages,
+        )
+        if extraction_error or not extraction_reply:
+            return
+        extracted_facts = parse_direct_chat_memory_facts(extraction_reply)
+        for fact in extracted_facts:
+            store_direct_chat_memory_fact(workspace_id, fact)
+    except Exception:
+        return
 
 
 def find_workspace_memory_entry(workspace_id: str, query: str) -> Dict[str, Any] | None:

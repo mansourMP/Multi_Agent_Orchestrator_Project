@@ -178,6 +178,50 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertIn("Continue the architecture refactor.", summary)
         self.assertIn("Moved chat memory helpers behind the service boundary.", recent_logs)
 
+    def test_parse_direct_chat_memory_facts_dedupes_and_accepts_object_wrapper(self) -> None:
+        facts = memory_service.parse_direct_chat_memory_facts(
+            '{"facts":["Mansur prefers concise updates.","Mansur prefers concise updates.","Timezone is Asia/Shanghai."]}'
+        )
+
+        self.assertEqual(
+            facts,
+            [
+                "Mansur prefers concise updates.",
+                "Timezone is Asia/Shanghai.",
+            ],
+        )
+
+    def test_persist_direct_chat_memory_best_effort_stores_log_and_extracted_facts(self) -> None:
+        def fake_generate_reply(**kwargs):
+            self.assertEqual(kwargs["context"]["source"], "chat_direct_memory_extract")
+            self.assertEqual(kwargs["metadata"]["source"], "chat_direct_memory_extract")
+            self.assertEqual(kwargs["user_goal"], "Extract durable facts.")
+            self.assertEqual(kwargs["system_prompt"], "Return a JSON array.")
+            self.assertEqual(kwargs["prior_messages"][-2]["role"], "user")
+            self.assertEqual(kwargs["prior_messages"][-1]["role"], "assistant")
+            return ('["Timezone is Asia/Shanghai.","Timezone is Asia/Shanghai."]', {}, "openai", "")
+
+        memory_service.persist_direct_chat_memory_best_effort(
+            workspace_id="default",
+            provider="openai",
+            model="gpt-test",
+            credentials={"api_key": "sk-test"},
+            reasoning_effort="medium",
+            prior_messages=[{"role": "user", "content": "Earlier context."}],
+            user_message="Remember the timezone.",
+            assistant_reply="I will keep that in mind.",
+            generate_reply=fake_generate_reply,
+            extraction_prompt="Extract durable facts.",
+            extraction_system_prompt="Return a JSON array.",
+        )
+
+        recent_logs = memory_service.get_recent_logs("default", days=7)
+        entries = memory_service.list_memory_entries("default")
+
+        self.assertIn("Remember the timezone.", recent_logs)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["content"], "Timezone is Asia/Shanghai.")
+
     def test_find_workspace_memory_entry_matches_key_or_content(self) -> None:
         memory_service.save_memory("default", "favorite_editor", "Neovim")
         memory_service.save_memory("default", "timezone", "Asia/Shanghai")

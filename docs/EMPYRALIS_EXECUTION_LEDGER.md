@@ -658,3 +658,59 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_direct_chat_service`
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Direct Chat Memory Extraction Flow Moved Behind Memory Service
+
+#### Stage
+
+Stage 1 continues. The LLM-driven direct-chat memory extraction and persistence loop no longer lives inline inside the chat module.
+
+This still does not make [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) a thin orchestrator yet. Prompt construction, provider selection, tool planning, and no-provider message parsing still remain there.
+
+#### Completed Work
+
+- Expanded [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) with:
+  - direct-chat memory fact parsing
+  - service-owned best-effort memory extraction and persistence orchestration with an injected generation callable
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so `_persist_direct_chat_memory_best_effort()` now delegates into the canonical memory service and only supplies:
+  - the provider-generation callable
+  - the extraction prompt
+  - the extraction system prompt
+- Removed now-dead local helper ownership in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) for:
+  - `_parse_direct_chat_memory_facts()`
+  - `_save_direct_chat_memory_fact()`
+- Added focused service coverage in:
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+
+#### Current Truth
+
+- The direct-chat memory extraction loop now crosses [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) as the service boundary.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still triggers that flow, but no longer owns the parsing and persistence implementation details inline.
+- The chat module still owns higher-level orchestration decisions and message parsing behavior.
+
+#### Open Gaps
+
+- No-provider memory read/write parsing still lives in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+- The direct-chat engine still mixes prompting, orchestration, approval behavior, and fallback handling in one module.
+- The memory service is now the canonical boundary, but the underlying memory implementations are still split between `agent_memory.py` and `runtime_memory.py`.
+
+#### Next Required Work
+
+1. Continue extracting direct-chat orchestration concerns out of [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), especially around no-provider memory behavior and context assembly triggers.
+2. Define the target unified memory contract that hides the split between notebook/workspace memory and runtime semantic memory.
+3. Keep test harnesses offline and deterministic as more chat behavior moves behind service boundaries.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`

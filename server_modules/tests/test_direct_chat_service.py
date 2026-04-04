@@ -1,11 +1,11 @@
 import unittest
-from unittest.mock import patch
 
-from server_modules import runtime_runs_api
 from server_modules.agent_turn import build_direct_chat_turn_request
-from server_modules.direct_chat_service import DirectChatExecutionServices
-from server_modules.run_service import RunExecutionServices
-from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
+from server_modules.direct_chat_service import (
+    DirectChatExecutionServices,
+    build_direct_chat_event_producer,
+    execute_direct_chat_turn_request,
+)
 
 
 class _DummyManager:
@@ -30,33 +30,28 @@ class _DummyManager:
         }
 
 
-class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
-    def test_runtime_runs_api_uses_session_manager_when_flag_enabled(self):
+class DirectChatServiceTests(unittest.TestCase):
+    def test_build_direct_chat_event_producer_uses_session_manager_when_enabled(self):
         manager = _DummyManager()
-        body = {
-            "message": "hello",
-            "thread_id": "thread-1",
-            "provider": "openai",
-            "model": "gpt-test",
-            "availability": {},
-        }
-        current_user = {"user_id": "user-1", "email": "user@example.com"}
+        services = DirectChatExecutionServices(
+            chat_stream_key=lambda current_user, body: ("user-1:thread-1:req-1", "thread-1", "req-1"),
+            session_manager_enabled=lambda: True,
+            session_manager_factory=lambda: manager,
+            build_direct_operator_reply=lambda **kwargs: {"reply": "direct"},
+            build_chat_turn_event_stream=lambda **kwargs: iter(()),
+        )
 
-        with patch.object(runtime_runs_api, "_direct_chat_session_manager_enabled", return_value=True), patch.object(
-            runtime_runs_api,
-            "_direct_chat_session_manager",
-            return_value=manager,
-        ):
-            producer = runtime_runs_api._build_direct_chat_event_producer(
-                current_user=current_user,
-                body=body,
-                message="hello",
-                workspace_id="default",
-                session_key="user-1:thread-1:req-1",
-                thread_id="thread-1",
-                client_request_id="req-1",
-            )
-            events = list(producer)
+        producer = build_direct_chat_event_producer(
+            current_user={"user_id": "user-1", "email": "user@example.com"},
+            body={"thread_id": "thread-1", "provider": "openai", "model": "gpt-test"},
+            message="hello",
+            workspace_id="default",
+            session_key="user-1:thread-1:req-1",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            services=services,
+        )
+        events = list(producer)
 
         self.assertEqual(events[-1]["payload"]["reply"], "session-manager")
         self.assertEqual(len(manager.calls), 1)
@@ -71,7 +66,7 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(call["request_meta"]["agent_turn_request"]["message"], "hello")
         self.assertEqual(manager.eviction_calls, 1)
 
-    def test_execute_agent_turn_request_returns_direct_chat_stream_plan(self):
+    def test_execute_direct_chat_turn_request_returns_stream_plan(self):
         turn_request = build_direct_chat_turn_request(
             current_user={"user_id": "user-1"},
             body={"thread_id": "thread-1"},
@@ -80,23 +75,16 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             client_request_id="req-1",
             message="hello",
         )
-        services = TurnExecutionServices(
-            run_execution=RunExecutionServices(
-                stamp_request_owner=lambda req, current_user: req,
-                prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
-                create_run_from_request=lambda req: {"run_id": "unused"},
-            ),
-            direct_chat=DirectChatExecutionServices(
-                chat_stream_key=runtime_runs_api._chat_stream_key,
-                session_manager_enabled=runtime_runs_api._direct_chat_session_manager_enabled,
-                session_manager_factory=runtime_runs_api._direct_chat_session_manager,
-                build_direct_operator_reply=lambda **kwargs: {"reply": "unused"},
-                build_chat_turn_event_stream=lambda **kwargs: iter(()),
-            ),
+        services = DirectChatExecutionServices(
+            chat_stream_key=lambda current_user, body: ("user-1:thread-1:req-1", "thread-1", "req-1"),
+            session_manager_enabled=lambda: False,
+            session_manager_factory=lambda: _DummyManager(),
+            build_direct_operator_reply=lambda **kwargs: {"reply": "direct"},
+            build_chat_turn_event_stream=lambda **kwargs: iter(()),
         )
 
         execution = __import__("asyncio").run(
-            execute_agent_turn_request(
+            execute_direct_chat_turn_request(
                 turn_request=turn_request,
                 current_user={"user_id": "user-1"},
                 services=services,

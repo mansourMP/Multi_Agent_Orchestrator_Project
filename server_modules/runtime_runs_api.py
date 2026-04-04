@@ -19,7 +19,13 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
     build_run_start_turn_request,
-    serialize_agent_turn_request,
+)
+from server_modules.direct_chat_service import (
+    DirectChatExecutionServices,
+    build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
+    build_direct_chat_request_meta as _service_build_direct_chat_request_meta,
+    direct_chat_actor_key as _service_direct_chat_actor_key,
+    direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
 )
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
@@ -437,26 +443,29 @@ def _chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
 
 
 def _direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:
-    owner = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
-        or "anonymous"
-    )
-    return f"{owner}:{str(workspace_id or 'default').strip() or 'default'}:{str(thread_id or 'direct-chat').strip() or 'direct-chat'}"
+    return _service_direct_chat_actor_key(current_user, workspace_id, thread_id)
 
 
 def _direct_chat_session_manager_enabled() -> bool:
-    configured = globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER")
-    if isinstance(configured, bool):
-        return configured
-    return str(os.getenv("ORION_DIRECT_CHAT_SESSION_MANAGER") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return _service_direct_chat_session_manager_enabled(globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER"))
 
 
 def _direct_chat_session_manager():
     from server_modules.session_manager.manager import get_default_session_manager
 
     return get_default_session_manager(db_path=_chat_stream_state_db_path())
+
+
+def _direct_chat_execution_services() -> DirectChatExecutionServices:
+    from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
+
+    return DirectChatExecutionServices(
+        chat_stream_key=_chat_stream_key,
+        session_manager_enabled=_direct_chat_session_manager_enabled,
+        session_manager_factory=_direct_chat_session_manager,
+        build_direct_operator_reply=build_direct_operator_reply,
+        build_chat_turn_event_stream=build_chat_turn_event_stream,
+    )
 
 
 def _build_direct_chat_request_meta(
@@ -467,28 +476,13 @@ def _build_direct_chat_request_meta(
     client_request_id: str,
     agent_turn_request: Optional[AgentTurnRequest] = None,
 ) -> dict[str, Any]:
-    request_meta = {
-        "request_id": client_request_id,
-        "client_request_id": client_request_id,
-        "workspace_id": workspace_id,
-        "thread_id": thread_id,
-        "provider": str(body.get("provider") or "").strip(),
-        "model": str(body.get("model") or "").strip(),
-        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
-        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-        "max_iterations": body.get("max_iterations"),
-        "runtime_options": {
-            "cwd": str(body.get("cwd") or "").strip(),
-            "provider": str(body.get("provider") or "").strip(),
-            "model": str(body.get("model") or "").strip(),
-            "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
-            "thread_id": thread_id,
-        },
-    }
-    if isinstance(agent_turn_request, AgentTurnRequest):
-        request_meta["agent_turn_request"] = serialize_agent_turn_request(agent_turn_request)
-    return request_meta
+    return _service_build_direct_chat_request_meta(
+        body=body,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+        agent_turn_request=agent_turn_request,
+    )
 
 
 def _build_direct_chat_event_producer(
@@ -502,67 +496,16 @@ def _build_direct_chat_event_producer(
     client_request_id: str,
     agent_turn_request: Optional[AgentTurnRequest] = None,
 ):
-    from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
-
-    turn_request = agent_turn_request if isinstance(agent_turn_request, AgentTurnRequest) else build_direct_chat_turn_request(
+    return _service_build_direct_chat_event_producer(
         current_user=current_user,
         body=body,
+        message=message,
         workspace_id=workspace_id,
+        session_key=session_key,
         thread_id=thread_id,
         client_request_id=client_request_id,
-        message=message,
-    )
-    serialized_turn_request = serialize_agent_turn_request(turn_request)
-    normalized_workspace_id = str(turn_request.workspace_id or workspace_id or "default").strip() or "default"
-    normalized_thread_id = str(turn_request.session_id or thread_id or "direct-chat").strip() or "direct-chat"
-    actor_key = _direct_chat_actor_key(current_user, normalized_workspace_id, normalized_thread_id)
-    user_id = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
-    )
-    direct_session_ctx = {
-        "workspace_id": normalized_workspace_id,
-        "thread_id": normalized_thread_id,
-        "user_id": user_id,
-        "agent_turn_request": serialized_turn_request,
-    }
-
-    if not _direct_chat_session_manager_enabled():
-        return build_direct_operator_reply(
-            message=turn_request.message,
-            workspace_id=normalized_workspace_id,
-            requested_model=str(body.get("model") or "").strip(),
-            requested_provider=str(body.get("provider") or "").strip(),
-            thread_id=normalized_thread_id,
-            prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-            reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
-            approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-            max_iterations=body.get("max_iterations"),
-            session_ctx=direct_session_ctx,
-            agent_turn_request=serialized_turn_request,
-        )
-
-    manager = _direct_chat_session_manager()
-    try:
-        manager.evict_idle_handles()
-    except Exception:
-        pass
-    request_meta = _build_direct_chat_request_meta(
-        body=body,
-        workspace_id=normalized_workspace_id,
-        thread_id=normalized_thread_id,
-        client_request_id=client_request_id,
-        agent_turn_request=turn_request,
-    )
-    return manager.iter_turn_events(
-        session_id=actor_key,
-        actor_key=actor_key,
-        workspace_id=normalized_workspace_id,
-        user_id=user_id,
-        message=turn_request.message,
-        request_meta=request_meta,
-        turn_executor=build_chat_turn_event_stream,
+        services=_direct_chat_execution_services(),
+        agent_turn_request=agent_turn_request,
     )
 
 
@@ -1199,8 +1142,7 @@ def register_run_routes(app) -> None:
                     prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
                     create_run_from_request=_late_server_export("_create_run_from_request"),
                 ),
-                chat_stream_key=_chat_stream_key,
-                build_direct_chat_event_producer=_build_direct_chat_event_producer,
+                direct_chat=_direct_chat_execution_services(),
             ),
             run_request=req,
         )
@@ -1239,8 +1181,7 @@ def register_run_routes(app) -> None:
                     prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
                     create_run_from_request=_late_server_export("_create_run_from_request"),
                 ),
-                chat_stream_key=_chat_stream_key,
-                build_direct_chat_event_producer=_build_direct_chat_event_producer,
+                direct_chat=_direct_chat_execution_services(),
             ),
             chat_body=body,
         )

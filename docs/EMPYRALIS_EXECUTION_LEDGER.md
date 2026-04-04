@@ -376,3 +376,57 @@ The durable-run branch is no longer implemented inside the turn runtime module. 
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Direct Chat Branch Moved Into Direct Chat Service
+
+#### Stage
+
+Stage 1 continues. Both major turn branches now delegate into dedicated service modules.
+
+The direct-chat branch is no longer primarily owned by the transport route file.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py) as the dedicated direct-chat execution service.
+- Moved direct-chat execution ownership into that module, including:
+  - direct-chat actor key resolution
+  - session-manager toggle resolution
+  - request-meta construction
+  - event producer construction
+  - direct-chat turn execution planning
+- Updated [server_modules/turn_runtime.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/turn_runtime.py) so the direct-chat branch delegates into the direct-chat service the same way the durable branch delegates into the run service.
+- Kept [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) as a transport layer with thin compatibility wrappers for the moved chat helpers.
+- Added focused direct-chat service tests in:
+  - [server_modules/tests/test_direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_service.py)
+
+#### Current Truth
+
+- `turn_runtime.py` now routes into:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) for durable turns
+  - [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py) for direct-chat turns
+- `runtime_runs_api.py` is thinner than before and no longer owns the primary direct-chat branch logic.
+- The legacy inner chat engine in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still exists under the direct-chat service layer.
+
+#### Open Gaps
+
+- `operator_chat.py` still contains the core direct-chat engine implementation.
+- `run_service.py` and `direct_chat_service.py` still delegate into legacy inner implementations.
+- The memory service, outbox service, worker dispatch service, and connector adapter cutovers are still incomplete.
+- The legacy duplicated run modules still remain under the service boundary.
+
+#### Next Required Work
+
+1. Start isolating the direct-chat engine itself behind [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py) instead of leaving it embedded in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+2. Continue moving durable-run orchestration behavior out of the legacy run modules and into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+3. Begin converging memory access behind [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py).
+4. Keep transport files thin and service-owned behavior explicit.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the new direct-chat service, updated runtime modules, and updated test modules.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

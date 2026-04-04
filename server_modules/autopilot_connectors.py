@@ -292,23 +292,32 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 clear_error=clear_error
             ),
             mark_started=lambda started_at: _mark_telegram_autopilot_started(started_at),
-            normalize_profile_field=lambda raw_value: _normalize_telegram_profile_field(raw_value),
+            normalize_profile_field=lambda raw_value: _telegram_helper_registry().profile_service().normalize_profile_field(raw_value),
             select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
             skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
-            help_text=lambda profile: _telegram_help_text(profile),
+            help_text=lambda profile: _telegram_helper_registry().routing_service().help_text(profile),
             skills_menu_text=lambda profile: _telegram_skills_menu_text(profile),
-            menu_keyboard=lambda profile, menu_id: _telegram_menu_keyboard(profile, menu_id),
-            onboarding_prompt=lambda step_index, retry: _telegram_onboarding_prompt(step_index, retry),
-            onboarding_start=lambda workspace_id, chat_id: _start_telegram_onboarding(workspace_id, chat_id),
-            profile_text=lambda profile, chat_profile: _telegram_profile_text(profile, chat_profile),
-            profile_help_text=lambda profile: _telegram_profile_help_text(profile),
-            profile_set=lambda workspace_id, chat_id, field_name, value: _set_telegram_profile_field(
+            menu_keyboard=lambda profile, menu_id: _telegram_menu_service().menu_keyboard(profile, menu_id),
+            onboarding_prompt=lambda step_index, retry: _telegram_helper_registry().profile_service().onboarding_prompt(
+                step_index,
+                retry=retry,
+            ),
+            onboarding_start=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().start_onboarding(
+                workspace_id,
+                chat_id,
+            ),
+            profile_text=lambda profile, chat_profile: _telegram_helper_registry().profile_service().profile_text(
+                profile,
+                chat_profile,
+            ),
+            profile_help_text=lambda profile: _telegram_helper_registry().profile_service().profile_help_text(profile),
+            profile_set=lambda workspace_id, chat_id, field_name, value: _telegram_helper_registry().profile_service().set_profile_field(
                 workspace_id,
                 chat_id,
                 field_name,
                 value,
             ),
-            profile_clear=lambda workspace_id, chat_id, field_name: _clear_telegram_profile(
+            profile_clear=lambda workspace_id, chat_id, field_name: _telegram_helper_registry().profile_service().clear_profile(
                 workspace_id,
                 chat_id,
                 field_name,
@@ -328,19 +337,36 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             route_message=lambda message_text, profile: _telegram_route_message(message_text, profile),
             session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
             trace_id_builder=lambda chat_id, update_id, message_id: _telegram_trace_id(chat_id, update_id, message_id),
-            guided_setup_handler=lambda **kwargs: _telegram_handle_guided_automation_setup(**kwargs),
+            guided_setup_handler=lambda **kwargs: _autopilot_workflow_setup_service().handle_telegram_guided_automation_setup(
+                **kwargs,
+                enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
+            ),
             sender_allowed=lambda sender, allow_from: _telegram_sender_allowed(sender, allow_from),
-            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            get_chat_profile=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().get_profile(
+                workspace_id,
+                chat_id,
+            ),
             explicit_run_command=lambda raw_text: _telegram_is_explicit_run_command(raw_text),
-            onboarding_get_state=lambda workspace_id, chat_id: _get_telegram_onboarding_state(workspace_id, chat_id),
-            onboarding_consume_answer=lambda workspace_id, chat_id, text: _telegram_onboarding_consume_answer(
+            onboarding_get_state=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().get_onboarding_state(
+                workspace_id,
+                chat_id,
+            ),
+            onboarding_consume_answer=lambda workspace_id, chat_id, text: _telegram_helper_registry().profile_service().onboarding_consume_answer(
                 workspace_id,
                 chat_id,
                 text,
             ),
-            profile_get=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
-            profile_has_context=lambda chat_profile: _telegram_profile_has_context(chat_profile),
-            build_goal_with_profile=lambda goal, chat_profile: _telegram_build_goal_with_profile(goal, chat_profile),
+            profile_get=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().get_profile(
+                workspace_id,
+                chat_id,
+            ),
+            profile_has_context=lambda chat_profile: _telegram_helper_registry().profile_service().profile_has_context(
+                chat_profile
+            ),
+            build_goal_with_profile=lambda goal, chat_profile: _telegram_helper_registry().profile_service().build_goal_with_profile(
+                goal,
+                chat_profile,
+            ),
             build_goal_with_attachments=lambda goal, attachments: _telegram_build_goal_with_attachments(goal, attachments),
             workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
             build_goal_with_connector_context=lambda goal, prompt_append: _telegram_build_goal_with_connector_context(
@@ -389,9 +415,12 @@ def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
             write_json=lambda path, payload: _safe_write_json(path, payload),
             now_iso=lambda: _utc_now_iso(),
             truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            session_key_builder=lambda workspace_id, chat_id: _telegram_profile_key(workspace_id, chat_id),
+            session_key_builder=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().telegram_profile_key(
+                workspace_id,
+                chat_id,
+            ),
             telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
-            normalize_profile_field=lambda raw_value: _normalize_telegram_profile_field(raw_value),
+            normalize_profile_field=lambda raw_value: _telegram_helper_registry().profile_service().normalize_profile_field(raw_value),
             select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
             skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
         )
@@ -626,7 +655,10 @@ def _telegram_terminal_service() -> TelegramTerminalService:
             get_secret=lambda entry: _telegram_get_secret(entry),
             resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
             route_message=lambda text, profile: _telegram_route_message(text, profile),
-            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            get_chat_profile=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().get_profile(
+                workspace_id,
+                chat_id,
+            ),
             build_goal_with_profile=lambda goal, profile: _telegram_build_goal_with_profile(goal, profile),
             workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
             build_goal_with_connector_context=lambda goal, prompt: _telegram_build_goal_with_connector_context(goal, prompt),
@@ -1071,106 +1103,6 @@ def _whatsapp_session_key(from_number: str, to_number: str) -> str:
     return f"whatsapp:{sender}->{receiver}"
 
 
-def _telegram_profile_key(workspace_id: str, chat_id: str) -> str:
-    return _telegram_helper_registry().profile_service().telegram_profile_key(workspace_id, chat_id)
-
-
-def _load_telegram_profile_state() -> None:
-    _telegram_helper_registry().profile_service().load_profile_state()
-
-
-def _ensure_telegram_profile_state_loaded() -> None:
-    _telegram_helper_registry().profile_service().ensure_profile_state_loaded()
-
-
-def _persist_telegram_profile_state() -> None:
-    _telegram_helper_registry().profile_service().persist_profile_state()
-
-
-def _normalize_telegram_profile_field(raw_value: str) -> str:
-    return _telegram_helper_registry().profile_service().normalize_profile_field(raw_value)
-
-
-def _get_telegram_profile(workspace_id: str, chat_id: str) -> Dict[str, str]:
-    return _telegram_helper_registry().profile_service().get_profile(workspace_id, chat_id)
-
-
-def _set_telegram_profile_field(workspace_id: str, chat_id: str, field_name: str, value: str) -> Dict[str, str]:
-    return _telegram_helper_registry().profile_service().set_profile_field(workspace_id, chat_id, field_name, value)
-
-
-def _clear_telegram_profile(workspace_id: str, chat_id: str, field_name: str = "") -> Dict[str, str]:
-    return _telegram_helper_registry().profile_service().clear_profile(workspace_id, chat_id, field_name)
-
-
-def _telegram_onboarding_key(workspace_id: str, chat_id: str) -> str:
-    return _telegram_helper_registry().profile_service().telegram_onboarding_key(workspace_id, chat_id)
-
-
-def _load_telegram_onboarding_state() -> None:
-    _telegram_helper_registry().profile_service().load_onboarding_state()
-
-
-def _ensure_telegram_onboarding_state_loaded() -> None:
-    _telegram_helper_registry().profile_service().ensure_onboarding_state_loaded()
-
-
-def _persist_telegram_onboarding_state() -> None:
-    _telegram_helper_registry().profile_service().persist_onboarding_state()
-
-
-def _get_telegram_onboarding_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _telegram_helper_registry().profile_service().get_onboarding_state(workspace_id, chat_id)
-
-
-def _start_telegram_onboarding(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _telegram_helper_registry().profile_service().start_onboarding(workspace_id, chat_id)
-
-
-def _advance_telegram_onboarding(workspace_id: str, chat_id: str, step_index: int, active: bool) -> Dict[str, Any]:
-    return _telegram_helper_registry().profile_service().advance_onboarding(workspace_id, chat_id, step_index, active)
-
-
-def _telegram_camera_setup_key(workspace_id: str, chat_id: str) -> str:
-    return _telegram_helper_registry().camera_setup_service().camera_setup_key(workspace_id, chat_id)
-
-
-def _load_telegram_camera_setup_state() -> None:
-    _telegram_helper_registry().camera_setup_service().load_state()
-
-
-def _ensure_telegram_camera_setup_state_loaded() -> None:
-    _telegram_helper_registry().camera_setup_service().ensure_state_loaded()
-
-
-def _persist_telegram_camera_setup_state() -> None:
-    _telegram_helper_registry().camera_setup_service().persist_state()
-
-
-def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _telegram_helper_registry().camera_setup_service().get_state(workspace_id, chat_id)
-
-
-def _set_telegram_camera_setup_state(
-    workspace_id: str,
-    chat_id: str,
-    stage: str,
-    original_prompt: str,
-    intent: str = "",
-) -> Dict[str, Any]:
-    return _telegram_helper_registry().camera_setup_service().set_state(
-        workspace_id,
-        chat_id,
-        stage,
-        original_prompt,
-        intent=intent,
-    )
-
-
-def _clear_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> None:
-    _telegram_helper_registry().camera_setup_service().clear_state(workspace_id, chat_id)
-
-
 def _runtime_api_headers() -> Dict[str, str]:
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     api_key = str(globals().get("ORION_API_KEY") or "").strip()
@@ -1267,56 +1199,6 @@ def _lead_followup_completion_text(
         email_connected=email_connected,
         workflow_id=workflow_id,
     )
-
-
-def _telegram_handle_guided_automation_setup(
-    *,
-    workspace_id: str,
-    chat_id: str,
-    message_text: str,
-) -> Dict[str, Any]:
-    return _autopilot_workflow_setup_service().handle_telegram_guided_automation_setup(
-        workspace_id=workspace_id,
-        chat_id=chat_id,
-        message_text=message_text,
-        enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
-    )
-
-
-def _telegram_profile_has_context(profile_data: Dict[str, str]) -> bool:
-    return _telegram_helper_registry().profile_service().profile_has_context(profile_data)
-
-
-def _telegram_next_onboarding_step_index(profile_data: Dict[str, str]) -> int:
-    return _telegram_helper_registry().profile_service().next_onboarding_step_index(profile_data)
-
-
-def _is_low_quality_onboarding_answer(raw_value: str) -> bool:
-    return _telegram_helper_registry().profile_service().is_low_quality_onboarding_answer(raw_value)
-
-
-def _telegram_onboarding_prompt(step_index: int, retry: bool = False) -> str:
-    return _telegram_helper_registry().profile_service().onboarding_prompt(step_index, retry=retry)
-
-
-def _telegram_onboarding_consume_answer(
-    workspace_id: str,
-    chat_id: str,
-    answer_text: str,
-) -> Dict[str, Any]:
-    return _telegram_helper_registry().profile_service().onboarding_consume_answer(workspace_id, chat_id, answer_text)
-
-
-def _telegram_profile_lines(profile_data: Dict[str, str]) -> List[str]:
-    return _telegram_helper_registry().profile_service().profile_lines(profile_data)
-
-
-def _telegram_profile_text(profile: Dict[str, Any], profile_data: Dict[str, str]) -> str:
-    return _telegram_helper_registry().profile_service().profile_text(profile, profile_data)
-
-
-def _telegram_profile_help_text(profile: Dict[str, Any]) -> str:
-    return _telegram_helper_registry().profile_service().profile_help_text(profile)
 
 
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:

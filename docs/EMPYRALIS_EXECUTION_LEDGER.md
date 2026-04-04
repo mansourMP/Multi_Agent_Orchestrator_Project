@@ -1305,6 +1305,68 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Helper-State Compatibility Band Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer owns the old Telegram helper-state compatibility band for profile state, onboarding state, camera setup state, and guided setup delegation.
+
+This is another deletion-first cut. The helper services already existed, so the correct move was to wire the registries to those services directly and delete the obsolete local forwarding layer.
+
+#### Completed Work
+
+- Rewired the Telegram service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted helper services directly for:
+  - profile normalization
+  - onboarding prompt and onboarding state access
+  - profile get/set/clear operations
+  - profile text and help text rendering
+  - guided automation setup handling
+  - profile-context detection and profile-based goal shaping
+- Rewired the Telegram helper registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the camera-setup service now derives its session key directly from the extracted profile service instead of the monolith wrapper layer.
+- Rewired the Telegram terminal service in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so chat-profile access now goes directly to the extracted profile service.
+- Removed the obsolete Telegram helper-state wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including wrappers for:
+  - profile state load/persist/get/set/clear
+  - onboarding state load/persist/get/start/advance
+  - camera setup state load/persist/get/set/clear
+  - guided setup forwarding
+  - internal profile/onboarding helper forwarding such as profile text/help and onboarding prompt routing
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now treats Telegram helper state as service-owned instead of pretending to own it locally.
+- The monolith line count dropped from `1936` to `1818` in this cut.
+- The deleted wrapper names are fully gone from the monolith source.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the last thin transport, endpoint, and runtime bridge layer.
+- Some externally exercised compatibility wrappers remain intentionally, especially where tests or other modules still call stable monolith names.
+- The file is now much closer to a composition shell, but not yet reduced to pure endpoint wiring.
+
+#### Next Required Work
+
+1. Continue collapsing the last bridge layer in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially transport and endpoint wrappers that now only delegate.
+2. Keep preserving externally exercised wrapper names only where compatibility still matters, and delete the rest.
+3. Re-check the remaining shared runtime/approval bridge layer for any more internal-only forwarding bands.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+  - [server_modules/connectors/telegram_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_profile_service.py)
+  - [server_modules/connectors/telegram_camera_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_camera_setup_service.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-05 - Connector Monolith State Bridge Wrappers Removed
 
 #### Stage

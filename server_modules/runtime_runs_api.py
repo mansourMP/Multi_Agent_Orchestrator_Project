@@ -14,6 +14,13 @@ from typing import Any, Optional
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from server_modules.agent_turn import (
+    AgentTurnRequest,
+    bind_agent_turn_metadata,
+    build_direct_chat_turn_request,
+    build_run_start_turn_request,
+    serialize_agent_turn_request,
+)
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.runtime_policy import (
@@ -456,8 +463,9 @@ def _build_direct_chat_request_meta(
     workspace_id: str,
     thread_id: str,
     client_request_id: str,
+    agent_turn_request: Optional[AgentTurnRequest] = None,
 ) -> dict[str, Any]:
-    return {
+    request_meta = {
         "request_id": client_request_id,
         "client_request_id": client_request_id,
         "workspace_id": workspace_id,
@@ -476,6 +484,9 @@ def _build_direct_chat_request_meta(
             "thread_id": thread_id,
         },
     }
+    if isinstance(agent_turn_request, AgentTurnRequest):
+        request_meta["agent_turn_request"] = serialize_agent_turn_request(agent_turn_request)
+    return request_meta
 
 
 def _build_direct_chat_event_producer(
@@ -487,32 +498,47 @@ def _build_direct_chat_event_producer(
     session_key: str,
     thread_id: str,
     client_request_id: str,
+    agent_turn_request: Optional[AgentTurnRequest] = None,
 ):
     from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
-    actor_key = _direct_chat_actor_key(current_user, workspace_id, thread_id)
+
+    turn_request = agent_turn_request if isinstance(agent_turn_request, AgentTurnRequest) else build_direct_chat_turn_request(
+        current_user=current_user,
+        body=body,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+        message=message,
+    )
+    serialized_turn_request = serialize_agent_turn_request(turn_request)
+    normalized_workspace_id = str(turn_request.workspace_id or workspace_id or "default").strip() or "default"
+    normalized_thread_id = str(turn_request.session_id or thread_id or "direct-chat").strip() or "direct-chat"
+    actor_key = _direct_chat_actor_key(current_user, normalized_workspace_id, normalized_thread_id)
     user_id = (
         str((current_user or {}).get("user_id") or "").strip()
         or str((current_user or {}).get("email") or "").strip().lower()
         or str((current_user or {}).get("auth_type") or "").strip()
     )
     direct_session_ctx = {
-        "workspace_id": workspace_id,
-        "thread_id": thread_id,
+        "workspace_id": normalized_workspace_id,
+        "thread_id": normalized_thread_id,
         "user_id": user_id,
+        "agent_turn_request": serialized_turn_request,
     }
 
     if not _direct_chat_session_manager_enabled():
         return build_direct_operator_reply(
-            message=message,
-            workspace_id=workspace_id,
+            message=turn_request.message,
+            workspace_id=normalized_workspace_id,
             requested_model=str(body.get("model") or "").strip(),
             requested_provider=str(body.get("provider") or "").strip(),
-            thread_id=str(body.get("thread_id") or "").strip(),
+            thread_id=normalized_thread_id,
             prior_messages=body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
             reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
             approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
             max_iterations=body.get("max_iterations"),
             session_ctx=direct_session_ctx,
+            agent_turn_request=serialized_turn_request,
         )
 
     manager = _direct_chat_session_manager()
@@ -522,16 +548,17 @@ def _build_direct_chat_event_producer(
         pass
     request_meta = _build_direct_chat_request_meta(
         body=body,
-        workspace_id=workspace_id,
-        thread_id=thread_id,
+        workspace_id=normalized_workspace_id,
+        thread_id=normalized_thread_id,
         client_request_id=client_request_id,
+        agent_turn_request=turn_request,
     )
     return manager.iter_turn_events(
         session_id=actor_key,
         actor_key=actor_key,
-        workspace_id=workspace_id,
+        workspace_id=normalized_workspace_id,
         user_id=user_id,
-        message=message,
+        message=turn_request.message,
         request_meta=request_meta,
         turn_executor=build_chat_turn_event_stream,
     )
@@ -1160,6 +1187,8 @@ def register_run_routes(app) -> None:
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         req = _stamp_request_owner(body or RunStartRequest(), current_user)
+        run_turn_request = build_run_start_turn_request(req)
+        req.metadata = bind_agent_turn_metadata(req.metadata, run_turn_request, source="runs/start")
         prepared = _late_server_export("_prepare_run_start_request")(req)
         metadata = dict(prepared["metadata"])
         route = decide_execution_target(metadata)
@@ -1195,6 +1224,16 @@ def register_run_routes(app) -> None:
 
         workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
         session_key, thread_id, client_request_id = _chat_stream_key(current_user, body)
+        direct_turn_request = build_direct_chat_turn_request(
+            current_user=current_user,
+            body=body,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            client_request_id=client_request_id,
+            message=message,
+        )
+        message = direct_turn_request.message
+        workspace_id = direct_turn_request.workspace_id
         replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
 
         def producer():
@@ -1206,6 +1245,7 @@ def register_run_routes(app) -> None:
                 session_key=session_key,
                 thread_id=thread_id,
                 client_request_id=client_request_id,
+                agent_turn_request=direct_turn_request,
             )
 
         existing_state = get_chat_stream_state(_chat_stream_state_db_path(), session_key)

@@ -168,3 +168,64 @@ Stage 1 has started: canonical runtime convergence scaffolding has been created,
 - `598ab02` `feat: add computer control and auth status support`
 - `a7ac871` `docs: mark current documentation and quarantine legacy docs`
 - `6a9359b` `chore: canonize architecture and scaffold core services`
+
+### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
+
+#### Stage
+
+Stage 1 is now active in the runtime boundary, not only in scaffolding.
+
+The platform still uses the older execution internals, but both direct chat and durable run start now construct and carry the canonical turn envelope.
+
+#### Completed Work
+
+- Extended [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py) from placeholder types into a usable contract layer with:
+  - direct-chat turn request builders
+  - run-start turn request builders
+  - serialized turn payload helpers
+  - metadata binding helpers
+  - turn request resolution helpers
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so:
+  - `POST /runs/start` binds a canonical `agent_turn_request` into run metadata before the existing run-start pipeline continues
+  - `POST /chat/respond` builds a canonical direct-chat turn envelope before streaming starts
+  - direct-chat request meta now carries the serialized canonical turn request
+  - direct-chat session context now carries the serialized canonical turn request
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so:
+  - `build_chat_turn_event_stream()` can consume the canonical turn envelope
+  - `build_direct_operator_reply()` can normalize from the canonical turn envelope instead of only raw ad hoc arguments
+- Added focused tests:
+  - [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py)
+  - updated [server_modules/tests/test_runtime_runs_api_session_manager.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runtime_runs_api_session_manager.py)
+  - updated [server_modules/tests/test_agent_machine_mode.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_machine_mode.py)
+
+#### Current Truth
+
+- The repo now has one canonical turn contract that is actually present at the live API boundary.
+- `runs/start` still uses the old run creation machinery after the canonical request is bound into metadata.
+- `chat/respond` still uses the old operator chat machinery after the canonical request is built and threaded through request meta and session context.
+- This is a boundary convergence step, not yet a full internal cutover.
+
+#### Open Gaps
+
+- `agent_turn()` is still not the sole executor for direct chat.
+- `agent_turn()` is still not the sole executor for durable runs.
+- `run_service.py` remains scaffolding and is not yet replacing the older run orchestration path.
+- `memory_service.py` remains scaffolding and is not yet the only memory facade.
+- connector extraction into thin adapters is still incomplete.
+- outbox and worker dispatcher are still not the production async backbone.
+
+#### Next Required Work
+
+1. Introduce a runtime composition function that accepts `AgentTurnRequest` and dispatches into the existing chat and run internals from one place.
+2. Move `chat/respond` to call that composition function directly instead of building its own execution wiring.
+3. Move `runs/start` to call the same composition function for durable turn creation.
+4. Start shifting run lifecycle responsibilities out of the duplicated legacy run modules and into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+5. Record each further convergence step here as a new append-only entry.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the modified runtime and test modules.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

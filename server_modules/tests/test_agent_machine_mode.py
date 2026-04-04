@@ -126,6 +126,8 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertEqual(payload["reply"], "ok")
         self.assertEqual((captured.get("session_ctx") or {}).get("user_id"), "user-123")
+        self.assertEqual((captured.get("agent_turn_request") or {}).get("workspace_id"), "default")
+        self.assertEqual((captured.get("agent_turn_request") or {}).get("session_id"), "thread-1")
 
     def test_runs_core_create_run_from_request_bypasses_local_confirmation_for_agent_machine(self):
         request = RunStartRequest(

@@ -59,9 +59,94 @@ def normalize_channel(value: Any) -> str:
     return text or "web"
 
 
+def _metadata_dict(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _attachments_from_payload(items: Any) -> List[TurnAttachment]:
+    if not isinstance(items, list):
+        return []
+    attachments: List[TurnAttachment] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uri = str(item.get("uri") or "").strip()
+        if not uri:
+            continue
+        attachments.append(
+            TurnAttachment(
+                kind=str(item.get("kind") or "file").strip() or "file",
+                uri=uri,
+                name=str(item.get("name") or "").strip(),
+                metadata=_metadata_dict(item.get("metadata")),
+            )
+        )
+    return attachments
+
+
+def _request_actor_id(current_user: Any, metadata: Optional[Dict[str, Any]] = None) -> str:
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str(metadata.get("owner_user_id") or "").strip()
+        or str(metadata.get("owner_email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+        or "anonymous"
+    )
+
+
+def _request_actor_display_name(current_user: Any, actor_id: str) -> str:
+    email = str((current_user or {}).get("email") or "").strip()
+    if email:
+        return email
+    return actor_id
+
+
+def serialize_turn_actor(actor: TurnActor) -> Dict[str, Any]:
+    return {
+        "type": str(actor.type or "").strip() or "user",
+        "id": str(actor.id or "").strip(),
+        "display_name": str(actor.display_name or "").strip(),
+    }
+
+
+def serialize_turn_attachment(attachment: TurnAttachment) -> Dict[str, Any]:
+    return {
+        "kind": str(attachment.kind or "").strip() or "file",
+        "uri": str(attachment.uri or "").strip(),
+        "name": str(attachment.name or "").strip(),
+        "metadata": dict(attachment.metadata or {}),
+    }
+
+
+def serialize_agent_turn_request(request: AgentTurnRequest) -> Dict[str, Any]:
+    return {
+        "tenant_id": str(request.tenant_id or "").strip(),
+        "workspace_id": str(request.workspace_id or "").strip() or "default",
+        "session_id": str(request.session_id or "").strip(),
+        "channel": normalize_channel(request.channel),
+        "actor": serialize_turn_actor(request.actor),
+        "message": str(request.message or ""),
+        "attachments": [serialize_turn_attachment(item) for item in request.attachments],
+        "context_hints": dict(request.context_hints or {}),
+        "execution_mode": request.execution_mode,
+        "response_mode": request.response_mode,
+        "machine_target": str(request.machine_target or "").strip() or None,
+        "policy_context": dict(request.policy_context or {}),
+    }
+
+
+def resolve_agent_turn_request(value: Any) -> Optional[AgentTurnRequest]:
+    if isinstance(value, AgentTurnRequest):
+        return value
+    if isinstance(value, dict):
+        return build_agent_turn_request(value)
+    return None
+
+
 def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     actor_payload = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    attachments_payload = payload.get("attachments") if isinstance(payload.get("attachments"), list) else []
     return AgentTurnRequest(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         workspace_id=str(payload.get("workspace_id") or "").strip(),
@@ -73,16 +158,7 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
             display_name=str(actor_payload.get("display_name") or "").strip(),
         ),
         message=str(payload.get("message") or ""),
-        attachments=[
-            TurnAttachment(
-                kind=str(item.get("kind") or "file").strip() or "file",
-                uri=str(item.get("uri") or "").strip(),
-                name=str(item.get("name") or "").strip(),
-                metadata=item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
-            )
-            for item in attachments_payload
-            if isinstance(item, dict) and str(item.get("uri") or "").strip()
-        ],
+        attachments=_attachments_from_payload(payload.get("attachments")),
         context_hints=payload.get("context_hints") if isinstance(payload.get("context_hints"), dict) else {},
         execution_mode="durable" if str(payload.get("execution_mode") or "").strip().lower() == "durable" else "sync",
         response_mode=(
@@ -93,3 +169,124 @@ def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
         machine_target=str(payload.get("machine_target") or "").strip() or None,
         policy_context=payload.get("policy_context") if isinstance(payload.get("policy_context"), dict) else {},
     )
+
+
+def build_direct_chat_turn_request(
+    *,
+    current_user: Any,
+    body: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    client_request_id: str,
+    message: str,
+) -> AgentTurnRequest:
+    actor_id = _request_actor_id(current_user)
+    body_metadata = _metadata_dict(body.get("metadata"))
+    policy_context = _metadata_dict(body.get("policy_context"))
+    runtime_hints = {
+        "provider": str(body.get("provider") or "").strip() or None,
+        "model": str(body.get("model") or "").strip() or None,
+        "reasoning_effort": str(body.get("reasoning_effort") or "").strip() or None,
+        "request_id": str(client_request_id or "").strip() or None,
+        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+        "max_iterations": body.get("max_iterations"),
+        "metadata": body_metadata,
+    }
+    return AgentTurnRequest(
+        tenant_id=str(body.get("tenant_id") or actor_id or "default").strip() or "default",
+        workspace_id=str(workspace_id or "default").strip() or "default",
+        session_id=str(thread_id or client_request_id or "direct-chat").strip() or "direct-chat",
+        channel=normalize_channel(body.get("channel") or "web"),
+        actor=TurnActor(
+            type="user",
+            id=actor_id,
+            display_name=_request_actor_display_name(current_user, actor_id),
+        ),
+        message=str(message or ""),
+        attachments=_attachments_from_payload(body.get("attachments")),
+        context_hints={key: value for key, value in runtime_hints.items() if value not in (None, "", [], {})},
+        execution_mode="sync",
+        response_mode="stream",
+        machine_target=str(body.get("machine_target") or "").strip() or None,
+        policy_context=policy_context,
+    )
+
+
+def build_run_start_turn_request(req: Any) -> AgentTurnRequest:
+    metadata = _metadata_dict(getattr(req, "metadata", None))
+    actor_id = _request_actor_id(None, metadata)
+    workspace_id = str(getattr(req, "workspace_id", None) or metadata.get("workspace_id") or "default").strip() or "default"
+    session_id = (
+        str(metadata.get("session_id") or "").strip()
+        or str(metadata.get("thread_id") or "").strip()
+        or str(metadata.get("parent_run_id") or "").strip()
+        or str(getattr(req, "workflow_id", None) or "").strip()
+        or "run-start"
+    )
+    message = (
+        str(getattr(req, "user_goal", None) or "").strip()
+        or str(getattr(req, "business_plan", None) or "").strip()
+        or str(metadata.get("summary") or "").strip()
+    )
+    policy_context = {
+        "trust_mode": str(metadata.get("trust_mode") or "").strip() or None,
+        "outcome_pack": str(metadata.get("outcome_pack") or "").strip() or None,
+        "execution_target": str(metadata.get("execution_target") or "").strip() or None,
+        "action_policy": metadata.get("action_policy") if isinstance(metadata.get("action_policy"), dict) else None,
+    }
+    context_hints = {
+        "engine": str(getattr(req, "engine", None) or "orion").strip().lower() or "orion",
+        "workflow_id": str(getattr(req, "workflow_id", None) or "").strip() or None,
+        "provider": str(getattr(req, "provider", None) or "").strip() or None,
+        "model": str(getattr(req, "model", None) or "").strip() or None,
+        "credential_id": str(getattr(req, "credential_id", None) or "").strip() or None,
+        "agent_role": str(getattr(req, "agent_role", None) or "").strip() or None,
+        "max_iterations": getattr(req, "max_iterations", None),
+        "metadata": metadata,
+    }
+    return AgentTurnRequest(
+        tenant_id=str(metadata.get("tenant_id") or actor_id or "default").strip() or "default",
+        workspace_id=workspace_id,
+        session_id=session_id,
+        channel=normalize_channel(metadata.get("channel") or "web"),
+        actor=TurnActor(
+            type="user",
+            id=actor_id,
+            display_name=str(metadata.get("owner_email") or actor_id).strip(),
+        ),
+        message=message,
+        attachments=[],
+        context_hints={key: value for key, value in context_hints.items() if value not in (None, "", [], {})},
+        execution_mode="durable",
+        response_mode="artifact",
+        machine_target=(
+            str(metadata.get("machine_target") or "").strip()
+            or str(metadata.get("execution_target_selected") or "").strip()
+            or str(metadata.get("execution_target") or "").strip()
+            or None
+        ),
+        policy_context={key: value for key, value in policy_context.items() if value not in (None, "", [], {})},
+    )
+
+
+def bind_agent_turn_metadata(
+    metadata: Optional[Dict[str, Any]],
+    request: AgentTurnRequest,
+    *,
+    source: str,
+) -> Dict[str, Any]:
+    bound = _metadata_dict(metadata)
+    bound["agent_turn_request"] = serialize_agent_turn_request(request)
+    bound["agent_turn_contract_version"] = 1
+    if source and not str(bound.get("source") or "").strip():
+        bound["source"] = str(source).strip()
+    if request.session_id and not str(bound.get("session_id") or "").strip():
+        bound["session_id"] = str(request.session_id).strip()
+    if request.channel and not str(bound.get("channel") or "").strip():
+        bound["channel"] = normalize_channel(request.channel)
+    if request.machine_target and not str(bound.get("machine_target") or "").strip():
+        bound["machine_target"] = str(request.machine_target).strip()
+    if request.actor.id and not str(bound.get("request_actor_id") or "").strip():
+        bound["request_actor_id"] = str(request.actor.id).strip()
+    return bound

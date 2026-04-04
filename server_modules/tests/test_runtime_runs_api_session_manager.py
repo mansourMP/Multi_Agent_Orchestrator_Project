@@ -62,6 +62,9 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(call["workspace_id"], "default")
         self.assertEqual(call["user_id"], "user-1")
         self.assertEqual(call["request_meta"]["request_id"], "req-1")
+        self.assertEqual(call["request_meta"]["agent_turn_request"]["workspace_id"], "default")
+        self.assertEqual(call["request_meta"]["agent_turn_request"]["session_id"], "thread-1")
+        self.assertEqual(call["request_meta"]["agent_turn_request"]["message"], "hello")
         self.assertEqual(manager.eviction_calls, 1)
 
 

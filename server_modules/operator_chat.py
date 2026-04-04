@@ -51,6 +51,7 @@ from server_modules.agent_memory import (
     search_memory_notebook,
     semantic_search,
 )
+from server_modules.agent_turn import resolve_agent_turn_request
 from server_modules.conversation_compaction import compact_conversation_history
 from server_modules.llm_task import llm_task
 from server_modules.session_transcript_store import save_session_transcript
@@ -4218,10 +4219,26 @@ def build_direct_operator_reply(
     approved_action: Optional[Dict[str, Any]] = None,
     max_iterations: Optional[int] = None,
     session_ctx: Optional[Dict[str, Any]] = None,
+    agent_turn_request: Optional[Any] = None,
 ) -> Iterator[Dict[str, Any]]:
-    normalized_message = str(message or "").strip()
-    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-    normalized_thread_id = str(thread_id or "").strip()
+    resolved_turn_request = resolve_agent_turn_request(agent_turn_request)
+    if resolved_turn_request is None and isinstance(session_ctx, dict):
+        resolved_turn_request = resolve_agent_turn_request(session_ctx.get("agent_turn_request"))
+    normalized_message = (
+        str(resolved_turn_request.message or "").strip()
+        if resolved_turn_request is not None
+        else str(message or "").strip()
+    )
+    normalized_workspace_id = (
+        str(resolved_turn_request.workspace_id or "default").strip() or "default"
+        if resolved_turn_request is not None
+        else str(workspace_id or "default").strip() or "default"
+    )
+    normalized_thread_id = (
+        str(resolved_turn_request.session_id or "").strip()
+        if resolved_turn_request is not None
+        else str(thread_id or "").strip()
+    )
     session_key = _direct_chat_session_key(normalized_workspace_id, normalized_thread_id)
     normalized_requested_provider = str(requested_provider or "").strip().lower()
     normalized_requested_model = str(requested_model or "").strip()
@@ -5172,17 +5189,29 @@ def build_chat_turn_event_stream(
 ) -> Iterator[Dict[str, Any]]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = request_meta if isinstance(request_meta, dict) else {}
+    turn_request = resolve_agent_turn_request(meta.get("agent_turn_request"))
+    if turn_request is None:
+        turn_request = resolve_agent_turn_request(context.get("agent_turn_request"))
     return build_direct_operator_reply(
         session_ctx=context,
-        message=message,
-        workspace_id=str(meta.get("workspace_id") or context.get("workspace_id") or "default").strip() or "default",
+        message=(str(turn_request.message or "").strip() if turn_request is not None else message),
+        workspace_id=(
+            str(turn_request.workspace_id or "default").strip() or "default"
+            if turn_request is not None
+            else str(meta.get("workspace_id") or context.get("workspace_id") or "default").strip() or "default"
+        ),
         requested_model=str(meta.get("model") or "").strip(),
         requested_provider=str(meta.get("provider") or "").strip(),
-        thread_id=str(meta.get("thread_id") or context.get("thread_id") or "").strip(),
+        thread_id=(
+            str(turn_request.session_id or "").strip()
+            if turn_request is not None
+            else str(meta.get("thread_id") or context.get("thread_id") or "").strip()
+        ),
         prior_messages=meta.get("prior_messages") if isinstance(meta.get("prior_messages"), list) else [],
         reasoning_effort=str(meta.get("reasoning_effort") or "").strip(),
         approved_action=meta.get("approved_action") if isinstance(meta.get("approved_action"), dict) else None,
         max_iterations=meta.get("max_iterations"),
+        agent_turn_request=(meta.get("agent_turn_request") if turn_request is None else turn_request),
     )
 
 

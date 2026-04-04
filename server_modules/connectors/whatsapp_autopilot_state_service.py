@@ -157,6 +157,50 @@ class WhatsAppAutopilotStateService:
             connectors[credential_id] = current
         self.persist_state()
 
+    def connector_match(
+        self,
+        account_sid: str,
+        from_number: str,
+        to_number: str,
+        requested_workspace_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        inbound_account = str(account_sid or "").strip()
+        inbound_from = self.normalize_whatsapp_number(from_number)
+        inbound_to = self.normalize_whatsapp_number(to_number)
+        entries = self.list_connector_entries(requested_workspace_id)
+        with self.lock:
+            self.state["connectors_seen"] = len(entries)
+        for entry in entries:
+            credential_id = str(entry.get("id") or "").strip()
+            workspace_id = self.normalize_workspace_id(entry.get("workspace_id"))
+            if not credential_id:
+                continue
+            try:
+                secret = self.resolve_vault_credential(credential_id, workspace_id)
+            except Exception:
+                continue
+            connector_sid = str(secret.get("account_sid") or "").strip()
+            if inbound_account and connector_sid and inbound_account != connector_sid:
+                continue
+            connector_to = self.normalize_whatsapp_number(secret.get("from_number"))
+            if connector_to and inbound_to and connector_to != inbound_to:
+                continue
+            connector_from = self.normalize_whatsapp_number(secret.get("to_number"))
+            if (
+                connector_from
+                and connector_from not in {"*", "whatsapp:*"}
+                and inbound_from
+                and connector_from != inbound_from
+            ):
+                continue
+            return {
+                "entry": entry,
+                "secret": secret,
+                "connector_id": credential_id,
+                "workspace_id": workspace_id or "default",
+            }
+        return None
+
     def list_connector_entries(self, requested_workspace_id: Optional[str]) -> List[Dict[str, Any]]:
         requested_ws = self.normalize_workspace_id(requested_workspace_id)
         entries: List[Dict[str, Any]] = []

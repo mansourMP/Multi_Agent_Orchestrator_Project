@@ -19,7 +19,6 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
             workspace_visible=lambda workspace_id, requested_ws: True,
             connector_paused=lambda item: False,
             resolve_vault_credential=lambda credential_id, workspace_id: {},
-            normalize_whatsapp_number=lambda value: str(value or ""),
             enabled=True,
             default_profile="assistant",
             require_prefix=False,
@@ -34,12 +33,10 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
                 "summary": "done",
             },
             run_reply_text=lambda status, run_id, summary: f"{status}:{run_id}:{summary}",
-            send_whatsapp_message=lambda **kwargs: {"sid": "SM123"},
             append_dead_letter=lambda **kwargs: None,
             record_channel_event=lambda **kwargs: None,
             log_error=lambda message: None,
             safe_path_token=lambda value: str(value or "").replace(":", "_"),
-            connector_match=lambda account_sid, inbound_from, inbound_to: None,
             resolve_profile=lambda entry: {"id": "profile-1"},
             route_message=lambda body, profile: {"action": "ignore"},
             help_text=lambda profile: "help",
@@ -55,6 +52,7 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
 
     def test_registry_caches_whatsapp_services(self) -> None:
         registry = self._make_registry()
+        self.assertIs(registry.whatsapp_transport_service(), registry.whatsapp_transport_service())
         self.assertIs(registry.whatsapp_autopilot_state_service(), registry.whatsapp_autopilot_state_service())
         self.assertIs(registry.whatsapp_run_dispatch_service(), registry.whatsapp_run_dispatch_service())
         self.assertIs(registry.whatsapp_webhook_service(), registry.whatsapp_webhook_service())
@@ -63,6 +61,7 @@ class WhatsAppAutopilotServiceRegistryTests(unittest.TestCase):
         registry = self._make_registry()
         service = registry.whatsapp_webhook_service()
         self.assertIs(service.run_dispatch_service(), registry.whatsapp_run_dispatch_service())
+        self.assertEqual(service.normalize_number("+100"), "whatsapp:+100")
 
 
 if __name__ == "__main__":

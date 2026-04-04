@@ -423,7 +423,6 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
             connector_paused=lambda item: _connector_paused(item),
             resolve_vault_credential=lambda credential_id, workspace_id: resolve_vault_credential(credential_id, workspace_id),
-            normalize_whatsapp_number=lambda value: _normalize_whatsapp_number(value),
             enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
             default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
             require_prefix=ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
@@ -439,16 +438,10 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
                 max_reply_chars=max_reply_chars,
             ),
             run_reply_text=lambda status, run_id, summary: _autopilot_run_reply_text(status, run_id, summary),
-            send_whatsapp_message=lambda **kwargs: _twilio_send_whatsapp_message(**kwargs),
             append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
             record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
             log_error=lambda message: _whatsapp_autopilot_log(message),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
-            connector_match=lambda account_sid, inbound_from, inbound_to: _whatsapp_connector_match(
-                account_sid,
-                inbound_from,
-                inbound_to,
-            ),
             resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
             route_message=lambda body, profile: _telegram_route_message(body, profile),
             help_text=lambda profile: _whatsapp_help_text(profile),
@@ -1800,26 +1793,11 @@ def _whatsapp_help_text(profile: Dict[str, Any]) -> str:
 
 
 def _normalize_whatsapp_number(raw_value: Any) -> str:
-    value = str(raw_value or "").strip().replace(" ", "")
-    if not value:
-        return ""
-    if value.lower() in {"*", "whatsapp:*"}:
-        return "whatsapp:*"
-    if value.lower().startswith("whatsapp:"):
-        suffix = value.split(":", 1)[1]
-        return f"whatsapp:{suffix}"
-    if value.startswith("+"):
-        return f"whatsapp:{value}"
-    return value.lower()
+    return _whatsapp_service_registry().whatsapp_transport_service().normalize_number(raw_value)
 
 
 def _whatsapp_twiml(message: Optional[str] = None) -> Response:
-    if message and str(message).strip():
-        safe = html.escape(str(message), quote=False)
-        xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{safe}</Message></Response>'
-    else:
-        xml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-    return Response(content=xml, media_type="application/xml")
+    return _whatsapp_service_registry().whatsapp_transport_service().twiml_response(message)
 
 
 def _twilio_send_whatsapp_message(
@@ -1829,36 +1807,13 @@ def _twilio_send_whatsapp_message(
     to_number: str,
     body: str,
 ):
-    sid = str(account_sid or "").strip()
-    token = str(auth_token or "").strip()
-    sender = _normalize_whatsapp_number(from_number)
-    receiver = _normalize_whatsapp_number(to_number)
-    if not sid or not token:
-        raise RuntimeError("Twilio account_sid/auth_token are required.")
-    if not sender or not receiver:
-        raise RuntimeError("Twilio From/To numbers are required.")
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{quote_plus(sid)}/Messages.json"
-    basic = base64.b64encode(f"{sid}:{token}".encode("utf-8")).decode("ascii")
-    payload = urlencode({"From": sender, "To": receiver, "Body": str(body or "")}).encode("utf-8")
-    headers = {
-        "Authorization": f"Basic {basic}",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    req = urlrequest.Request(url, data=payload, headers=headers, method="POST")
-    context = ssl.create_default_context(cafile=certifi.where())
-    try:
-        with urlrequest.urlopen(req, timeout=15, context=context) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            parsed = json.loads(raw) if raw else {}
-            if resp.status not in {200, 201}:
-                raise RuntimeError(f"Twilio send failed: status {resp.status}")
-            return parsed if isinstance(parsed, dict) else {}
-    except urlerror.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
-        detail = raw or str(exc)
-        raise RuntimeError(f"Twilio send failed: HTTP {exc.code}: {detail}") from exc
-    except Exception as exc:
-        raise RuntimeError(str(exc)) from exc
+    return _whatsapp_service_registry().whatsapp_transport_service().send_message(
+        account_sid=account_sid,
+        auth_token=auth_token,
+        from_number=from_number,
+        to_number=to_number,
+        body=body,
+    )
 
 
 def _truncate_one_line(text: str, limit: int) -> str:
@@ -2272,37 +2227,12 @@ def _whatsapp_connector_match(
     from_number: str,
     to_number: str,
 ) -> Optional[Dict[str, Any]]:
-    inbound_account = str(account_sid or "").strip()
-    inbound_from = _normalize_whatsapp_number(from_number)
-    inbound_to = _normalize_whatsapp_number(to_number)
-    entries = _list_whatsapp_connector_entries()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["connectors_seen"] = len(entries)
-    for entry in entries:
-        credential_id = str(entry.get("id") or "").strip()
-        workspace_id = _normalize_workspace_id(entry.get("workspace_id"))
-        if not credential_id:
-            continue
-        try:
-            secret = resolve_vault_credential(credential_id, workspace_id)
-        except Exception:
-            continue
-        connector_sid = str(secret.get("account_sid") or "").strip()
-        if inbound_account and connector_sid and inbound_account != connector_sid:
-            continue
-        connector_to = _normalize_whatsapp_number(secret.get("from_number"))
-        if connector_to and inbound_to and connector_to != inbound_to:
-            continue
-        connector_from = _normalize_whatsapp_number(secret.get("to_number"))
-        if connector_from and connector_from not in {"*", "whatsapp:*"} and inbound_from and connector_from != inbound_from:
-            continue
-        return {
-            "entry": entry,
-            "secret": secret,
-            "connector_id": credential_id,
-            "workspace_id": workspace_id or ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID or "default",
-        }
-    return None
+    return _whatsapp_service_registry().whatsapp_autopilot_state_service().connector_match(
+        account_sid,
+        from_number,
+        to_number,
+        ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID or None,
+    )
 
 
 def _whatsapp_finalize_run_async(

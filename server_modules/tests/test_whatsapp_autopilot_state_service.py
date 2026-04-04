@@ -102,6 +102,27 @@ class WhatsAppAutopilotStateServiceTests(unittest.TestCase):
         self.assertEqual(snapshot["connector_error_count"], 1)
         self.assertEqual(snapshot["connectors"], service.state["connectors"])
 
+    def test_connector_match_returns_matching_entry(self) -> None:
+        service = self._make_service(
+            vault_payload={
+                "credentials": [
+                    {"id": "conn-1", "provider": "whatsapp_twilio", "workspace_id": "ws-1", "label": "Main"}
+                ]
+            },
+            resolve_vault_credential=lambda credential_id, workspace_id: {
+                "account_sid": "AC123",
+                "from_number": "whatsapp:+200",
+                "to_number": "whatsapp:+100",
+            },
+            normalize_whatsapp_number=lambda value: str(value or "").strip().lower(),
+        )
+        matched = service.connector_match("AC123", "whatsapp:+100", "whatsapp:+200")
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched["connector_id"], "conn-1")
+        self.assertEqual(matched["workspace_id"], "ws-1")
+        self.assertEqual(service.state["connectors_seen"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

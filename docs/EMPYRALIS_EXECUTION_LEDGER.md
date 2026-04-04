@@ -1305,6 +1305,70 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - WhatsApp Transport And Connector Matching Moved Behind Service Registry
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The remaining WhatsApp transport and connector-matching slice no longer lives as inline implementation inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is another bounded ownership cut, not a behavior rewrite. The webhook flow, run-dispatch flow, and runtime state flow keep their current semantics, but they now consume service-owned transport and connector matching.
+
+#### Completed Work
+
+- Added [server_modules/connectors/whatsapp_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_transport_service.py) with:
+  - WhatsApp number normalization
+  - TwiML response rendering
+  - Twilio Messages API send behavior
+- Expanded [server_modules/connectors/whatsapp_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_state_service.py) with:
+  - connector matching against inbound account/from/to data
+  - `connectors_seen` mutation at the service boundary
+- Updated [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py) so the registry now owns:
+  - lazy transport-service creation
+  - transport injection into webhook and run-dispatch services
+  - state-service-backed connector matching
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these wrappers now delegate instead of owning implementation inline:
+  - `_normalize_whatsapp_number()`
+  - `_whatsapp_twiml()`
+  - `_twilio_send_whatsapp_message()`
+  - `_whatsapp_connector_match()`
+- Added focused coverage in:
+  - [server_modules/tests/test_whatsapp_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_transport_service.py)
+  - [server_modules/tests/test_whatsapp_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_autopilot_state_service.py)
+  - [server_modules/tests/test_whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_autopilot_service_registry.py)
+
+#### Current Truth
+
+- WhatsApp transport concerns now have a dedicated service boundary instead of living in the connector monolith.
+- WhatsApp connector matching now lives in the state service where connector enumeration and vault-backed resolution already belong.
+- The webhook layer still enters through [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), but the remaining WhatsApp-specific implementation there is thinner than before.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2382` lines to `2312` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns shared runtime/event helpers such as channel-event recording, dead-letter writes, and mixed Telegram/WhatsApp glue.
+- Some remaining WhatsApp wrappers still live in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) even though the underlying ownership is now externalized.
+- The channel layer is thinner, but the final target is still a composition shell rather than a behavior-heavy module.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared channel-event and dead-letter helper block.
+2. Keep connector wiring in registries and keep runtime state or transport behavior out of the monolith.
+3. Preserve focused service-level tests for each extracted connector slice instead of falling back to only broad integration coverage.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/whatsapp_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_transport_service.py)
+  - [server_modules/connectors/whatsapp_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_state_service.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_transport_service`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+
 ### 2026-04-05 - Shared Telegram And WhatsApp Run Entry Flow Moved Behind Run Entry Service
 
 #### Stage

@@ -726,6 +726,76 @@ This is the beginning of the subtraction phase inside the chat module. The user-
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Lightweight No-Provider Fallback Helpers Extracted Into Dedicated Service
+
+#### Stage
+
+Stage 1 continues. The lightweight no-provider fallback helpers for local file analysis, directory listing, shell command parsing, web query parsing, and HTTP response parsing no longer live inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is a real subtraction step. The chat module still orchestrates the no-provider fallback path, but it no longer owns the reusable helper logic for those lightweight behaviors.
+
+#### Completed Work
+
+- Added [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) as the new service boundary for lightweight no-provider helpers:
+  - `count_definitions_in_file()`
+  - `count_functions_and_write_summary()`
+  - `list_directory()`
+  - `looks_like_directory_listing_request()`
+  - `extract_shell_command()`
+  - `extract_web_query()`
+  - `parse_http_tool_output()`
+- Removed the corresponding helper ownership from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), including:
+  - `_count_python_definition_lines()`
+  - `_chat_count_definitions_in_file()`
+  - `_chat_count_functions_and_write_summary()`
+  - `_chat_list_directory()`
+  - `_extract_no_provider_shell_command()`
+  - `_extract_no_provider_web_query()`
+  - `_parse_http_tool_output()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the no-provider fallback path now delegates to the new service for:
+  - summary/count replies
+  - directory listing replies
+  - shell and web query parsing for direct-tool planning
+  - HTTP tool output parsing
+  - syntactic detection of directory-list requests during direct-tool intent detection
+- Added focused service coverage in:
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+
+#### Current Truth
+
+- The no-provider fallback path is now split between service-owned helper logic and chat-module orchestration.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) lost a large block of inline helper code and now depends on:
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) for memory fallback behavior
+  - [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) for lightweight fallback parsing and formatting helpers
+- The directory-list intent detector is now syntactic-only, while path validation remains in execution-time fallback handling.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns the top-level no-provider fallback branch, approval handling, provider orchestration, and prompt assembly.
+- The no-provider service still depends on injected callbacks for path resolution and message compaction rather than owning the whole local-path contract.
+- The direct-chat engine still mixes too many responsibilities even after these helper extractions.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting more of the no-provider fallback orchestration into service-owned modules.
+2. Decide whether the no-provider path should ultimately live behind a dedicated direct-chat fallback service instead of multiple helper services.
+3. Keep preserving exact user-visible fallback replies while deleting chat-module-owned utility code.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Chat Memory Extraction Flow Moved Behind Memory Service
 
 #### Stage

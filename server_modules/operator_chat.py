@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import ast
 import json
 import logging
 import os
@@ -25,6 +24,7 @@ from scripts.orion_local_worker_llm import (
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import memory_service
+from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 from server_modules.local_queue import _is_worker_online
@@ -3108,167 +3108,6 @@ def _resolve_chat_local_path(raw_path: str) -> Path:
     return candidate
 
 
-def _count_python_definition_lines(source_text: str, kind: str) -> int:
-    if kind == "class":
-        pattern = r"^\s*class\s+"
-    else:
-        pattern = r"^\s*(?:async\s+def|def)\s+"
-    return sum(1 for line in str(source_text or "").splitlines() if re.search(pattern, line))
-
-
-def _chat_count_definitions_in_file(message: str) -> Optional[str]:
-    compact = _compact_text(message)
-    if "count" not in compact and "how many" not in compact:
-        return None
-    path = _extract_first_path_reference(message)
-    if not path:
-        return None
-    wants_functions = "function" in compact
-    wants_classes = "class" in compact
-    if not wants_functions and not wants_classes:
-        return None
-    target = _resolve_chat_local_path(path)
-    if not target.exists() or not target.is_file():
-        raise RuntimeError(f"File not found: {target}")
-    source_text = target.read_text(encoding="utf-8")
-    counts: List[str] = []
-    if wants_functions:
-        function_count = _count_python_definition_lines(source_text, "function")
-        counts.append(f"{function_count} functions")
-    if wants_classes:
-        class_count = _count_python_definition_lines(source_text, "class")
-        counts.append(f"{class_count} classes")
-    if not counts:
-        return None
-    if len(counts) == 1:
-        return f"{target} defines {counts[0]}."
-    return f"{target} defines {counts[0]} and {counts[1]}."
-
-
-def _chat_count_functions_and_write_summary(message: str) -> Optional[str]:
-    compact = _compact_text(message)
-    if ".py" not in compact or "function" not in compact or "count" not in compact:
-        return None
-    directory_match = re.search(r"\.py files in\s+([^\s,;:]+)", str(message or ""), flags=re.IGNORECASE)
-    output_match = re.search(r"\bwrite(?:\s+\w+){0,4}\s+to\s+([^\s,;:]+)", str(message or ""), flags=re.IGNORECASE)
-    if not directory_match or not output_match:
-        return None
-    source_dir = _resolve_chat_local_path(str(directory_match.group(1) or "").strip())
-    output_path = _resolve_chat_local_path(str(output_match.group(1) or "").strip())
-    if not source_dir.exists() or not source_dir.is_dir():
-        raise RuntimeError(f"Directory not found: {source_dir}")
-
-    python_files = sorted(source_dir.rglob("*.py"))
-    total_functions = 0
-    parse_failures: List[str] = []
-    per_file_counts: List[tuple[str, int]] = []
-    for path in python_files:
-        try:
-            source_text = path.read_text(encoding="utf-8")
-            tree = ast.parse(source_text, filename=str(path))
-            function_count = sum(
-                1 for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            )
-        except Exception:
-            parse_failures.append(str(path.relative_to(source_dir)))
-            function_count = 0
-        total_functions += function_count
-        per_file_counts.append((str(path.relative_to(source_dir)), function_count))
-
-    summary_lines = [
-        f"Directory: {source_dir}",
-        f"Python files scanned: {len(python_files)}",
-        f"Functions found: {total_functions}",
-    ]
-    if parse_failures:
-        summary_lines.append(f"Parse failures: {len(parse_failures)}")
-    summary_lines.append("")
-    summary_lines.append("Per-file counts:")
-    for relative_path, function_count in per_file_counts:
-        summary_lines.append(f"- {relative_path}: {function_count}")
-    if parse_failures:
-        summary_lines.append("")
-        summary_lines.append("Files with parse failures:")
-        for relative_path in parse_failures:
-            summary_lines.append(f"- {relative_path}")
-    summary_text = "\n".join(summary_lines).strip()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(summary_text + "\n", encoding="utf-8")
-    return (
-        f"Counted {total_functions} functions across {len(python_files)} Python files in {source_dir}. "
-        f"Wrote the summary to {output_path}."
-    )
-
-
-def _chat_list_directory(message: str) -> Optional[Dict[str, str]]:
-    list_match = re.search(
-        r"\blist(?:\s+the)?(?:\s+first\s+(\d+))?\s+files?\s+in\s+([^\s,;:()]+)",
-        str(message or ""),
-        flags=re.IGNORECASE,
-    )
-    if not list_match:
-        return None
-    requested_limit = _safe_positive_int(list_match.group(1), default=0)
-    directory = _resolve_chat_local_path(str(list_match.group(2) or "").strip())
-    if not directory.exists() or not directory.is_dir():
-        raise RuntimeError(f"Directory not found: {directory}")
-    entries = sorted(path.name for path in directory.iterdir())
-    if requested_limit > 0:
-        entries = entries[:requested_limit]
-    listing = "\n".join(entries) if entries else "(empty)"
-    return {
-        "directory": str(directory),
-        "listing": listing,
-        "limit": requested_limit if requested_limit > 0 else None,
-    }
-
-
-def _extract_no_provider_shell_command(message: str) -> str:
-    text = str(message or "").strip()
-    if not text:
-        return ""
-    patterns = (
-        r"run\s+this\s+shell\s+command:\s*(.+)$",
-        r"run\s+this\s+command:\s*(.+)$",
-        r"execute\s+this\s+shell\s+command:\s*(.+)$",
-        r"execute\s+this\s+command:\s*(.+)$",
-        r"shell:\s*(.+)$",
-        r"run:\s*(.+)$",
-        r"execute:\s*(.+)$",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return str(match.group(1) or "").strip().strip("`")
-    backtick_match = re.search(r"`([^`]+)`", text)
-    compact = _compact_text(text)
-    if backtick_match and any(token in compact for token in ("run", "execute", "shell", "command")):
-        return str(backtick_match.group(1) or "").strip()
-    for opener in ("run ", "execute "):
-        if compact.startswith(opener):
-            candidate = text[len(opener):].strip()
-            if candidate and not _extract_first_url(candidate):
-                return candidate.strip("`")
-    return ""
-
-
-def _extract_no_provider_web_query(message: str) -> str:
-    text = str(message or "").strip()
-    if not text:
-        return ""
-    patterns = (
-        r"search\s+for\s+(.+)$",
-        r"look\s+up\s+(.+)$",
-        r"find\s+(.+?)\s+on\s+the\s+web$",
-        r"what\s+is\s+(.+)$",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return str(match.group(1) or "").strip().rstrip("?.!")
-    return ""
-
-
 def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     compact = _compact_text(message)
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
@@ -3294,25 +3133,18 @@ def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> L
             planned.append({"name": "browser__get_page_state", "arguments": {}})
         if "heading" in compact and "browser__extract_text" in tool_names:
             planned.append({"name": "browser__extract_text", "arguments": {"selector": "h1"}})
-    shell_command = _extract_no_provider_shell_command(message)
+    shell_command = no_provider_service.extract_shell_command(
+        message,
+        compact_text=_compact_text,
+        extract_first_url=_extract_first_url,
+    )
     if shell_command and "shell__exec" in tool_names:
         planned.append({"name": "shell__exec", "arguments": {"command": shell_command}})
-    web_query = _extract_no_provider_web_query(message)
+    web_query = no_provider_service.extract_web_query(message)
     if web_query and "web__search" in tool_names and not url:
         planned.append({"name": "web__search", "arguments": {"query": web_query}})
 
     return planned
-
-
-def _parse_http_tool_output(output: str) -> Any:
-    parts = str(output or "").split("\n\n", 1)
-    payload = parts[1] if len(parts) > 1 else ""
-    if not payload:
-        return None
-    try:
-        return json.loads(payload)
-    except Exception:
-        return payload.strip()
 
 
 def _no_provider_reasoning_required_response() -> Dict[str, Any]:
@@ -3336,7 +3168,11 @@ def _execute_no_provider_request(
     session_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     compact = _compact_text(message)
-    summary_reply = _chat_count_functions_and_write_summary(message)
+    summary_reply = no_provider_service.count_functions_and_write_summary(
+        message,
+        compact_text=_compact_text,
+        resolve_local_path=_resolve_chat_local_path,
+    )
     if summary_reply:
         return {
             "reply": summary_reply,
@@ -3348,7 +3184,12 @@ def _execute_no_provider_request(
             "attempted_providers": "",
             "error": "",
         }
-    single_file_count_reply = _chat_count_definitions_in_file(message)
+    single_file_count_reply = no_provider_service.count_definitions_in_file(
+        message,
+        compact_text=_compact_text,
+        extract_first_path_reference=_extract_first_path_reference,
+        resolve_local_path=_resolve_chat_local_path,
+    )
     if single_file_count_reply:
         return {
             "reply": single_file_count_reply,
@@ -3372,7 +3213,11 @@ def _execute_no_provider_request(
             "attempted_providers": "",
             "error": "",
         }
-    directory_listing = _chat_list_directory(message)
+    directory_listing = no_provider_service.list_directory(
+        message,
+        safe_positive_int=_safe_positive_int,
+        resolve_local_path=_resolve_chat_local_path,
+    )
 
     tool_calls = _plan_no_provider_tool_calls(message, tools)
     if not tool_calls and directory_listing is None:
@@ -3425,7 +3270,7 @@ def _execute_no_provider_request(
         for item in results:
             if str(item.get("tool_call", {}).get("name") or "").strip() != "http_request":
                 continue
-            parsed = _parse_http_tool_output(str(item.get("output") or ""))
+            parsed = no_provider_service.parse_http_tool_output(str(item.get("output") or ""))
             if isinstance(parsed, dict) and str(parsed.get("origin") or "").strip():
                 reply = f"Origin IP: {str(parsed.get('origin') or '').strip()}"
                 break
@@ -3435,7 +3280,7 @@ def _execute_no_provider_request(
         for item in results:
             tool_name = str(item.get("tool_call", {}).get("name") or "").strip()
             if tool_name == "http_request":
-                parsed = _parse_http_tool_output(str(item.get("output") or ""))
+                parsed = no_provider_service.parse_http_tool_output(str(item.get("output") or ""))
                 if isinstance(parsed, dict):
                     current_time = str(
                         parsed.get("utc_datetime")
@@ -3496,13 +3341,17 @@ def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, 
     path = _extract_first_path_reference(message)
     if path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")):
         return True
-    if _chat_list_directory(message) is not None:
+    if no_provider_service.looks_like_directory_listing_request(message):
         return True
-    if _extract_no_provider_shell_command(message):
+    if no_provider_service.extract_shell_command(
+        message,
+        compact_text=_compact_text,
+        extract_first_url=_extract_first_url,
+    ):
         return True
     if memory_service.parse_no_provider_memory_write(message) is not None or memory_service.parse_no_provider_memory_read(message) is not None:
         return True
-    if _extract_no_provider_web_query(message):
+    if no_provider_service.extract_web_query(message):
         return True
     url = _extract_first_url(message)
     if not url:

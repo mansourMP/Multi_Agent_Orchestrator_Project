@@ -52,6 +52,7 @@ class TelegramActionService:
         chat_profile: Dict[str, Any],
         workspace_id: str,
         connector_id: str,
+        bot_token: str,
         chat_id: str,
         inbound_message_id: str,
         trace_id: str,
@@ -69,6 +70,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -99,6 +101,7 @@ class TelegramActionService:
                 reply_markup=self.menu_keyboard(profile, menu_id),
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -117,6 +120,7 @@ class TelegramActionService:
                         profile=profile,
                         trace_id=trace_id,
                         source_event_id=source_event_id,
+                        bot_token=bot_token,
                         chat_id=chat_id,
                     )
                 else:
@@ -131,6 +135,7 @@ class TelegramActionService:
                         profile=profile,
                         trace_id=trace_id,
                         source_event_id=source_event_id,
+                        bot_token=bot_token,
                         chat_id=chat_id,
                     )
             else:
@@ -143,6 +148,7 @@ class TelegramActionService:
                     profile=profile,
                     trace_id=trace_id,
                     source_event_id=source_event_id,
+                    bot_token=bot_token,
                     chat_id=chat_id,
                 )
                 action = "profile_show"
@@ -157,6 +163,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -170,6 +177,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -186,6 +194,7 @@ class TelegramActionService:
                     profile=profile,
                     trace_id=trace_id,
                     source_event_id=source_event_id,
+                    bot_token=bot_token,
                     chat_id=chat_id,
                 )
                 action = "profile_help"
@@ -200,6 +209,7 @@ class TelegramActionService:
                     profile=profile,
                     trace_id=trace_id,
                     source_event_id=source_event_id,
+                    bot_token=bot_token,
                     chat_id=chat_id,
                 )
             handled = True
@@ -216,6 +226,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -229,6 +240,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -244,6 +256,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -260,6 +273,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True
@@ -276,6 +290,7 @@ class TelegramActionService:
                 profile=profile,
                 trace_id=trace_id,
                 source_event_id=source_event_id,
+                bot_token=bot_token,
                 chat_id=chat_id,
             )
             handled = True

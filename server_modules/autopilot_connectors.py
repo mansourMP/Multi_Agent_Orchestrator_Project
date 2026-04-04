@@ -14,6 +14,7 @@ from server_modules.connectors.telegram_profile_service import (
     TelegramProfileService,
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
+from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
@@ -238,6 +239,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
+_TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 _WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
@@ -317,6 +319,22 @@ def _telegram_action_service() -> TelegramActionService:
             ),
         )
     return _TELEGRAM_ACTION_SERVICE
+
+
+def _telegram_increment_processed_updates() -> None:
+    with TELEGRAM_AUTOPILOT_LOCK:
+        TELEGRAM_AUTOPILOT_STATE["processed_updates"] = int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0) + 1
+
+
+def _telegram_poll_state_service() -> TelegramPollStateService:
+    global _TELEGRAM_POLL_STATE_SERVICE
+    if _TELEGRAM_POLL_STATE_SERVICE is None:
+        _TELEGRAM_POLL_STATE_SERVICE = TelegramPollStateService(
+            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
+            utc_now_iso=lambda: _utc_now_iso(),
+            increment_processed_updates=lambda: _telegram_increment_processed_updates(),
+        )
+    return _TELEGRAM_POLL_STATE_SERVICE
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
@@ -3640,6 +3658,7 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                     chat_profile=chat_profile,
                     workspace_id=workspace_id,
                     connector_id=connector_id,
+                    bot_token=bot_token,
                     chat_id=chat_id,
                     inbound_message_id=inbound_message_id or "",
                     trace_id=trace_id,
@@ -3822,56 +3841,37 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                     source_event_id=source_event_id,
                 )
 
-            state_patch: Dict[str, Any] = {
-                "label": label,
-                "workspace_id": workspace_id,
-                "last_update_id": update_id,
-                "last_processed_at": _utc_now_iso(),
-                "last_error": None,
-                "last_error_category": None,
-                "last_error_at": None,
-                "last_chat_id": chat_id,
-                "last_action": action,
-                "profile_id": profile.get("id"),
-                "allow_from": list(allow_from),
-            }
-            if run_id:
-                state_patch["last_run_id"] = run_id
-            if approval_state_patch:
-                state_patch.update(approval_state_patch)
-            _set_telegram_connector_state(connector_id, state_patch)
-            with TELEGRAM_AUTOPILOT_LOCK:
-                TELEGRAM_AUTOPILOT_STATE["processed_updates"] = int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0) + 1
+            _telegram_poll_state_service().record_processed_update(
+                connector_id=connector_id,
+                label=label,
+                workspace_id=workspace_id,
+                update_id=update_id,
+                chat_id=chat_id,
+                action=action,
+                profile_id=str(profile.get("id") or ""),
+                allow_from=list(allow_from),
+                run_id=run_id,
+                approval_state_patch=approval_state_patch,
+            )
 
         if max_seen > last_update_id:
-            patch = {
-                "label": label,
-                "workspace_id": workspace_id,
-                "last_update_id": max_seen,
-                "last_poll_at": _utc_now_iso(),
-                "last_error": None,
-                "last_error_category": None,
-                "last_error_at": None,
-                "profile_id": profile.get("id"),
-                "allow_from": list(allow_from),
-            }
-            if approval_state_patch:
-                patch.update(approval_state_patch)
-            _set_telegram_connector_state(connector_id, patch)
+            _telegram_poll_state_service().record_poll_completion(
+                connector_id=connector_id,
+                label=label,
+                workspace_id=workspace_id,
+                max_seen=max_seen,
+                profile_id=str(profile.get("id") or ""),
+                allow_from=list(allow_from),
+                approval_state_patch=approval_state_patch,
+            )
         elif approval_state_patch:
-            _set_telegram_connector_state(
-                connector_id,
-                {
-                    "label": label,
-                    "workspace_id": workspace_id,
-                    "last_poll_at": _utc_now_iso(),
-                    "last_error": None,
-                    "last_error_category": None,
-                    "last_error_at": None,
-                    "profile_id": profile.get("id"),
-                    "allow_from": list(allow_from),
-                    **approval_state_patch,
-                },
+            _telegram_poll_state_service().record_poll_approval_only(
+                connector_id=connector_id,
+                label=label,
+                workspace_id=workspace_id,
+                profile_id=str(profile.get("id") or ""),
+                allow_from=list(allow_from),
+                approval_state_patch=approval_state_patch,
             )
     except Exception as exc:
         detail = str(exc)
@@ -3886,16 +3886,12 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
             metadata={"connector_id": connector_id, "category": category},
             dedupe_seconds=max(30.0, float(ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS) * 6.0),
         )
-        _set_telegram_connector_state(
-            connector_id,
-            {
-                "label": label,
-                "workspace_id": workspace_id,
-                "last_error": detail,
-                "last_error_category": category,
-                "last_error_at": _utc_now_iso(),
-                "last_poll_at": _utc_now_iso(),
-            },
+        _telegram_poll_state_service().record_connector_error(
+            connector_id=connector_id,
+            label=label,
+            workspace_id=workspace_id,
+            detail=detail,
+            category=category,
         )
         _telegram_autopilot_mark_error(detail, source="connector")
         raise

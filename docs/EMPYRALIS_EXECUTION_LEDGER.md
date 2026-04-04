@@ -1305,6 +1305,60 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Machine-Mode Run Wrapper Band Removed From Autopilot Connectors
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining machine-mode run wrapper band no longer lives in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This was a real subtraction cut, not another service add. The monolith now relies on the extracted run-entry and run-dispatch services directly for those paths, and the machine-mode tests now target the service boundaries instead of deleted compatibility aliases.
+
+#### Completed Work
+
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the WhatsApp service registry now calls [server_modules/connectors/telegram_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_dispatch_service.py) directly for terminal-status waiting.
+- Removed the forwarding-only compatibility wrappers from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py):
+  - `_create_telegram_run()`
+  - `_wait_for_run_terminal_status()`
+  - `_create_whatsapp_run()`
+- Updated [server_modules/tests/test_agent_machine_mode.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_machine_mode.py) so the machine-mode assertions now target:
+  - [server_modules/connectors/autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_run_entry_service.py)
+  - [server_modules/connectors/telegram_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_dispatch_service.py)
+- Kept the true runtime contract intact:
+  - [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py) still imports the stable autopilot entrypoints it needs
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exposes the runtime-facing Telegram and WhatsApp entrypoints and snapshots
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1535` lines.
+- The deleted run wrappers are no longer referenced anywhere in the repo.
+- The remaining autopilot monolith is now much closer to a real compatibility and composition shell than a behavior-heavy connector runtime.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a broad compatibility shell plus a smaller set of local helper functions.
+- The remaining wrapper layer still needs a stricter audit to decide which names are true runtime exports and which are only historical aliases.
+- The durable-run side and direct-chat side still have larger convergence work remaining than the connector shell now does.
+
+#### Next Required Work
+
+1. Audit the remaining exported names in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) against [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py) and [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py) so only real runtime entrypoints remain.
+2. Continue reducing the connector monolith by deleting forwarding-only compatibility names instead of adding more aliases.
+3. After the shell is tighter, shift attention back toward the larger remaining convergence areas on the durable-run and direct-chat sides.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_agent_machine_mode.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_machine_mode.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+
 ### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
 
 #### Stage

@@ -249,12 +249,12 @@ class AgentMachineModeTests(unittest.TestCase):
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                autopilot_connectors._init()
+                dispatch_service = autopilot_connectors._telegram_run_dispatch_service()
                 with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
-                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
-                        with patch.object(autopilot_connectors, "_summarize_run_terminal_result", return_value="Done"):
-                            with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 1]):
-                                with patch.object(autopilot_connectors.time, "sleep", return_value=None):
-                                    result = autopilot_connectors._wait_for_run_terminal_status(run_id)
+                    with patch.object(dispatch_service, "time_now", side_effect=[0, 0, 1]):
+                        with patch.object(dispatch_service, "sleep", return_value=None):
+                            result = dispatch_service.wait_for_terminal_status(run_id)
 
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["auto_approved"])
@@ -272,11 +272,12 @@ class AgentMachineModeTests(unittest.TestCase):
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                autopilot_connectors._init()
+                dispatch_service = autopilot_connectors._telegram_run_dispatch_service()
                 with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
-                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
-                        with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 31, 31, 31]):
-                            with patch.object(autopilot_connectors.time, "sleep", return_value=None):
-                                result = autopilot_connectors._wait_for_run_terminal_status(run_id, timeout_seconds=30)
+                    with patch.object(dispatch_service, "time_now", side_effect=[0, 0, 31, 31, 31]):
+                        with patch.object(dispatch_service, "sleep", return_value=None):
+                            result = dispatch_service.wait_for_terminal_status(run_id, timeout_seconds=30)
 
         self.assertEqual(result["status"], "timeout")
         self.assertFalse(result["auto_approved"])
@@ -294,11 +295,12 @@ class AgentMachineModeTests(unittest.TestCase):
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                autopilot_connectors._init()
+                dispatch_service = autopilot_connectors._telegram_run_dispatch_service()
                 with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
-                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
-                        with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 31, 31, 31]):
-                            with patch.object(autopilot_connectors.time, "sleep", return_value=None):
-                                result = autopilot_connectors._wait_for_run_terminal_status(run_id, timeout_seconds=30)
+                    with patch.object(dispatch_service, "time_now", side_effect=[0, 0, 31, 31, 31]):
+                        with patch.object(dispatch_service, "sleep", return_value=None):
+                            result = dispatch_service.wait_for_terminal_status(run_id, timeout_seconds=30)
 
         self.assertEqual(result["status"], "timeout")
         self.assertFalse(result["auto_approved"])
@@ -314,16 +316,20 @@ class AgentMachineModeTests(unittest.TestCase):
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                autopilot_connectors._init()
                 with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
                         with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
-                            autopilot_connectors._create_telegram_run(
+                            autopilot_connectors._autopilot_run_entry_service().create_telegram_run(
                                 goal="Investigate this issue",
                                 workspace_id="default",
                                 connector_id="cred-telegram",
                                 chat_id="123",
                                 sender_id="456",
                                 update_id=1,
+                                media_max_items=autopilot_connectors.ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+                                trust_mode_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+                                execution_target_value=autopilot_connectors.ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
                             )
 
         self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")
@@ -338,10 +344,11 @@ class AgentMachineModeTests(unittest.TestCase):
 
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                autopilot_connectors._init()
                 with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
                     with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
                         with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
-                            autopilot_connectors._create_whatsapp_run(
+                            autopilot_connectors._autopilot_run_entry_service().create_whatsapp_run(
                                 goal="Handle this request",
                                 workspace_id="default",
                                 connector_id="cred-whatsapp",
@@ -349,6 +356,8 @@ class AgentMachineModeTests(unittest.TestCase):
                                 to_number="whatsapp:+15559870000",
                                 message_sid="SM123",
                                 account_sid="AC123",
+                                trust_mode_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
+                                execution_target_value=autopilot_connectors.ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
                             )
 
         self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")

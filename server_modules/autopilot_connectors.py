@@ -505,7 +505,7 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
             include_run_meta=lambda: _autopilot_include_run_meta(),
             truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
+            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _telegram_run_dispatch_service().wait_for_terminal_status(
                 run_id,
                 timeout_seconds=timeout_seconds,
                 max_reply_chars=max_reply_chars,
@@ -1470,82 +1470,6 @@ async def handle_telegram_autopilot_test_message(
         connector_id=connector_id,
         sender_id=sender_id,
         timeout_seconds=timeout_seconds,
-    )
-
-
-def _create_telegram_run(
-    goal: str,
-    workspace_id: str,
-    connector_id: str,
-    chat_id: str,
-    sender_id: str,
-    update_id: int,
-    message_id: Optional[str] = None,
-    profile_context: Optional[Dict[str, str]] = None,
-    media_attachments: Optional[List[Dict[str, Any]]] = None,
-    skill_override: Optional[Dict[str, Any]] = None,
-    trace_id: Optional[str] = None,
-    source_event_id: Optional[str] = None,
-    connector_entry: Optional[Dict[str, Any]] = None,
-    connector_context: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    _init()
-    return _autopilot_run_entry_service().create_telegram_run(
-        goal=goal,
-        workspace_id=workspace_id,
-        connector_id=connector_id,
-        chat_id=chat_id,
-        sender_id=sender_id,
-        update_id=update_id,
-        message_id=message_id,
-        profile_context=profile_context,
-        media_attachments=media_attachments,
-        skill_override=skill_override,
-        trace_id=trace_id or _telegram_trace_id(chat_id, update_id, message_id or ""),
-        source_event_id=source_event_id,
-        connector_entry=connector_entry,
-        connector_context=connector_context,
-        media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-        trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
-        execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
-    )
-
-
-def _wait_for_run_terminal_status(
-    run_id: str,
-    timeout_seconds: Optional[int] = None,
-    max_reply_chars: Optional[int] = None,
-) -> Dict[str, Any]:
-    _init()
-    return _telegram_run_dispatch_service().wait_for_terminal_status(
-        run_id,
-        timeout_seconds=timeout_seconds,
-        max_reply_chars=max_reply_chars,
-    )
-
-
-def _create_whatsapp_run(
-    goal: str,
-    workspace_id: str,
-    connector_id: str,
-    from_number: str,
-    to_number: str,
-    message_sid: str,
-    account_sid: str,
-    connector_entry: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    _init()
-    return _autopilot_run_entry_service().create_whatsapp_run(
-        goal=goal,
-        workspace_id=workspace_id,
-        connector_id=connector_id,
-        from_number=from_number,
-        to_number=to_number,
-        message_sid=message_sid,
-        account_sid=account_sid,
-        connector_entry=connector_entry,
-        trust_mode_value=ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
-        execution_target_value=ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
     )
 
 

@@ -28,6 +28,7 @@ from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
+from server_modules import direct_chat_entry_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -3140,6 +3141,58 @@ def _direct_chat_generation_services() -> direct_chat_generation_service.DirectC
     )
 
 
+def _prepare_direct_chat_request(
+    *,
+    resolved_turn_request: Optional[Any],
+    session_ctx: Optional[Dict[str, Any]],
+    message: str,
+    workspace_id: str,
+    thread_id: str,
+    requested_model: str,
+    requested_provider: str,
+    prior_messages: Optional[List[Dict[str, Any]]],
+    reasoning_effort: str,
+    availability: Optional[Dict[str, Any]],
+    approved_action: Optional[Dict[str, Any]],
+    max_iterations: Optional[int],
+) -> direct_chat_entry_service.PreparedDirectChatRequest:
+    return direct_chat_entry_service.prepare_direct_chat_request(
+        resolved_turn_request=resolved_turn_request,
+        session_ctx=session_ctx,
+        message=message,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        requested_model=requested_model,
+        requested_provider=requested_provider,
+        prior_messages=prior_messages,
+        reasoning_effort=reasoning_effort,
+        availability=availability,
+        approved_action=approved_action,
+        max_iterations=max_iterations,
+        direct_chat_session_key_fn=_direct_chat_session_key,
+        resolved_chat_iteration_limit_fn=_resolved_chat_iteration_limit,
+        session_model_preference_fn=_session_model_preference,
+        normalize_reasoning_effort_fn=_normalize_reasoning_effort,
+        parse_slash_command_fn=_parse_slash_command,
+        set_session_model_preference_fn=_set_session_model_preference,
+        mark_thread_cleared_fn=_mark_thread_cleared,
+        normalize_prior_messages_fn=_normalize_prior_messages,
+        consume_thread_cleared_fn=_consume_thread_cleared,
+        compact_conversation_history_fn=compact_conversation_history,
+        build_proactive_suggestions_fn=_build_proactive_suggestions,
+        direct_tool_session_key_fn=_direct_tool_session_key,
+        resolve_direct_chat_availability_fn=_resolve_direct_chat_availability,
+        connected_system_labels_fn=_connected_system_labels,
+        context_tool_capabilities_fn=_context_tool_capabilities,
+        build_direct_chat_tools_fn=_build_direct_chat_tools,
+        build_local_direct_chat_tools_fn=_build_local_direct_chat_tools,
+        build_builtin_direct_chat_tools_fn=_build_builtin_direct_chat_tools,
+        normalize_direct_approved_action_fn=_normalize_direct_approved_action,
+        build_context_used_fn=_build_context_used,
+        direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
+    )
+
+
 def build_direct_operator_reply(
     *,
     message: str,
@@ -3158,102 +3211,40 @@ def build_direct_operator_reply(
     resolved_turn_request = resolve_agent_turn_request(agent_turn_request)
     if resolved_turn_request is None and isinstance(session_ctx, dict):
         resolved_turn_request = resolve_agent_turn_request(session_ctx.get("agent_turn_request"))
-    normalized_message = (
-        str(resolved_turn_request.message or "").strip()
-        if resolved_turn_request is not None
-        else str(message or "").strip()
+    prepared = _prepare_direct_chat_request(
+        resolved_turn_request=resolved_turn_request,
+        session_ctx=session_ctx,
+        message=message,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        requested_model=requested_model,
+        requested_provider=requested_provider,
+        prior_messages=prior_messages,
+        reasoning_effort=reasoning_effort,
+        availability=availability,
+        approved_action=approved_action,
+        max_iterations=max_iterations,
     )
-    normalized_workspace_id = (
-        str(resolved_turn_request.workspace_id or "default").strip() or "default"
-        if resolved_turn_request is not None
-        else str(workspace_id or "default").strip() or "default"
-    )
-    normalized_thread_id = (
-        str(resolved_turn_request.session_id or "").strip()
-        if resolved_turn_request is not None
-        else str(thread_id or "").strip()
-    )
-    session_key = _direct_chat_session_key(normalized_workspace_id, normalized_thread_id)
-    normalized_requested_provider = str(requested_provider or "").strip().lower()
-    normalized_requested_model = str(requested_model or "").strip()
-    resolved_chat_max_iterations = _resolved_chat_iteration_limit(max_iterations)
-    session_model_preference = _session_model_preference(session_key)
-    if session_model_preference.get("provider"):
-        normalized_requested_provider = str(session_model_preference.get("provider") or "").strip().lower()
-    if session_model_preference.get("model"):
-        normalized_requested_model = str(session_model_preference.get("model") or "").strip()
-    normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
-    slash_command = _parse_slash_command(normalized_message)
-    slash_command_name = str(slash_command.get("command") or "").strip().lower()
-    slash_remainder = str(slash_command.get("remainder") or "").strip()
-    if slash_command_name == "model":
-        model_parts = slash_remainder.split(None, 1) if slash_remainder else []
-        selected_model_token = str(model_parts[0] or "").strip() if model_parts else ""
-        trailing_content = str(model_parts[1] or "").strip() if len(model_parts) > 1 else ""
-        selected_provider = normalized_requested_provider or None
-        selected_model = selected_model_token
-        if ":" in selected_model_token:
-            provider_token, model_token = selected_model_token.split(":", 1)
-            selected_provider = str(provider_token or "").strip().lower() or selected_provider
-            selected_model = str(model_token or "").strip()
-        if selected_provider:
-            normalized_requested_provider = selected_provider
-        if selected_model:
-            normalized_requested_model = selected_model
-        if selected_provider or selected_model:
-            _set_session_model_preference(
-                session_key,
-                provider=normalized_requested_provider or None,
-                model=normalized_requested_model or None,
-            )
-        if trailing_content:
-            normalized_message = trailing_content
-            slash_command_name = ""
-            slash_remainder = ""
-    elif slash_command_name == "clear" and slash_remainder:
-        _mark_thread_cleared(session_key)
-        normalized_message = slash_remainder
-        slash_command_name = ""
-        slash_remainder = ""
-    normalized_prior_messages = _normalize_prior_messages(prior_messages)
-    if _consume_thread_cleared(session_key):
-        normalized_prior_messages = []
-    compaction = compact_conversation_history(
-        normalized_prior_messages,
-        max_tokens=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
-        preserve_last_messages=10,
-    )
-    compacted_prior_messages = [
-        item
-        for item in (compaction.get("messages") if isinstance(compaction, dict) else [])
-        if isinstance(item, dict)
-    ]
-    proactive_suggestions = _build_proactive_suggestions(normalized_workspace_id) if not normalized_prior_messages else []
-    tool_loop_session_key = _direct_tool_session_key(normalized_workspace_id, normalized_thread_id)
-    availability_payload = _resolve_direct_chat_availability(
-        normalized_workspace_id,
-        normalized_requested_provider,
-        availability_override=availability if isinstance(availability, dict) else None,
-    )
-    connected_systems = _connected_system_labels(availability_payload)
-    tool_capabilities = _context_tool_capabilities(availability_payload)
-    tools = _build_direct_chat_tools(tool_capabilities)
-    tools.extend(_build_local_direct_chat_tools(availability_payload))
-    tools.extend(_build_builtin_direct_chat_tools())
-    approved_action_payload = _normalize_direct_approved_action(approved_action)
-    base_context_used = _build_context_used(
-        workspace_id=normalized_workspace_id,
-        requested_provider=normalized_requested_provider,
-        effective_provider=None,
-        requested_model=normalized_requested_model,
-        effective_model=None,
-        reasoning_effort=normalized_reasoning_effort,
-        connected_systems=connected_systems,
-        tool_capabilities=tool_capabilities,
-        prior_messages_used=False,
-        history_mode="none",
-        run_created=False,
-    )
+    normalized_message = prepared.normalized_message
+    normalized_workspace_id = prepared.normalized_workspace_id
+    normalized_thread_id = prepared.normalized_thread_id
+    session_key = prepared.session_key
+    normalized_requested_provider = prepared.normalized_requested_provider
+    normalized_requested_model = prepared.normalized_requested_model
+    normalized_reasoning_effort = prepared.normalized_reasoning_effort
+    compaction = prepared.compaction
+    compacted_prior_messages = prepared.compacted_prior_messages
+    proactive_suggestions = prepared.proactive_suggestions
+    tool_loop_session_key = prepared.tool_loop_session_key
+    availability_payload = prepared.availability_payload
+    connected_systems = prepared.connected_systems
+    tool_capabilities = prepared.tool_capabilities
+    tools = prepared.tools
+    approved_action_payload = prepared.approved_action_payload
+    base_context_used = prepared.base_context_used
+    slash_command_name = prepared.slash_command_name
+    slash_remainder = prepared.slash_remainder
+    resolved_chat_max_iterations = prepared.resolved_chat_max_iterations
 
     if slash_command_name:
         if slash_command_name == "status":

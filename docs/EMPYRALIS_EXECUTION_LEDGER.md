@@ -790,6 +790,72 @@ This is the next major ownership cut after handoff extraction. The chat module s
   - `server_modules.tests.test_agent_machine_mode`
   - final rerun after the generation-service extraction: `99 tests`, `OK`
 
+### 2026-04-04 - Direct Chat Entrypoint Preparation Moved Behind Dedicated Entry Service
+
+#### Stage
+
+Stage 1 continues. The top-level direct-chat entrypoint no longer owns the full inline preparation path for request normalization, session preference application, slash-command preprocessing, compaction, availability/tool setup, and base context assembly.
+
+This does not remove [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) as the direct-chat entrypoint, but it does reduce how much preparation logic it owns before dispatching into the extracted services.
+
+#### Completed Work
+
+- Added a new entry boundary in [server_modules/direct_chat_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_entry_service.py) for:
+  - `PreparedDirectChatRequest`
+  - `prepare_direct_chat_request()`
+- Moved the following direct-chat preparation behaviors behind the service boundary:
+  - request normalization from turn/session inputs
+  - session model preference application
+  - slash-command preprocessing for `/model` and `/clear`
+  - prior-message normalization and compaction
+  - proactive suggestion setup
+  - availability resolution and tool catalog assembly
+  - approved-action normalization
+  - base `context_used` envelope construction
+- Replaced the large inline setup block in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with `_prepare_direct_chat_request()`, which delegates into [server_modules/direct_chat_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_entry_service.py)
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_chat_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_entry_service.py)
+
+#### Current Truth
+
+- The direct-chat entrypoint now mainly coordinates slash-command handling, fallback branching, and dispatch into extracted provider, routing, handoff, generation, prompt, and memory services.
+- Request preparation for direct chat now has its own explicit service boundary instead of living as a long inline block inside the chat module.
+- The chat module is materially closer to an orchestration-only boundary than it was at the start of Stage 1.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still remains the top-level entrypoint and still contains some direct final-response branching for slash commands, approvals, and provider-unavailable fallback cases.
+- Several extracted services still communicate through callback bundles rather than a richer explicit runtime composition object.
+- Older tests still patch chat-module helpers, so the chat module remains the compatibility seam.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the remaining direct final-response branching where it forms reusable behavior.
+2. Decide whether the next convergence step should introduce an explicit composed direct-chat runtime object that wires the extracted services together.
+3. Keep using deletions in the chat module as the success metric instead of allowing new inline preparation logic to return.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_entry_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_entry_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_entry_service`
+  - `server_modules.tests.test_direct_chat_generation_service`
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - final rerun after the entry-service extraction: `101 tests`, `OK`
+
 ### 2026-04-04 - Direct Chat Provider Routing Moved Behind Dedicated Provider Service
 
 #### Stage

@@ -8,12 +8,14 @@ from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
+from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
 from server_modules.connectors.telegram_media_service import TelegramMediaService, telegram_safe_path_token
 from server_modules.connectors.telegram_profile_service import (
     TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
     TelegramProfileService,
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
+from server_modules.connectors.telegram_autopilot_supervisor_service import TelegramAutopilotSupervisorService
 from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
 from server_modules.connectors.telegram_autopilot_runtime_service import TelegramAutopilotRuntimeService
@@ -260,6 +262,8 @@ _TELEGRAM_POLL_CYCLE_SERVICE: Optional[TelegramPollCycleService] = None
 _TELEGRAM_POLL_DISPATCH_SERVICE: Optional[TelegramPollDispatchService] = None
 _TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
 _TELEGRAM_RUN_ACTION_SERVICE: Optional[TelegramRunActionService] = None
+_TELEGRAM_CONNECTOR_POLL_SERVICE: Optional[TelegramConnectorPollService] = None
+_TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE: Optional[TelegramAutopilotSupervisorService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 _WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
@@ -573,6 +577,48 @@ def _telegram_run_action_service() -> TelegramRunActionService:
             create_run=lambda **kwargs: _create_telegram_run(**kwargs),
         )
     return _TELEGRAM_RUN_ACTION_SERVICE
+
+
+def _telegram_connector_poll_service() -> TelegramConnectorPollService:
+    global _TELEGRAM_CONNECTOR_POLL_SERVICE
+    if _TELEGRAM_CONNECTOR_POLL_SERVICE is None:
+        _TELEGRAM_CONNECTOR_POLL_SERVICE = TelegramConnectorPollService(
+            default_workspace_id=ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID or "default",
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
+            resolve_allow_from=lambda entry: _telegram_resolve_allow_from(entry),
+            connector_state=lambda connector_id: _telegram_connector_state(connector_id),
+            resolve_secret=lambda entry: _telegram_get_secret(entry),
+            poll_cycle_service=lambda: _telegram_poll_cycle_service(),
+            inbound_context_service=lambda: _telegram_inbound_context_service(),
+            poll_dispatch_service=lambda: _telegram_poll_dispatch_service(),
+            poll_state_service=lambda: _telegram_poll_state_service(),
+        )
+    return _TELEGRAM_CONNECTOR_POLL_SERVICE
+
+
+def _mark_telegram_autopilot_started(started_at: str) -> None:
+    with TELEGRAM_AUTOPILOT_LOCK:
+        TELEGRAM_AUTOPILOT_STATE["active"] = True
+        TELEGRAM_AUTOPILOT_STATE["started_at"] = started_at
+        TELEGRAM_AUTOPILOT_STATE["enabled"] = True
+
+
+def _telegram_autopilot_supervisor_service() -> TelegramAutopilotSupervisorService:
+    global _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE
+    if _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE is None:
+        _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE = TelegramAutopilotSupervisorService(
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            utc_now_iso=lambda: _utc_now_iso(),
+            mark_started=lambda started_at: _mark_telegram_autopilot_started(started_at),
+            persist_state=lambda: _persist_telegram_autopilot_state(),
+            autopilot_log=lambda message: _telegram_autopilot_log(message),
+            require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
+            prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
+            loop_service=lambda: _telegram_autopilot_loop_service(),
+            sleep=lambda seconds: time.sleep(seconds),
+        )
+    return _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
@@ -3371,120 +3417,12 @@ async def _parse_form_urlencoded(request: Request) -> Dict[str, str]:
 
 
 def _telegram_poll_connector(entry: Dict[str, Any]):
-    connector_id = str(entry.get("id") or "").strip()
-    if not connector_id:
-        return
-    label = str(entry.get("label") or connector_id)
-    workspace_id = _normalize_workspace_id(entry.get("workspace_id")) or ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID or "default"
-    profile = _resolve_telegram_autopilot_profile(entry)
-    allow_from = _telegram_resolve_allow_from(entry)
-
-    connector_state = _telegram_connector_state(connector_id)
-    last_update_id = int(connector_state.get("last_update_id") or 0)
-
-    try:
-        secret = _telegram_get_secret(entry)
-        bot_token = str(secret.get("bot_token") or "").strip()
-        configured_chat_id = str(secret.get("chat_id") or "").strip()
-        if not bot_token or not configured_chat_id:
-            raise RuntimeError("Connector is missing bot_token or chat_id.")
-        poll_begin = _telegram_poll_cycle_service().begin_poll(
-            connector_state=connector_state,
-            bot_token=bot_token,
-            configured_chat_id=configured_chat_id,
-            workspace_id=workspace_id,
-            profile=profile,
-            connector_id=connector_id,
-            label=label,
-            last_update_id=last_update_id,
-        )
-        if bool(poll_begin.get("skipped")):
-            return
-        approval_state_patch = poll_begin.get("approval_state_patch") if isinstance(poll_begin.get("approval_state_patch"), dict) else {}
-        updates = poll_begin.get("updates") if isinstance(poll_begin.get("updates"), list) else []
-
-        max_seen = last_update_id
-        for update in updates:
-            if not isinstance(update, dict):
-                continue
-            extracted_message = _telegram_inbound_context_service().extract_inbound_message(
-                update=update,
-                configured_chat_id=configured_chat_id,
-            )
-            update_id = int(extracted_message.get("update_id") or 0)
-            if update_id <= max_seen:
-                continue
-            max_seen = update_id
-            if not bool(extracted_message.get("handled")):
-                continue
-            dispatch_result = _telegram_poll_dispatch_service().handle_update(
-                entry=entry,
-                label=label,
-                workspace_id=workspace_id,
-                profile=profile,
-                allow_from=list(allow_from),
-                connector_state=connector_state,
-                connector_id=connector_id,
-                bot_token=bot_token,
-                configured_chat_id=configured_chat_id,
-                extracted_message=extracted_message,
-                update_id=update_id,
-            )
-            if not bool(dispatch_result.get("processed")):
-                continue
-            chat_id = str(dispatch_result.get("chat_id") or "").strip()
-            action = str(dispatch_result.get("action") or "").strip().lower()
-            run_id = str(dispatch_result.get("run_id") or "")
-
-            _telegram_poll_state_service().record_processed_update(
-                connector_id=connector_id,
-                label=label,
-                workspace_id=workspace_id,
-                update_id=update_id,
-                chat_id=chat_id,
-                action=action,
-                profile_id=str(profile.get("id") or ""),
-                allow_from=list(allow_from),
-                run_id=run_id,
-                approval_state_patch=approval_state_patch,
-            )
-
-        _telegram_poll_cycle_service().complete_poll(
-            connector_id=connector_id,
-            label=label,
-            workspace_id=workspace_id,
-            max_seen=max_seen,
-            last_update_id=last_update_id,
-            profile_id=str(profile.get("id") or ""),
-            allow_from=list(allow_from),
-            approval_state_patch=approval_state_patch,
-        )
-    except Exception as exc:
-        detail = str(exc)
-        _telegram_poll_cycle_service().handle_connector_error(
-            connector_id=connector_id,
-            label=label,
-            workspace_id=workspace_id,
-            detail=detail,
-        )
-        raise
+    _telegram_connector_poll_service().poll_connector(entry)
 
 
 def _run_telegram_autopilot_forever():
     _init()
-    poll_seconds = max(1.0, ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS)
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["active"] = True
-        TELEGRAM_AUTOPILOT_STATE["started_at"] = _utc_now_iso()
-        TELEGRAM_AUTOPILOT_STATE["enabled"] = True
-    _persist_telegram_autopilot_state()
-    _telegram_autopilot_log(
-        f"enabled (poll={poll_seconds}s, prefix={'on' if ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX else 'off'}:{ORION_TELEGRAM_AUTOPILOT_PREFIX})"
-    )
-
-    while True:
-        sleep_seconds = _telegram_autopilot_loop_service().run_iteration()
-        time.sleep(max(0.25, float(sleep_seconds)))
+    _telegram_autopilot_supervisor_service().run_forever()
 
 
 

@@ -16,6 +16,7 @@ from server_modules.connectors.telegram_profile_service import (
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
+from server_modules.connectors.telegram_autopilot_runtime_service import TelegramAutopilotRuntimeService
 from server_modules.connectors.telegram_autopilot_state_service import TelegramAutopilotStateService
 from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
@@ -247,6 +248,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
 _AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
+_TELEGRAM_AUTOPILOT_RUNTIME_SERVICE: Optional[TelegramAutopilotRuntimeService] = None
 _TELEGRAM_AUTOPILOT_STATE_SERVICE: Optional[TelegramAutopilotStateService] = None
 _WHATSAPP_AUTOPILOT_STATE_SERVICE: Optional[WhatsAppAutopilotStateService] = None
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
@@ -363,6 +365,21 @@ def _telegram_autopilot_state_service() -> TelegramAutopilotStateService:
             ),
         )
     return _TELEGRAM_AUTOPILOT_STATE_SERVICE
+
+
+def _telegram_autopilot_runtime_service() -> TelegramAutopilotRuntimeService:
+    global _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE
+    if _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE is None:
+        _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE = TelegramAutopilotRuntimeService(
+            state=TELEGRAM_AUTOPILOT_STATE,
+            lock=TELEGRAM_AUTOPILOT_LOCK,
+            utc_now_iso=lambda: _utc_now_iso(),
+            classify_error=lambda detail: _classify_autopilot_error(detail),
+            iso_from_epoch=lambda ts: _iso_from_epoch(ts),
+            persist_state=lambda: _persist_telegram_autopilot_state(),
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+        )
+    return _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE
 
 
 def _telegram_sender_filter_service() -> TelegramSenderFilterService:
@@ -497,13 +514,11 @@ def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
 
 
 def _telegram_increment_processed_updates() -> None:
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["processed_updates"] = int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0) + 1
+    _telegram_autopilot_runtime_service().increment_processed_updates()
 
 
 def _telegram_set_connectors_seen(count: int) -> None:
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["connectors_seen"] = max(0, int(count or 0))
+    _telegram_autopilot_runtime_service().set_connectors_seen(count)
 
 
 def _telegram_poll_state_service() -> TelegramPollStateService:
@@ -1818,45 +1833,12 @@ def _whatsapp_autopilot_snapshot(include_connectors: bool = False) -> Dict[str, 
 
 def _telegram_autopilot_mark_error(detail: str, source: str = "loop") -> float:
     _init()
-    now_ts = time.time()
-    now_iso = _utc_now_iso()
-    category = _classify_autopilot_error(detail)
-    source_name = str(source or "loop")
-    backoff_seconds = 0.0
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["last_error"] = detail
-        TELEGRAM_AUTOPILOT_STATE["last_poll_at"] = now_iso
-        TELEGRAM_AUTOPILOT_STATE["last_error_at"] = now_iso
-        TELEGRAM_AUTOPILOT_STATE["last_error_category"] = category
-        TELEGRAM_AUTOPILOT_STATE["last_error_source"] = source_name
-        TELEGRAM_AUTOPILOT_STATE["error_count"] = int(TELEGRAM_AUTOPILOT_STATE.get("error_count") or 0) + 1
-        TELEGRAM_AUTOPILOT_STATE["consecutive_errors"] = int(TELEGRAM_AUTOPILOT_STATE.get("consecutive_errors") or 0) + 1
-        if source_name == "loop":
-            TELEGRAM_AUTOPILOT_STATE["retry_count"] = int(TELEGRAM_AUTOPILOT_STATE.get("retry_count") or 0) + 1
-            TELEGRAM_AUTOPILOT_STATE["last_retry_at"] = now_iso
-            consecutive = int(TELEGRAM_AUTOPILOT_STATE.get("consecutive_errors") or 0)
-            base_delay = max(1.0, float(ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS))
-            backoff_seconds = min(60.0, base_delay * (1.6 ** min(consecutive, 8)))
-            TELEGRAM_AUTOPILOT_STATE["backoff_seconds"] = round(backoff_seconds, 3)
-            TELEGRAM_AUTOPILOT_STATE["next_retry_at"] = _iso_from_epoch(now_ts + backoff_seconds)
-    _persist_telegram_autopilot_state()
-    return backoff_seconds
+    return _telegram_autopilot_runtime_service().mark_error(detail, source=source)
 
 
 def _telegram_autopilot_mark_poll(clear_error: bool = True):
     _init()
-    now = _utc_now_iso()
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["last_poll_at"] = now
-        if clear_error:
-            TELEGRAM_AUTOPILOT_STATE["last_error"] = None
-            TELEGRAM_AUTOPILOT_STATE["last_error_at"] = None
-            TELEGRAM_AUTOPILOT_STATE["last_error_category"] = None
-            TELEGRAM_AUTOPILOT_STATE["last_error_source"] = None
-            TELEGRAM_AUTOPILOT_STATE["consecutive_errors"] = 0
-            TELEGRAM_AUTOPILOT_STATE["backoff_seconds"] = 0.0
-            TELEGRAM_AUTOPILOT_STATE["next_retry_at"] = None
-            TELEGRAM_AUTOPILOT_STATE["last_success_at"] = now
+    _telegram_autopilot_runtime_service().mark_poll(clear_error=clear_error)
 
 
 def _telegram_connector_state(credential_id: str) -> Dict[str, Any]:

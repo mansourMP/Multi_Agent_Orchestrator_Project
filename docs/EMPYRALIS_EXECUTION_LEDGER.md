@@ -659,6 +659,72 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Direct Chat Durable-Run Handoff Lifecycle Moved Behind Dedicated Handoff Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat loop no longer owns the full inline implementation of durable-run handoff start, status shaping, snapshot interpretation, or live handoff streaming.
+
+This is a larger ownership cut than the earlier route-planning extraction. The chat loop still decides when to trigger durable-run handoff, but the handoff lifecycle itself is now service-owned.
+
+#### Completed Work
+
+- Added a new handoff boundary in [server_modules/direct_chat_handoff_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_handoff_service.py) for:
+  - `durable_run_preferred_response()`
+  - `run_handoff_execution_target()`
+  - `can_auto_start_run_handoff()`
+  - `direct_chat_run_handoff_failure_payload()`
+  - `start_direct_chat_run_handoff()`
+  - `direct_chat_run_handoff_reply()`
+  - `direct_chat_run_actions()`
+  - `direct_chat_run_snapshot()`
+  - `direct_chat_run_event_to_step()`
+  - `direct_chat_run_snapshot_to_step()`
+  - `direct_chat_run_final_payload()`
+  - `stream_direct_chat_run_handoff()`
+- Replaced the inline handoff implementation in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with thin compatibility wrappers for the extracted functions
+- Preserved the current patch surface for older tests by keeping the wrapper names in the chat module while moving implementation ownership into the new handoff service
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_chat_handoff_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_handoff_service.py)
+
+#### Current Truth
+
+- The durable-run handoff lifecycle for direct chat now has its own dedicated service boundary.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still triggers the handoff path, but no longer owns the lifecycle implementation inline.
+- Provider routing, prompt assembly, no-provider fallback execution, route planning, and handoff lifecycle are now all outside the main direct-chat loop as extracted service-owned subsystems.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns the main streaming reply loop and the final direct-chat generation/orchestration path.
+- Older tests still patch wrapper functions in the chat module, so the chat module remains a public seam even though it no longer owns those implementations.
+- The service extraction is still functional and injected rather than a fully composed runtime object graph.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the remaining streaming reply orchestration and final payload shaping around provider-backed chat generation.
+2. Decide whether the next service boundary should be the provider-backed streaming loop itself or the final payload assembly around chat results and fallbacks.
+3. Keep removing ownership from the chat module instead of introducing new inline orchestration there.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_handoff_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_handoff_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_handoff_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_handoff_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - final rerun after the handoff-service extraction: `97 tests`, `OK`
+
 ### 2026-04-04 - Direct Chat Provider Routing Moved Behind Dedicated Provider Service
 
 #### Stage

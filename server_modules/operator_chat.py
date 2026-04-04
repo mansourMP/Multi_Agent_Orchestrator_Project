@@ -25,6 +25,7 @@ from scripts.orion_local_worker_llm import (
 from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_prompt_service
+from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_routing_service
 from server_modules import memory_service
 from server_modules import no_provider_service
@@ -1204,39 +1205,26 @@ def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> b
 
 
 def _durable_run_preferred_response(message: str) -> Dict[str, Any]:
-    return {
-        "reply": "I can run that here.",
-        "actions": [_run_action(message)],
-        "mode": "answer_with_action",
-    }
+    return direct_chat_handoff_service.durable_run_preferred_response(
+        message,
+        run_action_fn=_run_action,
+    )
 
 
 def _run_handoff_execution_target(availability: Dict[str, Any]) -> str:
-    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
-    if connection_mode == "local_companion":
-        return "local_companion"
-    return "auto"
+    return direct_chat_handoff_service.run_handoff_execution_target(availability)
 
 
 def _can_auto_start_run_handoff(availability: Dict[str, Any]) -> bool:
-    if not isinstance(availability, dict):
-        return False
-    if not bool(availability.get("ai_ready")):
-        return False
-    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
-    if connection_mode == "byok":
-        return False
-    return True
+    return direct_chat_handoff_service.can_auto_start_run_handoff(availability)
 
 
 def _direct_chat_run_handoff_failure_payload(message: str, error_detail: str) -> Dict[str, Any]:
-    detail = str(error_detail or "").strip() or "unknown_error"
-    return {
-        "reply": f"I couldn't start a durable run automatically: {detail}",
-        "actions": [_run_action(message)],
-        "mode": "answer_with_action",
-        "error": detail,
-    }
+    return direct_chat_handoff_service.direct_chat_run_handoff_failure_payload(
+        message,
+        error_detail,
+        run_action_fn=_run_action,
+    )
 
 
 def _start_direct_chat_run_handoff(
@@ -1252,82 +1240,33 @@ def _start_direct_chat_run_handoff(
     from server_modules.runs_delegation import _create_run_from_request
     from server_modules.runtime_models import RunStartRequest
 
-    connection_mode = str(availability.get("connection_mode") or "").strip().lower() or None
-    execution_target = _run_handoff_execution_target(availability)
-    req = RunStartRequest(
-        engine="orion",
-        workspace_id=workspace_id or "default",
-        user_goal=str(message or "").strip(),
-        max_iterations=_safe_positive_int(max_iterations, 0) if max_iterations is not None else None,
-        provider=str(requested_provider or "").strip() or None,
-        model=str(requested_model or "").strip() or None,
-        metadata={
-            "source": "operator_chat",
-            "direct_chat": True,
-            "chat_handoff": True,
-            "thread_id": str(thread_id or "").strip() or None,
-            "execution_target": execution_target,
-            "connection_mode": connection_mode,
-        },
+    return direct_chat_handoff_service.start_direct_chat_run_handoff(
+        message=message,
+        workspace_id=workspace_id,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        thread_id=thread_id,
+        availability=availability,
+        max_iterations=max_iterations,
+        create_run_from_request_fn=_create_run_from_request,
+        run_start_request_cls=RunStartRequest,
+        safe_positive_int_fn=_safe_positive_int,
     )
-    return _create_run_from_request(req)
 
 
 def _direct_chat_run_handoff_reply(started: Dict[str, Any]) -> Dict[str, Any]:
-    run_id = str(started.get("run_id") or "").strip()
-    route = started.get("route") if isinstance(started.get("route"), dict) else {}
-    selected_target = str(route.get("selected") or "").strip().lower()
-    pending = started.get("pending_confirmation") if isinstance(started.get("pending_confirmation"), dict) else {}
-    waiting_for_confirmation = bool(pending) or str(started.get("status") or "").strip().lower() == "waiting_for_input"
-
-    if waiting_for_confirmation:
-        reply = "I started a durable run for this task, but it needs confirmation before local execution begins."
-        actions = [
-            _open_action("Open approvals", "/approvals", variant="primary"),
-            _open_action("Open run", f"/runs/{run_id}", variant="secondary") if run_id else _open_action("Open runs", "/executions", variant="secondary"),
-        ]
-        detail = "Waiting for confirmation"
-    elif selected_target == "local_companion":
-        reply = "I started a durable run for this task on your local machine."
-        actions = [
-            _open_action("Open run", f"/runs/{run_id}", variant="primary") if run_id else _open_action("Open runs", "/executions", variant="primary"),
-            _open_action("Open runs", "/executions", variant="secondary"),
-        ]
-        detail = "Queued for Local Companion"
-    else:
-        reply = "I started a durable run for this task."
-        actions = [
-            _open_action("Open run", f"/runs/{run_id}", variant="primary") if run_id else _open_action("Open runs", "/executions", variant="primary"),
-            _open_action("Open runs", "/executions", variant="secondary"),
-        ]
-        detail = "Run started"
-
-    return {
-        "reply": reply,
-        "actions": actions,
-        "mode": "answer_with_action",
-        "run_id": run_id or None,
-        "detail": detail,
-        "route": route if route else None,
-        "pending_confirmation": pending if pending else None,
-        "status": str(started.get("status") or "").strip() or None,
-    }
+    return direct_chat_handoff_service.direct_chat_run_handoff_reply(
+        started,
+        open_action_fn=_open_action,
+    )
 
 
 def _direct_chat_run_actions(run_id: str, *, waiting_for_confirmation: bool = False) -> List[Dict[str, Any]]:
-    if waiting_for_confirmation:
-        actions: List[Dict[str, Any]] = [_open_action("Open approvals", "/approvals", variant="primary")]
-        if run_id:
-            actions.append(_open_action("Open run", f"/runs/{run_id}", variant="secondary"))
-        else:
-            actions.append(_open_action("Open runs", "/executions", variant="secondary"))
-        return actions
-    if run_id:
-        return [
-            _open_action("Open run", f"/runs/{run_id}", variant="primary"),
-            _open_action("Open runs", "/executions", variant="secondary"),
-        ]
-    return [_open_action("Open runs", "/executions", variant="primary")]
+    return direct_chat_handoff_service.direct_chat_run_actions(
+        run_id,
+        waiting_for_confirmation=waiting_for_confirmation,
+        open_action_fn=_open_action,
+    )
 
 
 def _direct_chat_run_snapshot(run_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
@@ -1335,214 +1274,20 @@ def _direct_chat_run_snapshot(run_id: str) -> tuple[Optional[Dict[str, Any]], Di
     from server_modules.runs_output import _serialize_run_snapshot
     from server_modules.shared import runs
 
-    run = runs.get(run_id)
-    if isinstance(run, dict):
-        try:
-            return run, _serialize_run_snapshot(run_id, run)
-        except Exception:
-            return run, {
-                "run_id": run_id,
-                "status": str(run.get("status") or "").strip() or "unknown",
-                "requested_provider": None,
-                "effective_provider": None,
-                "requested_model": None,
-                "effective_model": None,
-                "fallback_used": False,
-            }
-    try:
-        snapshot = _lookup_run_snapshot(run_id)
-        return None, snapshot if isinstance(snapshot, dict) else {"run_id": run_id}
-    except Exception:
-        return None, {"run_id": run_id}
+    return direct_chat_handoff_service.direct_chat_run_snapshot(
+        run_id,
+        runs_mapping=runs,
+        lookup_run_snapshot_fn=_lookup_run_snapshot,
+        serialize_run_snapshot_fn=_serialize_run_snapshot,
+    )
 
 
 def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-    event_name = str(event.get("event") or "").strip().lower()
-    message = str(event.get("message") or "").strip()
-    data = event.get("data") if isinstance(event.get("data"), dict) else {}
-
-    if event_name in {"memory_context", "memory_write", "usage_masked", "action_policy_evaluated", "approval_skipped"}:
-        return None, None
-
-    if event_name == "local_queued":
-        detail = str(data.get("preferred_runtime_label") or "").strip() or message
-        return {
-            "type": "step",
-            "id": f"run-handoff:queue:{run_id}",
-            "label": "Queued on your laptop",
-            "detail": detail or None,
-            "status": "done",
-            "kind": "thinking",
-        }, None
-
-    if event_name == "local_claimed":
-        detail = str(data.get("worker_id") or "").strip() or message
-        return {
-            "type": "step",
-            "id": f"run-handoff:claim:{run_id}",
-            "label": "Local machine picked up the run",
-            "detail": detail or None,
-            "status": "done",
-            "kind": "thinking",
-        }, None
-
-    if event_name in {"local_heartbeat", "local_still_working", "workflow_node_start", "workflow_data_step", "workflow_tool_http", "workflow_tool_connector_action", "pack_phase", "orion_plan", "dag_node_start"}:
-        return {
-            "type": "step",
-            "id": f"run-handoff:working:{run_id}",
-            "label": "Working on your laptop",
-            "detail": message or None,
-            "status": "active",
-            "kind": "thinking",
-        }, None
-
-    if event_name == "run_start":
-        return {
-            "type": "step",
-            "id": f"run-handoff:started:{run_id}",
-            "label": "Run started",
-            "detail": message or None,
-            "status": "done",
-            "kind": "thinking",
-        }, None
-
-    if event_name in {"approval_requested", "approval_waiting"}:
-        prompt = str(data.get("prompt") or "").strip() or message
-        return {
-            "type": "step",
-            "id": f"run-handoff:approval:{run_id}",
-            "label": "Waiting for confirmation",
-            "detail": prompt or None,
-            "status": "done",
-            "kind": "thinking",
-        }, None
-
-    if event_name in {"run_error", "timeout", "run_stopped", "local_worker_lost"}:
-        label = "Run failed"
-        if event_name == "timeout":
-            label = "Run timed out"
-        elif event_name == "run_stopped":
-            label = "Run stopped"
-        elif event_name == "local_worker_lost":
-            label = "Worker disconnected"
-        return {
-            "type": "step",
-            "id": f"run-handoff:error:{run_id}",
-            "label": label,
-            "detail": message or None,
-            "status": "error",
-            "kind": "thinking",
-        }, None
-
-    if event_name in {"local_result", "orion_result", "pack_summary"}:
-        reply_text = str(data.get("reply") or data.get("summary") or message).strip() or None
-        return {
-            "type": "step",
-            "id": f"run-handoff:working:{run_id}",
-            "label": "Working on your laptop",
-            "detail": "Response ready",
-            "status": "done",
-            "kind": "thinking",
-        }, reply_text
-
-    if event_name == "run_complete":
-        return {
-            "type": "step",
-            "id": f"run-handoff:working:{run_id}",
-            "label": "Completed on your laptop",
-            "detail": message or None,
-            "status": "done",
-            "kind": "thinking",
-        }, None
-
-    return None, None
+    return direct_chat_handoff_service.direct_chat_run_event_to_step(run_id, event)
 
 
 def _direct_chat_run_snapshot_to_step(run_id: str, snapshot: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-    status = str(snapshot.get("status") or "").strip().lower()
-    if not status:
-        return None, None
-
-    selected_target = str(snapshot.get("execution_target_selected") or "").strip().lower()
-    waiting_for_runtime = bool(snapshot.get("execution_target_waiting_for_runtime"))
-    waiting_for_capacity = bool(snapshot.get("execution_target_waiting_for_capacity"))
-    preferred_runtime_label = str(snapshot.get("execution_target_preferred_runtime_label") or "").strip()
-    estimated_wait_band = str(snapshot.get("execution_target_estimated_wait_band") or "").strip()
-    pending = (
-        snapshot.get("pending_confirmation")
-        if isinstance(snapshot.get("pending_confirmation"), dict)
-        else snapshot.get("pending_approval")
-        if isinstance(snapshot.get("pending_approval"), dict)
-        else {}
-    )
-    prompt = str(pending.get("prompt") or "").strip()
-
-    def _detail(*values: str) -> Optional[str]:
-        for value in values:
-            token = str(value or "").strip()
-            if token:
-                return token
-        return None
-
-    if status == "waiting_for_input":
-        return f"waiting_for_input:{run_id}", {
-            "type": "step",
-            "id": f"run-handoff:approval:{run_id}",
-            "label": "Waiting for confirmation",
-            "detail": _detail(prompt, preferred_runtime_label),
-            "status": "done",
-            "kind": "thinking",
-        }
-
-    if status in {"queued_local", "queued", "starting"}:
-        if waiting_for_runtime:
-            return f"waiting_for_runtime:{run_id}", {
-                "type": "step",
-                "id": f"run-handoff:waiting-runtime:{run_id}",
-                "label": "Waiting for your laptop",
-                "detail": _detail(preferred_runtime_label, estimated_wait_band, "Local machine not ready yet"),
-                "status": "active",
-                "kind": "thinking",
-            }
-        if waiting_for_capacity:
-            return f"waiting_for_capacity:{run_id}", {
-                "type": "step",
-                "id": f"run-handoff:waiting-capacity:{run_id}",
-                "label": "Waiting for laptop capacity",
-                "detail": _detail(preferred_runtime_label, estimated_wait_band, "Another task is using the local machine"),
-                "status": "active",
-                "kind": "thinking",
-            }
-        if selected_target == "local_companion" or status == "queued_local":
-            return f"queued_local:{run_id}", {
-                "type": "step",
-                "id": f"run-handoff:queue:{run_id}",
-                "label": "Queued on your laptop",
-                "detail": _detail(preferred_runtime_label, estimated_wait_band),
-                "status": "active",
-                "kind": "thinking",
-            }
-        return f"queued:{run_id}", {
-            "type": "step",
-            "id": f"run-handoff:queue:{run_id}",
-            "label": "Run queued",
-            "detail": _detail(estimated_wait_band),
-            "status": "active",
-            "kind": "thinking",
-        }
-
-    if status in {"running", "running_local"}:
-        label = "Working on your laptop" if selected_target == "local_companion" or status == "running_local" else "Working on the run"
-        return f"running:{run_id}", {
-            "type": "step",
-            "id": f"run-handoff:working:{run_id}",
-            "label": label,
-            "detail": _detail(preferred_runtime_label),
-            "status": "active",
-            "kind": "thinking",
-        }
-
-    return None, None
+    return direct_chat_handoff_service.direct_chat_run_snapshot_to_step(run_id, snapshot)
 
 
 def _direct_chat_run_final_payload(
@@ -1560,79 +1305,22 @@ def _direct_chat_run_final_payload(
     reply_override: Optional[str] = None,
     continuing: bool = False,
 ) -> Dict[str, Any]:
-    status = str(snapshot.get("status") or (run.get("status") if isinstance(run, dict) else "") or "").strip().lower() or "unknown"
-    pending = (
-        run.get("pending_confirmation")
-        if isinstance(run, dict) and isinstance(run.get("pending_confirmation"), dict)
-        else snapshot.get("pending_confirmation")
-        if isinstance(snapshot.get("pending_confirmation"), dict)
-        else snapshot.get("pending_approval")
-        if isinstance(snapshot.get("pending_approval"), dict)
-        else {}
+    return direct_chat_handoff_service.direct_chat_run_final_payload(
+        run_id=run_id,
+        run=run,
+        snapshot=snapshot,
+        requested_workspace_id=requested_workspace_id,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        reasoning_effort=reasoning_effort,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        fallback_reason=fallback_reason,
+        reply_override=reply_override,
+        continuing=continuing,
+        build_context_used_fn=_build_context_used,
+        open_action_fn=_open_action,
     )
-    result_data = snapshot.get("result_data") if isinstance(snapshot.get("result_data"), dict) else {}
-    selected_target = str(snapshot.get("execution_target_selected") or "").strip().lower()
-    attempted_providers = str(result_data.get("attempted_providers") or "").strip()
-    effective_provider = str(snapshot.get("effective_provider") or "").strip() or None
-    effective_model = str(snapshot.get("effective_model") or "").strip() or None
-    actual_fallback_reason = str(snapshot.get("fallback_reason") or fallback_reason or "").strip() or None
-    base_reply = str(reply_override or snapshot.get("result_summary") or (run.get("result") if isinstance(run, dict) else "") or "").strip()
-
-    if status == "completed":
-        reply = base_reply or "Durable run completed."
-        actions = _direct_chat_run_actions(run_id)
-        error = ""
-    elif status == "waiting_for_input":
-        prompt = str(pending.get("prompt") or "").strip()
-        if prompt:
-            reply = f"I started a durable run for this task, and it is waiting for confirmation. {prompt}"
-        else:
-            reply = "I started a durable run for this task, and it is waiting for confirmation before continuing."
-        actions = _direct_chat_run_actions(run_id, waiting_for_confirmation=True)
-        error = ""
-    elif continuing:
-        if bool(snapshot.get("execution_target_waiting_for_runtime")):
-            reply = "The durable run is waiting for your laptop to become available. You can keep monitoring it live in Runs."
-        elif bool(snapshot.get("execution_target_waiting_for_capacity")):
-            reply = "The durable run is waiting for local machine capacity. You can keep monitoring it live in Runs."
-        elif selected_target == "local_companion" and status in {"queued_local", "queued", "starting"}:
-            reply = "The durable run is queued for your laptop. You can keep monitoring it live in Runs."
-        elif selected_target == "local_companion":
-            reply = "The durable run is still working on your laptop. You can keep monitoring it live in Runs."
-        else:
-            reply = "The durable run is still working. You can keep monitoring it live in Runs."
-        actions = _direct_chat_run_actions(run_id)
-        error = ""
-    else:
-        reply = base_reply or f"Durable run ended with status '{status}'."
-        actions = _direct_chat_run_actions(run_id)
-        error = status if status not in {"completed", "waiting_for_input"} else ""
-
-    return {
-        "reply": reply,
-        "actions": actions,
-        "mode": "answer_with_action" if actions else "answer",
-        "usage_masked": snapshot.get("usage_masked") if isinstance(snapshot.get("usage_masked"), dict) else {},
-        "provider": effective_provider,
-        "model": effective_model,
-        "attempted_providers": attempted_providers,
-        "error": error,
-        "context_used": _build_context_used(
-            workspace_id=requested_workspace_id,
-            requested_provider=requested_provider,
-            effective_provider=effective_provider,
-            requested_model=requested_model,
-            effective_model=effective_model,
-            reasoning_effort=reasoning_effort,
-            connected_systems=connected_systems,
-            tool_capabilities=tool_capabilities,
-            prior_messages_used=False,
-            history_mode="none",
-            run_created=True,
-            fallback_used=bool(snapshot.get("fallback_used")),
-            fallback_reason=actual_fallback_reason,
-        ),
-    }
 
 
 def _stream_direct_chat_run_handoff(
@@ -1646,105 +1334,26 @@ def _stream_direct_chat_run_handoff(
     tool_capabilities: List[Dict[str, Any]],
     fallback_reason: Optional[str],
 ) -> Iterator[Dict[str, Any]]:
-    run_id = str(started_run.get("run_id") or "").strip()
-    if not run_id:
-        yield {
-            "type": "final",
-            "payload": {
-                "reply": "A durable run was requested, but the runtime did not return a run id.",
-                "actions": [_open_action("Open runs", "/executions", variant="primary")],
-                "mode": "answer_with_action",
-                "error": "missing_run_id",
-                "context_used": _build_context_used(
-                    workspace_id=requested_workspace_id,
-                    requested_provider=requested_provider,
-                    effective_provider=None,
-                    requested_model=requested_model,
-                    effective_model=None,
-                    reasoning_effort=reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    prior_messages_used=False,
-                    history_mode="none",
-                    run_created=False,
-                    fallback_used=False,
-                    fallback_reason=fallback_reason,
-                ),
-            },
-        }
-        return
-
-    deadline = time.monotonic() + DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS
-    last_seq = 0
-    reply_override: Optional[str] = None
-    emitted_snapshot_step_keys: set[str] = set()
-
-    while True:
-        run, snapshot = _direct_chat_run_snapshot(run_id)
-        events = run.get("events") if isinstance(run, dict) and isinstance(run.get("events"), list) else []
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            try:
-                seq = int(event.get("seq") or 0)
-            except Exception:
-                seq = 0
-            if seq <= last_seq:
-                continue
-            last_seq = seq
-            step_payload, candidate_reply = _direct_chat_run_event_to_step(run_id, event)
-            if candidate_reply and not reply_override:
-                reply_override = candidate_reply
-            if step_payload is not None:
-                yield step_payload
-
-        snapshot_step_key, snapshot_step_payload = _direct_chat_run_snapshot_to_step(run_id, snapshot)
-        if snapshot_step_key and snapshot_step_payload is not None and snapshot_step_key not in emitted_snapshot_step_keys:
-            emitted_snapshot_step_keys.add(snapshot_step_key)
-            yield snapshot_step_payload
-
-        status = str(snapshot.get("status") or "").strip().lower() or "unknown"
-        if status in {"completed", "failed", "timeout", "waiting_for_input", "stopped", "cancelled"}:
-            yield {
-                "type": "final",
-                "payload": _direct_chat_run_final_payload(
-                    run_id=run_id,
-                    run=run,
-                    snapshot=snapshot,
-                    requested_workspace_id=requested_workspace_id,
-                    requested_provider=requested_provider,
-                    requested_model=requested_model,
-                    reasoning_effort=reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    fallback_reason=fallback_reason,
-                    reply_override=reply_override,
-                    continuing=False,
-                ),
-            }
-            return
-
-        if time.monotonic() >= deadline:
-            yield {
-                "type": "final",
-                "payload": _direct_chat_run_final_payload(
-                    run_id=run_id,
-                    run=run,
-                    snapshot=snapshot,
-                    requested_workspace_id=requested_workspace_id,
-                    requested_provider=requested_provider,
-                    requested_model=requested_model,
-                    reasoning_effort=reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    fallback_reason=fallback_reason,
-                    reply_override=reply_override,
-                    continuing=True,
-                ),
-            }
-            return
-
-        time.sleep(DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS)
+    yield from direct_chat_handoff_service.stream_direct_chat_run_handoff(
+        started_run=started_run,
+        requested_workspace_id=requested_workspace_id,
+        requested_provider=requested_provider,
+        requested_model=requested_model,
+        reasoning_effort=reasoning_effort,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        fallback_reason=fallback_reason,
+        direct_chat_run_snapshot_fn=_direct_chat_run_snapshot,
+        direct_chat_run_event_to_step_fn=_direct_chat_run_event_to_step,
+        direct_chat_run_snapshot_to_step_fn=_direct_chat_run_snapshot_to_step,
+        direct_chat_run_final_payload_fn=_direct_chat_run_final_payload,
+        open_action_fn=_open_action,
+        build_context_used_fn=_build_context_used,
+        live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
+        poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
+        monotonic_fn=time.monotonic,
+        sleep_fn=time.sleep,
+    )
 
 
 def _provider_supports_direct_tool_calls(provider: str) -> bool:

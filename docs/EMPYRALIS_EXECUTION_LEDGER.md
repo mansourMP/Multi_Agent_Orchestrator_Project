@@ -319,6 +319,80 @@ The loop still fetches updates, tracks `max_seen`, and records poll-completion/e
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - Telegram Poll Cycle Lifecycle Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram poller no longer owns the `getUpdates` lifecycle edge inline.
+
+Approval preflight, poll-lock handling, `getUpdates` fetch, poll completion patching, approval-only patching, and connector-error recording are now behind a dedicated service. The poll loop still iterates updates, but another top-level lifecycle block has been removed from the monolith.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_poll_cycle_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_poll_cycle_service.py).
+- Moved Telegram poll-cycle lifecycle behavior behind that service:
+  - approval notification preflight
+  - `getUpdates` lock acquisition handling
+  - `getUpdates` fetch request construction
+  - update list normalization
+  - poll completion patching
+  - approval-only patching when no updates are processed
+  - connector-error event recording, connector-error state patching, and autopilot error marking
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so `_telegram_poll_connector()` now delegates poll begin, poll completion, and connector-error handling to the cycle service.
+- Added focused service coverage in [server_modules/tests/test_telegram_poll_cycle_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_poll_cycle_service.py).
+
+#### Current Truth
+
+- The Telegram connector is now decomposed into service-owned boundaries for:
+  - poll-cycle lifecycle
+  - per-update dispatch
+  - inbound context assembly
+  - sender filtering
+  - routing
+  - profile/onboarding
+  - media
+  - guided camera setup
+  - run action composition
+  - run dispatch
+  - poll-state patching
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still coordinates the outer Telegram poll flow, but it no longer owns most of the connector behavior inline.
+- The monolith is still present, but the Telegram slice is increasingly a coordinator over connector services rather than a single blob.
+
+#### Open Gaps
+
+- The Telegram outer poll loop still owns update iteration, `max_seen` progression, and the surrounding forever-loop orchestration.
+- The non-Telegram channel logic still lives in the same monolith file.
+- The connector monolith is smaller and better factored, but it is not yet a thin coordination shell.
+
+#### Next Required Work
+
+1. Continue reducing the remaining Telegram outer loop until it is mostly iteration and delegation only.
+2. Move the non-Telegram control flow out of [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) using the same bounded-service approach.
+3. After the channel logic is thinner, decide whether the long-running autopilot loop should move behind a supervisor/runtime service boundary.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_poll_cycle_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_poll_cycle_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_poll_cycle_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_poll_cycle_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

@@ -15,6 +15,7 @@ from server_modules.connectors.telegram_profile_service import (
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
+from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
 from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
 from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
 from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
@@ -243,6 +244,7 @@ _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
 _TELEGRAM_INBOUND_CONTEXT_SERVICE: Optional[TelegramInboundContextService] = None
+_TELEGRAM_POLL_CYCLE_SERVICE: Optional[TelegramPollCycleService] = None
 _TELEGRAM_POLL_DISPATCH_SERVICE: Optional[TelegramPollDispatchService] = None
 _TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
 _TELEGRAM_RUN_ACTION_SERVICE: Optional[TelegramRunActionService] = None
@@ -348,6 +350,24 @@ def _telegram_inbound_context_service() -> TelegramInboundContextService:
             ),
         )
     return _TELEGRAM_INBOUND_CONTEXT_SERVICE
+
+
+def _telegram_poll_cycle_service() -> TelegramPollCycleService:
+    global _TELEGRAM_POLL_CYCLE_SERVICE
+    if _TELEGRAM_POLL_CYCLE_SERVICE is None:
+        _TELEGRAM_POLL_CYCLE_SERVICE = TelegramPollCycleService(
+            max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            notify_pending_approvals=lambda **kwargs: _telegram_notify_pending_approvals(**kwargs),
+            get_updates_process_lock=lambda bot_token: _telegram_get_updates_process_lock(bot_token),
+            autopilot_log=lambda message: _telegram_autopilot_log(message),
+            telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
+            poll_state_service=lambda: _telegram_poll_state_service(),
+            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
+            classify_error=lambda detail: _classify_autopilot_error(detail),
+            autopilot_mark_error=lambda detail, source: _telegram_autopilot_mark_error(detail, source=source),
+        )
+    return _TELEGRAM_POLL_CYCLE_SERVICE
 
 
 def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
@@ -3567,7 +3587,6 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
 
     connector_state = _telegram_connector_state(connector_id)
     last_update_id = int(connector_state.get("last_update_id") or 0)
-    approval_state_patch: Dict[str, Any] = {}
 
     try:
         secret = _telegram_get_secret(entry)
@@ -3575,33 +3594,20 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
         configured_chat_id = str(secret.get("chat_id") or "").strip()
         if not bot_token or not configured_chat_id:
             raise RuntimeError("Connector is missing bot_token or chat_id.")
-        approval_state_patch = _telegram_notify_pending_approvals(
+        poll_begin = _telegram_poll_cycle_service().begin_poll(
             connector_state=connector_state,
             bot_token=bot_token,
-            chat_id=configured_chat_id,
+            configured_chat_id=configured_chat_id,
             workspace_id=workspace_id,
             profile=profile,
             connector_id=connector_id,
+            label=label,
+            last_update_id=last_update_id,
         )
-
-        with _telegram_get_updates_process_lock(bot_token) as acquired_poll_lock:
-            if not acquired_poll_lock:
-                _telegram_autopilot_log(
-                    f"skipping getUpdates for {label}: another poller currently holds the Telegram bot lock"
-                )
-                return
-            updates_result = _telegram_api_request(
-                bot_token,
-                "getUpdates",
-                params={
-                    "offset": last_update_id + 1,
-                    "limit": max(1, min(ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES, 100)),
-                    "timeout": 0,
-                },
-            )
-        updates = updates_result.get("result")
-        if not isinstance(updates, list):
-            updates = []
+        if bool(poll_begin.get("skipped")):
+            return
+        approval_state_patch = poll_begin.get("approval_state_patch") if isinstance(poll_begin.get("approval_state_patch"), dict) else {}
+        updates = poll_begin.get("updates") if isinstance(poll_begin.get("updates"), list) else []
 
         max_seen = last_update_id
         for update in updates:
@@ -3649,46 +3655,24 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                 approval_state_patch=approval_state_patch,
             )
 
-        if max_seen > last_update_id:
-            _telegram_poll_state_service().record_poll_completion(
-                connector_id=connector_id,
-                label=label,
-                workspace_id=workspace_id,
-                max_seen=max_seen,
-                profile_id=str(profile.get("id") or ""),
-                allow_from=list(allow_from),
-                approval_state_patch=approval_state_patch,
-            )
-        elif approval_state_patch:
-            _telegram_poll_state_service().record_poll_approval_only(
-                connector_id=connector_id,
-                label=label,
-                workspace_id=workspace_id,
-                profile_id=str(profile.get("id") or ""),
-                allow_from=list(allow_from),
-                approval_state_patch=approval_state_patch,
-            )
+        _telegram_poll_cycle_service().complete_poll(
+            connector_id=connector_id,
+            label=label,
+            workspace_id=workspace_id,
+            max_seen=max_seen,
+            last_update_id=last_update_id,
+            profile_id=str(profile.get("id") or ""),
+            allow_from=list(allow_from),
+            approval_state_patch=approval_state_patch,
+        )
     except Exception as exc:
         detail = str(exc)
-        category = _classify_autopilot_error(detail)
-        _record_channel_event_throttled(
-            channel="telegram",
-            direction="system",
-            event_type="error",
-            text=detail,
-            workspace_id=workspace_id,
-            action="connector",
-            metadata={"connector_id": connector_id, "category": category},
-            dedupe_seconds=max(30.0, float(ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS) * 6.0),
-        )
-        _telegram_poll_state_service().record_connector_error(
+        _telegram_poll_cycle_service().handle_connector_error(
             connector_id=connector_id,
             label=label,
             workspace_id=workspace_id,
             detail=detail,
-            category=category,
         )
-        _telegram_autopilot_mark_error(detail, source="connector")
         raise
 
 

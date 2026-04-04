@@ -3054,6 +3054,72 @@ This is a real composition cut, not just another wrapper bridge. The top-level h
   - `server_modules.tests.test_telegram_connector_context_service`
   - `server_modules.tests.test_autopilot_approval_service`
 
+### 2026-04-05 - Runtime And Transport Composition Moved Behind Dedicated Runtime Registry
+
+#### Stage
+
+Stage 2 connector convergence continues. The lazy-construction block for connector support, Telegram transport, Telegram terminal, run-entry, runtime-support, and menu services no longer owns its caching/composition logic inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a real composition cut. The getter functions still exist, but the build-and-cache ownership for that runtime stack now belongs to a dedicated runtime registry.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_service_registry.py) to own lazy construction and caching for:
+  - Telegram connector support service
+  - Telegram transport service
+  - Telegram terminal service
+  - autopilot run-entry service
+  - autopilot runtime-support service
+  - Telegram menu service
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_telegram_connector_support_service()` now delegates through the runtime registry
+  - `_telegram_transport_service()` now delegates through the runtime registry
+  - `_telegram_terminal_service()` now delegates through the runtime registry
+  - `_autopilot_run_entry_service()` now delegates through the runtime registry
+  - `_autopilot_runtime_support_service()` now delegates through the runtime registry
+  - `_telegram_menu_service()` now delegates through the runtime registry
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_service_registry.py)
+
+#### Current Truth
+
+- Runtime/transport composition is now explicit in [server_modules/connectors/autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_service_registry.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical runtime getter names, but it no longer owns the multi-service build-and-cache bodies inline.
+- The extracted runtime stack still passes its focused suites after moving behind the runtime registry:
+  - [server_modules/tests/test_telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_transport_service.py)
+  - [server_modules/tests/test_telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_terminal_service.py)
+  - [server_modules/tests/test_autopilot_runtime_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_support_service.py)
+  - [server_modules/tests/test_whatsapp_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_run_dispatch_service.py)
+  - [server_modules/tests/test_telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_autopilot_service_registry.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1190` lines versus `1174` after the previous cut.
+  This increase is expected because the runtime-registry factory was added while the historical getter names remain exported.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the largest registry-assembly blocks for Telegram and WhatsApp service graphs.
+- The remaining inline surface is now mostly service-registry assembly and exported compatibility glue rather than standalone helper logic.
+- More reduction is still needed before the module becomes only thin composition/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by targeting one of the remaining service-graph assembly blocks, not another one-off wrapper.
+2. Keep verifying the runtime-facing suites directly whenever construction paths move behind a registry.
+3. Preserve the getter names until the rest of the codebase stops importing them directly.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_service_registry.py)
+  - [server_modules/tests/test_autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_runtime_service_registry`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_autopilot_runtime_support_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

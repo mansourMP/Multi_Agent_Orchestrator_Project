@@ -19,6 +19,7 @@ from server_modules.connectors.telegram_connector_poll_service import TelegramCo
 from server_modules.connectors.telegram_media_service import telegram_safe_path_token
 from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
+from server_modules.connectors.telegram_terminal_service import TelegramTerminalService
 from server_modules.connectors.telegram_transport_service import TelegramTransportService
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 from server_modules.installed_skills import query_active_installed_skills
@@ -214,6 +215,7 @@ _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = Non
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
+_TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -575,6 +577,37 @@ def _telegram_transport_service() -> TelegramTransportService:
             utc_now_iso=lambda: _utc_now_iso(),
         )
     return _TELEGRAM_TRANSPORT_SERVICE
+
+
+def _telegram_terminal_service() -> TelegramTerminalService:
+    global _TELEGRAM_TERMINAL_SERVICE
+    if _TELEGRAM_TERMINAL_SERVICE is None:
+        _TELEGRAM_TERMINAL_SERVICE = TelegramTerminalService(
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            chat_id_from_session_key=lambda key: _chat_id_from_session_key(key),
+            list_connector_entries=lambda: _list_telegram_connector_entries(),
+            get_secret=lambda entry: _telegram_get_secret(entry),
+            resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
+            route_message=lambda text, profile: _telegram_route_message(text, profile),
+            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            build_goal_with_profile=lambda goal, profile: _telegram_build_goal_with_profile(goal, profile),
+            workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
+            build_goal_with_connector_context=lambda goal, prompt: _telegram_build_goal_with_connector_context(goal, prompt),
+            installed_skill_query=lambda **kwargs: _telegram_installed_skill_query(**kwargs),
+            create_run=lambda **kwargs: _create_telegram_run(**kwargs),
+            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
+                run_id,
+                timeout_seconds=timeout_seconds,
+                max_reply_chars=max_reply_chars,
+            ),
+            runs_get=lambda run_id: runs.get(run_id) if isinstance(runs, dict) else None,
+            session_key=lambda chat_id: _telegram_session_key(chat_id),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            send_message=lambda **kwargs: _telegram_send_message(**kwargs),
+            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
+            utc_now_iso=lambda: _utc_now_iso(),
+        )
+    return _TELEGRAM_TERMINAL_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -2074,89 +2107,12 @@ async def handle_telegram_send_message(
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     _init()
-    message = str(text or "").strip()
-    if not message:
-        raise RuntimeError("Message text is required.")
-    if len(message) > 3900:
-        raise RuntimeError("Message is too long for Telegram. Keep it under 3900 characters.")
-
-    requested_workspace = _normalize_workspace_id(workspace_id)
-    requested_chat_id = str(chat_id or "").strip() or _chat_id_from_session_key(str(session_key or "").strip())
-    entries = _list_telegram_connector_entries()
-    if requested_workspace:
-        entries = [item for item in entries if _normalize_workspace_id(item.get("workspace_id")) == requested_workspace]
-    if not entries:
-        scope = requested_workspace or "visible workspaces"
-        raise RuntimeError(f"No Telegram connector found for workspace '{scope}'.")
-
-    selected_entry: Optional[Dict[str, Any]] = None
-    selected_secret: Optional[Dict[str, Any]] = None
-    target_chat_id = ""
-    last_error = ""
-
-    for entry in entries:
-        try:
-            secret = _telegram_get_secret(entry)
-            bot_token = str(secret.get("bot_token") or "").strip()
-            configured_chat_id = str(secret.get("chat_id") or "").strip()
-            if not bot_token:
-                raise RuntimeError("Connector is missing bot_token.")
-            resolved_chat_id = requested_chat_id or configured_chat_id
-            if not resolved_chat_id:
-                raise RuntimeError("Connector is missing chat_id.")
-            selected_entry = entry
-            selected_secret = secret
-            target_chat_id = resolved_chat_id
-            break
-        except Exception as exc:
-            last_error = str(exc)
-            continue
-
-    if not selected_entry or not selected_secret:
-        if last_error:
-            raise RuntimeError(last_error)
-        raise RuntimeError("Unable to resolve Telegram connector credentials.")
-
-    connector_id = str(selected_entry.get("id") or "").strip()
-    connector_label = str(selected_entry.get("label") or "Telegram Bot").strip()
-    workspace_norm = _normalize_workspace_id(selected_entry.get("workspace_id"))
-    bot_token = str(selected_secret.get("bot_token") or "").strip()
-    trace_id = f"tg-terminal:{_telegram_safe_path_token(target_chat_id)}:{str(uuid.uuid4())[:10]}"
-
-    _telegram_send_message(
-        bot_token=bot_token,
-        chat_id=target_chat_id,
-        text=message,
-        workspace_id=workspace_norm,
-        action="terminal_send",
-        connector_id=connector_id,
-        trace_id=trace_id,
+    return await _telegram_terminal_service().handle_send_message(
+        text=text,
+        workspace_id=workspace_id,
+        session_key=session_key,
+        chat_id=chat_id,
     )
-    _set_telegram_connector_state(
-        connector_id,
-        {
-            "label": connector_label,
-            "workspace_id": workspace_norm,
-            "last_action": "terminal_send",
-            "last_chat_id": target_chat_id,
-            "last_error": None,
-            "last_processed_at": _utc_now_iso(),
-            "last_poll_at": _utc_now_iso(),
-        },
-    )
-
-    return {
-        "ok": True,
-        "channel": "telegram",
-        "connector_id": connector_id,
-        "connector_label": connector_label,
-        "workspace_id": workspace_norm,
-        "chat_id": target_chat_id,
-        "session_key": _telegram_session_key(target_chat_id),
-        "text": message,
-        "trace_id": trace_id,
-        "sent_at": _utc_now_iso(),
-    }
 
 
 async def handle_telegram_autopilot_test_message(
@@ -2169,147 +2125,15 @@ async def handle_telegram_autopilot_test_message(
     timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     _init()
-    message = str(text or "").strip()
-    if not message:
-        raise RuntimeError("Message text is required.")
-
-    requested_workspace = _normalize_workspace_id(workspace_id)
-    requested_connector_id = str(connector_id or "").strip()
-    requested_chat_id = str(chat_id or "").strip() or _chat_id_from_session_key(str(session_key or "").strip())
-    entries = _list_telegram_connector_entries()
-    if requested_workspace:
-        entries = [item for item in entries if _normalize_workspace_id(item.get("workspace_id")) == requested_workspace]
-    if requested_connector_id:
-        entries = [item for item in entries if str(item.get("id") or "").strip() == requested_connector_id]
-    if not entries:
-        scope = requested_workspace or "visible workspaces"
-        raise RuntimeError(f"No Telegram connector found for workspace '{scope}'.")
-
-    selected_entry: Optional[Dict[str, Any]] = None
-    last_error = ""
-    target_chat_id = ""
-    for entry in entries:
-        try:
-            secret = _telegram_get_secret(entry)
-            bot_token = str(secret.get("bot_token") or "").strip()
-            configured_chat_id = str(secret.get("chat_id") or "").strip()
-            if not bot_token:
-                raise RuntimeError("Connector is missing bot_token.")
-            resolved_chat_id = requested_chat_id or configured_chat_id
-            if not resolved_chat_id:
-                raise RuntimeError("Connector is missing chat_id.")
-            if requested_chat_id and configured_chat_id and requested_chat_id != configured_chat_id:
-                continue
-            selected_entry = entry
-            target_chat_id = resolved_chat_id
-            break
-        except Exception as exc:
-            last_error = str(exc)
-            continue
-
-    if not selected_entry:
-        if last_error:
-            raise RuntimeError(last_error)
-        raise RuntimeError("Unable to resolve Telegram connector credentials.")
-
-    profile = _resolve_telegram_autopilot_profile(selected_entry)
-    routed = _telegram_route_message(message, profile)
-    action = str(routed.get("action") or "ignore").strip().lower()
-    if action != "run":
-        return {
-            "ok": True,
-            "channel": "telegram",
-            "mode": "autopilot_test",
-            "action": action,
-            "routed": routed,
-            "message": "Telegram autopilot routed the test message without starting a run.",
-        }
-
-    workspace_norm = _normalize_workspace_id(selected_entry.get("workspace_id")) or requested_workspace or "default"
-    connector_id_value = str(selected_entry.get("id") or "").strip()
-    sender_value = str(sender_id or "telegram-test-user").strip() or "telegram-test-user"
-    chat_profile = _get_telegram_profile(workspace_norm, target_chat_id)
-    goal = str(routed.get("goal") or "").strip()
-    run_goal = _telegram_build_goal_with_profile(goal, chat_profile)
-    connector_context = _telegram_workspace_connector_context(
-        goal=goal,
-        workspace_id=workspace_norm,
-        current_connector_id=connector_id_value,
+    return await _telegram_terminal_service().handle_autopilot_test_message(
+        text=text,
+        workspace_id=workspace_id,
+        session_key=session_key,
+        chat_id=chat_id,
+        connector_id=connector_id,
+        sender_id=sender_id,
+        timeout_seconds=timeout_seconds,
     )
-    run_goal = _telegram_build_goal_with_connector_context(
-        run_goal,
-        str(connector_context.get("prompt_append") or "").strip(),
-    )
-    skill_query = _telegram_installed_skill_query(
-        goal=goal,
-        workspace_id=workspace_norm,
-        connector_id=connector_id_value,
-        chat_id=target_chat_id,
-        session_key=_telegram_session_key(target_chat_id),
-    )
-    run_goal = _telegram_build_goal_with_connector_context(
-        run_goal,
-        str(skill_query.get("prompt_append") or "").strip(),
-    )
-    direct_response = str(skill_query.get("response") or "").strip() if bool(skill_query.get("handled")) else ""
-    if direct_response:
-        return {
-            "ok": True,
-            "channel": "telegram",
-            "mode": "autopilot_test",
-            "connector_id": connector_id_value,
-            "chat_id": target_chat_id,
-            "profile_id": str(profile.get("id") or "").strip(),
-            "routed": routed,
-            "connector_context": connector_context,
-            "skill_query": skill_query,
-            "result": {
-                "status": "completed",
-                "summary": direct_response,
-                "reply": direct_response,
-            },
-        }
-    run_info = _create_telegram_run(
-        goal=run_goal,
-        workspace_id=workspace_norm,
-        connector_id=connector_id_value,
-        chat_id=target_chat_id,
-        sender_id=sender_value,
-        update_id=int(time.time()),
-        message_id=f"test-{str(uuid.uuid4())[:10]}",
-        profile_context=chat_profile,
-        trace_id=f"tg-test:{_telegram_safe_path_token(target_chat_id)}:{str(uuid.uuid4())[:10]}",
-        source_event_id="telegram-test-message",
-        connector_entry=selected_entry,
-        connector_context=connector_context,
-    )
-    run_id = str(run_info.get("run_id") or "").strip()
-    if not run_id:
-        raise RuntimeError("Telegram autopilot test did not create a run.")
-    result = await asyncio.to_thread(
-        _wait_for_run_terminal_status,
-        run_id,
-        timeout_seconds,
-        None,
-    )
-    run = runs.get(run_id) if isinstance(runs, dict) else None
-    context = run.get("context") if isinstance(run, dict) and isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    return {
-        "ok": True,
-        "channel": "telegram",
-        "mode": "autopilot_test",
-        "connector_id": connector_id_value,
-        "chat_id": target_chat_id,
-        "profile_id": str(profile.get("id") or "").strip(),
-        "run_id": run_id,
-        "routed": routed,
-        "route": run_info.get("route"),
-        "connector_context": connector_context,
-        "skill_query": skill_query,
-        "run_metadata": metadata,
-        "result": result,
-    }
 
 
 def _create_telegram_run(

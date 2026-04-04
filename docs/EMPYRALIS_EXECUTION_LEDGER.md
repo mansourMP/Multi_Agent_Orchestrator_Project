@@ -1305,6 +1305,62 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Terminal Send And Autopilot Test Flow Moved Behind Terminal Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram terminal send entrypoint and the Telegram autopilot test entrypoint no longer live inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is an endpoint/runtime coordination cut. The shared run backend is still injected from the existing `_create_telegram_run()` and `_wait_for_run_terminal_status()` helpers, but the connector selection, profile routing, direct-skill short-circuiting, and terminal send/test orchestration are now owned by a dedicated service instead of the monolith.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py).
+- Moved Telegram terminal send behavior behind that service:
+  - connector selection by workspace/session/chat
+  - credential resolution and chat targeting
+  - outbound terminal send orchestration
+  - connector state patching after terminal sends
+- Moved Telegram autopilot test behavior behind that service:
+  - connector selection by workspace/chat/connector id
+  - profile resolution and routing
+  - connector-context and installed-skill prompt shaping
+  - direct-response short-circuiting
+  - run creation handoff and terminal wait/result shaping
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so both async Telegram terminal entrypoints now delegate to the terminal service instead of owning those flows inline.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_terminal_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2728` lines to `2552` lines in this cut.
+- The monolith no longer owns the full Telegram terminal send/test orchestration path inline.
+- The remaining mass is increasingly concentrated in shared runtime glue and the still-shared run creation helpers rather than in terminal-facing endpoint logic.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns too much shared connector/runtime bridge logic.
+- `_create_telegram_run()` and other shared run-entry helpers still live in the monolith because they are still coupled to machine-mode and run metadata behavior.
+- The broader connector architecture still needs more explicit thin-adapter boundaries across the remaining shared runtime helpers.
+
+#### Next Required Work
+
+1. Keep reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared connector-selection and runtime bridge helpers.
+2. Decide when `_create_telegram_run()` should move behind a more general run-entry service without destabilizing the machine-mode path.
+3. Continue verifying extracted terminal/runtime services with focused suites even when the broader imported-runtime test stack is noisy or slow to exit.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+  - [server_modules/tests/test_telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_terminal_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+
 ### 2026-04-05 - Telegram Transport And Approval Flow Moved Behind Shared Services
 
 #### Stage

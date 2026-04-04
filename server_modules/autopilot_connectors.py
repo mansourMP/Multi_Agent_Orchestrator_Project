@@ -18,6 +18,7 @@ from server_modules.connectors.runtime_status_service import RuntimeStatusServic
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
 from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
 from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
+from server_modules.connectors.telegram_menu_service import TelegramMenuService
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
 from server_modules.connectors.telegram_media_service import telegram_safe_path_token
@@ -224,6 +225,7 @@ _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
 _TELEGRAM_CONNECTOR_SUPPORT_SERVICE: Optional[TelegramConnectorSupportService] = None
 _AUTOPILOT_COMMON_SUPPORT_SERVICE: Optional[AutopilotCommonSupportService] = None
+_TELEGRAM_MENU_SERVICE: Optional[TelegramMenuService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -1343,115 +1345,26 @@ def _telegram_installed_skill_query(
 
 
 def _telegram_prefixed_command(profile: Dict[str, Any], command_text: str) -> str:
-    clean = str(command_text or "").strip()
-    if not clean:
-        return ""
-    if bool(profile.get("require_prefix")):
-        prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX).strip() or DEFAULT_CHAT_PREFIX
-        return f"{prefix} {clean}".strip()
-    return clean
+    return _telegram_menu_service().prefixed_command(profile, command_text)
 
 
 def _telegram_menu_keyboard(profile: Dict[str, Any], menu_id: str = "main") -> Dict[str, Any]:
-    if not ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS:
-        return {"remove_keyboard": True}
-    require_prefix = bool(profile.get("require_prefix"))
-    status_cmd = _telegram_prefixed_command(profile, "status") if require_prefix else "Status"
-    approvals_cmd = _telegram_prefixed_command(profile, "approvals") if require_prefix else "Approvals"
-    help_cmd = _telegram_prefixed_command(profile, "help") if require_prefix else "Help"
-    me_cmd = _telegram_prefixed_command(profile, "me") if require_prefix else "My context"
-
-    if menu_id == "study":
-        if require_prefix:
-            keyboard = [
-                [{"text": _telegram_prefixed_command(profile, "run inbox triage")}, {"text": _telegram_prefixed_command(profile, "run draft message")}],
-                [{"text": _telegram_prefixed_command(profile, "run today priorities")}, {"text": _telegram_prefixed_command(profile, "run task breakdown")}],
-                [{"text": _telegram_prefixed_command(profile, "menu")}],
-            ]
-        else:
-            keyboard = [
-                [{"text": "Inbox triage"}, {"text": "Draft message"}],
-                [{"text": "Today priorities"}, {"text": "Task breakdown"}],
-                [{"text": "Back to main"}],
-            ]
-    elif menu_id == "project":
-        if require_prefix:
-            keyboard = [
-                [{"text": _telegram_prefixed_command(profile, "run project update")}, {"text": _telegram_prefixed_command(profile, "run next steps")}],
-                [{"text": _telegram_prefixed_command(profile, "run meeting prep")}, {"text": _telegram_prefixed_command(profile, "run write follow-up")}],
-                [{"text": _telegram_prefixed_command(profile, "menu")}],
-            ]
-        else:
-            keyboard = [
-                [{"text": "Project update"}, {"text": "Next steps"}],
-                [{"text": "Meeting prep"}, {"text": "Write follow-up"}],
-                [{"text": "Back to main"}],
-            ]
-    elif menu_id == "context":
-        if require_prefix:
-            keyboard = [
-                [{"text": _telegram_prefixed_command(profile, "me")}, {"text": _telegram_prefixed_command(profile, "help")}],
-                [{"text": _telegram_prefixed_command(profile, "menu")}],
-            ]
-        else:
-            keyboard = [
-                [{"text": "My context"}, {"text": "Context help"}],
-                [{"text": "Back to main"}],
-            ]
-    elif menu_id == "skills":
-        active_skills = _runtime_active_skills("assistant_defaults", limit=8)
-        if require_prefix:
-            keyboard = []
-            row: List[Dict[str, str]] = []
-            for skill in active_skills:
-                row.append({"text": _telegram_prefixed_command(profile, f"skill {skill.get('id')}")})
-                if len(row) >= 2:
-                    keyboard.append(row)
-                    row = []
-            if row:
-                keyboard.append(row)
-            keyboard.append([{"text": _telegram_prefixed_command(profile, "menu")}])
-        else:
-            keyboard = []
-            row = []
-            for skill in active_skills:
-                label = f"Skill: {str(skill.get('title') or '').strip()}"[:48]
-                row.append({"text": label})
-                if len(row) >= 2:
-                    keyboard.append(row)
-                    row = []
-            if row:
-                keyboard.append(row)
-            keyboard.append([{"text": "Back to main"}])
-    else:
-        if require_prefix:
-            keyboard = [
-                [{"text": _telegram_prefixed_command(profile, "menu work")}, {"text": _telegram_prefixed_command(profile, "menu project")}],
-                [{"text": _telegram_prefixed_command(profile, "menu skills")}, {"text": _telegram_prefixed_command(profile, "menu context")}],
-                [{"text": status_cmd}],
-                [{"text": approvals_cmd}, {"text": help_cmd}],
-            ]
-        else:
-            keyboard = [
-                [{"text": "Work menu"}, {"text": "Project menu"}],
-                [{"text": "Skills"}, {"text": "Context"}],
-                [{"text": status_cmd}],
-                [{"text": approvals_cmd}, {"text": help_cmd}],
-            ]
-
-    return {
-        "keyboard": keyboard if keyboard else [[{"text": me_cmd}]],
-        "resize_keyboard": True,
-        "is_persistent": True,
-        "one_time_keyboard": False,
-        "input_field_placeholder": "Message Empyralis...",
-    }
+    return _telegram_menu_service().menu_keyboard(profile, menu_id)
 
 
 def _telegram_reply_keyboard(profile: Dict[str, Any]) -> Dict[str, Any]:
-    if not ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS:
-        return {"remove_keyboard": True}
-    return _telegram_menu_keyboard(profile, "main")
+    return _telegram_menu_service().reply_keyboard(profile)
+
+
+def _telegram_menu_service() -> TelegramMenuService:
+    global _TELEGRAM_MENU_SERVICE
+    if _TELEGRAM_MENU_SERVICE is None:
+        _TELEGRAM_MENU_SERVICE = TelegramMenuService(
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            show_buttons=ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS,
+            runtime_active_skills=lambda scope_key, limit: _runtime_active_skills(scope_key, limit=limit),
+        )
+    return _TELEGRAM_MENU_SERVICE
 
 
 def _load_telegram_autopilot_state():

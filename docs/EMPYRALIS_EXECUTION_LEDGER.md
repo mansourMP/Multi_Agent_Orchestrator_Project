@@ -1305,6 +1305,55 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Menu And Keyboard Flow Moved Behind Menu Service
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The Telegram menu and reply-keyboard builder no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This was one of the last remaining inline behavior blocks in the monolith rather than a simple wrapper cluster. The change keeps the UI semantics the same but moves the branching keyboard logic behind a dedicated service.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_menu_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_menu_service.py) with:
+  - prefixed-command generation
+  - main menu keyboard generation
+  - study/project/context/skills submenu generation
+  - reply-keyboard generation
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these helpers now delegate instead of owning implementation inline:
+  - `_telegram_prefixed_command()`
+  - `_telegram_menu_keyboard()`
+  - `_telegram_reply_keyboard()`
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_menu_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_menu_service.py)
+
+#### Current Truth
+
+- Telegram menu and keyboard behavior now has a dedicated service boundary instead of staying embedded in the connector monolith.
+- The public wrappers and existing registry wiring still behave the same, but the real keyboard/menu branching logic is no longer inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2102` lines to `2015` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns thin transport wrappers, endpoint entry functions, and a small band of bridge helpers.
+- The remaining file is much thinner now, but it is not yet only a transport/composition shell.
+- Future reductions will need to target the last meaningful grouped seams rather than isolated one-line delegates.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by targeting the remaining grouped bridge layers.
+2. Keep Telegram UI behavior in dedicated services and keep the connector entry module focused on composition and routing.
+3. Preserve focused service-level coverage for user-facing command/menu behavior.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_menu_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_menu_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_menu_service`
+  - `server_modules.tests.test_autopilot_profile_service`
+
 ### 2026-04-05 - Approval And Terminal Common Helpers Moved Behind Common Support Service
 
 #### Stage

@@ -7,34 +7,14 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
-from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
+from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
+from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
-from server_modules.connectors.telegram_media_service import TelegramMediaService, telegram_safe_path_token
-from server_modules.connectors.telegram_profile_service import (
-    TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
-    TelegramProfileService,
-)
-from server_modules.connectors.telegram_action_service import TelegramActionService
-from server_modules.connectors.telegram_autopilot_supervisor_service import TelegramAutopilotSupervisorService
-from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
-from server_modules.connectors.autopilot_status_service import AutopilotStatusService
-from server_modules.connectors.telegram_autopilot_runtime_service import TelegramAutopilotRuntimeService
-from server_modules.connectors.telegram_autopilot_state_service import TelegramAutopilotStateService
-from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
-from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
-from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
-from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
-from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
-from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
-from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
-from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
-from server_modules.connectors.telegram_routing_service import TelegramRoutingService
-from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
+from server_modules.connectors.telegram_media_service import telegram_safe_path_token
+from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
-from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
-from server_modules.connectors.whatsapp_webhook_service import WhatsAppWebhookService
 from server_modules.installed_skills import query_active_installed_skills
 try:
     from fastapi import Request, Response
@@ -218,42 +198,10 @@ _TELEGRAM_MENU_GOAL_TEMPLATES: Dict[str, str] = {
     "exam plan": "Build my exam preparation plan for this week with daily tasks, time blocks, and revision checkpoints.",
 }
 DEFAULT_CHAT_PREFIX = "/empyralis"
-_TELEGRAM_PROFILE_SERVICE = TelegramProfileService(
-    profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
-    onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
-    default_chat_prefix=DEFAULT_CHAT_PREFIX,
-    read_json=lambda path, default: _safe_read_json(path, default),
-    write_json=lambda path, payload: _safe_write_json(path, payload),
-    now_iso=lambda: _utc_now_iso(),
-    truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-)
-_TELEGRAM_CAMERA_SETUP_SERVICE = TelegramCameraSetupService(
-    state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
-    read_json=lambda path, default: _safe_read_json(path, default),
-    write_json=lambda path, payload: _safe_write_json(path, payload),
-    now_iso=lambda: _utc_now_iso(),
-    session_key_builder=lambda workspace_id, chat_id: _telegram_profile_key(workspace_id, chat_id),
-)
-_TELEGRAM_MEDIA_SERVICE = TelegramMediaService(
-    media_dir=ORION_TELEGRAM_MEDIA_DIR,
-    media_enabled=ORION_TELEGRAM_MEDIA_ENABLED,
-    media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-    media_max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
-    media_include_in_goal=ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL,
-    telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
-)
-_TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
-    default_chat_prefix=DEFAULT_CHAT_PREFIX,
-    quick_goal_templates=_TELEGRAM_QUICK_GOAL_TEMPLATES,
-    menu_goal_templates=_TELEGRAM_MENU_GOAL_TEMPLATES,
-    normalize_profile_field=lambda raw_value: _normalize_telegram_profile_field(raw_value),
-    select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
-    skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
-)
-_AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
-_AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
+_AUTOPILOT_SHARED_SERVICE_REGISTRY: Optional[AutopilotSharedServiceRegistry] = None
 _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY: Optional[TelegramAutopilotServiceRegistry] = None
 _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY: Optional[WhatsAppAutopilotServiceRegistry] = None
+_TELEGRAM_AUTOPILOT_HELPER_REGISTRY: Optional[TelegramAutopilotHelperRegistry] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -388,14 +336,42 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
     return _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY
 
 
-def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
+def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
+    global _TELEGRAM_AUTOPILOT_HELPER_REGISTRY
+    if _TELEGRAM_AUTOPILOT_HELPER_REGISTRY is None:
+        _TELEGRAM_AUTOPILOT_HELPER_REGISTRY = TelegramAutopilotHelperRegistry(
+            profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
+            onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
+            camera_setup_state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
+            media_dir=ORION_TELEGRAM_MEDIA_DIR,
+            media_enabled=ORION_TELEGRAM_MEDIA_ENABLED,
+            media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+            media_max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
+            media_include_in_goal=ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL,
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            quick_goal_templates=_TELEGRAM_QUICK_GOAL_TEMPLATES,
+            menu_goal_templates=_TELEGRAM_MENU_GOAL_TEMPLATES,
+            read_json=lambda path, default: _safe_read_json(path, default),
+            write_json=lambda path, payload: _safe_write_json(path, payload),
+            now_iso=lambda: _utc_now_iso(),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            session_key_builder=lambda workspace_id, chat_id: _telegram_profile_key(workspace_id, chat_id),
+            telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
+            normalize_profile_field=lambda raw_value: _normalize_telegram_profile_field(raw_value),
+            select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
+            skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
+        )
+    return _TELEGRAM_AUTOPILOT_HELPER_REGISTRY
+
+
+def _telegram_run_dispatch_service():
     return _telegram_service_registry().telegram_run_dispatch_service()
 
 
-def _autopilot_status_service() -> AutopilotStatusService:
-    global _AUTOPILOT_STATUS_SERVICE
-    if _AUTOPILOT_STATUS_SERVICE is None:
-        _AUTOPILOT_STATUS_SERVICE = AutopilotStatusService(
+def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
+    global _AUTOPILOT_SHARED_SERVICE_REGISTRY
+    if _AUTOPILOT_SHARED_SERVICE_REGISTRY is None:
+        _AUTOPILOT_SHARED_SERVICE_REGISTRY = AutopilotSharedServiceRegistry(
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
             telegram_snapshot=lambda: _telegram_autopilot_snapshot(include_connectors=True),
             telegram_list_entries=lambda: _list_telegram_connector_entries(),
@@ -404,14 +380,15 @@ def _autopilot_status_service() -> AutopilotStatusService:
             whatsapp_list_entries=lambda: _list_whatsapp_connector_entries(),
             resolve_whatsapp_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
         )
-    return _AUTOPILOT_STATUS_SERVICE
+    return _AUTOPILOT_SHARED_SERVICE_REGISTRY
 
 
-def _autopilot_endpoint_service() -> AutopilotEndpointService:
-    global _AUTOPILOT_ENDPOINT_SERVICE
-    if _AUTOPILOT_ENDPOINT_SERVICE is None:
-        _AUTOPILOT_ENDPOINT_SERVICE = AutopilotEndpointService()
-    return _AUTOPILOT_ENDPOINT_SERVICE
+def _autopilot_status_service():
+    return _autopilot_shared_service_registry().autopilot_status_service()
+
+
+def _autopilot_endpoint_service():
+    return _autopilot_shared_service_registry().autopilot_endpoint_service()
 
 
 def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
@@ -475,39 +452,39 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
     return _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY
 
 
-def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
+def _whatsapp_autopilot_state_service():
     return _whatsapp_service_registry().whatsapp_autopilot_state_service()
 
 
-def _telegram_autopilot_state_service() -> TelegramAutopilotStateService:
+def _telegram_autopilot_state_service():
     return _telegram_service_registry().telegram_autopilot_state_service()
 
 
-def _telegram_autopilot_runtime_service() -> TelegramAutopilotRuntimeService:
+def _telegram_autopilot_runtime_service():
     return _telegram_service_registry().telegram_autopilot_runtime_service()
 
 
-def _telegram_sender_filter_service() -> TelegramSenderFilterService:
+def _telegram_sender_filter_service():
     return _telegram_service_registry().telegram_sender_filter_service()
 
 
-def _telegram_action_service() -> TelegramActionService:
+def _telegram_action_service():
     return _telegram_service_registry().telegram_action_service()
 
 
-def _telegram_inbound_context_service() -> TelegramInboundContextService:
+def _telegram_inbound_context_service():
     return _telegram_service_registry().telegram_inbound_context_service()
 
 
-def _telegram_autopilot_loop_service() -> TelegramAutopilotLoopService:
+def _telegram_autopilot_loop_service():
     return _telegram_service_registry().telegram_autopilot_loop_service()
 
 
-def _telegram_poll_cycle_service() -> TelegramPollCycleService:
+def _telegram_poll_cycle_service():
     return _telegram_service_registry().telegram_poll_cycle_service()
 
 
-def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
+def _telegram_poll_dispatch_service():
     return _telegram_service_registry().telegram_poll_dispatch_service()
 
 
@@ -519,15 +496,15 @@ def _telegram_set_connectors_seen(count: int) -> None:
     _telegram_service_registry().telegram_autopilot_runtime_service().set_connectors_seen(count)
 
 
-def _telegram_poll_state_service() -> TelegramPollStateService:
+def _telegram_poll_state_service():
     return _telegram_service_registry().telegram_poll_state_service()
 
 
-def _telegram_run_action_service() -> TelegramRunActionService:
+def _telegram_run_action_service():
     return _telegram_service_registry().telegram_run_action_service()
 
 
-def _telegram_connector_poll_service() -> TelegramConnectorPollService:
+def _telegram_connector_poll_service():
     return _telegram_service_registry().telegram_connector_poll_service()
 
 
@@ -538,15 +515,15 @@ def _mark_telegram_autopilot_started(started_at: str) -> None:
         TELEGRAM_AUTOPILOT_STATE["enabled"] = True
 
 
-def _telegram_autopilot_supervisor_service() -> TelegramAutopilotSupervisorService:
+def _telegram_autopilot_supervisor_service():
     return _telegram_service_registry().telegram_autopilot_supervisor_service()
 
 
-def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
+def _whatsapp_run_dispatch_service():
     return _whatsapp_service_registry().whatsapp_run_dispatch_service()
 
 
-def _whatsapp_webhook_service() -> WhatsAppWebhookService:
+def _whatsapp_webhook_service():
     return _whatsapp_service_registry().whatsapp_webhook_service()
 
 
@@ -875,83 +852,83 @@ def _whatsapp_session_key(from_number: str, to_number: str) -> str:
 
 
 def _telegram_profile_key(workspace_id: str, chat_id: str) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.telegram_profile_key(workspace_id, chat_id)
+    return _telegram_helper_registry().profile_service().telegram_profile_key(workspace_id, chat_id)
 
 
 def _load_telegram_profile_state() -> None:
-    _TELEGRAM_PROFILE_SERVICE.load_profile_state()
+    _telegram_helper_registry().profile_service().load_profile_state()
 
 
 def _ensure_telegram_profile_state_loaded() -> None:
-    _TELEGRAM_PROFILE_SERVICE.ensure_profile_state_loaded()
+    _telegram_helper_registry().profile_service().ensure_profile_state_loaded()
 
 
 def _persist_telegram_profile_state() -> None:
-    _TELEGRAM_PROFILE_SERVICE.persist_profile_state()
+    _telegram_helper_registry().profile_service().persist_profile_state()
 
 
 def _normalize_telegram_profile_field(raw_value: str) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.normalize_profile_field(raw_value)
+    return _telegram_helper_registry().profile_service().normalize_profile_field(raw_value)
 
 
 def _get_telegram_profile(workspace_id: str, chat_id: str) -> Dict[str, str]:
-    return _TELEGRAM_PROFILE_SERVICE.get_profile(workspace_id, chat_id)
+    return _telegram_helper_registry().profile_service().get_profile(workspace_id, chat_id)
 
 
 def _set_telegram_profile_field(workspace_id: str, chat_id: str, field_name: str, value: str) -> Dict[str, str]:
-    return _TELEGRAM_PROFILE_SERVICE.set_profile_field(workspace_id, chat_id, field_name, value)
+    return _telegram_helper_registry().profile_service().set_profile_field(workspace_id, chat_id, field_name, value)
 
 
 def _clear_telegram_profile(workspace_id: str, chat_id: str, field_name: str = "") -> Dict[str, str]:
-    return _TELEGRAM_PROFILE_SERVICE.clear_profile(workspace_id, chat_id, field_name)
+    return _telegram_helper_registry().profile_service().clear_profile(workspace_id, chat_id, field_name)
 
 
 def _telegram_onboarding_key(workspace_id: str, chat_id: str) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.telegram_onboarding_key(workspace_id, chat_id)
+    return _telegram_helper_registry().profile_service().telegram_onboarding_key(workspace_id, chat_id)
 
 
 def _load_telegram_onboarding_state() -> None:
-    _TELEGRAM_PROFILE_SERVICE.load_onboarding_state()
+    _telegram_helper_registry().profile_service().load_onboarding_state()
 
 
 def _ensure_telegram_onboarding_state_loaded() -> None:
-    _TELEGRAM_PROFILE_SERVICE.ensure_onboarding_state_loaded()
+    _telegram_helper_registry().profile_service().ensure_onboarding_state_loaded()
 
 
 def _persist_telegram_onboarding_state() -> None:
-    _TELEGRAM_PROFILE_SERVICE.persist_onboarding_state()
+    _telegram_helper_registry().profile_service().persist_onboarding_state()
 
 
 def _get_telegram_onboarding_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _TELEGRAM_PROFILE_SERVICE.get_onboarding_state(workspace_id, chat_id)
+    return _telegram_helper_registry().profile_service().get_onboarding_state(workspace_id, chat_id)
 
 
 def _start_telegram_onboarding(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _TELEGRAM_PROFILE_SERVICE.start_onboarding(workspace_id, chat_id)
+    return _telegram_helper_registry().profile_service().start_onboarding(workspace_id, chat_id)
 
 
 def _advance_telegram_onboarding(workspace_id: str, chat_id: str, step_index: int, active: bool) -> Dict[str, Any]:
-    return _TELEGRAM_PROFILE_SERVICE.advance_onboarding(workspace_id, chat_id, step_index, active)
+    return _telegram_helper_registry().profile_service().advance_onboarding(workspace_id, chat_id, step_index, active)
 
 
 def _telegram_camera_setup_key(workspace_id: str, chat_id: str) -> str:
-    return _TELEGRAM_CAMERA_SETUP_SERVICE.camera_setup_key(workspace_id, chat_id)
+    return _telegram_helper_registry().camera_setup_service().camera_setup_key(workspace_id, chat_id)
 
 
 def _load_telegram_camera_setup_state() -> None:
-    _TELEGRAM_CAMERA_SETUP_SERVICE.load_state()
+    _telegram_helper_registry().camera_setup_service().load_state()
 
 
 def _ensure_telegram_camera_setup_state_loaded() -> None:
-    _TELEGRAM_CAMERA_SETUP_SERVICE.ensure_state_loaded()
+    _telegram_helper_registry().camera_setup_service().ensure_state_loaded()
 
 
 def _persist_telegram_camera_setup_state() -> None:
-    _TELEGRAM_CAMERA_SETUP_SERVICE.persist_state()
+    _telegram_helper_registry().camera_setup_service().persist_state()
 
 
 def _get_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    return _TELEGRAM_CAMERA_SETUP_SERVICE.get_state(workspace_id, chat_id)
+    return _telegram_helper_registry().camera_setup_service().get_state(workspace_id, chat_id)
 
 
 def _set_telegram_camera_setup_state(
@@ -961,11 +938,17 @@ def _set_telegram_camera_setup_state(
     original_prompt: str,
     intent: str = "",
 ) -> Dict[str, Any]:
-    return _TELEGRAM_CAMERA_SETUP_SERVICE.set_state(workspace_id, chat_id, stage, original_prompt, intent=intent)
+    return _telegram_helper_registry().camera_setup_service().set_state(
+        workspace_id,
+        chat_id,
+        stage,
+        original_prompt,
+        intent=intent,
+    )
 
 
 def _clear_telegram_camera_setup_state(workspace_id: str, chat_id: str) -> None:
-    _TELEGRAM_CAMERA_SETUP_SERVICE.clear_state(workspace_id, chat_id)
+    _telegram_helper_registry().camera_setup_service().clear_state(workspace_id, chat_id)
 
 
 def _runtime_api_headers() -> Dict[str, str]:
@@ -1336,7 +1319,7 @@ def _telegram_handle_guided_automation_setup(
     chat_id: str,
     message_text: str,
 ) -> Dict[str, Any]:
-    return _TELEGRAM_CAMERA_SETUP_SERVICE.handle_guided_automation_setup(
+    return _telegram_helper_registry().camera_setup_service().handle_guided_automation_setup(
         workspace_id=workspace_id,
         chat_id=chat_id,
         message_text=message_text,
@@ -1353,19 +1336,19 @@ def _telegram_handle_guided_automation_setup(
 
 
 def _telegram_profile_has_context(profile_data: Dict[str, str]) -> bool:
-    return _TELEGRAM_PROFILE_SERVICE.profile_has_context(profile_data)
+    return _telegram_helper_registry().profile_service().profile_has_context(profile_data)
 
 
 def _telegram_next_onboarding_step_index(profile_data: Dict[str, str]) -> int:
-    return _TELEGRAM_PROFILE_SERVICE.next_onboarding_step_index(profile_data)
+    return _telegram_helper_registry().profile_service().next_onboarding_step_index(profile_data)
 
 
 def _is_low_quality_onboarding_answer(raw_value: str) -> bool:
-    return _TELEGRAM_PROFILE_SERVICE.is_low_quality_onboarding_answer(raw_value)
+    return _telegram_helper_registry().profile_service().is_low_quality_onboarding_answer(raw_value)
 
 
 def _telegram_onboarding_prompt(step_index: int, retry: bool = False) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.onboarding_prompt(step_index, retry=retry)
+    return _telegram_helper_registry().profile_service().onboarding_prompt(step_index, retry=retry)
 
 
 def _telegram_onboarding_consume_answer(
@@ -1373,23 +1356,23 @@ def _telegram_onboarding_consume_answer(
     chat_id: str,
     answer_text: str,
 ) -> Dict[str, Any]:
-    return _TELEGRAM_PROFILE_SERVICE.onboarding_consume_answer(workspace_id, chat_id, answer_text)
+    return _telegram_helper_registry().profile_service().onboarding_consume_answer(workspace_id, chat_id, answer_text)
 
 
 def _telegram_profile_lines(profile_data: Dict[str, str]) -> List[str]:
-    return _TELEGRAM_PROFILE_SERVICE.profile_lines(profile_data)
+    return _telegram_helper_registry().profile_service().profile_lines(profile_data)
 
 
 def _telegram_profile_text(profile: Dict[str, Any], profile_data: Dict[str, str]) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.profile_text(profile, profile_data)
+    return _telegram_helper_registry().profile_service().profile_text(profile, profile_data)
 
 
 def _telegram_profile_help_text(profile: Dict[str, Any]) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.profile_help_text(profile)
+    return _telegram_helper_registry().profile_service().profile_help_text(profile)
 
 
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
-    return _TELEGRAM_PROFILE_SERVICE.build_goal_with_profile(goal, profile_data)
+    return _telegram_helper_registry().profile_service().build_goal_with_profile(goal, profile_data)
 
 
 def _connector_capability_summary(connector_id: str) -> str:
@@ -1888,7 +1871,7 @@ def _telegram_sender_allowed(sender: Dict[str, Any], allow_from: List[str]) -> b
 
 
 def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return _TELEGRAM_MEDIA_SERVICE.extract_message(update)
+    return _telegram_helper_registry().media_service().extract_message(update)
 
 
 def _telegram_safe_path_token(value: Any) -> str:
@@ -1896,11 +1879,11 @@ def _telegram_safe_path_token(value: Any) -> str:
 
 
 def _telegram_extension_from_attachment(attachment: Dict[str, Any], remote_file_path: str) -> str:
-    return _TELEGRAM_MEDIA_SERVICE.extension_from_attachment(attachment, remote_file_path)
+    return _telegram_helper_registry().media_service().extension_from_attachment(attachment, remote_file_path)
 
 
 def _telegram_download_file(bot_token: str, remote_file_path: str, dest_path: Path, max_bytes: int) -> int:
-    return _TELEGRAM_MEDIA_SERVICE.download_file(bot_token, remote_file_path, dest_path, max_bytes)
+    return _telegram_helper_registry().media_service().download_file(bot_token, remote_file_path, dest_path, max_bytes)
 
 
 def _telegram_store_attachments(
@@ -1912,7 +1895,7 @@ def _telegram_store_attachments(
     message_id: str,
     attachments: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    return _TELEGRAM_MEDIA_SERVICE.store_attachments(
+    return _telegram_helper_registry().media_service().store_attachments(
         bot_token=bot_token,
         workspace_id=workspace_id,
         chat_id=chat_id,
@@ -1923,7 +1906,7 @@ def _telegram_store_attachments(
 
 
 def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str, Any]]) -> str:
-    return _TELEGRAM_MEDIA_SERVICE.build_goal_with_attachments(goal, attachments)
+    return _telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments)
 
 
 def _bool_from_any(value: Any, default: bool = False) -> bool:
@@ -1960,7 +1943,7 @@ def _connector_paused(entry: Dict[str, Any]) -> bool:
 
 
 def _telegram_strip_prefix(text: str, prefix: str) -> Dict[str, Any]:
-    return _TELEGRAM_ROUTING_SERVICE.strip_prefix(text, prefix)
+    return _telegram_helper_registry().routing_service().strip_prefix(text, prefix)
 
 
 def _resolve_telegram_autopilot_profile(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -2027,15 +2010,15 @@ def _resolve_whatsapp_autopilot_profile(entry: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    return _TELEGRAM_ROUTING_SERVICE.route_message(raw_text, profile)
+    return _telegram_helper_registry().routing_service().route_message(raw_text, profile)
 
 
 def _telegram_help_text(profile: Dict[str, Any]) -> str:
-    return _TELEGRAM_ROUTING_SERVICE.help_text(profile)
+    return _telegram_helper_registry().routing_service().help_text(profile)
 
 
 def _telegram_is_explicit_run_command(raw_text: str) -> bool:
-    return _TELEGRAM_ROUTING_SERVICE.is_explicit_run_command(raw_text)
+    return _telegram_helper_registry().routing_service().is_explicit_run_command(raw_text)
 
 
 def _runtime_status_text(workspace_id: str) -> str:

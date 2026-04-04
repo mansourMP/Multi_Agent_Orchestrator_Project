@@ -1462,6 +1462,97 @@ This is the WhatsApp-side match to the Telegram registry cut. Runtime behavior s
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-05 - Shared Endpoint Wiring And Telegram Helper Bootstraps Moved Behind Registries
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining shared endpoint/status composition and the eager Telegram helper singletons no longer live inline as direct service ownership inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a composition-layer cleanup that removes more container-style ownership from the monolith. Runtime behavior stays the same, but shared wiring and helper bootstrapping now cross dedicated registries first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py) to own:
+  - `AutopilotStatusService` lazy construction and caching
+  - `AutopilotEndpointService` lazy construction and caching
+- Added [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py) to own:
+  - `TelegramProfileService`
+  - `TelegramCameraSetupService`
+  - `TelegramMediaService`
+  - `TelegramRoutingService`
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_status_service()` now delegates to the shared registry
+  - `_autopilot_endpoint_service()` now delegates to the shared registry
+  - Telegram profile/onboarding wrappers now delegate through the helper registry
+  - Telegram camera-setup wrappers now delegate through the helper registry
+  - Telegram media wrappers now delegate through the helper registry
+  - Telegram routing wrappers now delegate through the helper registry
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_shared_service_registry.py)
+  - [server_modules/tests/test_telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_autopilot_helper_registry.py)
+
+#### Current Truth
+
+- Both channel-side lazy service graphs are externalized:
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Shared endpoint/status composition is externalized:
+  - [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py)
+- The eager Telegram helper bootstraps are externalized:
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `3314` lines from `3331` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a large amount of shared channel helper logic and endpoint exports.
+- Profile resolution, capability summaries, runtime status rendering, and transport helpers still live in the monolith.
+- The connector file is thinner as a container, but it is still not yet reduced to transport and compatibility glue only.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared helper blocks, not by moving tiny utility functions around.
+2. Target the remaining shared channel/runtime helper ownership next, especially status/rendering and connector-profile helper logic.
+3. Keep the full focused connector suite as the regression gate for every cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+  - [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py)
+  - [server_modules/tests/test_telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_autopilot_helper_registry.py)
+  - [server_modules/tests/test_autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_shared_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_autopilot_shared_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_connector_poll_service`
+  - `server_modules.tests.test_telegram_autopilot_supervisor_service`
+  - `server_modules.tests.test_telegram_autopilot_runtime_service`
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-05 - Telegram Connector Poll Execution And Supervisor Loop Moved Behind Dedicated Services
 
 #### Stage

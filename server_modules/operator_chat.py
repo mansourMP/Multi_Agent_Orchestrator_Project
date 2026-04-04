@@ -29,6 +29,7 @@ from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_entry_service
+from server_modules import direct_chat_response_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -3193,6 +3194,22 @@ def _prepare_direct_chat_request(
     )
 
 
+def _direct_chat_response_services() -> direct_chat_response_service.DirectChatResponseServices:
+    return direct_chat_response_service.DirectChatResponseServices(
+        with_context_used=_with_context_used,
+        build_context_used=_build_context_used,
+        connected_provider_tokens=_connected_provider_tokens,
+        list_memory_entries=list_memory_entries,
+        active_run_count=_active_run_count,
+        get_memory=get_memory,
+        delete_memory=delete_memory,
+        slash_command_help_text=_slash_command_help_text,
+        execute_direct_tool_calls=_execute_direct_tool_calls,
+        direct_chat_credentials=_direct_chat_credentials,
+        capture_exception=sentry_sdk.capture_exception,
+    )
+
+
 def build_direct_operator_reply(
     *,
     message: str,
@@ -3246,164 +3263,52 @@ def build_direct_operator_reply(
     slash_remainder = prepared.slash_remainder
     resolved_chat_max_iterations = prepared.resolved_chat_max_iterations
 
-    if slash_command_name:
-        if slash_command_name == "status":
-            connected_providers = _connected_provider_tokens(normalized_workspace_id)
-            reply = (
-                "Runtime status\n"
-                f"- AI ready: {'yes' if bool(availability_payload.get('ai_ready')) else 'no'}\n"
-                f"- Connected providers: {', '.join(connected_providers) if connected_providers else 'none'}\n"
-                f"- Memory facts: {len(list_memory_entries(normalized_workspace_id))}\n"
-                f"- Active runs: {_active_run_count(normalized_workspace_id)}"
-            )
-            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
-        if slash_command_name == "memory":
-            memory_text = get_memory(normalized_workspace_id) or "No memory facts saved yet."
-            yield {"type": "final", "payload": _with_context_used({"reply": memory_text, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
-        if slash_command_name == "forget":
-            memory_key = str(slash_remainder or "").strip()
-            if not memory_key:
-                reply = "Usage: /forget <key>"
-            else:
-                deleted = delete_memory(normalized_workspace_id, memory_key)
-                reply = f"Forgot memory '{memory_key}'." if deleted else f"Memory '{memory_key}' was not found."
-            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
-        if slash_command_name == "model":
-            if not normalized_requested_model:
-                reply = "Usage: /model <name>"
-            else:
-                provider_label = f" ({normalized_requested_provider})" if normalized_requested_provider else ""
-                reply = f"Chat model set to {normalized_requested_model}{provider_label} for this session."
-            yield {"type": "final", "payload": _with_context_used({"reply": reply, "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
-        if slash_command_name == "clear":
-            _mark_thread_cleared(session_key)
-            yield {"type": "final", "payload": _with_context_used({"reply": "Conversation history cleared for this thread.", "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
-        if slash_command_name == "help":
-            yield {"type": "final", "payload": _with_context_used({"reply": _slash_command_help_text(), "actions": [], "suggestions": proactive_suggestions, "mode": "answer"}, base_context_used)}
-            return
+    slash_payload = direct_chat_response_service.slash_command_payload(
+        slash_command_name=slash_command_name,
+        slash_remainder=slash_remainder,
+        workspace_id=normalized_workspace_id,
+        requested_provider=normalized_requested_provider,
+        requested_model=normalized_requested_model,
+        reasoning_effort=normalized_reasoning_effort,
+        availability_payload=availability_payload,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        proactive_suggestions=proactive_suggestions,
+        base_context_used=base_context_used,
+        services=_direct_chat_response_services(),
+    )
+    if slash_payload is not None:
+        yield {"type": "final", "payload": slash_payload}
+        return
 
     if not normalized_message:
-        yield {
-            "type": "final",
-            "payload": _with_context_used({
-                "reply": "Tell me the outcome you want and I’ll help you move it forward.",
-                "actions": [],
-                "suggestions": proactive_suggestions,
-                "mode": "answer",
-            }, base_context_used),
-        }
+        yield {"type": "final", "payload": direct_chat_response_service.empty_message_payload(
+            proactive_suggestions=proactive_suggestions,
+            base_context_used=base_context_used,
+            services=_direct_chat_response_services(),
+        )}
         return
 
     if normalized_message == "__approval_confirmed__":
-        if approved_action_payload is None:
-            yield {
-                "type": "final",
-                "payload": _with_context_used({
-                    "reply": "Approval confirmation is missing the connector action payload.",
-                    "actions": [],
-                    "suggestions": proactive_suggestions,
-                    "mode": "answer",
-                    "error": "missing_approved_action",
-                }, base_context_used),
-            }
-            return
-        if not _tool_write_action_available(
-            approved_action_payload["connector"],
-            approved_action_payload["action"],
-            tool_capabilities,
-        ):
-            yield {
-                "type": "final",
-                "payload": _with_context_used({
-                    "reply": "That connector action is not available in this workspace right now.",
-                    "actions": [],
-                    "suggestions": proactive_suggestions,
-                    "mode": "answer",
-                    "error": "unavailable_approved_action",
-                }, base_context_used),
-            }
-            return
-        try:
-            tool_reply = _execute_direct_tool_calls(
-                tool_calls=[_approved_action_to_tool_call(approved_action_payload)],
+        yield {
+            "type": "final",
+            "payload": direct_chat_response_service.approval_confirmation_payload(
+                approved_action_payload=approved_action_payload,
                 workspace_id=normalized_workspace_id,
                 thread_id=normalized_thread_id,
-                provider=normalized_requested_provider or None,
-                model=normalized_requested_model or None,
-                credentials=_direct_chat_credentials(normalized_workspace_id, normalized_requested_provider)
-                if normalized_requested_provider
-                else None,
-                reasoning_effort=normalized_reasoning_effort or "",
+                requested_provider=normalized_requested_provider,
+                requested_model=normalized_requested_model,
+                reasoning_effort=normalized_reasoning_effort,
                 session_ctx=session_ctx,
-            )
-            yield {
-                "type": "final",
-                "payload": {
-                    "reply": tool_reply or "Connector action completed.",
-                    "actions": [],
-                    "suggestions": proactive_suggestions,
-                    "mode": "answer",
-                    "usage_masked": {},
-                    "provider": None,
-                    "model": None,
-                    "attempted_providers": "",
-                    "error": "",
-                    "context_used": _build_context_used(
-                        workspace_id=normalized_workspace_id,
-                        requested_provider=normalized_requested_provider,
-                        effective_provider=None,
-                        requested_model=normalized_requested_model,
-                        effective_model=None,
-                        reasoning_effort=normalized_reasoning_effort,
-                        connected_systems=connected_systems,
-                        tool_capabilities=tool_capabilities,
-                        prior_messages_used=False,
-                        history_mode="none",
-                        run_created=False,
-                        fallback_used=False,
-                        fallback_reason=None,
-                    ),
-                },
-            }
-            return
-        except Exception as exc:
-            error_text = str(exc).strip() or "connector_action_failed"
-            sentry_sdk.capture_exception(exc)
-            yield {
-                "type": "final",
-                "payload": {
-                    "reply": f"Connector action failed: {error_text}",
-                    "actions": [],
-                    "suggestions": proactive_suggestions,
-                    "mode": "answer",
-                    "usage_masked": {},
-                    "provider": None,
-                    "model": None,
-                    "attempted_providers": "",
-                    "error": error_text,
-                    "context_used": _build_context_used(
-                        workspace_id=normalized_workspace_id,
-                        requested_provider=normalized_requested_provider,
-                        effective_provider=None,
-                        requested_model=normalized_requested_model,
-                        effective_model=None,
-                        reasoning_effort=normalized_reasoning_effort,
-                        connected_systems=connected_systems,
-                        tool_capabilities=tool_capabilities,
-                        prior_messages_used=False,
-                        history_mode="none",
-                        run_created=False,
-                        fallback_used=False,
-                        fallback_reason=None,
-                    ),
-                },
-            }
-            return
+                proactive_suggestions=proactive_suggestions,
+                connected_systems=connected_systems,
+                tool_capabilities=tool_capabilities,
+                tool_write_action_available_fn=_tool_write_action_available,
+                approved_action_to_tool_call_fn=_approved_action_to_tool_call,
+                services=_direct_chat_response_services(),
+            ),
+        }
+        return
 
     gated = _tool_gate_response(normalized_message, availability_payload)
     if gated is not None:
@@ -3567,45 +3472,37 @@ def build_direct_operator_reply(
             }
             yield {
                 "type": "final",
-                "payload": _with_context_used(
-                    {**fallback_payload, "suggestions": proactive_suggestions},
-                    _build_context_used(
-                        workspace_id=normalized_workspace_id,
-                        requested_provider=normalized_requested_provider,
-                        effective_provider=None,
-                        requested_model=normalized_requested_model,
-                        effective_model=None,
-                        reasoning_effort=normalized_reasoning_effort,
-                        connected_systems=connected_systems,
-                        tool_capabilities=tool_capabilities,
-                        prior_messages_used=False,
-                        history_mode="none",
-                        run_created=False,
-                        fallback_used=True,
-                        fallback_reason="no_provider_tool_execution",
-                    ),
+                "payload": direct_chat_response_service.unavailable_fallback_payload(
+                    fallback_payload=fallback_payload,
+                    proactive_suggestions=proactive_suggestions,
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    requested_model=normalized_requested_model,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    no_provider_tool_fallback_reason="no_provider_tool_execution",
+                    unavailable_fallback_reason="provider_unavailable",
+                    services=_direct_chat_response_services(),
+                    no_provider_reasoning_required_response_fn=no_provider_service.no_provider_reasoning_required_response,
                 ),
             }
             return
         yield {
             "type": "final",
-            "payload": _with_context_used(
-                {**no_provider_service.no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
-                _build_context_used(
-                    workspace_id=normalized_workspace_id,
-                    requested_provider=normalized_requested_provider,
-                    effective_provider=None,
-                    requested_model=normalized_requested_model,
-                    effective_model=None,
-                    reasoning_effort=normalized_reasoning_effort,
-                    connected_systems=connected_systems,
-                    tool_capabilities=tool_capabilities,
-                    prior_messages_used=False,
-                    history_mode="none",
-                    run_created=False,
-                    fallback_used=True,
-                    fallback_reason="provider_unavailable",
-                ),
+            "payload": direct_chat_response_service.unavailable_fallback_payload(
+                fallback_payload=None,
+                proactive_suggestions=proactive_suggestions,
+                workspace_id=normalized_workspace_id,
+                requested_provider=normalized_requested_provider,
+                requested_model=normalized_requested_model,
+                reasoning_effort=normalized_reasoning_effort,
+                connected_systems=connected_systems,
+                tool_capabilities=tool_capabilities,
+                no_provider_tool_fallback_reason="no_provider_tool_execution",
+                unavailable_fallback_reason="provider_unavailable",
+                services=_direct_chat_response_services(),
+                no_provider_reasoning_required_response_fn=no_provider_service.no_provider_reasoning_required_response,
             ),
         }
         return
@@ -3639,45 +3536,37 @@ def build_direct_operator_reply(
             }
             yield {
                 "type": "final",
-                "payload": _with_context_used(
-                    {**fallback_payload, "suggestions": proactive_suggestions},
-                    _build_context_used(
-                        workspace_id=normalized_workspace_id,
-                        requested_provider=normalized_requested_provider,
-                        effective_provider=None,
-                        requested_model=normalized_requested_model,
-                        effective_model=None,
-                        reasoning_effort=normalized_reasoning_effort,
-                        connected_systems=connected_systems,
-                        tool_capabilities=tool_capabilities,
-                        prior_messages_used=False,
-                        history_mode="none",
-                        run_created=False,
-                        fallback_used=True,
-                        fallback_reason="no_provider_tool_execution",
-                    ),
+                "payload": direct_chat_response_service.unavailable_fallback_payload(
+                    fallback_payload=fallback_payload,
+                    proactive_suggestions=proactive_suggestions,
+                    workspace_id=normalized_workspace_id,
+                    requested_provider=normalized_requested_provider,
+                    requested_model=normalized_requested_model,
+                    reasoning_effort=normalized_reasoning_effort,
+                    connected_systems=connected_systems,
+                    tool_capabilities=tool_capabilities,
+                    no_provider_tool_fallback_reason="no_provider_tool_execution",
+                    unavailable_fallback_reason="provider_unavailable",
+                    services=_direct_chat_response_services(),
+                    no_provider_reasoning_required_response_fn=no_provider_service.no_provider_reasoning_required_response,
                 ),
             }
             return
         yield {
             "type": "final",
-            "payload": _with_context_used(
-                {**no_provider_service.no_provider_reasoning_required_response(), "suggestions": proactive_suggestions},
-                _build_context_used(
+            "payload": direct_chat_response_service.unavailable_fallback_payload(
+                fallback_payload=None,
+                proactive_suggestions=proactive_suggestions,
                 workspace_id=normalized_workspace_id,
                 requested_provider=normalized_requested_provider,
-                effective_provider=None,
                 requested_model=normalized_requested_model,
-                effective_model=None,
                 reasoning_effort=normalized_reasoning_effort,
                 connected_systems=connected_systems,
                 tool_capabilities=tool_capabilities,
-                prior_messages_used=False,
-                history_mode="none",
-                run_created=False,
-                fallback_used=True,
-                fallback_reason="provider_unavailable",
-            ),
+                no_provider_tool_fallback_reason="no_provider_tool_execution",
+                unavailable_fallback_reason="provider_unavailable",
+                services=_direct_chat_response_services(),
+                no_provider_reasoning_required_response_fn=no_provider_service.no_provider_reasoning_required_response,
             ),
         }
         return

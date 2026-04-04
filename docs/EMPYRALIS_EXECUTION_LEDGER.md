@@ -856,6 +856,72 @@ This does not remove [server_modules/operator_chat.py](/Users/mansur/Multi_Agent
   - `server_modules.tests.test_agent_machine_mode`
   - final rerun after the entry-service extraction: `101 tests`, `OK`
 
+### 2026-04-04 - Direct Chat Top-Level Response Shaping Moved Behind Dedicated Response Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat entrypoint no longer owns the full inline response shaping for slash commands, empty-input handling, approval-confirmation finalization, and provider-unavailable fallback final payloads.
+
+This is another step toward making [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) an orchestration-only boundary instead of a payload-construction owner.
+
+#### Completed Work
+
+- Added a new response boundary in [server_modules/direct_chat_response_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_response_service.py) for:
+  - `DirectChatResponseServices`
+  - `slash_command_payload()`
+  - `empty_message_payload()`
+  - `approval_confirmation_payload()`
+  - `unavailable_fallback_payload()`
+- Moved the following top-level direct-chat response behaviors behind the service boundary:
+  - slash-command final payload construction for `status`, `memory`, `forget`, `model`, `clear`, and `help`
+  - empty-message final payload construction
+  - approval-confirmation success and error payload construction
+  - provider-unavailable fallback final payload construction for both tool-backed and no-provider cases
+- Replaced the corresponding inline payload-building branches in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with calls into [server_modules/direct_chat_response_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_response_service.py)
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_chat_response_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_response_service.py)
+
+#### Current Truth
+
+- Request preparation, provider routing, route planning, handoff lifecycle, provider-backed generation, prompt assembly, memory behaviors, and top-level response shaping are now all outside the main direct-chat loop as dedicated service-owned boundaries.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still remains the direct-chat entrypoint and transport seam, but it now owns materially less payload-shaping logic.
+- The remaining weight in the chat module is increasingly concentrated in orchestration glue and compatibility wrappers rather than reusable subsystem logic.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still remains the compatibility seam that older tests patch directly.
+- Several service boundaries still communicate through callback bundles rather than a more explicit composed runtime object.
+- Some final branching and transport collection helpers still remain inline in the chat module.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting any remaining reusable final-branch behavior or transport helpers that are still inline.
+2. Decide whether the next convergence step should be introducing an explicit composed direct-chat runtime object that wires these services together.
+3. Keep using deletion pressure on the chat module as the measure of whether the architecture is becoming real in code.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_response_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_response_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_response_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_response_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_response_service`
+  - `server_modules.tests.test_direct_chat_entry_service`
+  - `server_modules.tests.test_direct_chat_generation_service`
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - final rerun after the response-service extraction: `104 tests`, `OK`
+
 ### 2026-04-04 - Direct Chat Provider Routing Moved Behind Dedicated Provider Service
 
 #### Stage

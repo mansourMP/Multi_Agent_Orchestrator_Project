@@ -20,6 +20,7 @@ from server_modules.connectors.autopilot_shared_service_registry import Autopilo
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
+from server_modules.connectors.telegram_compatibility_bridge_service import TelegramCompatibilityBridgeService
 from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
 from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
 from server_modules.connectors.telegram_menu_service import TelegramMenuService
@@ -224,6 +225,7 @@ _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = Non
 _AUTOPILOT_EVENT_BRIDGE_SERVICE: Optional[AutopilotEventBridgeService] = None
 _AUTOPILOT_STATE_BRIDGE_SERVICE: Optional[AutopilotStateBridgeService] = None
 _AUTOPILOT_TERMINAL_BRIDGE_SERVICE: Optional[AutopilotTerminalBridgeService] = None
+_TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE: Optional[TelegramCompatibilityBridgeService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
@@ -885,6 +887,30 @@ def _normalize_workspace_id_fallback(value: Any) -> str:
     token = str(normalized if normalized is not None else value or "default").strip()
     return token or "default"
 
+
+def _telegram_compatibility_bridge_service() -> TelegramCompatibilityBridgeService:
+    global _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE
+    if _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE is None:
+        _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE = TelegramCompatibilityBridgeService(
+            safe_path_token=lambda value: telegram_safe_path_token(value),
+            build_goal_with_profile=lambda goal, profile_data: _telegram_helper_registry().profile_service().build_goal_with_profile(
+                goal,
+                profile_data,
+            ),
+            workspace_connector_context=lambda goal, workspace_id, current_connector_id: _telegram_connector_context_service().workspace_connector_context(
+                goal,
+                workspace_id,
+                current_connector_id,
+            ),
+            extract_message=lambda update: _telegram_helper_registry().media_service().extract_message(update),
+            build_goal_with_attachments=lambda goal, attachments: _telegram_helper_registry().media_service().build_goal_with_attachments(
+                goal,
+                attachments,
+            ),
+            route_message=lambda raw_text, profile: _telegram_helper_registry().routing_service().route_message(raw_text, profile),
+        )
+    return _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE
+
 def _load_telegram_autopilot_state() -> None:
     _autopilot_state_bridge_service().load_telegram_autopilot_state()
 
@@ -1036,11 +1062,11 @@ def _telegram_menu_service() -> TelegramMenuService:
 
 
 def _telegram_safe_path_token(value: Any) -> str:
-    return telegram_safe_path_token(value)
+    return _telegram_compatibility_bridge_service().safe_path_token(value)
 
 
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
-    return _telegram_helper_registry().profile_service().build_goal_with_profile(goal, profile_data)
+    return _telegram_compatibility_bridge_service().build_goal_with_profile(goal, profile_data)
 
 
 def _telegram_workspace_connector_context(
@@ -1048,7 +1074,7 @@ def _telegram_workspace_connector_context(
     workspace_id: str,
     current_connector_id: str,
 ) -> Dict[str, Any]:
-    return _telegram_connector_context_service().workspace_connector_context(
+    return _telegram_compatibility_bridge_service().workspace_connector_context(
         goal,
         workspace_id,
         current_connector_id,
@@ -1056,15 +1082,15 @@ def _telegram_workspace_connector_context(
 
 
 def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return _telegram_helper_registry().media_service().extract_message(update)
+    return _telegram_compatibility_bridge_service().extract_message(update)
 
 
 def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str, Any]]) -> str:
-    return _telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments)
+    return _telegram_compatibility_bridge_service().build_goal_with_attachments(goal, attachments)
 
 
 def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    return _telegram_helper_registry().routing_service().route_message(raw_text, profile)
+    return _telegram_compatibility_bridge_service().route_message(raw_text, profile)
 
 
 async def handle_telegram_send_message(

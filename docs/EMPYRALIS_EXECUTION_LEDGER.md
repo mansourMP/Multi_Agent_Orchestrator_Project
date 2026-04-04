@@ -2865,6 +2865,69 @@ This is another ownership cut with compatibility wrappers intentionally preserve
   - `server_modules.tests.test_autopilot_status_service`
   - `server_modules.tests.test_runs_execution_graph -k launch_gate_connector_triage_workflow`
 
+### 2026-04-05 - Telegram Compatibility Shim Band Moved Behind Dedicated Compatibility Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram compatibility shim band near the bottom of [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) no longer owns its direct delegation logic inline.
+
+This is a compatibility-surface extraction, not a behavior rewrite. The historical helper names still remain exported because terminal tests and runtime imports call them directly, but their implementation body now crosses a dedicated compatibility bridge service first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_compatibility_bridge_service.py) to own delegation for:
+  - Telegram safe-path token rendering
+  - goal building with chat profile context
+  - workspace connector-context assembly
+  - Telegram message extraction
+  - goal building with media attachments
+  - Telegram routing
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_telegram_safe_path_token()` now delegates through the compatibility bridge
+  - `_telegram_build_goal_with_profile()` now delegates through the compatibility bridge
+  - `_telegram_workspace_connector_context()` now delegates through the compatibility bridge
+  - `_telegram_extract_message()` now delegates through the compatibility bridge
+  - `_telegram_build_goal_with_attachments()` now delegates through the compatibility bridge
+  - `_telegram_route_message()` now delegates through the compatibility bridge
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_compatibility_bridge_service.py)
+
+#### Current Truth
+
+- Compatibility shim ownership is now explicit in [server_modules/connectors/telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_compatibility_bridge_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical Telegram helper names because terminal and runtime call sites still import them directly.
+- The terminal-facing wrapper consumers still pass after this cut:
+  - [scripts/orion_terminal/tests/test_telegram_autopilot_profile_commands.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_terminal/tests/test_telegram_autopilot_profile_commands.py)
+  - [scripts/orion_terminal/tests/test_telegram_connector_context.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_terminal/tests/test_telegram_connector_context.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1164` lines versus `1138` after the previous cut.
+  This increase is expected because the bridge factory and service wiring were added while the compatibility wrapper exports remain in place.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a large amount of top-level composition and compatibility glue.
+- The WhatsApp webhook shell and remaining bridge/wrapper exports are still inline.
+- More extractions are still needed before the file becomes only thin adapter/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting another bounded compatibility-wrapper or composition cluster.
+2. Keep validating both terminal-facing wrapper tests and the underlying Telegram service suites whenever compatibility shims move behind bridge services.
+3. Preserve exported shim names until the rest of the codebase stops importing them directly.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_compatibility_bridge_service.py)
+  - [server_modules/tests/test_telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_compatibility_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_compatibility_bridge_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_profile_service`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

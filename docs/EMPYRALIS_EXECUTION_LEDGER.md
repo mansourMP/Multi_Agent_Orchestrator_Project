@@ -2984,6 +2984,76 @@ This is a bounded runtime-bridge extraction. The exported async webhook entrypoi
   - `server_modules.tests.test_autopilot_endpoint_service`
   - `server_modules.tests.test_whatsapp_transport_service`
 
+### 2026-04-05 - Support-Service Composition Moved Behind Dedicated Support Registry
+
+#### Stage
+
+Stage 2 connector convergence continues. The lazy-construction block for shared support services no longer owns its caching/composition logic inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a real composition cut, not just another wrapper bridge. The top-level helper getters still exist, but the service construction and caching for profile, runtime-status, workflow-setup, connector-context, approval, common-support, skill, and channel-support helpers now belong to a dedicated support registry.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_service_registry.py) to own lazy construction and caching for:
+  - autopilot profile service
+  - runtime status service
+  - workflow setup service
+  - Telegram connector-context service
+  - autopilot approval service
+  - common support service
+  - skill service
+  - channel support service
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_profile_service()` now delegates through the support registry
+  - `_runtime_status_service()` now delegates through the support registry
+  - `_autopilot_workflow_setup_service()` now delegates through the support registry
+  - `_telegram_connector_context_service()` now delegates through the support registry
+  - `_autopilot_approval_service()` now delegates through the support registry
+  - `_autopilot_common_support_service()` now delegates through the support registry
+  - `_autopilot_skill_service()` now delegates through the support registry
+  - `_autopilot_channel_support_service()` now delegates through the support registry
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_support_service_registry.py)
+
+#### Current Truth
+
+- Shared support-service composition is now explicit in [server_modules/connectors/autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_service_registry.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical getter functions, but it no longer owns the multi-service lazy-construction bodies inline.
+- The extracted service families still pass their focused suites after moving behind the support registry:
+  - [server_modules/tests/test_autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_profile_service.py)
+  - [server_modules/tests/test_runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runtime_status_service.py)
+  - [server_modules/tests/test_autopilot_workflow_setup_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_workflow_setup_service.py)
+  - [server_modules/tests/test_telegram_connector_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_connector_context_service.py)
+  - [server_modules/tests/test_autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_approval_service.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1174` lines versus `1170` after the previous cut.
+  This slight increase is expected because the new support-registry factory was added while the historical getter names remain exported.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a large amount of registry wiring and adapter composition for Telegram and WhatsApp runtime construction.
+- The remaining inline surface is now more dominated by service-registry assembly than by standalone helper logic.
+- More reduction is still needed before the file becomes only thin composition/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by targeting a remaining registry/composition cluster, not just individual wrappers.
+2. Keep verifying the extracted service families directly whenever their construction path moves behind a new registry.
+3. Preserve the existing helper getter names until their callers stop importing them directly.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_service_registry.py)
+  - [server_modules/tests/test_autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_support_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_support_service_registry`
+  - `server_modules.tests.test_autopilot_profile_service`
+  - `server_modules.tests.test_runtime_status_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+  - `server_modules.tests.test_telegram_connector_context_service`
+  - `server_modules.tests.test_autopilot_approval_service`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

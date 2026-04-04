@@ -9,6 +9,7 @@ from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
+from server_modules.connectors.autopilot_event_bridge_service import AutopilotEventBridgeService
 from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
@@ -218,6 +219,7 @@ _TELEGRAM_AUTOPILOT_HELPER_REGISTRY: Optional[TelegramAutopilotHelperRegistry] =
 _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
+_AUTOPILOT_EVENT_BRIDGE_SERVICE: Optional[AutopilotEventBridgeService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
@@ -257,7 +259,7 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             utc_now_iso=lambda: _utc_now_iso(),
             classify_error=lambda detail: _autopilot_channel_support_service().classify_error(detail),
             iso_from_epoch=lambda ts: _autopilot_channel_support_service().iso_from_epoch(ts),
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             thread_alive=lambda: bool(
                 (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD)
                 and (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD).is_alive()
@@ -288,8 +290,8 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 method,
                 **kwargs,
             ),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
+            record_channel_event=lambda **kwargs: _autopilot_event_bridge_service().record_channel_event(**kwargs),
+            record_channel_event_throttled=lambda **kwargs: _autopilot_event_bridge_service().record_channel_event_throttled(**kwargs),
             send_message=lambda *args, **kwargs: _telegram_transport_service().send_message(*args, **kwargs),
             send_chat_action=lambda *args, **kwargs: _telegram_transport_service().send_chat_action(*args, **kwargs),
             edit_message=lambda *args, **kwargs: _telegram_transport_service().edit_message(*args, **kwargs),
@@ -471,7 +473,7 @@ def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
     global _AUTOPILOT_SHARED_SERVICE_REGISTRY
     if _AUTOPILOT_SHARED_SERVICE_REGISTRY is None:
         _AUTOPILOT_SHARED_SERVICE_REGISTRY = AutopilotSharedServiceRegistry(
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             append_channel_event=lambda **kwargs: globals().get("_append_channel_event")(**kwargs),
             utc_now_iso=lambda: _utc_now_iso(),
             truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
@@ -519,7 +521,7 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             state_file=ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
             utc_now_iso=lambda: _utc_now_iso(),
             classify_error=lambda detail: _autopilot_channel_support_service().classify_error(detail),
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             load_vault=lambda: load_vault(),
             workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
             connector_paused=lambda item: _telegram_connector_support_service().connector_paused(item),
@@ -543,8 +545,8 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
                 run_id,
                 summary,
             ),
-            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            append_dead_letter=lambda **kwargs: _autopilot_event_bridge_service().append_channel_dead_letter(**kwargs),
+            record_channel_event=lambda **kwargs: _autopilot_event_bridge_service().record_channel_event(**kwargs),
             log_error=lambda message: print(f"[whatsapp-autopilot {_utc_now_iso()}] {message}", flush=True),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
             resolve_profile=lambda entry: _autopilot_profile_service().resolve_whatsapp_profile(entry),
@@ -599,7 +601,7 @@ def _telegram_connector_support_service() -> TelegramConnectorSupportService:
     if _TELEGRAM_CONNECTOR_SUPPORT_SERVICE is None:
         normalize_role = globals().get("normalize_agent_role")
         _TELEGRAM_CONNECTOR_SUPPORT_SERVICE = TelegramConnectorSupportService(
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             resolve_vault_credential=lambda credential_id, workspace_id: resolve_vault_credential(credential_id, workspace_id),
             normalize_agent_role=lambda value: (
                 str(normalize_role(value) or "").strip().lower()
@@ -678,8 +680,8 @@ def _telegram_transport_service() -> TelegramTransportService:
             session_key=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
             reply_keyboard=lambda profile: _telegram_menu_service().reply_keyboard(profile),
-            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            append_dead_letter=lambda **kwargs: _autopilot_event_bridge_service().append_channel_dead_letter(**kwargs),
+            record_channel_event=lambda **kwargs: _autopilot_event_bridge_service().record_channel_event(**kwargs),
             utc_now_iso=lambda: _utc_now_iso(),
         )
     return _TELEGRAM_TRANSPORT_SERVICE
@@ -689,7 +691,7 @@ def _telegram_terminal_service() -> TelegramTerminalService:
     global _TELEGRAM_TERMINAL_SERVICE
     if _TELEGRAM_TERMINAL_SERVICE is None:
         _TELEGRAM_TERMINAL_SERVICE = TelegramTerminalService(
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             chat_id_from_session_key=lambda key: _autopilot_common_support_service().chat_id_from_session_key(key),
             list_connector_entries=lambda: _telegram_service_registry().telegram_autopilot_state_service().list_connector_entries(
                 ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID
@@ -760,7 +762,7 @@ def _autopilot_run_entry_service() -> AutopilotRunEntryService:
             decide_execution_target=lambda metadata: decide_execution_target(metadata),
             apply_execution_route_metadata=lambda metadata, route: apply_execution_route_metadata(metadata, route),
             create_run=lambda **kwargs: create_run(**kwargs),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            record_channel_event=lambda **kwargs: _autopilot_event_bridge_service().record_channel_event(**kwargs),
             telegram_session_key=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
             whatsapp_session_key=lambda from_number, to_number: _autopilot_channel_support_service().whatsapp_session_key(from_number, to_number),
             inherit_owner_user_id=lambda owner_user_id=None: runtime_config.agent_machine_inherited_owner_user_id(owner_user_id),
@@ -823,6 +825,29 @@ def _autopilot_channel_support_service() -> AutopilotChannelSupportService:
         )
     return _AUTOPILOT_CHANNEL_SUPPORT_SERVICE
 
+
+def _autopilot_event_bridge_service() -> AutopilotEventBridgeService:
+    global _AUTOPILOT_EVENT_BRIDGE_SERVICE
+    if _AUTOPILOT_EVENT_BRIDGE_SERVICE is None:
+        _AUTOPILOT_EVENT_BRIDGE_SERVICE = AutopilotEventBridgeService(
+            init_runtime=lambda: _init(),
+            event_service=lambda: _autopilot_event_service(),
+        )
+    return _AUTOPILOT_EVENT_BRIDGE_SERVICE
+
+
+def _normalize_workspace_id_fallback(value: Any) -> str:
+    normalize_workspace_id = globals().get("_normalize_workspace_id")
+    if callable(normalize_workspace_id):
+        try:
+            normalized = normalize_workspace_id(value)
+        except Exception:
+            normalized = None
+    else:
+        normalized = None
+    token = str(normalized if normalized is not None else value or "default").strip()
+    return token or "default"
+
 def _load_telegram_autopilot_state() -> None:
     _telegram_service_registry().telegram_autopilot_state_service().load_state()
 
@@ -882,8 +907,7 @@ def _record_channel_event(
     action: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    _init()
-    return _autopilot_event_service().record_event(
+    return _autopilot_event_bridge_service().record_channel_event(
         channel=channel,
         direction=direction,
         event_type=event_type,
@@ -915,8 +939,7 @@ def _append_channel_dead_letter(
     source_event_id: str = "",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    _init()
-    _autopilot_event_service().append_dead_letter(
+    _autopilot_event_bridge_service().append_channel_dead_letter(
         channel=channel,
         direction=direction,
         event_type=event_type,
@@ -949,8 +972,7 @@ def _record_channel_event_throttled(
     metadata: Optional[Dict[str, Any]] = None,
     dedupe_seconds: float = 30.0,
 ) -> bool:
-    _init()
-    return _autopilot_event_service().record_event_throttled(
+    return _autopilot_event_bridge_service().record_channel_event_throttled(
         channel=channel,
         direction=direction,
         event_type=event_type,
@@ -964,6 +986,7 @@ def _record_channel_event_throttled(
         action=action,
         metadata=metadata,
         dedupe_seconds=dedupe_seconds,
+        record_event_func=_record_channel_event,
     )
 
 

@@ -63,6 +63,22 @@ class AutopilotEventServiceTests(unittest.TestCase):
         self.assertFalse(second)
         self.assertEqual(len(recorded), 1)
 
+    def test_record_event_throttled_uses_override_callback(self) -> None:
+        service = self._make_service()
+        recorded = []
+
+        result = service.record_event_throttled(
+            channel="telegram",
+            direction="system",
+            event_type="error",
+            text="same text",
+            dedupe_seconds=0.0,
+            record_event_func=lambda **kwargs: recorded.append(kwargs) or {"ok": True},
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(len(recorded), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,6 +129,7 @@ class AutopilotEventService:
         action: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         dedupe_seconds: float = 30.0,
+        record_event_func: Optional[Callable[..., Optional[Dict[str, Any]]]] = None,
     ) -> bool:
         normalized_workspace_id = self.normalize_workspace_id(workspace_id)
         normalized_text = self.collapse_whitespace(str(text or "").strip().lower())
@@ -155,7 +156,8 @@ class AutopilotEventService:
                     stale = [k for k, ts in self._dedupe_index.items() if ts < cutoff]
                     for stale_key in stale[:1024]:
                         self._dedupe_index.pop(stale_key, None)
-        self.record_event(
+        record_event = record_event_func or self.record_event
+        record_event(
             channel=channel,
             direction=direction,
             event_type=event_type,

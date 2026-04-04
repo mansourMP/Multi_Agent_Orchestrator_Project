@@ -2676,6 +2676,71 @@ This is a real ownership cut, not a rename pass. Telegram and WhatsApp registry 
   - `server_modules.tests.test_whatsapp_webhook_service`
   - `server_modules.tests.test_autopilot_workflow_setup_service`
 
+### 2026-04-05 - Event Wrapper Band Moved Behind Dedicated Event Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The channel event/dead-letter runtime-init bridge no longer lives as owned inline logic inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut also repaired a real baseline regression in the terminal dedupe path. The previous wrapper flow could fail when `_init()` was patched out because service wiring still referenced `_normalize_workspace_id` directly with no local fallback.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_bridge_service.py) to own:
+  - runtime-init bridging before event persistence calls
+  - channel-event forwarding
+  - dead-letter forwarding
+  - throttled-event forwarding with callback passthrough for compatibility wrappers
+- Expanded [server_modules/connectors/autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_service.py) so throttled event recording can use an injected record callback when the compatibility wrapper surface needs to stay observable in tests.
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - Telegram and WhatsApp registry wiring now consumes the event bridge service directly for event and dead-letter operations
+  - the module-level `_record_channel_event*` wrappers now delegate through the event bridge instead of owning the runtime-init body inline
+  - service wiring now uses a local workspace-normalization fallback instead of assuming `_normalize_workspace_id` is always available from a booted server import
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_event_bridge_service.py)
+  - [server_modules/tests/test_autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_event_service.py)
+
+#### Current Truth
+
+- Event bridge ownership is now explicit in [server_modules/connectors/autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_bridge_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the event wrapper names for compatibility, but their implementation body now crosses the dedicated bridge service first.
+- The previously failing terminal dedupe regression is fixed:
+  - [scripts/orion_terminal/tests/test_autopilot_event_dedupe.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_terminal/tests/test_autopilot_event_dedupe.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1118` lines versus `1095` after the previous cut.
+  This increase is expected for this step because the file now carries fallback-safe normalization and keeps externally imported compatibility wrappers while moving the owned runtime-init/event bridge logic behind a dedicated service.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns too much top-level adapter composition and compatibility-export surface.
+- The compatibility wrapper names are still module-local and should only disappear after their external test/import surface is intentionally migrated.
+- More composition cuts are still needed before this file becomes only thin runtime/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting another remaining adapter-composition cluster instead of only shuffling wrappers.
+2. Keep preserving wrapper names that the terminal and connector tests import directly until those contracts are moved deliberately.
+3. Keep including [scripts/orion_terminal/tests/test_autopilot_event_dedupe.py](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts/orion_terminal/tests/test_autopilot_event_dedupe.py) in the regression suite, because it caught a real broken path that the previous focused suite missed.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_service.py)
+  - [server_modules/connectors/autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_bridge_service.py)
+  - [server_modules/tests/test_autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_event_service.py)
+  - [server_modules/tests/test_autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_event_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_event_service`
+  - `server_modules.tests.test_autopilot_event_bridge_service`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+  - `server_modules.tests.test_autopilot_shared_service_registry`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

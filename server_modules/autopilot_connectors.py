@@ -16,6 +16,7 @@ from server_modules.connectors.autopilot_profile_service import AutopilotProfile
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
 from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
+from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
 from server_modules.connectors.telegram_media_service import telegram_safe_path_token
@@ -220,6 +221,7 @@ _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
+_TELEGRAM_CONNECTOR_SUPPORT_SERVICE: Optional[TelegramConnectorSupportService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -482,7 +484,7 @@ def _autopilot_profile_service() -> AutopilotProfileService:
     if _AUTOPILOT_PROFILE_SERVICE is None:
         _AUTOPILOT_PROFILE_SERVICE = AutopilotProfileService(
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
-            bool_from_any=lambda value, default=False: _bool_from_any(value, default),
+            bool_from_any=lambda value, default=False: _telegram_connector_support_service().bool_from_any(value, default),
             telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
             telegram_default_prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
             telegram_default_require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
@@ -493,6 +495,23 @@ def _autopilot_profile_service() -> AutopilotProfileService:
             whatsapp_profile_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
         )
     return _AUTOPILOT_PROFILE_SERVICE
+
+
+def _telegram_connector_support_service() -> TelegramConnectorSupportService:
+    global _TELEGRAM_CONNECTOR_SUPPORT_SERVICE
+    if _TELEGRAM_CONNECTOR_SUPPORT_SERVICE is None:
+        normalize_role = globals().get("normalize_agent_role")
+        _TELEGRAM_CONNECTOR_SUPPORT_SERVICE = TelegramConnectorSupportService(
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            resolve_vault_credential=lambda credential_id, workspace_id: resolve_vault_credential(credential_id, workspace_id),
+            normalize_agent_role=lambda value: (
+                str(normalize_role(value) or "").strip().lower()
+                if callable(normalize_role)
+                else str(value or "").strip().lower()
+            ),
+            allow_any_chat=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", False)),
+        )
+    return _TELEGRAM_CONNECTOR_SUPPORT_SERVICE
 
 
 def _latest_runtime_run_summary() -> str:
@@ -1517,11 +1536,7 @@ def _list_telegram_connector_entries() -> List[Dict[str, Any]]:
 
 
 def _telegram_get_secret(entry: Dict[str, Any]) -> Dict[str, Any]:
-    credential_id = str(entry.get("id") or "").strip()
-    workspace_id = _normalize_workspace_id(entry.get("workspace_id"))
-    if not credential_id:
-        raise RuntimeError("Connector entry is missing id.")
-    return resolve_vault_credential(credential_id, workspace_id)
+    return _telegram_connector_support_service().get_secret(entry)
 
 
 def _telegram_api_request(
@@ -1539,89 +1554,22 @@ def _telegram_api_request(
 
 
 def _telegram_chat_matches(configured_chat_id: str, chat: Dict[str, Any]) -> bool:
-    if not isinstance(chat, dict):
-        return False
-    if bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", False)):
-        return bool(str(chat.get("id") or chat.get("username") or "").strip())
-    expected = str(configured_chat_id or "").strip()
-    if not expected:
-        return False
-    if expected.lower() in {"*", "any", "all"}:
-        return True
-    chat_id = str(chat.get("id") or "").strip()
-    chat_username = str(chat.get("username") or "").strip().lower()
-    if expected.startswith("@"):
-        return chat_username == expected[1:].lower()
-    return chat_id == expected
+    return _telegram_connector_support_service().chat_matches(configured_chat_id, chat)
 
 
 def _telegram_parse_allow_from(value: Any) -> List[str]:
-    tokens: List[str] = []
-    if isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, str):
-        raw_items = value.split(",")
-    else:
-        raw_items = []
-    for item in raw_items:
-        token = str(item or "").strip().lower()
-        if token:
-            tokens.append(token)
-    out: List[str] = []
-    for token in tokens:
-        normalized = token
-        if normalized.startswith("id:"):
-            normalized = normalized[3:].strip()
-        elif normalized.startswith("user:"):
-            normalized = f"@{normalized[5:].strip()}"
-        if not normalized:
-            continue
-        if normalized in {"*", "any", "all"}:
-            return ["*"]
-        if normalized.startswith("@"):
-            normalized = f"@{normalized[1:].strip().lower()}"
-            if normalized == "@":
-                continue
-        elif re.fullmatch(r"-?\d+", normalized):
-            pass
-        else:
-            normalized = f"@{normalized}"
-        if normalized and normalized not in out:
-            out.append(normalized)
-    return out
+    return _telegram_connector_support_service().parse_allow_from(value)
 
 
 def _telegram_resolve_allow_from(entry: Dict[str, Any]) -> List[str]:
-    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-    env_value = os.getenv("ORION_TELEGRAM_AUTOPILOT_ALLOW_FROM", "")
-    merged: List[str] = []
-    for candidate in (
-        metadata.get("allow_from"),
-        metadata.get("telegram_allow_from"),
-        metadata.get("autopilot_allow_from"),
-        env_value,
-    ):
-        parsed = _telegram_parse_allow_from(candidate)
-        for token in parsed:
-            if token == "*":
-                return ["*"]
-            if token not in merged:
-                merged.append(token)
-    return merged
+    return _telegram_connector_support_service().resolve_allow_from(
+        entry,
+        os.getenv("ORION_TELEGRAM_AUTOPILOT_ALLOW_FROM", ""),
+    )
 
 
 def _telegram_sender_allowed(sender: Dict[str, Any], allow_from: List[str]) -> bool:
-    if not allow_from or "*" in allow_from:
-        return True
-    sender_id = str(sender.get("id") or "").strip()
-    sender_username = str(sender.get("username") or "").strip().lower()
-    if sender_id and sender_id in allow_from:
-        return True
-    if sender_username:
-        normalized_username = f"@{sender_username}"
-        if normalized_username in allow_from:
-            return True
-    return False
+    return _telegram_connector_support_service().sender_allowed(sender, allow_from)
 
 
 def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1664,36 +1612,20 @@ def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str,
 
 
 def _bool_from_any(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    raw = str(value).strip().lower()
-    if raw in {"1", "true", "yes", "y", "on"}:
-        return True
-    if raw in {"0", "false", "no", "n", "off"}:
-        return False
-    return default
+    return _telegram_connector_support_service().bool_from_any(value, default)
 
 
 def _connector_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
-    return entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    return _telegram_connector_support_service().connector_metadata(entry)
 
 
 def _connector_assigned_agent_role(entry: Dict[str, Any]) -> str:
     _init()
-    metadata = _connector_metadata(entry)
-    normalize = globals().get("normalize_agent_role")
-    if callable(normalize):
-        try:
-            return str(normalize(metadata.get("agent_role")) or "").strip().lower()
-        except Exception:
-            return ""
-    return str(metadata.get("agent_role") or "").strip().lower()
+    return _telegram_connector_support_service().connector_assigned_agent_role(entry)
 
 
 def _connector_paused(entry: Dict[str, Any]) -> bool:
-    return _bool_from_any(_connector_metadata(entry).get("paused"), False)
+    return _telegram_connector_support_service().connector_paused(entry)
 
 
 def _telegram_strip_prefix(text: str, prefix: str) -> Dict[str, Any]:

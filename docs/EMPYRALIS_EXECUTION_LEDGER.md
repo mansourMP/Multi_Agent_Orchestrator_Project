@@ -1305,6 +1305,71 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Connector Support Helpers Moved Behind Support Service
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The remaining Telegram connector-support block for secret lookup, allowlist parsing, sender filtering, chat matching, and connector metadata helpers no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut removes Telegram support logic, not transport or runtime orchestration. The existing wrappers and registry wiring remain stable, but the underlying helper ownership is now externalized.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_connector_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_connector_support_service.py) with:
+  - boolean normalization
+  - connector metadata lookup
+  - assigned-agent-role normalization
+  - connector paused-state evaluation
+  - Telegram connector secret lookup
+  - chat targeting checks
+  - allowlist parsing and merged allowlist resolution
+  - sender allowlist checks
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these helpers now delegate instead of owning implementation inline:
+  - `_telegram_get_secret()`
+  - `_telegram_chat_matches()`
+  - `_telegram_parse_allow_from()`
+  - `_telegram_resolve_allow_from()`
+  - `_telegram_sender_allowed()`
+  - `_bool_from_any()`
+  - `_connector_metadata()`
+  - `_connector_assigned_agent_role()`
+  - `_connector_paused()`
+- Updated live dependency wiring so:
+  - [server_modules/connectors/autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_profile_service.py) now receives boolean parsing through the support-service-backed wrapper
+  - Telegram and WhatsApp registries continue using the same public wrappers, but those wrappers no longer own the helper logic inline
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_connector_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_connector_support_service.py)
+
+#### Current Truth
+
+- Telegram connector-support behavior now has a dedicated service boundary instead of being embedded in the monolith.
+- Connector paused-state, role resolution, secret lookup, and sender-allowlist behavior still flow through the same wrappers, but the real logic is no longer inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2176` lines to `2108` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns remaining shared wrappers around approvals, terminal send/edit paths, and endpoint entry functions.
+- Telegram helper ownership is thinner now, but [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still is not only a transport/composition shell.
+- Some tiny wrapper-only helper groups remain because they still bridge service registries or runtime globals.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared wrapper groups that still contain cross-channel utility ownership.
+2. Keep Telegram support behavior in dedicated services and keep registry wiring thin.
+3. Preserve direct support-service tests alongside the broader profile and state tests that depend on the same semantics.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_connector_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_connector_support_service.py)
+  - [server_modules/connectors/autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_profile_service.py)
+  - [server_modules/connectors/telegram_autopilot_state_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_state_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_connector_support_service`
+  - `server_modules.tests.test_autopilot_profile_service`
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+
 ### 2026-04-05 - Shared Channel Event And Dead-Letter Flow Moved Behind Event Service
 
 #### Stage

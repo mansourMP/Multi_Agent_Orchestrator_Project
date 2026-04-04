@@ -280,9 +280,9 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
             record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
             record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
-            send_message=lambda *args, **kwargs: _telegram_send_message(*args, **kwargs),
-            send_chat_action=lambda *args, **kwargs: _telegram_send_chat_action(*args, **kwargs),
-            edit_message=lambda *args, **kwargs: _telegram_edit_message(*args, **kwargs),
+            send_message=lambda *args, **kwargs: _telegram_transport_service().send_message(*args, **kwargs),
+            send_chat_action=lambda *args, **kwargs: _telegram_transport_service().send_chat_action(*args, **kwargs),
+            edit_message=lambda *args, **kwargs: _telegram_transport_service().edit_message(*args, **kwargs),
             autopilot_log=lambda message: _telegram_autopilot_log(message),
             autopilot_mark_error=lambda detail, source: _telegram_service_registry().telegram_autopilot_runtime_service().mark_error(
                 detail,
@@ -323,14 +323,17 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 field_name,
             ),
             runtime_status_text=lambda workspace_id: _telegram_runtime_status_text(workspace_id),
-            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
-            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
-            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+            approvals_list=lambda limit: _autopilot_approval_service().approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approval_service().approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_service().approval_resolve(
                 event_id=event_id,
                 approved=approved,
                 note=note,
             ),
-            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            approval_result_text=lambda payload, approved: _autopilot_approval_service().approval_result_text(
+                payload,
+                approved=approved,
+            ),
             extract_message=lambda update: _telegram_extract_message(update),
             chat_matches=lambda configured_chat_id, chat: _telegram_chat_matches(configured_chat_id, chat),
             store_attachments=lambda **kwargs: _telegram_store_attachments(**kwargs),
@@ -511,14 +514,17 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             route_message=lambda body, profile: _telegram_route_message(body, profile),
             help_text=lambda profile: _whatsapp_help_text(profile),
             runtime_status_text=lambda workspace_id: _runtime_status_text(workspace_id),
-            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
-            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
-            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+            approvals_list=lambda limit: _autopilot_approval_service().approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approval_service().approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_service().approval_resolve(
                 event_id=event_id,
                 approved=approved,
                 note=note,
             ),
-            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            approval_result_text=lambda payload, approved: _autopilot_approval_service().approval_result_text(
+                payload,
+                approved=approved,
+            ),
             create_run=lambda **kwargs: _create_whatsapp_run(**kwargs),
             session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
@@ -622,7 +628,7 @@ def _autopilot_approval_service() -> AutopilotApprovalService:
             truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
             normalize_string_list=lambda value: _autopilot_common_support_service().normalize_string_list(value),
             utc_now_iso=lambda: _utc_now_iso(),
-            send_message=lambda **kwargs: _telegram_send_message(**kwargs),
+            send_message=lambda **kwargs: _telegram_transport_service().send_message(**kwargs),
         )
     return _AUTOPILOT_APPROVAL_SERVICE
 
@@ -672,7 +678,7 @@ def _telegram_terminal_service() -> TelegramTerminalService:
             runs_get=lambda run_id: runs.get(run_id) if isinstance(runs, dict) else None,
             session_key=lambda chat_id: _telegram_session_key(chat_id),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
-            send_message=lambda **kwargs: _telegram_send_message(**kwargs),
+            send_message=lambda **kwargs: _telegram_transport_service().send_message(**kwargs),
             set_connector_state=lambda connector_id, patch: _telegram_service_registry().telegram_autopilot_state_service().set_connector_state(
                 connector_id,
                 patch,
@@ -1476,93 +1482,6 @@ def _cognitive_defaults() -> Dict[str, str]:
 
 def _cognitive_module():
     return _autopilot_common_support_service().cognitive_module()
-
-
-def _autopilot_approvals_list(limit: int = 5) -> Dict[str, Any]:
-    return _autopilot_approval_service().approvals_list(limit)
-
-
-def _autopilot_approval_resolve(event_id: str, approved: bool, note: str = "") -> Dict[str, Any]:
-    return _autopilot_approval_service().approval_resolve(event_id, approved, note=note)
-
-
-def _autopilot_approvals_text(payload: Dict[str, Any], prefix: str = DEFAULT_CHAT_PREFIX) -> str:
-    return _autopilot_approval_service().approvals_text(payload, prefix=prefix)
-
-
-def _autopilot_approval_result_text(payload: Dict[str, Any], approved: bool) -> str:
-    return _autopilot_approval_service().approval_result_text(payload, approved=approved)
-
-
-def _telegram_send_message(
-    bot_token: str,
-    chat_id: str,
-    text: str,
-    workspace_id: Optional[str] = None,
-    action: Optional[str] = None,
-    run_id: Optional[str] = None,
-    connector_id: Optional[str] = None,
-    parent_message_id: Optional[Any] = None,
-    profile: Optional[Dict[str, Any]] = None,
-    include_keyboard: bool = True,
-    reply_markup: Optional[Dict[str, Any]] = None,
-    trace_id: Optional[str] = None,
-    source_event_id: Optional[str] = None,
-) -> str:
-    return _telegram_transport_service().send_message(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        text=text,
-        workspace_id=workspace_id,
-        action=action,
-        run_id=run_id,
-        connector_id=connector_id,
-        parent_message_id=parent_message_id,
-        profile=profile,
-        include_keyboard=include_keyboard,
-        reply_markup=reply_markup,
-        trace_id=trace_id,
-        source_event_id=source_event_id,
-    )
-
-
-def _telegram_send_chat_action(bot_token: str, chat_id: str, action: str = "typing") -> None:
-    _telegram_transport_service().send_chat_action(bot_token, chat_id, action=action)
-
-
-def _telegram_edit_message(
-    bot_token: str,
-    chat_id: str,
-    message_id: Any,
-    text: str,
-    *,
-    workspace_id: Optional[str] = None,
-    action: Optional[str] = None,
-    run_id: Optional[str] = None,
-    connector_id: Optional[str] = None,
-    parent_message_id: Optional[Any] = None,
-    profile: Optional[Dict[str, Any]] = None,
-    include_keyboard: bool = True,
-    reply_markup: Optional[Dict[str, Any]] = None,
-    trace_id: Optional[str] = None,
-    source_event_id: Optional[str] = None,
-) -> bool:
-    return _telegram_transport_service().edit_message(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=text,
-        workspace_id=workspace_id,
-        action=action,
-        run_id=run_id,
-        connector_id=connector_id,
-        parent_message_id=parent_message_id,
-        profile=profile,
-        include_keyboard=include_keyboard,
-        reply_markup=reply_markup,
-        trace_id=trace_id,
-        source_event_id=source_event_id,
-    )
 
 
 def _chat_id_from_session_key(session_key: str) -> str:

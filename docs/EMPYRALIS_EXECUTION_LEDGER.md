@@ -1305,6 +1305,70 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Approval And Telegram Transport Wrapper Band Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer owns the compatibility band for approval operations and Telegram transport operations that only forwarded into already-extracted services.
+
+This is another deletion-first cut. The approval service and Telegram transport service were already canonical, so the monolith should not keep local aliases for those behaviors.
+
+#### Completed Work
+
+- Rewired the Telegram service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted services directly for:
+  - outbound Telegram send/edit/chat-action operations
+  - approval listing
+  - approval resolution
+  - approval text rendering
+  - approval result rendering
+- Rewired the WhatsApp service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so approval-related operations now call the extracted approval service directly.
+- Rewired the approval service constructor in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so outbound notifications now go straight through the extracted Telegram transport service.
+- Rewired the Telegram terminal service in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so terminal sends now call the extracted Telegram transport service directly.
+- Removed the obsolete wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_autopilot_approvals_list()`
+  - `_autopilot_approval_resolve()`
+  - `_autopilot_approvals_text()`
+  - `_autopilot_approval_result_text()`
+  - `_telegram_send_message()`
+  - `_telegram_send_chat_action()`
+  - `_telegram_edit_message()`
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now treats approvals and Telegram outbound transport as service-owned behavior instead of monolith-owned aliases.
+- The monolith line count dropped from `1818` to `1737` in this cut.
+- The deleted wrapper names are fully gone from the monolith source.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the last bridge shell for run entry, endpoint wrappers, and some cross-channel runtime helper names.
+- Some compatibility wrappers remain intentionally where tests or other modules still call stable monolith entrypoints.
+- The file is approaching a composition shell, but it is not yet reduced to pure endpoint and registry wiring.
+
+#### Next Required Work
+
+1. Continue collapsing the remaining endpoint and run-entry bridge layer in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+2. Keep deleting internal-only forwarding names instead of preserving them as compatibility aliases without a real external caller.
+3. Re-check the remaining stable wrapper names against cross-module usage before removing them.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py)
+  - [server_modules/connectors/telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_transport_service.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_approval_service`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+
 ### 2026-04-05 - Telegram Helper-State Compatibility Band Removed
 
 #### Stage

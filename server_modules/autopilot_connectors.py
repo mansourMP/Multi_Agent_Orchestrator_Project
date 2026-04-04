@@ -10,6 +10,7 @@ from server_modules.connectors.autopilot_approval_service import AutopilotApprov
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
 from server_modules.connectors.autopilot_event_bridge_service import AutopilotEventBridgeService
+from server_modules.connectors.autopilot_state_bridge_service import AutopilotStateBridgeService
 from server_modules.connectors.autopilot_terminal_bridge_service import AutopilotTerminalBridgeService
 from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
@@ -221,6 +222,7 @@ _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
 _AUTOPILOT_EVENT_BRIDGE_SERVICE: Optional[AutopilotEventBridgeService] = None
+_AUTOPILOT_STATE_BRIDGE_SERVICE: Optional[AutopilotStateBridgeService] = None
 _AUTOPILOT_TERMINAL_BRIDGE_SERVICE: Optional[AutopilotTerminalBridgeService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
@@ -858,6 +860,19 @@ def _autopilot_terminal_bridge_service() -> AutopilotTerminalBridgeService:
     return _AUTOPILOT_TERMINAL_BRIDGE_SERVICE
 
 
+def _autopilot_state_bridge_service() -> AutopilotStateBridgeService:
+    global _AUTOPILOT_STATE_BRIDGE_SERVICE
+    if _AUTOPILOT_STATE_BRIDGE_SERVICE is None:
+        _AUTOPILOT_STATE_BRIDGE_SERVICE = AutopilotStateBridgeService(
+            telegram_state_service=lambda: _telegram_service_registry().telegram_autopilot_state_service(),
+            whatsapp_state_service=lambda: _whatsapp_service_registry().whatsapp_autopilot_state_service(),
+            telegram_runtime_service=lambda: _telegram_service_registry().telegram_autopilot_runtime_service(),
+            telegram_state=TELEGRAM_AUTOPILOT_STATE,
+            telegram_lock=TELEGRAM_AUTOPILOT_LOCK,
+        )
+    return _AUTOPILOT_STATE_BRIDGE_SERVICE
+
+
 def _normalize_workspace_id_fallback(value: Any) -> str:
     normalize_workspace_id = globals().get("_normalize_workspace_id")
     if callable(normalize_workspace_id):
@@ -871,37 +886,34 @@ def _normalize_workspace_id_fallback(value: Any) -> str:
     return token or "default"
 
 def _load_telegram_autopilot_state() -> None:
-    _telegram_service_registry().telegram_autopilot_state_service().load_state()
+    _autopilot_state_bridge_service().load_telegram_autopilot_state()
 
 
 def _load_whatsapp_autopilot_state() -> None:
-    _whatsapp_service_registry().whatsapp_autopilot_state_service().load_state()
+    _autopilot_state_bridge_service().load_whatsapp_autopilot_state()
 
 
 def _telegram_autopilot_snapshot() -> Dict[str, Any]:
-    return _telegram_service_registry().telegram_autopilot_state_service().snapshot(include_connectors=True)
+    return _autopilot_state_bridge_service().telegram_autopilot_snapshot()
 
 
 def _whatsapp_autopilot_snapshot() -> Dict[str, Any]:
-    return _whatsapp_service_registry().whatsapp_autopilot_state_service().snapshot(include_connectors=True)
+    return _autopilot_state_bridge_service().whatsapp_autopilot_snapshot()
 
 
 def _whatsapp_autopilot_activate() -> None:
-    _whatsapp_service_registry().whatsapp_autopilot_state_service().activate()
+    _autopilot_state_bridge_service().whatsapp_autopilot_activate()
 
 def _telegram_increment_processed_updates() -> None:
-    _telegram_service_registry().telegram_autopilot_runtime_service().increment_processed_updates()
+    _autopilot_state_bridge_service().telegram_increment_processed_updates()
 
 
 def _telegram_set_connectors_seen(count: int) -> None:
-    _telegram_service_registry().telegram_autopilot_runtime_service().set_connectors_seen(count)
+    _autopilot_state_bridge_service().telegram_set_connectors_seen(count)
 
 
 def _mark_telegram_autopilot_started(started_at: str) -> None:
-    with TELEGRAM_AUTOPILOT_LOCK:
-        TELEGRAM_AUTOPILOT_STATE["active"] = True
-        TELEGRAM_AUTOPILOT_STATE["started_at"] = started_at
-        TELEGRAM_AUTOPILOT_STATE["enabled"] = True
+    _autopilot_state_bridge_service().mark_telegram_autopilot_started(started_at)
 
 def _init():
     global _server

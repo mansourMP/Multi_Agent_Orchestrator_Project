@@ -2798,6 +2798,73 @@ This is still a real ownership cut even though the monolith did not shrink. The 
   - `server_modules.tests.test_telegram_terminal_service`
   - `server_modules.tests.test_runs_execution_graph -k launch_gate_connector_triage_workflow`
 
+### 2026-04-05 - Autopilot State And Runtime Helper Band Moved Behind Dedicated State Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The autopilot state/runtime helper band above `_init()` no longer owns its load/snapshot/activate/runtime-counter/start-state logic inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is another ownership cut with compatibility wrappers intentionally preserved. The exported helper names still exist for the rest of the runtime, but their implementation body now crosses a dedicated state bridge service first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_state_bridge_service.py) to own:
+  - Telegram autopilot state loading
+  - WhatsApp autopilot state loading
+  - Telegram and WhatsApp snapshot access with connector payloads
+  - WhatsApp autopilot activation
+  - Telegram processed-update incrementing
+  - Telegram connector-count updates
+  - Telegram start-state mutation
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_load_telegram_autopilot_state()` now delegates through the state bridge
+  - `_load_whatsapp_autopilot_state()` now delegates through the state bridge
+  - `_telegram_autopilot_snapshot()` now delegates through the state bridge
+  - `_whatsapp_autopilot_snapshot()` now delegates through the state bridge
+  - `_whatsapp_autopilot_activate()` now delegates through the state bridge
+  - `_telegram_increment_processed_updates()` now delegates through the state bridge
+  - `_telegram_set_connectors_seen()` now delegates through the state bridge
+  - `_mark_telegram_autopilot_started()` now delegates through the state bridge
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_state_bridge_service.py)
+
+#### Current Truth
+
+- State/runtime helper ownership is now explicit in [server_modules/connectors/autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_state_bridge_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical helper names used by runtime startup, health, and connector orchestration code, but it no longer owns their load/snapshot/mutation body inline.
+- The public consumers that rely on those wrappers still pass after this cut:
+  - [server_modules/tests/test_autopilot_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_status_service.py)
+  - [server_modules/tests/test_runs_execution_graph.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runs_execution_graph.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1138` lines versus `1126` after the previous cut.
+  This increase is expected because the wrapper names remain exported while the new cached bridge service was added.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns too much top-level composition and compatibility glue.
+- The remaining inline compatibility-wrapper band still includes event wrappers, Telegram helper shims, and the WhatsApp webhook shell.
+- More service-composition reductions are still needed before the module becomes only thin adapter/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting another bounded compatibility-wrapper or composition cluster with real service ownership.
+2. Keep verifying public consumers like health/runtime startup and execution-graph entrypoints whenever wrapper helpers move behind bridge services.
+3. Leave wrapper names in place until the rest of the codebase stops importing them directly.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_state_bridge_service.py)
+  - [server_modules/tests/test_autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_state_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_state_bridge_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+  - `server_modules.tests.test_telegram_autopilot_runtime_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_runs_execution_graph -k launch_gate_connector_triage_workflow`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

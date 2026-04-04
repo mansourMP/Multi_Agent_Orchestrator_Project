@@ -1,9 +1,9 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from server_modules import runtime_runs_api
-from server_modules.agent_turn import build_direct_chat_turn_request, build_run_start_turn_request
-from server_modules.runtime_models import RunStartRequest
+from server_modules.agent_turn import build_direct_chat_turn_request
+from server_modules.run_service import RunExecutionServices
 from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 
 
@@ -80,9 +80,11 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             message="hello",
         )
         services = TurnExecutionServices(
-            stamp_request_owner=lambda req, current_user: req,
-            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
-            create_run_from_request=lambda req: {"run_id": "unused"},
+            run_execution=RunExecutionServices(
+                stamp_request_owner=lambda req, current_user: req,
+                prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                create_run_from_request=lambda req: {"run_id": "unused"},
+            ),
             chat_stream_key=runtime_runs_api._chat_stream_key,
             build_direct_chat_event_producer=runtime_runs_api._build_direct_chat_event_producer,
         )
@@ -101,44 +103,6 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(execution["thread_id"], "thread-1")
         self.assertEqual(execution["client_request_id"], "req-1")
         self.assertTrue(callable(execution["producer"]))
-
-    def test_execute_agent_turn_request_returns_durable_run_result(self):
-        run_request = RunStartRequest(
-            engine="orion",
-            workspace_id="default",
-            user_goal="Summarize inbox state",
-            provider="openai",
-            model="gpt-test",
-            metadata={"owner_user_id": "user-1"},
-        )
-        turn_request = build_run_start_turn_request(run_request)
-        services = TurnExecutionServices(
-            stamp_request_owner=lambda req, current_user: req,
-            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
-            create_run_from_request=lambda req: {"run_id": "run-1", "status": "starting"},
-            chat_stream_key=runtime_runs_api._chat_stream_key,
-            build_direct_chat_event_producer=runtime_runs_api._build_direct_chat_event_producer,
-        )
-
-        with patch("server_modules.turn_runtime.decide_execution_target", return_value={"selected": "cloud"}), patch(
-            "server_modules.turn_runtime.apply_execution_route_metadata",
-            side_effect=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
-        ), patch(
-            "server_modules.turn_runtime.build_doctor_run_gate_live",
-            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
-        ):
-            execution = __import__("asyncio").run(
-                execute_agent_turn_request(
-                    turn_request=turn_request,
-                    current_user={"user_id": "user-1"},
-                    services=services,
-                    run_request=run_request,
-                )
-            )
-
-        self.assertEqual(execution["kind"], "durable_run")
-        self.assertEqual(execution["result"]["run_id"], "run-1")
-        self.assertFalse(execution["result"]["doctor_preflight"]["blocking"])
 
 
 if __name__ == "__main__":

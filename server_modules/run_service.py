@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from fastapi import HTTPException
+
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata
+from server_modules.doctor_gate import build_doctor_run_gate_live
+from server_modules.runtime_policy import apply_execution_route_metadata, decide_execution_target
 from server_modules.runtime_models import RunStartRequest
 
 
@@ -40,6 +44,13 @@ class RunTransition:
     reason: str = ""
     actor_id: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RunExecutionServices:
+    stamp_request_owner: Any
+    prepare_run_start_request: Any
+    create_run_from_request: Any
 
 
 def is_valid_run_state(value: str) -> bool:
@@ -108,3 +119,41 @@ def build_run_start_request_from_turn(
         agents=_hint_list(getattr(base, "agents", None)),
         metadata=metadata,
     )
+
+
+async def execute_durable_turn_request(
+    *,
+    turn_request: AgentTurnRequest,
+    current_user: Any,
+    services: RunExecutionServices,
+    base_request: Optional[Any] = None,
+) -> Dict[str, Any]:
+    req = build_run_start_request_from_turn(turn_request, base_request=base_request)
+    req = services.stamp_request_owner(req, current_user)
+    prepared = services.prepare_run_start_request(req)
+    metadata = dict(prepared["metadata"])
+    route = decide_execution_target(metadata)
+    metadata = apply_execution_route_metadata(metadata, route)
+    doctor_preflight = await build_doctor_run_gate_live(
+        execution_target=route["selected"],
+        metadata=metadata,
+        provider=req.provider,
+        credential_id=req.credential_id,
+    )
+    if bool(doctor_preflight.get("blocking")):
+        raise HTTPException(
+            status_code=409,
+            detail=str(
+                doctor_preflight.get("detail")
+                or doctor_preflight.get("title")
+                or "Run blocked by doctor policy."
+            ),
+        )
+    result = services.create_run_from_request(req)
+    if isinstance(result, dict):
+        result["doctor_preflight"] = doctor_preflight
+    return {
+        "kind": "durable_run",
+        "result": result,
+        "turn_request": turn_request,
+    }

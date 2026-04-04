@@ -23,6 +23,7 @@ from server_modules.agent_turn import (
 )
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
+from server_modules.run_service import RunExecutionServices
 from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
@@ -1193,9 +1194,11 @@ def register_run_routes(app) -> None:
             turn_request=run_turn_request,
             current_user=current_user,
             services=TurnExecutionServices(
-                stamp_request_owner=_stamp_request_owner,
-                prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-                create_run_from_request=_late_server_export("_create_run_from_request"),
+                run_execution=RunExecutionServices(
+                    stamp_request_owner=_stamp_request_owner,
+                    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+                    create_run_from_request=_late_server_export("_create_run_from_request"),
+                ),
                 chat_stream_key=_chat_stream_key,
                 build_direct_chat_event_producer=_build_direct_chat_event_producer,
             ),
@@ -1231,9 +1234,11 @@ def register_run_routes(app) -> None:
             turn_request=direct_turn_request,
             current_user=current_user,
             services=TurnExecutionServices(
-                stamp_request_owner=_stamp_request_owner,
-                prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-                create_run_from_request=_late_server_export("_create_run_from_request"),
+                run_execution=RunExecutionServices(
+                    stamp_request_owner=_stamp_request_owner,
+                    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+                    create_run_from_request=_late_server_export("_create_run_from_request"),
+                ),
                 chat_stream_key=_chat_stream_key,
                 build_direct_chat_event_producer=_build_direct_chat_event_producer,
             ),

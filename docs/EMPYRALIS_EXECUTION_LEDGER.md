@@ -327,3 +327,52 @@ The API surface is thinner than before, and the canonical turn orchestration now
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Durable Run Branch Moved Into Run Service
+
+#### Stage
+
+Stage 1 continues. The run service now owns more than request conversion.
+
+The durable-run branch is no longer implemented inside the turn runtime module. It is now delegated to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `RunExecutionServices`
+  - `execute_durable_turn_request()`
+- Updated [server_modules/turn_runtime.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/turn_runtime.py) so the durable branch delegates into the run service instead of implementing durable-run orchestration directly.
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) to pass an explicit run-service dependency bundle into the turn runtime layer.
+- Added dedicated durable-run tests in:
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Simplified [server_modules/tests/test_runtime_runs_api_session_manager.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runtime_runs_api_session_manager.py) so it focuses again on direct-chat/runtime-composition behavior instead of trying to own durable-run service coverage.
+
+#### Current Truth
+
+- `turn_runtime.py` is now primarily a turn router.
+- `run_service.py` owns durable-turn request conversion and the current durable execution branch.
+- The underlying legacy run internals are still invoked under that service layer.
+- The API layer is still transport-oriented and thinner than before.
+
+#### Open Gaps
+
+- `run_service.py` still delegates to legacy `_prepare_run_start_request` and `_create_run_from_request` callbacks.
+- Full durable run lifecycle ownership has not yet been migrated out of the legacy run modules.
+- `operator_chat.py` still owns the direct chat engine.
+- The memory, outbox, worker-dispatch, and connector-adapter cutovers are still incomplete.
+
+#### Next Required Work
+
+1. Move more durable run lifecycle behavior from legacy run modules into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Introduce a dedicated direct-chat service so [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) stops being the only owner of direct-chat execution.
+3. Keep `turn_runtime.py` as the canonical routing boundary while shrinking the remaining legacy callbacks behind service modules.
+4. Continue recording each cutover step here without rewriting older entries.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the updated service, runtime, and test files.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

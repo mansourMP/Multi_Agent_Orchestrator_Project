@@ -1543,6 +1543,87 @@ This cut did not move behavior into a new service. It removed definition-only he
   - `server_modules.tests.test_whatsapp_autopilot_service_registry`
   - `server_modules.tests.test_whatsapp_webhook_service`
 
+### 2026-04-05 - Service-Wiring Wrapper Band Reduced With Terminal Compatibility Preserved
+
+#### Stage
+
+Stage 2 connector convergence continues. Another large one-line delegate band was removed from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This pass focused on helper names that only existed to feed service lambdas into the Telegram and WhatsApp registries. The wiring now calls the extracted services directly in most places. A small Telegram helper subset was intentionally preserved because terminal-side tests still treat those names as part of the compatibility surface.
+
+#### Completed Work
+
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the Telegram and WhatsApp registries now call extracted services directly for:
+  - profile resolution
+  - allowlist resolution
+  - secret lookup
+  - paused-state checks
+  - Telegram API request transport
+  - message routing
+  - sender checks
+  - attachment storage
+  - connector-context assembly
+  - installed-skill query routing
+  - role assignment
+  - terminal profile/goal routing
+- Removed the now-dead one-line delegate band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_runtime_api_headers()`
+  - `_telegram_reply_keyboard()`
+  - `_telegram_get_secret()`
+  - `_telegram_api_request()`
+  - `_telegram_chat_matches()`
+  - `_telegram_resolve_allow_from()`
+  - `_telegram_sender_allowed()`
+  - `_telegram_store_attachments()`
+  - `_connector_assigned_agent_role()`
+  - `_connector_paused()`
+  - `_resolve_telegram_autopilot_profile()`
+  - `_resolve_whatsapp_autopilot_profile()`
+  - `_telegram_is_explicit_run_command()`
+  - `_cognitive_defaults()`
+  - `_cognitive_module()`
+- Kept these Telegram helper wrappers intentionally because the terminal-side test surface still imports or calls them directly:
+  - `_telegram_build_goal_with_profile()`
+  - `_telegram_workspace_connector_context()`
+  - `_telegram_extract_message()`
+  - `_telegram_build_goal_with_attachments()`
+  - `_telegram_route_message()`
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1131` lines.
+- The connector shell is getting closer to a real runtime boundary:
+  - service construction
+  - runtime-facing entrypoints
+  - a smaller compatibility layer for still-supported helper names
+- The broader Telegram terminal-side compatibility surface is now explicit instead of accidental.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns event/session/trace helper logic plus a small remaining compatibility shell.
+- Some helper names are still retained only because the terminal-side tests rely on them; those should be audited deliberately rather than removed blindly.
+- The connector shell is much smaller now, but the overall architecture still has larger unfinished work in direct-chat and durable-run convergence.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by separating true runtime exports from legacy-but-still-tested compatibility helpers.
+2. If terminal-side helper compatibility is still required, make that contract explicit and minimal rather than leaving broad helper ownership in the shell.
+3. Keep redirecting service wiring straight to extracted services instead of routing through monolith-owned aliases.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
 
 #### Stage

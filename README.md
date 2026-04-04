@@ -10,6 +10,7 @@ These files are the current documentation entry points:
 
 - [README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/README.md)
 - [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md)
+- [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md)
 - [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
 - [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
 - [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
@@ -18,6 +19,10 @@ These files are the current documentation entry points:
 - [runtime/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/runtime/README.md)
 
 If another doc conflicts with these files, treat these files as authoritative.
+
+The platform architecture source of truth is:
+
+- [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md)
 
 ## Current Product Shape
 
@@ -88,3 +93,4 @@ This repo contains many old design docs and handoff notes. They are not all curr
 - Files under [reference](/Users/mansur/Multi_Agent_Orchestrator_Project/reference) are external reference material, not project documentation.
 - Versioned docs like `*_V1.md`, `*_V2.md`, and similar architecture blueprints in [docs](/Users/mansur/Multi_Agent_Orchestrator_Project/docs) should be treated as research or planning documents unless they are explicitly linked from the authoritative docs above.
 - The root README and [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md) are the canonical starting points for understanding the current system.
+- Legacy docs removed from the active `/docs` surface are preserved under [archive/legacy-docs](/Users/mansur/Multi_Agent_Orchestrator_Project/archive/legacy-docs).

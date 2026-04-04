@@ -9,6 +9,7 @@ Use this file to decide what is authoritative.
 These files describe the current repo shape and should be read first:
 
 - [README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/README.md)
+- [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md)
 - [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
 - [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
 - [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
@@ -23,6 +24,18 @@ These files describe the current repo shape and should be read first:
 - Mobile app: [mobile](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile)
 - Desktop shell: [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
 
+## Active Docs Surface
+
+The active `/docs` surface is intentionally small.
+
+Keep only:
+
+- [docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_CANONICAL_ARCHITECTURE.md)
+- [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
+- [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
+- [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
+- [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md)
+
 ## Historical Or Research-Only Material
 
 Treat these as non-authoritative unless a current doc points to them explicitly:
@@ -33,6 +46,7 @@ Treat these as non-authoritative unless a current doc points to them explicitly:
 - [archive/legacy-docs](/Users/mansur/Multi_Agent_Orchestrator_Project/archive/legacy-docs)
 - [reference](/Users/mansur/Multi_Agent_Orchestrator_Project/reference)
 - the parallel NestJS backend in [backend](/Users/mansur/Multi_Agent_Orchestrator_Project/backend)
+- root notes such as archived context, versioned notes, and test summaries moved out of the repo root
 
 ## Rule Of Thumb
 

@@ -32,6 +32,7 @@ from server_modules.connectors.telegram_run_dispatch_service import TelegramRunD
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
+from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
 from server_modules.connectors.whatsapp_webhook_service import WhatsAppWebhookService
 from server_modules.installed_skills import query_active_installed_skills
@@ -251,10 +252,8 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
 _AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
-_WHATSAPP_AUTOPILOT_STATE_SERVICE: Optional[WhatsAppAutopilotStateService] = None
 _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY: Optional[TelegramAutopilotServiceRegistry] = None
-_WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
-_WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
+_WHATSAPP_AUTOPILOT_SERVICE_REGISTRY: Optional[WhatsAppAutopilotServiceRegistry] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -415,10 +414,10 @@ def _autopilot_endpoint_service() -> AutopilotEndpointService:
     return _AUTOPILOT_ENDPOINT_SERVICE
 
 
-def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
-    global _WHATSAPP_AUTOPILOT_STATE_SERVICE
-    if _WHATSAPP_AUTOPILOT_STATE_SERVICE is None:
-        _WHATSAPP_AUTOPILOT_STATE_SERVICE = WhatsAppAutopilotStateService(
+def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
+    global _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY
+    if _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY is None:
+        _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY = WhatsAppAutopilotServiceRegistry(
             state=WHATSAPP_AUTOPILOT_STATE,
             lock=WHATSAPP_AUTOPILOT_LOCK,
             read_json=lambda path, default: _safe_read_json(path, default),
@@ -436,10 +435,48 @@ def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
             default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
             require_prefix=ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
             prefix=ORION_WHATSAPP_AUTOPILOT_PREFIX,
-            run_timeout_seconds=ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS,
-            max_reply_chars=ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS,
+            run_timeout_seconds=int(globals().get("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
+            max_reply_chars=int(globals().get("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
+            send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
+            include_run_meta=lambda: _autopilot_include_run_meta(),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
+                run_id,
+                timeout_seconds=timeout_seconds,
+                max_reply_chars=max_reply_chars,
+            ),
+            run_reply_text=lambda status, run_id, summary: _autopilot_run_reply_text(status, run_id, summary),
+            send_whatsapp_message=lambda **kwargs: _twilio_send_whatsapp_message(**kwargs),
+            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            log_error=lambda message: _whatsapp_autopilot_log(message),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            connector_match=lambda account_sid, inbound_from, inbound_to: _whatsapp_connector_match(
+                account_sid,
+                inbound_from,
+                inbound_to,
+            ),
+            resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
+            route_message=lambda body, profile: _telegram_route_message(body, profile),
+            help_text=lambda profile: _whatsapp_help_text(profile),
+            runtime_status_text=lambda workspace_id: _runtime_status_text(workspace_id),
+            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+                event_id=event_id,
+                approved=approved,
+                note=note,
+            ),
+            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            create_run=lambda **kwargs: _create_whatsapp_run(**kwargs),
+            session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
         )
-    return _WHATSAPP_AUTOPILOT_STATE_SERVICE
+    return _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY
+
+
+def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
+    return _whatsapp_service_registry().whatsapp_autopilot_state_service()
 
 
 def _telegram_autopilot_state_service() -> TelegramAutopilotStateService:
@@ -506,71 +543,11 @@ def _telegram_autopilot_supervisor_service() -> TelegramAutopilotSupervisorServi
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
-    global _WHATSAPP_RUN_DISPATCH_SERVICE
-    if _WHATSAPP_RUN_DISPATCH_SERVICE is None:
-        _WHATSAPP_RUN_DISPATCH_SERVICE = WhatsAppRunDispatchService(
-            default_timeout_seconds=int(globals().get("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
-            default_max_reply_chars=int(globals().get("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
-            send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
-            include_run_meta=lambda: _autopilot_include_run_meta(),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
-                run_id,
-                timeout_seconds=timeout_seconds,
-                max_reply_chars=max_reply_chars,
-            ),
-            run_reply_text=lambda status, run_id, summary: _autopilot_run_reply_text(status, run_id, summary),
-            send_whatsapp_message=lambda **kwargs: _twilio_send_whatsapp_message(**kwargs),
-            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            set_connector_state=lambda connector_id, payload: _set_whatsapp_connector_state(connector_id, payload),
-            utc_now_iso=lambda: _utc_now_iso(),
-            classify_error=lambda detail: _classify_autopilot_error(detail),
-            log_error=lambda message: _whatsapp_autopilot_log(message),
-            mark_error=lambda detail: _whatsapp_autopilot_mark_error(detail, source="run_finalize"),
-            session_key_builder=lambda reply_to, from_number: _whatsapp_session_key(reply_to, from_number),
-            safe_path_token=lambda value: _telegram_safe_path_token(value),
-        )
-    return _WHATSAPP_RUN_DISPATCH_SERVICE
+    return _whatsapp_service_registry().whatsapp_run_dispatch_service()
 
 
 def _whatsapp_webhook_service() -> WhatsAppWebhookService:
-    global _WHATSAPP_WEBHOOK_SERVICE
-    if _WHATSAPP_WEBHOOK_SERVICE is None:
-        _WHATSAPP_WEBHOOK_SERVICE = WhatsAppWebhookService(
-            normalize_number=lambda value: _normalize_whatsapp_number(value),
-            session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
-            safe_path_token=lambda value: _telegram_safe_path_token(value),
-            connector_match=lambda account_sid, inbound_from, inbound_to: _whatsapp_connector_match(
-                account_sid,
-                inbound_from,
-                inbound_to,
-            ),
-            resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
-            route_message=lambda body, profile: _telegram_route_message(body, profile),
-            help_text=lambda profile: _whatsapp_help_text(profile),
-            runtime_status_text=lambda workspace_id: _runtime_status_text(workspace_id),
-            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
-            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
-            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
-                event_id=event_id,
-                approved=approved,
-                note=note,
-            ),
-            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
-            create_run=lambda **kwargs: _create_whatsapp_run(**kwargs),
-            run_dispatch_service=lambda: _whatsapp_run_dispatch_service(),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            set_connector_state=lambda connector_id, payload: _set_whatsapp_connector_state(connector_id, payload),
-            persist_state=lambda: _persist_whatsapp_autopilot_state(),
-            increment_processed=lambda: _whatsapp_autopilot_increment_processed(),
-            autopilot_activate=lambda: _whatsapp_autopilot_activate(),
-            mark_inbound=lambda **kwargs: _whatsapp_autopilot_mark_inbound(**kwargs),
-            mark_error=lambda detail: _whatsapp_autopilot_mark_error(detail, source="match_connector"),
-            utc_now_iso=lambda: _utc_now_iso(),
-            default_chat_prefix=DEFAULT_CHAT_PREFIX,
-        )
-    return _WHATSAPP_WEBHOOK_SERVICE
+    return _whatsapp_service_registry().whatsapp_webhook_service()
 
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:

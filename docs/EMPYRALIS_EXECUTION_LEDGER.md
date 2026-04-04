@@ -1429,6 +1429,76 @@ This is a smaller composition cut than the channel-registry bridge, but it remov
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Support And Runtime Registry Assembly Moved Behind Dedicated Bridge Services
+
+#### Stage
+
+Stage 2 connector convergence continues. The autopilot connector module no longer owns the large inline constructor bodies for the support-service registry and runtime-service registry.
+
+This is a real composition cut. The historical getters still exist in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), but the registry assembly now crosses dedicated bridge modules first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_support_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_registry_bridge_service.py) to own:
+  - support-registry construction
+  - support-registry caching
+  - profile/runtime-status/workflow/context/approval/common/skill/channel builder wiring
+- Added [server_modules/connectors/autopilot_runtime_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_registry_bridge_service.py) to own:
+  - runtime-registry construction
+  - runtime-registry caching
+  - connector-support/transport/terminal/run-entry/runtime-support/menu builder wiring
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_support_service_registry()` now delegates through the support bridge
+  - `_autopilot_runtime_service_registry()` now delegates through the runtime bridge
+  - the old inline registry-constructor blocks were removed from the connector module
+  - direct-import compatibility was preserved with late-safe `globals().get(...)` lookups for profile defaults, profile catalogs, engine-validation errors, and other server-synced values
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_support_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_support_registry_bridge_service.py)
+  - [server_modules/tests/test_autopilot_runtime_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_registry_bridge_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical service getters, but it no longer owns the support/runtime registry assembly inline.
+- The composition layer is now split more clearly across:
+  - [server_modules/connectors/autopilot_support_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_registry_bridge_service.py)
+  - [server_modules/connectors/autopilot_runtime_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_registry_bridge_service.py)
+  - [server_modules/connectors/autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_service_registry.py)
+  - [server_modules/connectors/autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_service_registry.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `926` lines from `1001` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the shared endpoint/event/status export surface inline.
+- The channel snapshot/load/init helper band is still local to the connector module.
+- The module is materially smaller now, but it is still not yet the final thin runtime shell described by the architecture paper.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by moving the remaining endpoint/bootstrap/export bands behind dedicated bridges or services.
+2. Keep preserving direct-import compatibility for terminal tests whenever constructor wiring depends on server-synced globals.
+3. Prefer cuts that remove ownership of composition/state wiring rather than only renaming wrappers.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_support_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_registry_bridge_service.py)
+  - [server_modules/connectors/autopilot_runtime_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_registry_bridge_service.py)
+  - [server_modules/tests/test_autopilot_support_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_support_registry_bridge_service.py)
+  - [server_modules/tests/test_autopilot_runtime_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_registry_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_support_registry_bridge_service`
+  - `server_modules.tests.test_autopilot_runtime_registry_bridge_service`
+  - `server_modules.tests.test_autopilot_support_service_registry`
+  - `server_modules.tests.test_autopilot_runtime_service_registry`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_autopilot_runtime_support_service`
+  - `server_modules.tests.test_autopilot_profile_service`
+  - `server_modules.tests.test_runtime_status_service`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-05 - Machine-Mode Run Wrapper Band Removed From Autopilot Connectors
 
 #### Stage

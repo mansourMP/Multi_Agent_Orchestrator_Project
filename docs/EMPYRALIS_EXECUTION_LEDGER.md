@@ -1305,6 +1305,58 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Dead Helper Alias Band Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer carries the last dead helper alias band that only forwarded into approval, runtime-support, or common-support services without having any real external caller.
+
+This is a small but honest subtraction step. The remaining stable run-entry wrappers were left alone because they still have compatibility callers, but these aliases did not.
+
+#### Completed Work
+
+- Rewired the Telegram service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so pending-approval notification now calls the extracted approval service directly.
+- Rewired the WhatsApp service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so run-reply text now calls the extracted Telegram run-dispatch service directly.
+- Removed the dead helper alias band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_autopilot_run_reply_text()`
+  - `_chat_id_from_session_key()`
+  - `_normalize_string_list()`
+  - `_pending_approval_event_id()`
+  - `_telegram_notify_pending_approvals()`
+
+#### Current Truth
+
+- The deleted helper alias names are fully gone from the monolith source.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `1723` lines to `1692` in this cut.
+- The remaining shell is now more clearly the true compatibility layer: runtime-facing entrypoints and the still-used run-entry wrappers.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still carries the stable compatibility wrappers for externally exercised run creation and terminal wait behavior.
+- Some remaining runtime-support helper wrappers are still in place because they participate in the broader runtime surface.
+- The monolith is smaller, but the final compatibility audit is not done yet.
+
+#### Next Required Work
+
+1. Audit the remaining stable wrapper names in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) against actual external imports and tests.
+2. Delete any remaining helper wrappers that no longer have a runtime or test dependency.
+3. Keep preserving only the compatibility names that still matter for `runtime_config.py`, `runs_core.py`, and explicit test callers.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_approval_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+
 ### 2026-04-05 - Endpoint And Run-Bridge Wrapper Band Reduced
 
 #### Stage

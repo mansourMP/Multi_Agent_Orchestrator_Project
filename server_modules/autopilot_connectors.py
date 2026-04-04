@@ -276,7 +276,7 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
             connector_paused=lambda item: _connector_paused(item),
             get_updates_process_lock=lambda bot_token: _telegram_get_updates_process_lock(bot_token),
-            notify_pending_approvals=lambda **kwargs: _telegram_notify_pending_approvals(**kwargs),
+            notify_pending_approvals=lambda **kwargs: _autopilot_approval_service().notify_pending_approvals(**kwargs),
             telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
             record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
             record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
@@ -510,7 +510,11 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
                 timeout_seconds=timeout_seconds,
                 max_reply_chars=max_reply_chars,
             ),
-            run_reply_text=lambda status, run_id, summary: _autopilot_run_reply_text(status, run_id, summary),
+            run_reply_text=lambda status, run_id, summary: _telegram_run_dispatch_service().run_reply_text(
+                status,
+                run_id,
+                summary,
+            ),
             append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
             record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
             log_error=lambda message: print(f"[whatsapp-autopilot {_utc_now_iso()}] {message}", flush=True),
@@ -1506,47 +1510,12 @@ def _autopilot_include_run_meta() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _autopilot_run_reply_text(status: str, run_id: str, summary: str) -> str:
-    return _telegram_run_dispatch_service().run_reply_text(status, run_id, summary)
-
-
 def _cognitive_defaults() -> Dict[str, str]:
     return _autopilot_common_support_service().cognitive_defaults()
 
 
 def _cognitive_module():
     return _autopilot_common_support_service().cognitive_module()
-
-
-def _chat_id_from_session_key(session_key: str) -> str:
-    return _autopilot_common_support_service().chat_id_from_session_key(session_key)
-
-
-def _normalize_string_list(value: Any) -> List[str]:
-    return _autopilot_common_support_service().normalize_string_list(value)
-
-
-def _pending_approval_event_id(item: Dict[str, Any]) -> str:
-    return _autopilot_approval_service().pending_approval_event_id(item)
-
-
-def _telegram_notify_pending_approvals(
-    *,
-    connector_state: Dict[str, Any],
-    bot_token: str,
-    chat_id: str,
-    workspace_id: str,
-    profile: Dict[str, Any],
-    connector_id: str,
-) -> Dict[str, Any]:
-    return _autopilot_approval_service().notify_pending_approvals(
-        connector_state=connector_state,
-        bot_token=bot_token,
-        chat_id=chat_id,
-        workspace_id=workspace_id,
-        profile=profile,
-        connector_id=connector_id,
-    )
 
 
 async def handle_telegram_send_message(

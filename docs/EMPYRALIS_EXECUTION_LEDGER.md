@@ -875,6 +875,55 @@ Stage 2 connector convergence continues. The Telegram “sender not allowed” h
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - Telegram Non-Run Action Handling Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The bulk of Telegram’s non-run action handling is no longer inline inside the poll loop.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_action_service.py) to own:
+  - help/menu/onboarding/profile/status/approval action handling
+  - message dispatch for non-run paths
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the poll loop delegates non-run actions to the service before the run branch.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_action_service.py)
+
+#### Current Truth
+
+- The Telegram poll loop still owns the run branch and state patching.
+- Non-run action handling now crosses a dedicated service boundary.
+
+#### Open Gaps
+
+- The run branch still lives inside the poll loop.
+- The poll loop still owns the state patching and connector-state updates.
+
+#### Next Required Work
+
+1. Extract the run branch and state patching into dedicated services so the poll loop becomes pure orchestration.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_action_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_action_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Telegram Space-Status MCP Slice Moved Behind Connector Service
 
 #### Stage

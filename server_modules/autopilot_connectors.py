@@ -13,6 +13,7 @@ from server_modules.connectors.telegram_profile_service import (
     TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
     TelegramProfileService,
 )
+from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
@@ -236,6 +237,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
+_TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 _WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
@@ -272,6 +274,49 @@ def _telegram_sender_filter_service() -> TelegramSenderFilterService:
             utc_now_iso=lambda: _utc_now_iso(),
         )
     return _TELEGRAM_SENDER_FILTER_SERVICE
+
+
+def _telegram_action_service() -> TelegramActionService:
+    global _TELEGRAM_ACTION_SERVICE
+    if _TELEGRAM_ACTION_SERVICE is None:
+        _TELEGRAM_ACTION_SERVICE = TelegramActionService(
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            onboarding_enabled=ORION_TELEGRAM_ONBOARDING_ENABLED,
+            help_text=lambda profile: _telegram_help_text(profile),
+            skills_menu_text=lambda profile: _telegram_skills_menu_text(profile),
+            menu_keyboard=lambda profile, menu_id: _telegram_menu_keyboard(profile, menu_id),
+            onboarding_prompt=lambda step_index, retry: _telegram_onboarding_prompt(step_index, retry),
+            onboarding_start=lambda workspace_id, chat_id: _start_telegram_onboarding(workspace_id, chat_id),
+            profile_text=lambda profile, chat_profile: _telegram_profile_text(profile, chat_profile),
+            profile_help_text=lambda profile: _telegram_profile_help_text(profile),
+            profile_set=lambda workspace_id, chat_id, field_name, value: _set_telegram_profile_field(
+                workspace_id,
+                chat_id,
+                field_name,
+                value,
+            ),
+            profile_clear=lambda workspace_id, chat_id, field_name: _clear_telegram_profile(
+                workspace_id,
+                chat_id,
+                field_name,
+            ),
+            runtime_status_text=lambda workspace_id: _telegram_runtime_status_text(workspace_id),
+            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+                event_id=event_id,
+                approved=approved,
+                note=note,
+            ),
+            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            send_message=lambda **kwargs: _telegram_send_message(
+                bot_token=kwargs.pop("bot_token", ""),
+                chat_id=kwargs.pop("chat_id", ""),
+                text=kwargs.pop("text", ""),
+                **kwargs,
+            ),
+        )
+    return _TELEGRAM_ACTION_SERVICE
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
@@ -3586,229 +3631,25 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
 
             run_id = ""
             chat_profile = _get_telegram_profile(workspace_id, chat_id)
-            if action == "help":
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _telegram_help_text(profile),
-                    workspace_id=workspace_id,
+            action_service = _telegram_action_service()
+            if action != "run":
+                action_result = action_service.handle_non_run_action(
                     action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
+                    routed=routed,
                     profile=profile,
+                    chat_profile=chat_profile,
+                    workspace_id=workspace_id,
+                    connector_id=connector_id,
+                    chat_id=chat_id,
+                    inbound_message_id=inbound_message_id or "",
                     trace_id=trace_id,
                     source_event_id=source_event_id,
                 )
-            elif action in {"menu", "menu_main", "menu_study", "menu_project", "menu_context", "menu_skills"}:
-                menu_id = "main"
-                if action.endswith("_study"):
-                    menu_id = "study"
-                elif action.endswith("_project"):
-                    menu_id = "project"
-                elif action.endswith("_context"):
-                    menu_id = "context"
-                elif action.endswith("_skills"):
-                    menu_id = "skills"
-                menu_titles = {
-                    "main": "Main menu opened.",
-                    "study": "Work menu opened.",
-                    "project": "Project menu opened.",
-                    "context": "Context menu opened.",
-                    "skills": _telegram_skills_menu_text(profile),
-                }
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    menu_titles.get(menu_id, "Menu opened."),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    reply_markup=_telegram_menu_keyboard(profile, menu_id),
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "onboard_start":
-                if ORION_TELEGRAM_ONBOARDING_ENABLED:
-                    onboarding_state = _start_telegram_onboarding(workspace_id, chat_id)
-                    step_index = int(onboarding_state.get("step_index") or 0)
-                    if bool(onboarding_state.get("active")):
-                        action = "onboarding_start"
-                        _telegram_send_message(
-                            bot_token,
-                            chat_id,
-                            _telegram_onboarding_prompt(step_index, retry=False),
-                            workspace_id=workspace_id,
-                            action=action,
-                            connector_id=connector_id,
-                            parent_message_id=inbound_message_id or None,
-                            profile=profile,
-                            trace_id=trace_id,
-                            source_event_id=source_event_id,
-                        )
-                    else:
-                        action = "onboarding_already_complete"
-                        _telegram_send_message(
-                            bot_token,
-                            chat_id,
-                            "Your context is already set. Use `me set ...` anytime to update it.\n\n"
-                            + _telegram_profile_text(profile, chat_profile),
-                            workspace_id=workspace_id,
-                            action=action,
-                            connector_id=connector_id,
-                            parent_message_id=inbound_message_id or None,
-                            profile=profile,
-                            trace_id=trace_id,
-                            source_event_id=source_event_id,
-                        )
-                else:
-                    _telegram_send_message(
-                        bot_token,
-                        chat_id,
-                        _telegram_profile_text(profile, chat_profile),
-                        workspace_id=workspace_id,
-                        action="profile_show",
-                        connector_id=connector_id,
-                        parent_message_id=inbound_message_id or None,
-                        profile=profile,
-                        trace_id=trace_id,
-                        source_event_id=source_event_id,
-                    )
-            elif action == "profile_show":
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _telegram_profile_text(profile, chat_profile),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "profile_help":
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _telegram_profile_help_text(profile),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "profile_set":
-                field_name = str(routed.get("field") or "").strip().lower()
-                field_label = _TELEGRAM_PROFILE_FIELDS.get(field_name, field_name or "field")
-                value = str(routed.get("value") or "").strip()
-                if not field_name or not value:
-                    _telegram_send_message(
-                        bot_token,
-                        chat_id,
-                        _telegram_profile_help_text(profile),
-                        workspace_id=workspace_id,
-                        action="profile_help",
-                        connector_id=connector_id,
-                        parent_message_id=inbound_message_id or None,
-                        profile=profile,
-                        trace_id=trace_id,
-                        source_event_id=source_event_id,
-                    )
-                else:
-                    chat_profile = _set_telegram_profile_field(workspace_id, chat_id, field_name, value)
-                    _telegram_send_message(
-                        bot_token,
-                        chat_id,
-                        f"Saved {field_label}.\n\n{_telegram_profile_text(profile, chat_profile)}",
-                        workspace_id=workspace_id,
-                        action=action,
-                        connector_id=connector_id,
-                        parent_message_id=inbound_message_id or None,
-                        profile=profile,
-                        trace_id=trace_id,
-                        source_event_id=source_event_id,
-                    )
-            elif action == "profile_clear":
-                field_name = str(routed.get("field") or "").strip().lower()
-                chat_profile = _clear_telegram_profile(workspace_id, chat_id, field_name)
-                cleared_label = _TELEGRAM_PROFILE_FIELDS.get(field_name, field_name or "all context")
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    f"Cleared {cleared_label}.\n\n{_telegram_profile_text(profile, chat_profile)}",
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "status":
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _telegram_runtime_status_text(workspace_id),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "approvals":
-                limit = int(routed.get("limit") or 5)
-                payload = _autopilot_approvals_list(limit=limit)
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _autopilot_approvals_text(payload, prefix=str(profile.get("prefix") or DEFAULT_CHAT_PREFIX)),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "approve":
-                event_id = str(routed.get("event_id") or "").strip()
-                note = str(routed.get("note") or "").strip()
-                payload = _autopilot_approval_resolve(event_id=event_id, approved=True, note=note)
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _autopilot_approval_result_text(payload, approved=True),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "reject":
-                event_id = str(routed.get("event_id") or "").strip()
-                note = str(routed.get("note") or "").strip()
-                payload = _autopilot_approval_resolve(event_id=event_id, approved=False, note=note)
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _autopilot_approval_result_text(payload, approved=False),
-                    workspace_id=workspace_id,
-                    action=action,
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-            elif action == "run":
+                if bool(action_result.get("handled")):
+                    action = str(action_result.get("action") or action)
+                    if isinstance(action_result.get("chat_profile"), dict):
+                        chat_profile = action_result.get("chat_profile") or chat_profile
+            if action == "run":
                 goal = str(routed.get("goal") or "").strip()
                 goal_source = str(routed.get("source") or "").strip().lower()
                 onboarding_state = _get_telegram_onboarding_state(workspace_id, chat_id) if ORION_TELEGRAM_ONBOARDING_ENABLED else {

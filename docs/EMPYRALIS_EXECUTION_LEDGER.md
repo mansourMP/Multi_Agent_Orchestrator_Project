@@ -725,6 +725,71 @@ This is a larger ownership cut than the earlier route-planning extraction. The c
   - `server_modules.tests.test_agent_machine_mode`
   - final rerun after the handoff-service extraction: `97 tests`, `OK`
 
+### 2026-04-04 - Provider-Backed Direct Chat Generation Loop Moved Behind Dedicated Generation Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat loop no longer owns the full inline provider-backed generation and direct-tool iteration path.
+
+This is the next major ownership cut after handoff extraction. The chat module still assembles the request inputs for provider-backed chat, but the iterative generation loop itself is now service-owned.
+
+#### Completed Work
+
+- Added a new generation boundary in [server_modules/direct_chat_generation_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_generation_service.py) for:
+  - `DirectChatGenerationServices`
+  - `stream_provider_backed_direct_chat()`
+- Moved the following provider-backed direct-chat behaviors behind the service boundary:
+  - streaming model chunks
+  - result handling for provider-backed direct chat
+  - iterative direct-tool execution across provider responses
+  - direct-tool approval handoff
+  - tool-loop detection
+  - final success payload shaping for the provider-backed path
+  - final error payload shaping for the provider-backed path
+  - post-reply memory persistence and transcript persistence triggers
+- Replaced the inline generation loop in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with `_direct_chat_generation_services()` and a single delegated call into [server_modules/direct_chat_generation_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_generation_service.py)
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_chat_generation_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_generation_service.py)
+
+#### Current Truth
+
+- The provider-backed generation loop is now a dedicated service boundary instead of a large inline block inside the chat module.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) now mostly assembles the direct-chat request state and dispatches into extracted service-owned subsystems.
+- Provider routing, route planning, handoff lifecycle, prompt assembly, memory behaviors, no-provider execution, and provider-backed generation are all now outside the main chat loop as separate ownership boundaries.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still remains the top-level direct-chat entrypoint and still carries some request normalization and transport glue.
+- Several extracted services are still wired through callback bundles rather than a richer explicit runtime composition object.
+- Older tests still patch chat-module wrappers and globals, so the chat module remains the compatibility seam for now.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the remaining direct-chat entrypoint glue and result-collection helpers where it makes sense.
+2. Decide whether the next convergence step should be a composed direct-chat runtime object that wires these service boundaries together explicitly.
+3. Keep deleting ownership from the chat module rather than allowing new orchestration blocks to form there.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_generation_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_generation_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_generation_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_generation_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_generation_service`
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - final rerun after the generation-service extraction: `99 tests`, `OK`
+
 ### 2026-04-04 - Direct Chat Provider Routing Moved Behind Dedicated Provider Service
 
 #### Stage

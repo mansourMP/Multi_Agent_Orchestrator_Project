@@ -26,6 +26,7 @@ from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
+from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
 from server_modules import memory_service
 from server_modules import no_provider_service
@@ -3117,6 +3118,28 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 )
 
 
+def _direct_chat_generation_services() -> direct_chat_generation_service.DirectChatGenerationServices:
+    return direct_chat_generation_service.DirectChatGenerationServices(
+        thinking_step_payload=_thinking_step_payload,
+        build_context_used=_build_context_used,
+        build_direct_tool_approval_response=_build_direct_tool_approval_response,
+        parse_tool_name=_parse_tool_name,
+        tool_arguments_payload=_tool_arguments_payload,
+        parse_page_state=parse_json_object_loose,
+        direct_tool_step_payload=_direct_tool_step_payload,
+        execute_single_direct_tool_call=_execute_single_direct_tool_call,
+        direct_tool_followup_message=_direct_tool_followup_message,
+        suggest_actions=_suggest_actions,
+        clear_direct_tool_loop_state=_clear_direct_tool_loop_state,
+        persist_direct_chat_memory_best_effort=_persist_direct_chat_memory_best_effort,
+        persist_direct_chat_transcript_best_effort=_persist_direct_chat_transcript_best_effort,
+        record_direct_tool_signature=_record_direct_tool_signature,
+        direct_chat_error_reply=_direct_chat_error_reply,
+        capture_exception=sentry_sdk.capture_exception,
+        generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
+    )
+
+
 def build_direct_operator_reply(
     *,
     message: str,
@@ -3705,328 +3728,32 @@ def build_direct_operator_reply(
     )
     history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else "none")
     prior_messages_used = bool(compacted_prior_messages)
-    usage_masked: Dict[str, Any] = {}
-    attempted_providers = ""
-    llm_error = ""
-    actual_provider: Optional[str] = provider
-    actual_model: Optional[str] = normalized_requested_model or None
-    executed_any_tools = False
-    conversation_messages: List[Dict[str, str]] = []
-    conversation_messages.extend(compacted_prior_messages)
-    current_prompt = normalized_message
-    max_iterations = resolved_chat_max_iterations
-
-    for iteration in range(max_iterations):
-        thinking_iteration = iteration + 1
-        yield _thinking_step_payload(thinking_iteration, "active")
-
-        iteration_reply = ""
-        iteration_tool_calls: List[Dict[str, Any]] = []
-        iteration_failed = False
-
-        messages = conversation_messages or []
-        for event in generate_chat_reply_stream_with_provider_fallback(
-            context=context,
-            metadata=metadata,
-            user_goal=current_prompt,
-            system_prompt=system_prompt,
-            prior_messages=messages or None,
-        ):
-            event_type = str(event.get("type") or "").strip().lower()
-            if event_type == "chunk":
-                delta = str(event.get("delta") or "")
-                if delta:
-                    iteration_reply += delta
-                    yield {"type": "chunk", "delta": delta}
-                continue
-            if event_type == "result":
-                final_reply = str(event.get("reply") or "").strip() or iteration_reply
-                usage_masked = event.get("usage_masked") if isinstance(event.get("usage_masked"), dict) else {}
-                attempted_providers = str(event.get("attempted_providers") or "").strip()
-                llm_error = str(event.get("error") or "").strip()
-                actual_provider = str(event.get("provider") or actual_provider or "").strip() or actual_provider
-                actual_model = str(event.get("model") or actual_model or "").strip() or actual_model
-                iteration_tool_calls = event.get("tool_calls") if isinstance(event.get("tool_calls"), list) else []
-                yield _thinking_step_payload(
-                    thinking_iteration,
-                    "done",
-                    "Prepared the next action" if iteration_tool_calls else "Answer ready",
-                )
-
-                conversation_messages.append({"role": "user", "content": current_prompt})
-                if final_reply:
-                    conversation_messages.append({"role": "assistant", "content": final_reply})
-
-                if iteration_tool_calls:
-                    loop_detected = any(
-                        _record_direct_tool_signature(tool_loop_session_key, tool_call)
-                        for tool_call in iteration_tool_calls
-                        if isinstance(tool_call, dict)
-                    )
-                    if loop_detected:
-                        yield {
-                            "type": "final",
-                            "payload": {
-                                "reply": _DIRECT_CHAT_LOOP_REPLY,
-                                "actions": [],
-                                "suggestions": proactive_suggestions,
-                                "mode": "answer",
-                                "usage_masked": usage_masked,
-                                "provider": actual_provider,
-                                "model": actual_model,
-                                "attempted_providers": attempted_providers,
-                                "error": "tool_loop_detected",
-                                "context_used": _build_context_used(
-                                    workspace_id=normalized_workspace_id,
-                                    requested_provider=normalized_requested_provider,
-                                    effective_provider=str(actual_provider or provider or "").strip() or None,
-                                    requested_model=normalized_requested_model,
-                                    effective_model=str(actual_model or "").strip() or None,
-                                    reasoning_effort=normalized_reasoning_effort,
-                                    connected_systems=connected_systems,
-                                    tool_capabilities=tool_capabilities,
-                                    prior_messages_used=True,
-                                    history_mode=history_mode,
-                                    run_created=False,
-                                    fallback_used=False,
-                                    fallback_reason=fallback_reason,
-                                ),
-                            },
-                        }
-                        _clear_direct_tool_loop_state(tool_loop_session_key)
-                        return
-                    approval_payload = _build_direct_tool_approval_response(
-                        tool_calls=iteration_tool_calls,
-                        tool_capabilities=tool_capabilities,
-                        session_ctx=session_ctx,
-                    )
-                    if approval_payload is not None:
-                        yield {
-                            "type": "final",
-                            "payload": {
-                                **approval_payload,
-                                "suggestions": proactive_suggestions,
-                                "usage_masked": usage_masked,
-                                "provider": actual_provider,
-                                "model": actual_model,
-                                "attempted_providers": attempted_providers,
-                                "error": "",
-                                "context_used": _build_context_used(
-                                    workspace_id=normalized_workspace_id,
-                                    requested_provider=normalized_requested_provider,
-                                    effective_provider=str(actual_provider or provider or "").strip() or None,
-                                    requested_model=normalized_requested_model,
-                                    effective_model=str(actual_model or "").strip() or None,
-                                    reasoning_effort=normalized_reasoning_effort,
-                                    connected_systems=connected_systems,
-                                    tool_capabilities=tool_capabilities,
-                                    prior_messages_used=True,
-                                    history_mode=history_mode,
-                                    run_created=False,
-                                    fallback_used=False,
-                                    fallback_reason=fallback_reason,
-                                ),
-                            },
-                        }
-                        return
-
-                    try:
-                        connector_id = ""
-                        action_id = ""
-                        argument_payload: Dict[str, Any] = {}
-                        step_id = f"tool:{thinking_iteration}:0"
-                        for tool_index, tool_call in enumerate(iteration_tool_calls, start=1):
-                            connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
-                            argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
-                            if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
-                                nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
-                                if isinstance(nested_input, dict):
-                                    argument_payload = nested_input
-                            step_id = f"tool:{thinking_iteration}:{tool_index}"
-                            yield _direct_tool_step_payload(
-                                connector_id,
-                                action_id,
-                                argument_payload,
-                                step_id=step_id,
-                                status="active",
-                            )
-                            tool_result = _execute_single_direct_tool_call(
-                                tool_call=tool_call,
-                                workspace_id=normalized_workspace_id,
-                                thread_id=normalized_thread_id,
-                                index=tool_index,
-                                provider=str(actual_provider or provider or "").strip() or None,
-                                model=str(actual_model or "").strip() or None,
-                                credentials=direct_chat_credentials if isinstance(direct_chat_credentials, dict) else None,
-                                reasoning_effort=normalized_reasoning_effort or "",
-                                session_ctx=session_ctx,
-                            )
-                            executed_any_tools = True
-                            yield _direct_tool_step_payload(
-                                connector_id,
-                                action_id,
-                                argument_payload,
-                                step_id=step_id,
-                                status="done",
-                            )
-                            conversation_messages.append(
-                                {
-                                    "role": "user",
-                                    "content": _direct_tool_followup_message(
-                                        str(tool_call.get("name") or f"{connector_id}__{action_id}"),
-                                        tool_result,
-                                    ),
-                                }
-                            )
-                        conversation_messages.append(
-                            {
-                                "role": "system",
-                                "content": _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE,
-                            }
-                        )
-                        current_prompt = (
-                            "Continue until the task is complete. If another tool is needed, call it now. "
-                            "Otherwise provide the final answer to the user."
-                        )
-                        break
-                    except Exception as exc:
-                        llm_error = str(exc).strip() or "connector_action_failed"
-                        sentry_sdk.capture_exception(exc)
-                        yield _direct_tool_step_payload(
-                            connector_id,
-                            action_id,
-                            argument_payload,
-                            step_id=step_id,
-                            status="error",
-                            detail_override=llm_error,
-                        )
-                        yield {
-                            "type": "final",
-                            "payload": {
-                                "reply": f"Connector action failed: {llm_error}",
-                                "actions": [],
-                                "suggestions": proactive_suggestions,
-                                "mode": "answer",
-                                "usage_masked": usage_masked,
-                                "provider": actual_provider,
-                                "model": actual_model,
-                                "attempted_providers": attempted_providers,
-                                "error": llm_error,
-                                "context_used": _build_context_used(
-                                    workspace_id=normalized_workspace_id,
-                                    requested_provider=normalized_requested_provider,
-                                    effective_provider=str(actual_provider or provider or "").strip() or None,
-                                    requested_model=normalized_requested_model,
-                                    effective_model=str(actual_model or "").strip() or None,
-                                    reasoning_effort=normalized_reasoning_effort,
-                                    connected_systems=connected_systems,
-                                    tool_capabilities=tool_capabilities,
-                                    prior_messages_used=True,
-                                    history_mode=history_mode,
-                                    run_created=False,
-                                    fallback_used=False,
-                                    fallback_reason=fallback_reason,
-                                ),
-                            },
-                        }
-                        return
-
-                actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
-                yield {
-                    "type": "final",
-                    "payload": {
-                        "reply": final_reply,
-                        "actions": actions,
-                        "suggestions": proactive_suggestions,
-                        "mode": "answer_with_action" if actions else "answer",
-                        "usage_masked": usage_masked,
-                        "provider": actual_provider,
-                        "model": actual_model,
-                        "attempted_providers": attempted_providers,
-                        "error": llm_error,
-                        "context_used": _build_context_used(
-                            workspace_id=normalized_workspace_id,
-                            requested_provider=normalized_requested_provider,
-                            effective_provider=str(actual_provider or provider or "").strip() or None,
-                            requested_model=normalized_requested_model,
-                            effective_model=str(actual_model or "").strip() or None,
-                            reasoning_effort=normalized_reasoning_effort,
-                            connected_systems=connected_systems,
-                            tool_capabilities=tool_capabilities,
-                            prior_messages_used=prior_messages_used,
-                            history_mode=history_mode,
-                            run_created=False,
-                            fallback_used=False,
-                            fallback_reason=fallback_reason,
-                        ),
-                    },
-                }
-                _clear_direct_tool_loop_state(tool_loop_session_key)
-                _persist_direct_chat_memory_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    provider=str(actual_provider or provider or "").strip() or None,
-                    model=str(actual_model or "").strip() or None,
-                    credentials=direct_chat_credentials,
-                    reasoning_effort=normalized_reasoning_effort,
-                    prior_messages=compacted_prior_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
-                _persist_direct_chat_transcript_best_effort(
-                    workspace_id=normalized_workspace_id,
-                    thread_id=normalized_thread_id,
-                    provider=str(actual_provider or provider or "").strip() or None,
-                    model=str(actual_model or "").strip() or None,
-                    messages=conversation_messages,
-                    user_message=normalized_message,
-                    assistant_reply=final_reply,
-                )
-                return
-            if event_type == "failure":
-                attempted_providers = str(event.get("attempted_providers") or "").strip()
-                llm_error = str(event.get("error") or "").strip()
-                yield _thinking_step_payload(thinking_iteration, "error", llm_error or "Model call failed")
-                iteration_failed = True
-                break
-
-        if iteration_failed:
-            break
-        if not iteration_tool_calls:
-            break
-    else:
-        llm_error = llm_error or f"max_tool_iterations_reached:{max_iterations}"
-
-    actions = [] if executed_any_tools else _suggest_actions(normalized_message, availability_payload)
-    _clear_direct_tool_loop_state(tool_loop_session_key)
-    yield {
-        "type": "final",
-        "payload": {
-            "reply": _direct_chat_error_reply(llm_error),
-            "actions": actions,
-            "suggestions": proactive_suggestions,
-            "mode": "answer_with_action" if actions else "answer",
-            "usage_masked": usage_masked,
-            "provider": actual_provider,
-            "model": actual_model,
-            "attempted_providers": attempted_providers,
-            "error": llm_error,
-            "context_used": _build_context_used(
-            workspace_id=normalized_workspace_id,
-            requested_provider=normalized_requested_provider,
-            effective_provider=str(actual_provider or provider or "").strip() or None,
-            requested_model=normalized_requested_model,
-            effective_model=str(actual_model or "").strip() or None,
-            reasoning_effort=normalized_reasoning_effort,
-            connected_systems=connected_systems,
-            tool_capabilities=tool_capabilities,
-            prior_messages_used=prior_messages_used,
-            history_mode=history_mode,
-            run_created=False,
-            fallback_used=False,
-            fallback_reason=fallback_reason,
-            ),
-        },
-    }
+    yield from direct_chat_generation_service.stream_provider_backed_direct_chat(
+        services=_direct_chat_generation_services(),
+        context=context,
+        metadata=metadata,
+        system_prompt=system_prompt,
+        normalized_workspace_id=normalized_workspace_id,
+        normalized_requested_provider=normalized_requested_provider,
+        normalized_requested_model=normalized_requested_model,
+        normalized_reasoning_effort=normalized_reasoning_effort,
+        normalized_thread_id=normalized_thread_id,
+        normalized_message=normalized_message,
+        compacted_prior_messages=compacted_prior_messages,
+        prior_messages_used=prior_messages_used,
+        history_mode=history_mode,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        availability_payload=availability_payload,
+        tools=tools,
+        direct_chat_credentials=direct_chat_credentials,
+        proactive_suggestions=proactive_suggestions,
+        tool_loop_session_key=tool_loop_session_key,
+        fallback_reason=fallback_reason,
+        session_ctx=session_ctx,
+        resolved_chat_max_iterations=resolved_chat_max_iterations,
+        direct_tool_result_summary_system_message=_DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE,
+    )
 
 
 def collect_direct_operator_reply(

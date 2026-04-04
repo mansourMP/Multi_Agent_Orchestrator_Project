@@ -1,0 +1,68 @@
+import unittest
+
+from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
+
+
+class _CognitiveStub:
+    def __init__(self) -> None:
+        self.list_calls = []
+        self.resolve_calls = []
+
+    def list_pending_approvals(self, **kwargs):
+        self.list_calls.append(kwargs)
+        return [
+            {
+                "event_id": "abc12345-1111",
+                "risk_level": "medium",
+                "summary": "Needs approval",
+                "objective_title": "Launch",
+            }
+        ]
+
+    def resolve_event_approval(self, **kwargs):
+        self.resolve_calls.append(kwargs)
+        return {"ok": True, "event_id": kwargs["event_id"], "status": "approved"}
+
+
+class AutopilotApprovalServiceTests(unittest.TestCase):
+    def _make_service(self, **overrides):
+        self.messages = overrides.pop("messages", [])
+        self.mod = overrides.pop("mod", _CognitiveStub())
+        return AutopilotApprovalService(
+            default_chat_prefix="/empyralis",
+            cognitive_module=overrides.pop("cognitive_module", lambda: self.mod),
+            cognitive_defaults=overrides.pop("cognitive_defaults", lambda: {"db_path": "/tmp/db", "niche_id": "astronomy"}),
+            truncate_one_line=overrides.pop("truncate_one_line", lambda text, limit: str(text)[:limit]),
+            normalize_string_list=overrides.pop("normalize_string_list", lambda value: list(value) if isinstance(value, list) else []),
+            utc_now_iso=overrides.pop("utc_now_iso", lambda: "2026-04-05T00:00:00Z"),
+            send_message=overrides.pop("send_message", lambda **kwargs: self.messages.append(kwargs)),
+        )
+
+    def test_approvals_text_formats_items(self):
+        service = self._make_service()
+        text = service.approvals_text({"ok": True, "items": self.mod.list_pending_approvals()}, prefix="/ops")
+        self.assertIn("Pending approvals:", text)
+        self.assertIn("/ops approve", text)
+
+    def test_notify_pending_approvals_sends_only_new_items(self):
+        service = self._make_service()
+        patch = service.notify_pending_approvals(
+            connector_state={"notified_approval_ids": []},
+            bot_token="bot",
+            chat_id="chat",
+            workspace_id="ws",
+            profile={"prefix": "/emp"},
+            connector_id="conn",
+        )
+        self.assertEqual(patch["last_pending_approval_count"], 1)
+        self.assertEqual(len(self.messages), 1)
+        self.assertIn("Approval required", self.messages[0]["text"])
+
+    def test_approval_result_text_handles_failure(self):
+        service = self._make_service()
+        text = service.approval_result_text({"ok": False, "error": "bad"}, approved=True)
+        self.assertEqual(text, "Approval update failed: bad")
+
+
+if __name__ == "__main__":
+    unittest.main()

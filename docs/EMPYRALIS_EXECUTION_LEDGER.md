@@ -1305,6 +1305,73 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Transport And Approval Flow Moved Behind Shared Services
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram transport block and the approval-query/notification block no longer live inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a shared-runtime cut rather than a channel-specific parser cut. The Telegram entrypoints and service registries keep the same contracts, but the monolith no longer owns the HTTP transport semantics or the approval notification/text logic inline.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_transport_service.py).
+- Moved the Telegram transport helpers behind that service:
+  - raw Telegram API request handling
+  - outbound message send behavior
+  - outbound chat-action behavior
+  - outbound edit-message behavior
+  - dead-letter and channel-event recording for transport operations
+- Added [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py).
+- Moved the approval helpers behind that service:
+  - pending approval listing
+  - approval resolution
+  - approval text rendering
+  - approval result text rendering
+  - Telegram pending-approval notification patch calculation
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the old inline transport and approval helpers now delegate through service getters instead of owning those implementations.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_transport_service.py)
+  - [server_modules/tests/test_autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_approval_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2903` lines to `2728` lines in this cut.
+- The connector monolith now delegates:
+  - Telegram transport
+  - approval list/resolve/text
+  - approval notification patching
+  through dedicated services instead of carrying those blocks inline.
+- The remaining monolith mass is increasingly transport/composition glue and top-level channel entrypoint wiring, not large helper subsystems.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns too much top-level endpoint/runtime coordination.
+- Terminal send/test entrypoints and some shared connector selection logic still live in the monolith.
+- The broader connector architecture still needs more explicit thin-adapter boundaries across the remaining non-Telegram and non-WhatsApp helper surfaces.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining top-level endpoint/runtime coordination helpers.
+2. Decide whether the next strongest cut is terminal send/test handling or the remaining shared connector-selection/runtime bridge logic.
+3. Keep verifying both new service tests and the existing Telegram action/run tests so extracted runtime contracts stay stable.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_transport_service.py)
+  - [server_modules/connectors/autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_approval_service.py)
+  - [server_modules/tests/test_telegram_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_transport_service.py)
+  - [server_modules/tests/test_autopilot_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_approval_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_approval_service`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
+from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
@@ -18,6 +19,7 @@ from server_modules.connectors.telegram_connector_poll_service import TelegramCo
 from server_modules.connectors.telegram_media_service import telegram_safe_path_token
 from server_modules.connectors.telegram_profile_service import TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
+from server_modules.connectors.telegram_transport_service import TelegramTransportService
 from server_modules.connectors.whatsapp_autopilot_service_registry import WhatsAppAutopilotServiceRegistry
 from server_modules.installed_skills import query_active_installed_skills
 try:
@@ -210,6 +212,8 @@ _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
+_AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
+_TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -540,6 +544,37 @@ def _telegram_connector_context_service() -> TelegramConnectorContextService:
             query_active_installed_skills=lambda **kwargs: query_active_installed_skills(**kwargs),
         )
     return _TELEGRAM_CONNECTOR_CONTEXT_SERVICE
+
+
+def _autopilot_approval_service() -> AutopilotApprovalService:
+    global _AUTOPILOT_APPROVAL_SERVICE
+    if _AUTOPILOT_APPROVAL_SERVICE is None:
+        _AUTOPILOT_APPROVAL_SERVICE = AutopilotApprovalService(
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            cognitive_module=lambda: _cognitive_module(),
+            cognitive_defaults=lambda: _cognitive_defaults(),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            normalize_string_list=lambda value: _normalize_string_list(value),
+            utc_now_iso=lambda: _utc_now_iso(),
+            send_message=lambda **kwargs: _telegram_send_message(**kwargs),
+        )
+    return _AUTOPILOT_APPROVAL_SERVICE
+
+
+def _telegram_transport_service() -> TelegramTransportService:
+    global _TELEGRAM_TRANSPORT_SERVICE
+    if _TELEGRAM_TRANSPORT_SERVICE is None:
+        _TELEGRAM_TRANSPORT_SERVICE = TelegramTransportService(
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            http_json_request=lambda *args, **kwargs: http_json_request(*args, **kwargs),
+            session_key=lambda chat_id: _telegram_session_key(chat_id),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            reply_keyboard=lambda profile: _telegram_reply_keyboard(profile),
+            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            utc_now_iso=lambda: _utc_now_iso(),
+        )
+    return _TELEGRAM_TRANSPORT_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -1457,28 +1492,12 @@ def _telegram_api_request(
     params: Optional[Dict[str, Any]] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    base = f"https://api.telegram.org/bot{bot_token}/{method_name}"
-    if params:
-        query_parts = []
-        for key, value in params.items():
-            if value is None:
-                continue
-            query_parts.append(f"{quote_plus(str(key))}={quote_plus(str(value))}")
-        if query_parts:
-            base = f"{base}?{'&'.join(query_parts)}"
-    headers: Dict[str, str] = {}
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-    timeout_seconds = max(6, int(max(1.0, ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS)) + 3)
-    res = http_json_request(base, method="POST" if payload is not None else "GET", headers=headers, payload=payload, timeout=timeout_seconds)
-    body = res.get("json") if isinstance(res.get("json"), dict) else {}
-    if not isinstance(body, dict):
-        raise RuntimeError(f"Unexpected Telegram response for {method_name}.")
-    if res.get("status") != 200 or not bool(body.get("ok")):
-        detail = str(body.get("description") or "").strip()
-        raise RuntimeError(detail or f"Telegram {method_name} failed.")
-    result = body.get("result")
-    return result if isinstance(result, dict) else {"result": result}
+    return _telegram_transport_service().api_request(
+        bot_token,
+        method_name,
+        params=params,
+        payload=payload,
+    )
 
 
 def _telegram_chat_matches(configured_chat_id: str, chat: Dict[str, Any]) -> bool:
@@ -1919,82 +1938,19 @@ def _cognitive_module():
 
 
 def _autopilot_approvals_list(limit: int = 5) -> Dict[str, Any]:
-    mod = _cognitive_module()
-    if mod is None:
-        return {"ok": False, "error": "cognitive_daemon_unavailable"}
-    conf = _cognitive_defaults()
-    try:
-        items = mod.list_pending_approvals(
-            db_path=conf["db_path"],
-            niche_id=conf["niche_id"],
-            limit=max(1, min(20, int(limit))),
-        )
-        return {"ok": True, "items": items, "count": len(items)}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    return _autopilot_approval_service().approvals_list(limit)
 
 
 def _autopilot_approval_resolve(event_id: str, approved: bool, note: str = "") -> Dict[str, Any]:
-    mod = _cognitive_module()
-    if mod is None:
-        return {"ok": False, "error": "cognitive_daemon_unavailable"}
-    conf = _cognitive_defaults()
-    try:
-        out = mod.resolve_event_approval(
-            db_path=conf["db_path"],
-            event_id=str(event_id or "").strip(),
-            approved=bool(approved),
-            note=str(note or "").strip(),
-        )
-        return out if isinstance(out, dict) else {"ok": False, "error": "invalid_resolve_response"}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    return _autopilot_approval_service().approval_resolve(event_id, approved, note=note)
 
 
 def _autopilot_approvals_text(payload: Dict[str, Any], prefix: str = DEFAULT_CHAT_PREFIX) -> str:
-    if not bool(payload.get("ok")):
-        reason = str(payload.get("error") or "unable to load approvals")
-        return f"Empyralis approvals unavailable: {reason}"
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    if not items:
-        return "No pending approvals."
-    lines = ["Pending approvals:"]
-    for item in items[:10]:
-        if not isinstance(item, dict):
-            continue
-        event_id = str(item.get("event_id") or "").strip()
-        short_id = event_id[:8] if event_id else "unknown"
-        risk = str(item.get("risk_level") or "").strip() or "unknown"
-        summary = _truncate_one_line(str(item.get("summary") or "").strip(), 96)
-        objective_title = _truncate_one_line(str(item.get("objective_title") or "").strip(), 40)
-        objective_id = str(item.get("objective_id") or "").strip()
-        objective_text = ""
-        if objective_title:
-            objective_text = f" objective={objective_title}"
-        elif objective_id:
-            objective_text = f" objective={objective_id[:8]}"
-        if event_id:
-            lines.append(
-                f"- {short_id} risk={risk}{objective_text} {summary}\n  event_id: {event_id}".rstrip()
-            )
-        else:
-            lines.append(f"- {short_id} risk={risk}{objective_text} {summary}".rstrip())
-    lines.append(f"Use {prefix} approve <event_id> or {prefix} reject <event_id> <reason>")
-    return "\n".join(lines)
+    return _autopilot_approval_service().approvals_text(payload, prefix=prefix)
 
 
 def _autopilot_approval_result_text(payload: Dict[str, Any], approved: bool) -> str:
-    if not bool(payload.get("ok")):
-        reason = str(payload.get("error") or "approval update failed")
-        return f"Approval update failed: {reason}"
-    event_id = str(payload.get("event_id") or "").strip()
-    short_id = event_id[:8] if event_id else "unknown"
-    status = str(payload.get("status") or "").strip() or ("pending" if approved else "failed")
-    if approved:
-        return f"Approved {short_id}. Status: {status}."
-    note = str(payload.get("note") or "").strip()
-    suffix = f" Reason: {note}" if note else ""
-    return f"Rejected {short_id}. Status: {status}.{suffix}"
+    return _autopilot_approval_service().approval_result_text(payload, approved=approved)
 
 
 def _telegram_send_message(
@@ -2012,78 +1968,25 @@ def _telegram_send_message(
     trace_id: Optional[str] = None,
     source_event_id: Optional[str] = None,
 ) -> str:
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "disable_web_page_preview": True,
-    }
-    if isinstance(reply_markup, dict) and reply_markup:
-        payload["reply_markup"] = reply_markup
-    elif include_keyboard and isinstance(profile, dict):
-        default_keyboard = _telegram_reply_keyboard(profile)
-        if default_keyboard:
-            payload["reply_markup"] = default_keyboard
-    resolved_trace_id = str(trace_id or "").strip()
-    if not resolved_trace_id:
-        resolved_trace_id = f"tg-out:{_telegram_safe_path_token(chat_id)}:{str(uuid.uuid4())[:10]}"
-    try:
-        result = _telegram_api_request(bot_token, "sendMessage", payload=payload)
-    except Exception as exc:
-        reason = str(exc)
-        _append_channel_dead_letter(
-            channel="telegram",
-            direction="outbound",
-            event_type="message",
-            reason=reason,
-            text=text,
-            workspace_id=str(workspace_id or ""),
-            session_key=_telegram_session_key(chat_id),
-            run_id=str(run_id or ""),
-            action=str(action or ""),
-            connector_id=str(connector_id or ""),
-            trace_id=resolved_trace_id,
-            source_event_id=str(source_event_id or "").strip(),
-            metadata={"transport": "telegram_sendMessage"},
-        )
-        raise
-    sent = result.get("result") if isinstance(result.get("result"), dict) else {}
-    sent_message_id = str(sent.get("message_id") or "").strip()
-    session_key = _telegram_session_key(chat_id)
-    _record_channel_event(
-        channel="telegram",
-        direction="outbound",
-        event_type="message",
+    return _telegram_transport_service().send_message(
+        bot_token=bot_token,
+        chat_id=chat_id,
         text=text,
         workspace_id=workspace_id,
-        session_key=session_key,
-        session_id=session_key,
-        message_id=sent_message_id or None,
-        parent_id=str(parent_message_id or "").strip() or None,
-        run_id=run_id,
         action=action,
-        metadata={
-            "connector_id": str(connector_id or "").strip(),
-            "trace_id": resolved_trace_id,
-            "source_event_id": str(source_event_id or "").strip(),
-            "delivery_status": "sent",
-            "delivery_transport": "telegram_sendMessage",
-        },
+        run_id=run_id,
+        connector_id=connector_id,
+        parent_message_id=parent_message_id,
+        profile=profile,
+        include_keyboard=include_keyboard,
+        reply_markup=reply_markup,
+        trace_id=trace_id,
+        source_event_id=source_event_id,
     )
-    return sent_message_id
 
 
 def _telegram_send_chat_action(bot_token: str, chat_id: str, action: str = "typing") -> None:
-    try:
-        _telegram_api_request(
-            bot_token,
-            "sendChatAction",
-            payload={
-                "chat_id": chat_id,
-                "action": action,
-            },
-        )
-    except Exception:
-        return
+    _telegram_transport_service().send_chat_action(bot_token, chat_id, action=action)
 
 
 def _telegram_edit_message(
@@ -2103,65 +2006,22 @@ def _telegram_edit_message(
     trace_id: Optional[str] = None,
     source_event_id: Optional[str] = None,
 ) -> bool:
-    message_token = str(message_id or "").strip()
-    if not message_token:
-        return False
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "message_id": int(message_token) if message_token.isdigit() else message_token,
-        "text": text,
-        "disable_web_page_preview": True,
-    }
-    if isinstance(reply_markup, dict) and reply_markup:
-        payload["reply_markup"] = reply_markup
-    elif include_keyboard and isinstance(profile, dict):
-        default_keyboard = _telegram_reply_keyboard(profile)
-        if default_keyboard:
-            payload["reply_markup"] = default_keyboard
-    resolved_trace_id = str(trace_id or "").strip()
-    if not resolved_trace_id:
-        resolved_trace_id = f"tg-edit:{_telegram_safe_path_token(chat_id)}:{str(uuid.uuid4())[:10]}"
-    try:
-        _telegram_api_request(bot_token, "editMessageText", payload=payload)
-    except Exception as exc:
-        _append_channel_dead_letter(
-            channel="telegram",
-            direction="outbound",
-            event_type="message_edit",
-            reason=str(exc),
-            text=text,
-            workspace_id=str(workspace_id or ""),
-            session_key=_telegram_session_key(chat_id),
-            run_id=str(run_id or ""),
-            action=str(action or ""),
-            connector_id=str(connector_id or ""),
-            trace_id=resolved_trace_id,
-            source_event_id=str(source_event_id or "").strip(),
-            metadata={"transport": "telegram_editMessageText", "message_id": message_token},
-        )
-        return False
-    session_key = _telegram_session_key(chat_id)
-    _record_channel_event(
-        channel="telegram",
-        direction="outbound",
-        event_type="message_edit",
+    return _telegram_transport_service().edit_message(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        message_id=message_id,
         text=text,
         workspace_id=workspace_id,
-        session_key=session_key,
-        session_id=session_key,
-        message_id=message_token or None,
-        parent_id=str(parent_message_id or "").strip() or None,
-        run_id=run_id,
         action=action,
-        metadata={
-            "connector_id": str(connector_id or "").strip(),
-            "trace_id": resolved_trace_id,
-            "source_event_id": str(source_event_id or "").strip(),
-            "delivery_status": "sent",
-            "delivery_transport": "telegram_editMessageText",
-        },
+        run_id=run_id,
+        connector_id=connector_id,
+        parent_message_id=parent_message_id,
+        profile=profile,
+        include_keyboard=include_keyboard,
+        reply_markup=reply_markup,
+        trace_id=trace_id,
+        source_event_id=source_event_id,
     )
-    return True
 
 
 def _chat_id_from_session_key(session_key: str) -> str:
@@ -2185,7 +2045,7 @@ def _normalize_string_list(value: Any) -> List[str]:
 
 
 def _pending_approval_event_id(item: Dict[str, Any]) -> str:
-    return str(item.get("event_id") or "").strip()
+    return _autopilot_approval_service().pending_approval_event_id(item)
 
 
 def _telegram_notify_pending_approvals(
@@ -2197,49 +2057,14 @@ def _telegram_notify_pending_approvals(
     profile: Dict[str, Any],
     connector_id: str,
 ) -> Dict[str, Any]:
-    patch: Dict[str, Any] = {}
-    prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX)
-    payload = _autopilot_approvals_list(limit=20)
-    if not bool(payload.get("ok")):
-        reason = str(payload.get("error") or "unable to load approvals").strip() or "unable to load approvals"
-        if reason != str(connector_state.get("last_approval_notify_error") or "").strip():
-            patch["last_approval_notify_error"] = reason
-        return patch
-
-    patch["last_approval_notify_error"] = None
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    pending_items = [item for item in items if isinstance(item, dict)]
-    pending_ids: List[str] = []
-    for item in pending_items:
-        event_id = _pending_approval_event_id(item)
-        if event_id and event_id not in pending_ids:
-            pending_ids.append(event_id)
-
-    previous_ids = _normalize_string_list(connector_state.get("notified_approval_ids"))
-    pending_id_set = set(pending_ids)
-    retained_ids = [event_id for event_id in previous_ids if event_id in pending_id_set]
-    retained_id_set = set(retained_ids)
-    new_items = [item for item in pending_items if _pending_approval_event_id(item) not in retained_id_set]
-
-    if new_items:
-        new_payload = {"ok": True, "items": new_items}
-        notify_text = "⚠️ Approval required.\n" + _autopilot_approvals_text(new_payload, prefix=prefix)
-        _telegram_send_message(
-            bot_token,
-            chat_id,
-            notify_text,
-            workspace_id=workspace_id,
-            action="approval_notify",
-            connector_id=connector_id,
-            profile=profile,
-            include_keyboard=False,
-        )
-        patch["last_approval_notified_at"] = _utc_now_iso()
-        patch["last_approval_notified_count"] = len(new_items)
-
-    patch["notified_approval_ids"] = pending_ids[:40]
-    patch["last_pending_approval_count"] = len(pending_ids)
-    return patch
+    return _autopilot_approval_service().notify_pending_approvals(
+        connector_state=connector_state,
+        bot_token=bot_token,
+        chat_id=chat_id,
+        workspace_id=workspace_id,
+        profile=profile,
+        connector_id=connector_id,
+    )
 
 
 async def handle_telegram_send_message(

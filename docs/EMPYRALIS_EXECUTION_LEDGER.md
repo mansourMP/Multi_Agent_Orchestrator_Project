@@ -483,3 +483,51 @@ This is a partial memory convergence step. The older `agent_memory.py` implement
   - `server_modules.tests.test_direct_chat_service`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Transcript Logging Moved Behind Memory Service
+
+#### Stage
+
+Stage 1 continues. The remaining raw workspace-memory write inside the active direct-chat transcript path has been routed through the canonical memory service.
+
+This still does not unify the separate `runtime_memory.py` subsystem. The health memory endpoints remain intentionally backed by that subsystem.
+
+#### Completed Work
+
+- Updated [server_modules/session_transcript_store.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/session_transcript_store.py) so transcript summaries write daily logs through [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) instead of importing `agent_memory.py` directly.
+- Added focused coverage in:
+  - [server_modules/tests/test_session_transcript_store.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_session_transcript_store.py)
+- Re-verified the adjacent memory and direct-chat boundaries after the transcript-path change.
+
+#### Current Truth
+
+- The active workspace/notebook memory write path used by direct chat, transcript persistence, and the live workspace memory endpoints is now behind [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py).
+- [server_modules/session_transcript_store.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/session_transcript_store.py) no longer imports `agent_memory.py` directly.
+- [server_modules/routes_health.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/routes_health.py) and [server_modules/health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/health_core.py) still intentionally target the separate `runtime_memory.py` subsystem for `/memory/search` and `/memory/upsert`.
+
+#### Open Gaps
+
+- `runtime_memory.py` is still separate from the canonical workspace/notebook memory service.
+- Health/admin memory surfaces are still split across two memory subsystems by design.
+- The canonical memory service is still a facade over `agent_memory.py`, not yet a standalone implementation.
+
+#### Next Required Work
+
+1. Design the convergence plan between [server_modules/runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py) and [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) before changing `/memory/search` or `/memory/upsert`.
+2. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so memory usage remains declarative at service boundaries.
+3. Keep documenting each boundary decision here instead of collapsing distinct memory paths silently.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/session_transcript_store.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/session_transcript_store.py)
+  - [server_modules/tests/test_session_transcript_store.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_session_transcript_store.py)
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_agent_memory_notebook`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

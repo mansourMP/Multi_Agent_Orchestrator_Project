@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from server_modules.agent_memory import save_daily_log
+from server_modules.memory_service import save_daily_log
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]

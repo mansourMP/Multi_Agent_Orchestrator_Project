@@ -15,6 +15,7 @@ from server_modules.connectors.telegram_profile_service import (
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
+from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
 from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
 from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
 from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
@@ -244,6 +245,7 @@ _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
 _TELEGRAM_INBOUND_CONTEXT_SERVICE: Optional[TelegramInboundContextService] = None
+_TELEGRAM_AUTOPILOT_LOOP_SERVICE: Optional[TelegramAutopilotLoopService] = None
 _TELEGRAM_POLL_CYCLE_SERVICE: Optional[TelegramPollCycleService] = None
 _TELEGRAM_POLL_DISPATCH_SERVICE: Optional[TelegramPollDispatchService] = None
 _TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
@@ -352,6 +354,24 @@ def _telegram_inbound_context_service() -> TelegramInboundContextService:
     return _TELEGRAM_INBOUND_CONTEXT_SERVICE
 
 
+def _telegram_autopilot_loop_service() -> TelegramAutopilotLoopService:
+    global _TELEGRAM_AUTOPILOT_LOOP_SERVICE
+    if _TELEGRAM_AUTOPILOT_LOOP_SERVICE is None:
+        _TELEGRAM_AUTOPILOT_LOOP_SERVICE = TelegramAutopilotLoopService(
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            list_connector_entries=lambda: _list_telegram_connector_entries(),
+            set_connectors_seen=lambda count: _telegram_set_connectors_seen(count),
+            mark_poll=lambda clear_error: _telegram_autopilot_mark_poll(clear_error=clear_error),
+            poll_connector=lambda entry: _telegram_poll_connector(entry),
+            autopilot_log=lambda message: _telegram_autopilot_log(message),
+            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            persist_state=lambda: _persist_telegram_autopilot_state(),
+            autopilot_mark_error=lambda detail, source: _telegram_autopilot_mark_error(detail, source=source),
+        )
+    return _TELEGRAM_AUTOPILOT_LOOP_SERVICE
+
+
 def _telegram_poll_cycle_service() -> TelegramPollCycleService:
     global _TELEGRAM_POLL_CYCLE_SERVICE
     if _TELEGRAM_POLL_CYCLE_SERVICE is None:
@@ -391,6 +411,11 @@ def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
 def _telegram_increment_processed_updates() -> None:
     with TELEGRAM_AUTOPILOT_LOCK:
         TELEGRAM_AUTOPILOT_STATE["processed_updates"] = int(TELEGRAM_AUTOPILOT_STATE.get("processed_updates") or 0) + 1
+
+
+def _telegram_set_connectors_seen(count: int) -> None:
+    with TELEGRAM_AUTOPILOT_LOCK:
+        TELEGRAM_AUTOPILOT_STATE["connectors_seen"] = max(0, int(count or 0))
 
 
 def _telegram_poll_state_service() -> TelegramPollStateService:
@@ -3689,48 +3714,7 @@ def _run_telegram_autopilot_forever():
     )
 
     while True:
-        sleep_seconds = poll_seconds
-        try:
-            entries = _list_telegram_connector_entries()
-            had_connector_error = False
-            with TELEGRAM_AUTOPILOT_LOCK:
-                TELEGRAM_AUTOPILOT_STATE["connectors_seen"] = len(entries)
-            _telegram_autopilot_mark_poll(clear_error=False)
-            for entry in entries:
-                try:
-                    _telegram_poll_connector(entry)
-                except Exception as connector_exc:
-                    had_connector_error = True
-                    _telegram_autopilot_log(f"connector error: {connector_exc}")
-                    _record_channel_event_throttled(
-                        channel="telegram",
-                        direction="system",
-                        event_type="error",
-                        text=str(connector_exc),
-                        workspace_id=_normalize_workspace_id(entry.get("workspace_id")),
-                        action="connector",
-                        metadata={
-                            "connector_id": str(entry.get("id") or "").strip(),
-                            "source": "connector_loop",
-                        },
-                        dedupe_seconds=max(30.0, float(ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS) * 6.0),
-                    )
-            if not had_connector_error:
-                _telegram_autopilot_mark_poll(clear_error=True)
-            _persist_telegram_autopilot_state()
-        except Exception as exc:
-            detail = str(exc)
-            sleep_seconds = max(poll_seconds, _telegram_autopilot_mark_error(detail, source="loop"))
-            _telegram_autopilot_log(f"loop error: {detail}")
-            _record_channel_event_throttled(
-                channel="telegram",
-                direction="system",
-                event_type="error",
-                text=detail,
-                action="autopilot_loop",
-                metadata={"source": "loop"},
-                dedupe_seconds=max(45.0, float(poll_seconds) * 8.0),
-            )
+        sleep_seconds = _telegram_autopilot_loop_service().run_iteration()
         time.sleep(max(0.25, float(sleep_seconds)))
 
 

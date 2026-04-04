@@ -393,6 +393,79 @@ Approval preflight, poll-lock handling, `getUpdates` fetch, poll completion patc
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - Telegram Autopilot Loop Iteration Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The outer Telegram autopilot loop iteration is now a dedicated service boundary.
+
+The monolith still owns the forever loop and thread lifecycle, but the per-iteration control flow (connector enumeration, connector error fan-in, poll markers, and loop error/backoff handling) is now a service that can be tested independently.
+
+#### Completed Work
+
+- Added `server_modules/connectors/telegram_autopilot_loop_service.py`.
+- Moved the per-iteration Telegram autopilot logic behind that service:
+  - connector enumeration
+  - connectors-seen counter update
+  - poll mark (success/error) update
+  - per-connector error fan-in and event recording
+  - loop-level error handling and backoff sleep selection
+- Updated `server_modules/autopilot_connectors.py` so `_run_telegram_autopilot_forever()` delegates each iteration to the new service.
+- Added focused coverage in `server_modules/tests/test_telegram_autopilot_loop_service.py`.
+
+#### Current Truth
+
+- Telegram connector behavior is now mostly service-owned:
+  - poll-cycle lifecycle
+  - per-update dispatch
+  - inbound context assembly
+  - sender filtering
+  - routing
+  - profile/onboarding
+  - media
+  - guided camera setup
+  - run action composition
+  - run dispatch
+  - poll-state patching
+  - autopilot loop iteration
+- `server_modules/autopilot_connectors.py` still owns the forever loop shell and the other channel coordination, but the main Telegram runtime control blocks are now service boundaries.
+
+#### Open Gaps
+
+- The outer forever loop is still inline in `server_modules/autopilot_connectors.py`.
+- Non-Telegram channels still sit in the same monolith file.
+- The monolith is smaller but not yet a thin coordination shell.
+
+#### Next Required Work
+
+1. Keep extracting non-Telegram channel control flow from `server_modules/autopilot_connectors.py`.
+2. Decide whether the outer Telegram forever loop belongs in a long-running supervisor service.
+3. Consider a top-level channel supervisor to coordinate Telegram and WhatsApp runtime loops consistently.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - `server_modules/connectors/telegram_autopilot_loop_service.py`
+  - `server_modules/autopilot_connectors.py`
+  - `server_modules/tests/test_telegram_autopilot_loop_service.py`
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

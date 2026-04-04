@@ -68,6 +68,13 @@ stream_direct_operator_reply = operator_chat.build_direct_operator_reply
 
 
 class OperatorChatTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._semantic_model_patch = patch.object(operator_chat.memory_service.agent_memory, "_SEMANTIC_MODEL", False)
+        self._semantic_model_patch.start()
+
+    def tearDown(self) -> None:
+        self._semantic_model_patch.stop()
+
     def test_preferred_provider_maps_openai_oauth_to_codex_cli(self):
         def fake_credentials(_workspace_id, provider):
             if provider == "openai":

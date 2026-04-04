@@ -19,6 +19,8 @@ spec.loader.exec_module(operator_chat)
 
 class OperatorChatDirectToolTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._semantic_model_patcher = patch.object(operator_chat.memory_service.agent_memory, "_SEMANTIC_MODEL", False)
+        self._semantic_model_patcher.start()
         self._workspace_context_patcher = patch(
             "operator_chat_direct_tools_under_test._direct_chat_workspace_context_text",
             return_value="",
@@ -27,6 +29,7 @@ class OperatorChatDirectToolTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._workspace_context_patcher.stop()
+        self._semantic_model_patcher.stop()
 
     def test_memory_tools_are_exposed_in_direct_chat_prompt(self):
         captured = {}

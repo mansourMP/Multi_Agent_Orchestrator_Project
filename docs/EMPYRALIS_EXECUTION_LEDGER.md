@@ -588,3 +588,73 @@ This is still a service-boundary convergence step, not a storage migration. The 
   - `server_modules.tests.test_direct_chat_service`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Direct Chat Memory Helpers Moved Behind Memory Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat engine no longer owns the reusable memory-context assembly and simple memory persistence helpers inline.
+
+This is still not a full direct-chat engine extraction. The LLM-driven memory extraction loop and message-parsing behavior remain in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+#### Completed Work
+
+- Expanded [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) with direct-chat-oriented helpers for:
+  - memory system-message payload construction
+  - workspace context text assembly
+  - direct-chat fact storage
+  - daily-log summary building and persistence
+  - workspace memory lookup by conversational query
+  - memory-backed suggestion prompt construction
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the following wrappers now delegate to the canonical memory service:
+  - `_direct_chat_memory_context_message()`
+  - `_direct_chat_workspace_context_text()`
+  - `_save_direct_chat_memory_fact()`
+  - `_build_direct_chat_daily_log_summary()`
+  - `_memory_entry_for_query()`
+  - memory-backed portions of `_build_proactive_suggestions()`
+- Kept the existing wrapper names in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the operator-chat test surface remained stable while ownership moved underneath.
+- Expanded focused helper coverage in:
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+- Hardened operator-chat tests to disable semantic model downloads during unit runs:
+  - [server_modules/tests/test_operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_operator_chat.py)
+  - [server_modules/tests/test_operator_chat_no_provider.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_operator_chat_no_provider.py)
+  - [server_modules/tests/test_operator_chat_direct_tools.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_operator_chat_direct_tools.py)
+
+#### Current Truth
+
+- Direct chat now uses [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) for reusable memory-context shaping and basic memory persistence behaviors.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns:
+  - prompt construction
+  - provider selection
+  - tool execution planning
+  - LLM-driven fact extraction orchestration
+  - no-provider message parsing
+- The direct-chat engine is therefore thinner at the memory boundary, but not yet fully service-owned.
+
+#### Open Gaps
+
+- The LLM-driven direct-chat memory extraction flow still lives inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+- No-provider message parsing for memory read/write still remains chat-module logic, even though the storage operations now route through the service.
+- The direct-chat engine still mixes orchestration, prompting, and policy behavior in one module.
+
+#### Next Required Work
+
+1. Move more direct-chat memory orchestration, especially the fact-extraction persistence flow, behind service-level functions.
+2. Continue thinning [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so it becomes a chat orchestrator rather than the owner of reusable subsystems.
+3. Keep test harnesses offline and deterministic as service boundaries shift.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`

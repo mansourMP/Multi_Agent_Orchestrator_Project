@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import ast
-import hashlib
 import json
 import logging
 import os
@@ -25,6 +24,7 @@ from scripts.orion_local_worker_llm import (
     provider_has_key,
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
+from server_modules import memory_service
 from server_modules import runtime_config as runtime_config
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 from server_modules.local_queue import _is_worker_online
@@ -44,19 +44,16 @@ from server_modules.memory_service import (
     delete_memory,
     get_memory_notebook_excerpt,
     get_memory,
-    get_recent_logs,
     list_memory_entries,
-    save_daily_log,
     save_memory,
     search_memory_notebook,
-    semantic_search,
 )
 from server_modules.agent_turn import resolve_agent_turn_request
 from server_modules.conversation_compaction import compact_conversation_history
 from server_modules.llm_task import llm_task
 from server_modules.session_transcript_store import save_session_transcript
 from server_modules.web_tools import web_fetch, web_search
-from server_modules.workspace_context import read_workspace_context_files, workspace_context_dir
+from server_modules.workspace_context import workspace_context_dir
 
 WORKFLOW_REQUEST_MARKERS = (
     "turn this into a workflow",
@@ -650,49 +647,14 @@ def _clear_direct_tool_loop_state(session_key: str) -> None:
 
 
 def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:
-    memory = get_memory(workspace_id)
-    if not memory:
-        return None
-    return {
-        "role": "system",
-        "content": f"{_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX}{memory}",
-    }
+    return memory_service.direct_chat_memory_context_message(
+        workspace_id,
+        system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
+    )
 
 
 def _direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str = "") -> str:
-    sections: List[str] = []
-    try:
-        context_files = read_workspace_context_files()
-    except Exception:
-        context_files = {}
-
-    for filename in ("SOUL.md", "USER.md", "MEMORY.md"):
-        content = str(context_files.get(filename) or "").strip()
-        if content:
-            sections.append(f"{filename}\n{content}")
-
-    recent_logs = get_recent_logs(workspace_id, days=7)
-    if recent_logs:
-        sections.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
-
-    memory_entries = semantic_search(workspace_id, memory_query, top_k=5) if str(memory_query or "").strip() else []
-    if memory_entries:
-        memory_facts = "\n".join(
-            f"- {str(item.get('key') or '').strip()}: {str(item.get('content') or '').strip()}"
-            for item in memory_entries
-            if str(item.get("content") or "").strip()
-        ).strip()
-    else:
-        memory_facts = get_memory(workspace_id)
-    if memory_facts:
-        sections.append(f"Runtime Memory Facts\n{memory_facts}")
-
-    if not sections:
-        return ""
-    return (
-        "Workspace context files. Use these as durable background instructions and facts when they are relevant.\n\n"
-        + "\n\n".join(sections)
-    ).strip()
+    return memory_service.direct_chat_workspace_context_text(workspace_id, memory_query=memory_query)
 
 
 def _parse_direct_chat_memory_facts(raw_text: str) -> List[str]:
@@ -736,24 +698,14 @@ def _parse_direct_chat_memory_facts(raw_text: str) -> List[str]:
 
 
 def _save_direct_chat_memory_fact(workspace_id: str, fact: str) -> None:
-    normalized_fact = re.sub(r"\s+", " ", str(fact or "").strip())
-    if not normalized_fact:
-        return
-    memory_key = f"fact-{hashlib.sha1(normalized_fact.encode('utf-8')).hexdigest()[:16]}"
-    save_memory(workspace_id, memory_key, normalized_fact)
+    memory_service.store_direct_chat_memory_fact(workspace_id, fact)
 
 
 def _build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
-    normalized_user_message = re.sub(r"\s+", " ", str(user_message or "").strip())
-    normalized_assistant_reply = re.sub(r"\s+", " ", str(assistant_reply or "").strip())
-    if not normalized_user_message or not normalized_assistant_reply:
-        return ""
-    user_excerpt = normalized_user_message[:320].rstrip()
-    assistant_excerpt = normalized_assistant_reply[:500].rstrip()
-    return (
-        f"- User: {user_excerpt}\n"
-        f"- Assistant: {assistant_excerpt}"
-    ).strip()
+    return memory_service.build_direct_chat_daily_log_summary(
+        user_message=user_message,
+        assistant_reply=assistant_reply,
+    )
 
 
 def _persist_direct_chat_memory_best_effort(
@@ -771,15 +723,11 @@ def _persist_direct_chat_memory_best_effort(
     normalized_assistant_reply = str(assistant_reply or "").strip()
     if not normalized_user_message or not normalized_assistant_reply:
         return
-    daily_log_summary = _build_direct_chat_daily_log_summary(
+    daily_log_summary = memory_service.save_direct_chat_daily_log_summary(
+        workspace_id=workspace_id,
         user_message=normalized_user_message,
         assistant_reply=normalized_assistant_reply,
     )
-    if daily_log_summary:
-        try:
-            save_daily_log(workspace_id, daily_log_summary)
-        except Exception:
-            pass
     extraction_prior_messages: List[Dict[str, str]] = list(prior_messages or [])
     extraction_prior_messages.append({"role": "user", "content": normalized_user_message})
     extraction_prior_messages.append({"role": "assistant", "content": normalized_assistant_reply})
@@ -1233,12 +1181,8 @@ def _build_proactive_suggestions(workspace_id: str) -> List[str]:
     for prompt in _recent_run_prompts_for_suggestions(workspace_id):
         push(f"Continue: {prompt[:120].rstrip()}")
 
-    memory_entries = list_memory_entries(workspace_id)
-    for entry in memory_entries[:2]:
-        fact = re.sub(r"\s+", " ", str(entry.get("content") or "").strip())
-        if not fact:
-            continue
-        push(f"Use my saved context: {fact[:120].rstrip()}")
+    for prompt in memory_service.memory_suggestion_prompts(workspace_id, limit=2):
+        push(prompt)
 
     push(_time_of_day_suggestion())
 
@@ -3438,20 +3382,7 @@ def _extract_no_provider_memory_write(message: str) -> Optional[Dict[str, str]]:
 
 
 def _memory_entry_for_query(workspace_id: str, query: str) -> Optional[Dict[str, Any]]:
-    normalized_query = _normalize_memory_key(query)
-    if not normalized_query:
-        return None
-    entries = list_memory_entries(workspace_id)
-    for entry in entries:
-        entry_key = _normalize_memory_key(str(entry.get("key") or ""))
-        if entry_key == normalized_query:
-            return entry
-    for entry in entries:
-        entry_key = _normalize_memory_key(str(entry.get("key") or ""))
-        entry_content = str(entry.get("content") or "").strip().lower()
-        if normalized_query in entry_key or normalized_query.replace("_", " ") in entry_content:
-            return entry
-    return None
+    return memory_service.find_workspace_memory_entry(workspace_id, query)
 
 
 def _extract_no_provider_memory_read(message: str) -> Optional[str]:

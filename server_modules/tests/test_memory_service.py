@@ -133,6 +133,70 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(result["retention_days"], 14)
         self.assertTrue(str(result["expires_at"]).endswith("Z"))
 
+    def test_direct_chat_workspace_context_text_collects_context_logs_and_memory(self) -> None:
+        workspace_context.write_workspace_context_file("SOUL.md", "Stay concise.\n")
+        workspace_context.write_workspace_context_file("USER.md", "Owner prefers async updates.\n")
+        memory_service.save_memory("default", "timezone", "Asia/Shanghai")
+        memory_service.save_daily_log("default", "Reviewed the canonical architecture document.")
+
+        text = memory_service.direct_chat_workspace_context_text("default", memory_query="timezone")
+
+        self.assertIn("SOUL.md", text)
+        self.assertIn("USER.md", text)
+        self.assertIn("Recent Daily Logs", text)
+        self.assertIn("Runtime Memory Facts", text)
+        self.assertIn("timezone", text)
+
+    def test_direct_chat_memory_context_message_returns_system_payload(self) -> None:
+        memory_service.save_memory("default", "timezone", "Asia/Shanghai")
+
+        message = memory_service.direct_chat_memory_context_message(
+            "default",
+            system_prefix="Remember this:\n",
+        )
+
+        self.assertEqual(message["role"], "system")
+        self.assertIn("Remember this:", message["content"])
+        self.assertIn("Asia/Shanghai", message["content"])
+
+    def test_store_direct_chat_memory_fact_hashes_and_normalizes_fact(self) -> None:
+        memory_service.store_direct_chat_memory_fact("default", "  Mansur   prefers  concise updates.  ")
+
+        entries = memory_service.list_memory_entries("default")
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(str(entries[0]["key"]).startswith("fact-"))
+        self.assertEqual(entries[0]["content"], "Mansur prefers concise updates.")
+
+    def test_save_direct_chat_daily_log_summary_writes_recent_logs(self) -> None:
+        summary = memory_service.save_direct_chat_daily_log_summary(
+            workspace_id="default",
+            user_message="Continue the architecture refactor.",
+            assistant_reply="Moved chat memory helpers behind the service boundary.",
+        )
+
+        recent_logs = memory_service.get_recent_logs("default", days=7)
+        self.assertIn("Continue the architecture refactor.", summary)
+        self.assertIn("Moved chat memory helpers behind the service boundary.", recent_logs)
+
+    def test_find_workspace_memory_entry_matches_key_or_content(self) -> None:
+        memory_service.save_memory("default", "favorite_editor", "Neovim")
+        memory_service.save_memory("default", "timezone", "Asia/Shanghai")
+
+        by_key = memory_service.find_workspace_memory_entry("default", "favorite editor")
+        by_content = memory_service.find_workspace_memory_entry("default", "shanghai")
+
+        self.assertEqual(by_key["key"], "favorite_editor")
+        self.assertEqual(by_content["key"], "timezone")
+
+    def test_memory_suggestion_prompts_uses_saved_context_entries(self) -> None:
+        memory_service.save_memory("default", "timezone", "Asia/Shanghai")
+        memory_service.save_memory("default", "work_style", "async check-ins")
+
+        prompts = memory_service.memory_suggestion_prompts("default", limit=2)
+
+        self.assertEqual(len(prompts), 2)
+        self.assertTrue(all(prompt.startswith("Use my saved context:") for prompt in prompts))
+
 
 if __name__ == "__main__":
     unittest.main()

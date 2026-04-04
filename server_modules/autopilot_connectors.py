@@ -15,6 +15,7 @@ from server_modules.connectors.telegram_profile_service import (
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
+from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
 from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
 from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
@@ -242,6 +243,7 @@ _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
 _TELEGRAM_INBOUND_CONTEXT_SERVICE: Optional[TelegramInboundContextService] = None
+_TELEGRAM_POLL_DISPATCH_SERVICE: Optional[TelegramPollDispatchService] = None
 _TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
 _TELEGRAM_RUN_ACTION_SERVICE: Optional[TelegramRunActionService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
@@ -346,6 +348,24 @@ def _telegram_inbound_context_service() -> TelegramInboundContextService:
             ),
         )
     return _TELEGRAM_INBOUND_CONTEXT_SERVICE
+
+
+def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
+    global _TELEGRAM_POLL_DISPATCH_SERVICE
+    if _TELEGRAM_POLL_DISPATCH_SERVICE is None:
+        _TELEGRAM_POLL_DISPATCH_SERVICE = TelegramPollDispatchService(
+            sender_allowed=lambda sender, allow_from: _telegram_sender_allowed(sender, allow_from),
+            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
+            inbound_context_service=lambda: _telegram_inbound_context_service(),
+            sender_filter_service=lambda: _telegram_sender_filter_service(),
+            action_service=lambda: _telegram_action_service(),
+            run_action_service=lambda: _telegram_run_action_service(),
+            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            explicit_run_command=lambda raw_text: _telegram_is_explicit_run_command(raw_text),
+            help_text=lambda profile: _telegram_help_text(profile),
+            send_message=lambda *args, **kwargs: _telegram_send_message(*args, **kwargs),
+        )
+    return _TELEGRAM_POLL_DISPATCH_SERVICE
 
 
 def _telegram_increment_processed_updates() -> None:
@@ -3597,129 +3617,24 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
             max_seen = update_id
             if not bool(extracted_message.get("handled")):
                 continue
-            message = extracted_message.get("message") if isinstance(extracted_message.get("message"), dict) else {}
-            chat = extracted_message.get("chat") if isinstance(extracted_message.get("chat"), dict) else {}
-            sender = extracted_message.get("sender") if isinstance(extracted_message.get("sender"), dict) else {}
-            if not _telegram_sender_allowed(sender, allow_from):
-                sender_id = str(sender.get("id") or "").strip()
-                sender_username = str(sender.get("username") or "").strip().lower()
-                dropped_count = int(connector_state.get("dropped_sender_count") or 0) + 1
-                _telegram_sender_filter_service().handle_denied_sender(
-                    connector_id=connector_id,
-                    label=label,
-                    workspace_id=workspace_id,
-                    update_id=update_id,
-                    profile_id=str(profile.get("id") or ""),
-                    allow_from=list(allow_from),
-                    sender_id=sender_id,
-                    sender_username=sender_username,
-                    chat_id=_telegram_session_key(str(chat.get("id") or configured_chat_id)),
-                    dropped_count=dropped_count,
-                    dedupe_seconds=8.0,
-                )
-                continue
-
-            inbound_context = _telegram_inbound_context_service().build_inbound_context(
-                bot_token=bot_token,
+            dispatch_result = _telegram_poll_dispatch_service().handle_update(
+                entry=entry,
+                label=label,
                 workspace_id=workspace_id,
-                connector_id=connector_id,
                 profile=profile,
+                allow_from=list(allow_from),
+                connector_state=connector_state,
+                connector_id=connector_id,
+                bot_token=bot_token,
                 configured_chat_id=configured_chat_id,
-                extracted_message=message,
-                extracted_chat=chat,
-                extracted_sender=sender,
+                extracted_message=extracted_message,
                 update_id=update_id,
             )
-            chat_id = str(inbound_context.get("chat_id") or "").strip()
-            sender_id = str(inbound_context.get("sender_id") or "").strip()
-            inbound_message_id = str(inbound_context.get("inbound_message_id") or "").strip()
-            message_text = str(inbound_context.get("message_text") or "")
-            stored_attachments = (
-                inbound_context.get("stored_attachments")
-                if isinstance(inbound_context.get("stored_attachments"), list)
-                else []
-            )
-            routed = inbound_context.get("routed") if isinstance(inbound_context.get("routed"), dict) else {}
-            action = str(inbound_context.get("action") or "ignore").strip().lower()
-            session_key = str(inbound_context.get("session_key") or "").strip()
-            trace_id = str(inbound_context.get("trace_id") or "").strip()
-            source_event_id = str(inbound_context.get("source_event_id") or "").strip()
-            guided_setup = _telegram_inbound_context_service().handle_guided_setup(
-                workspace_id=workspace_id,
-                connector_id=connector_id,
-                profile=profile,
-                bot_token=bot_token,
-                chat_id=chat_id,
-                message_text=message_text,
-                inbound_message_id=inbound_message_id,
-                session_key=session_key,
-                trace_id=trace_id,
-                source_event_id=source_event_id,
-            )
-            if bool(guided_setup.get("handled")):
+            if not bool(dispatch_result.get("processed")):
                 continue
-            if action == "ignore":
-                continue
-
-            run_id = ""
-            chat_profile = _get_telegram_profile(workspace_id, chat_id)
-            action_service = _telegram_action_service()
-            if action != "run":
-                action_result = action_service.handle_non_run_action(
-                    action=action,
-                    routed=routed,
-                    profile=profile,
-                    chat_profile=chat_profile,
-                    workspace_id=workspace_id,
-                    connector_id=connector_id,
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    inbound_message_id=inbound_message_id or "",
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-                if bool(action_result.get("handled")):
-                    action = str(action_result.get("action") or action)
-                    if isinstance(action_result.get("chat_profile"), dict):
-                        chat_profile = action_result.get("chat_profile") or chat_profile
-            if action == "run":
-                explicit_run_command = _telegram_is_explicit_run_command(message_text)
-                run_result = _telegram_run_action_service().handle_run_action(
-                    routed=routed,
-                    message_text=message_text,
-                    explicit_run_command=explicit_run_command,
-                    profile=profile,
-                    chat_profile=chat_profile,
-                    stored_attachments=stored_attachments,
-                    workspace_id=workspace_id,
-                    connector_id=connector_id,
-                    connector_entry=entry,
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    sender_id=sender_id,
-                    update_id=update_id,
-                    inbound_message_id=inbound_message_id or None,
-                    session_key=session_key,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
-                action = str(run_result.get("action") or action)
-                if isinstance(run_result.get("chat_profile"), dict):
-                    chat_profile = run_result.get("chat_profile") or chat_profile
-                run_id = str(run_result.get("run_id") or "")
-            else:
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    _telegram_help_text(profile),
-                    workspace_id=workspace_id,
-                    action="help",
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
+            chat_id = str(dispatch_result.get("chat_id") or "").strip()
+            action = str(dispatch_result.get("action") or "").strip().lower()
+            run_id = str(dispatch_result.get("run_id") or "")
 
             _telegram_poll_state_service().record_processed_update(
                 connector_id=connector_id,

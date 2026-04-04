@@ -16,6 +16,7 @@ from server_modules.connectors.telegram_profile_service import (
 from server_modules.connectors.telegram_action_service import TelegramActionService
 from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
+from server_modules.connectors.whatsapp_autopilot_state_service import WhatsAppAutopilotStateService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
 from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
 from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
@@ -245,6 +246,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
 _AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
+_WHATSAPP_AUTOPILOT_STATE_SERVICE: Optional[WhatsAppAutopilotStateService] = None
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
@@ -301,6 +303,33 @@ def _autopilot_endpoint_service() -> AutopilotEndpointService:
     if _AUTOPILOT_ENDPOINT_SERVICE is None:
         _AUTOPILOT_ENDPOINT_SERVICE = AutopilotEndpointService()
     return _AUTOPILOT_ENDPOINT_SERVICE
+
+
+def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
+    global _WHATSAPP_AUTOPILOT_STATE_SERVICE
+    if _WHATSAPP_AUTOPILOT_STATE_SERVICE is None:
+        _WHATSAPP_AUTOPILOT_STATE_SERVICE = WhatsAppAutopilotStateService(
+            state=WHATSAPP_AUTOPILOT_STATE,
+            lock=WHATSAPP_AUTOPILOT_LOCK,
+            read_json=lambda path, default: _safe_read_json(path, default),
+            write_json=lambda path, payload: _safe_write_json(path, payload),
+            state_file=ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
+            utc_now_iso=lambda: _utc_now_iso(),
+            classify_error=lambda detail: _classify_autopilot_error(detail),
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            load_vault=lambda: load_vault(),
+            workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
+            connector_paused=lambda item: _connector_paused(item),
+            resolve_vault_credential=lambda credential_id, workspace_id: resolve_vault_credential(credential_id, workspace_id),
+            normalize_whatsapp_number=lambda value: _normalize_whatsapp_number(value),
+            enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+            default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
+            require_prefix=ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
+            prefix=ORION_WHATSAPP_AUTOPILOT_PREFIX,
+            run_timeout_seconds=ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS,
+            max_reply_chars=ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS,
+        )
+    return _WHATSAPP_AUTOPILOT_STATE_SERVICE
 
 
 def _telegram_sender_filter_service() -> TelegramSenderFilterService:
@@ -1809,211 +1838,55 @@ def _whatsapp_autopilot_log(message: str):
 
 def _load_whatsapp_autopilot_state():
     _init()
-    payload = _safe_read_json(
-        ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
-        {
-            "version": 1,
-            "state": {
-                "connectors": {},
-                "processed_messages": 0,
-                "runs_started": 0,
-                "last_inbound_at": None,
-                "last_error": None,
-                "last_error_at": None,
-                "last_error_category": None,
-                "last_error_source": None,
-                "error_count": 0,
-                "consecutive_errors": 0,
-            },
-        },
-    )
-    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
-    connectors = state.get("connectors") if isinstance(state.get("connectors"), dict) else {}
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["connectors"] = connectors
-        WHATSAPP_AUTOPILOT_STATE["processed_messages"] = int(state.get("processed_messages") or 0)
-        WHATSAPP_AUTOPILOT_STATE["runs_started"] = int(state.get("runs_started") or 0)
-        WHATSAPP_AUTOPILOT_STATE["last_inbound_at"] = state.get("last_inbound_at")
-        WHATSAPP_AUTOPILOT_STATE["last_error"] = state.get("last_error")
-        WHATSAPP_AUTOPILOT_STATE["last_error_at"] = state.get("last_error_at")
-        WHATSAPP_AUTOPILOT_STATE["last_error_category"] = state.get("last_error_category")
-        WHATSAPP_AUTOPILOT_STATE["last_error_source"] = state.get("last_error_source")
-        WHATSAPP_AUTOPILOT_STATE["error_count"] = int(state.get("error_count") or 0)
-        WHATSAPP_AUTOPILOT_STATE["consecutive_errors"] = int(state.get("consecutive_errors") or 0)
+    _whatsapp_autopilot_state_service().load_state()
 
 
 def _persist_whatsapp_autopilot_state():
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        payload = {
-            "version": 1,
-            "state": {
-                "connectors": WHATSAPP_AUTOPILOT_STATE.get("connectors", {}),
-                "processed_messages": int(WHATSAPP_AUTOPILOT_STATE.get("processed_messages") or 0),
-                "runs_started": int(WHATSAPP_AUTOPILOT_STATE.get("runs_started") or 0),
-                "last_inbound_at": WHATSAPP_AUTOPILOT_STATE.get("last_inbound_at"),
-                "last_error": WHATSAPP_AUTOPILOT_STATE.get("last_error"),
-                "last_error_at": WHATSAPP_AUTOPILOT_STATE.get("last_error_at"),
-                "last_error_category": WHATSAPP_AUTOPILOT_STATE.get("last_error_category"),
-                "last_error_source": WHATSAPP_AUTOPILOT_STATE.get("last_error_source"),
-                "error_count": int(WHATSAPP_AUTOPILOT_STATE.get("error_count") or 0),
-                "consecutive_errors": int(WHATSAPP_AUTOPILOT_STATE.get("consecutive_errors") or 0),
-            },
-        }
-    _safe_write_json(ORION_WHATSAPP_AUTOPILOT_STATE_FILE, payload)
+    _whatsapp_autopilot_state_service().persist_state()
 
 
 def _whatsapp_autopilot_mark_error(detail: str, source: str = "webhook"):
     _init()
-    now = _utc_now_iso()
-    category = _classify_autopilot_error(detail)
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["last_error"] = detail
-        WHATSAPP_AUTOPILOT_STATE["last_error_at"] = now
-        WHATSAPP_AUTOPILOT_STATE["last_error_category"] = category
-        WHATSAPP_AUTOPILOT_STATE["last_error_source"] = str(source or "webhook")
-        WHATSAPP_AUTOPILOT_STATE["error_count"] = int(WHATSAPP_AUTOPILOT_STATE.get("error_count") or 0) + 1
-        WHATSAPP_AUTOPILOT_STATE["consecutive_errors"] = int(WHATSAPP_AUTOPILOT_STATE.get("consecutive_errors") or 0) + 1
-        WHATSAPP_AUTOPILOT_STATE["last_inbound_at"] = now
-    _persist_whatsapp_autopilot_state()
+    _whatsapp_autopilot_state_service().mark_error(detail, source=source)
 
 
 def _whatsapp_autopilot_activate():
     _init()
-    if not ORION_WHATSAPP_AUTOPILOT_ENABLED:
-        return
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["enabled"] = True
-        WHATSAPP_AUTOPILOT_STATE["active"] = True
-        if not WHATSAPP_AUTOPILOT_STATE.get("started_at"):
-            WHATSAPP_AUTOPILOT_STATE["started_at"] = _utc_now_iso()
-    _persist_whatsapp_autopilot_state()
+    _whatsapp_autopilot_state_service().activate()
 
 
 def _whatsapp_autopilot_mark_inbound(clear_error: bool = True):
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["last_inbound_at"] = _utc_now_iso()
-        if clear_error:
-            WHATSAPP_AUTOPILOT_STATE["last_error"] = None
-            WHATSAPP_AUTOPILOT_STATE["last_error_at"] = None
-            WHATSAPP_AUTOPILOT_STATE["last_error_category"] = None
-            WHATSAPP_AUTOPILOT_STATE["last_error_source"] = None
-            WHATSAPP_AUTOPILOT_STATE["consecutive_errors"] = 0
-    _persist_whatsapp_autopilot_state()
+    _whatsapp_autopilot_state_service().mark_inbound(clear_error=clear_error)
 
 
 def _whatsapp_autopilot_increment_processed():
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["processed_messages"] = int(WHATSAPP_AUTOPILOT_STATE.get("processed_messages") or 0) + 1
+    _whatsapp_autopilot_state_service().increment_processed()
 
 
 def _whatsapp_connector_state(credential_id: str) -> Dict[str, Any]:
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        connectors = WHATSAPP_AUTOPILOT_STATE.setdefault("connectors", {})
-        raw = connectors.get(credential_id)
-        if not isinstance(raw, dict):
-            raw = {}
-        connectors[credential_id] = raw
-        return raw
+    return _whatsapp_autopilot_state_service().connector_state(credential_id)
 
 
 def _set_whatsapp_connector_state(credential_id: str, patch: Dict[str, Any]):
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        connectors = WHATSAPP_AUTOPILOT_STATE.setdefault("connectors", {})
-        current = connectors.get(credential_id)
-        if not isinstance(current, dict):
-            current = {}
-        for key, value in patch.items():
-            current[key] = value
-        connectors[credential_id] = current
-    _persist_whatsapp_autopilot_state()
+    _whatsapp_autopilot_state_service().set_connector_state(credential_id, patch)
 
 
 def _list_whatsapp_connector_entries() -> List[Dict[str, Any]]:
     _init()
-    requested_ws = _normalize_workspace_id(ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID)
-    entries: List[Dict[str, Any]] = []
-    seen_identities: set[str] = set()
-    for item in load_vault().get("credentials", []):
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("provider") or "").strip().lower() != "whatsapp_twilio":
-            continue
-        if not _workspace_visible(item.get("workspace_id"), requested_ws):
-            continue
-        if _connector_paused(item):
-            continue
-        credential_id = str(item.get("id") or "").strip()
-        workspace_id = _normalize_workspace_id(item.get("workspace_id"))
-        if not credential_id:
-            continue
-        try:
-            secret = resolve_vault_credential(credential_id, workspace_id)
-        except Exception:
-            continue
-        account_sid = str(secret.get("account_sid") or "").strip()
-        from_number = _normalize_whatsapp_number(secret.get("from_number"))
-        to_number = _normalize_whatsapp_number(secret.get("to_number"))
-        identity = f"{account_sid}:{from_number}:{to_number}" if account_sid and from_number and to_number else ""
-        if identity:
-            if identity in seen_identities:
-                continue
-            seen_identities.add(identity)
-        entries.append(item)
-    entries.sort(key=lambda item: str(item.get("label") or "").lower())
-    return entries
+    return _whatsapp_autopilot_state_service().list_connector_entries(ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID)
 
 
 def _whatsapp_autopilot_snapshot(include_connectors: bool = False) -> Dict[str, Any]:
     _init()
-    with WHATSAPP_AUTOPILOT_LOCK:
-        connectors_raw = WHATSAPP_AUTOPILOT_STATE.get("connectors", {})
-        connectors = dict(connectors_raw) if isinstance(connectors_raw, dict) else {}
-        snapshot: Dict[str, Any] = {
-            "enabled": bool(ORION_WHATSAPP_AUTOPILOT_ENABLED),
-            "active": bool(WHATSAPP_AUTOPILOT_STATE.get("active")),
-            "started_at": WHATSAPP_AUTOPILOT_STATE.get("started_at"),
-            "last_inbound_at": WHATSAPP_AUTOPILOT_STATE.get("last_inbound_at"),
-            "last_error": WHATSAPP_AUTOPILOT_STATE.get("last_error"),
-            "last_error_at": WHATSAPP_AUTOPILOT_STATE.get("last_error_at"),
-            "last_error_category": WHATSAPP_AUTOPILOT_STATE.get("last_error_category"),
-            "last_error_source": WHATSAPP_AUTOPILOT_STATE.get("last_error_source"),
-            "error_count": int(WHATSAPP_AUTOPILOT_STATE.get("error_count") or 0),
-            "consecutive_errors": int(WHATSAPP_AUTOPILOT_STATE.get("consecutive_errors") or 0),
-            "processed_messages": int(WHATSAPP_AUTOPILOT_STATE.get("processed_messages") or 0),
-            "runs_started": int(WHATSAPP_AUTOPILOT_STATE.get("runs_started") or 0),
-            "run_timeout_seconds": ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS,
-            "max_reply_chars": ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS,
-            "require_prefix": bool(ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX),
-            "prefix": ORION_WHATSAPP_AUTOPILOT_PREFIX,
-            "default_profile": ORION_WHATSAPP_AUTOPILOT_PROFILE,
-            "state_file": str(ORION_WHATSAPP_AUTOPILOT_STATE_FILE),
-            # WhatsApp autopilot is webhook-driven (no poll thread); treat active state as listener liveliness.
-            "thread_alive": bool(ORION_WHATSAPP_AUTOPILOT_ENABLED and WHATSAPP_AUTOPILOT_STATE.get("active")),
-        }
-    connector_error_count = 0
-    for connector_state in connectors.values():
-        if isinstance(connector_state, dict) and connector_state.get("last_error"):
-            connector_error_count += 1
-    snapshot["connector_state_count"] = len(connectors)
-    snapshot["connector_error_count"] = connector_error_count
-    try:
-        snapshot["connectors_seen"] = len(_list_whatsapp_connector_entries())
-    except Exception as exc:
-        snapshot["connectors_seen"] = 0
-        if not snapshot.get("last_error"):
-            snapshot["last_error"] = str(exc)
-            snapshot["last_error_category"] = _classify_autopilot_error(exc)
-            snapshot["last_error_source"] = "list_connectors"
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["connectors_seen"] = int(snapshot.get("connectors_seen") or 0)
-    if include_connectors:
-        snapshot["connectors"] = connectors
-    return snapshot
+    return _whatsapp_autopilot_state_service().snapshot(
+        include_connectors=include_connectors,
+        requested_workspace_id=ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID,
+    )
 
 
 def _telegram_autopilot_mark_error(detail: str, source: str = "loop") -> float:

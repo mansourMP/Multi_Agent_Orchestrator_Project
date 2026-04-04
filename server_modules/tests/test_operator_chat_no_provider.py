@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -146,6 +147,139 @@ class OperatorChatNoProviderTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "answer")
         self.assertIn("Page title: Example Domain", payload["reply"])
         self.assertIn("Main heading: Example Domain", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    def test_single_file_function_count_runs_without_provider_configured(
+        self,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        with tempfile.TemporaryDirectory(prefix="no-provider-single-file-") as tmpdir:
+            root = Path(tmpdir)
+            source_dir = root / "server_modules"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            source_path = source_dir / "shared.py"
+            source_path.write_text(
+                "def alpha():\n    return 1\n\nasync def beta():\n    return 2\n\nclass Example:\n    pass\n",
+                encoding="utf-8",
+            )
+            original_cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                payload = operator_chat.collect_direct_operator_reply(
+                    message="Read server_modules/shared.py and count functions",
+                    workspace_id="default",
+                    requested_model="gpt-5.4",
+                    requested_provider="openai",
+                    availability={"ai_ready": False},
+                )
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("server_modules/shared.py", payload["reply"])
+        self.assertIn("2 functions", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test._execute_single_direct_tool_call",
+        return_value="1. Top headline\nURL: https://example.com\nSnippet: Example AI headline",
+    )
+    def test_web_search_runs_without_provider_configured(
+        self,
+        _execute_single_direct_tool_call,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Search for today's top AI news headline",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Top headline", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test._execute_single_direct_tool_call",
+        return_value="Command completed: echo hello world\nhello world",
+    )
+    def test_shell_command_runs_without_provider_configured(
+        self,
+        _execute_single_direct_tool_call,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Run: echo hello world",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("hello world", payload["reply"])
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch("operator_chat_no_provider_under_test.save_memory")
+    def test_memory_write_runs_without_provider_configured(
+        self,
+        save_memory_mock,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="Remember my name is TestUser",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Stored memory", payload["reply"])
+        save_memory_mock.assert_called_once_with("default", "name", "TestUser")
+
+    @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
+    @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
+    @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_no_provider_under_test.list_memory_entries",
+        return_value=[{"key": "name", "content": "TestUser"}],
+    )
+    def test_memory_read_runs_without_provider_configured(
+        self,
+        _list_memory_entries,
+        _capabilities,
+        _supports_direct_message_native_chat,
+        _preferred_provider,
+    ):
+        payload = operator_chat.collect_direct_operator_reply(
+            message="What is my name",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": False},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertEqual(payload["reply"], "name = TestUser")
 
     @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
     @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)

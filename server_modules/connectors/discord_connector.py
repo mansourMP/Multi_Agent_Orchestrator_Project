@@ -865,6 +865,11 @@ def dispatch_inbound_event(
             },
         },
     }
+    from server_modules import runtime_config as _runtime_config
+
+    owner_user_id = _runtime_config.agent_machine_inherited_owner_user_id()
+    if owner_user_id:
+        context["metadata"]["owner_user_id"] = owner_user_id
     run_id = str(run_creator(context=context) or "").strip()
     if callable(append_event_fn) and run_id:
         append_event_fn(

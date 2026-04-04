@@ -141,6 +141,19 @@ async function verifyAppleIdentityToken(idToken: string): Promise<Record<string,
     return payload;
 }
 
+function serializeAuthenticatedUser(user: any) {
+    return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        organizations: user.memberships.map((m: any) => ({
+            id: m.organization.id,
+            name: m.organization.name,
+            role: m.role,
+        })),
+    };
+}
+
 @Controller('auth')
 export class AuthController {
     constructor(private authService: AuthService) { }
@@ -307,16 +320,16 @@ export class AuthController {
     @UseGuards(JwtAuthGuard)
     async getCurrentUser(@CurrentUser() user: any) {
         return {
-            user: {
-                id: user.id,
-                email: user.email,
-                name: user.name,
-                organizations: user.memberships.map((m: any) => ({
-                    id: m.organization.id,
-                    name: m.organization.name,
-                    role: m.role,
-                })),
-            },
+            user: serializeAuthenticatedUser(user),
+        };
+    }
+
+    @Get('status')
+    @UseGuards(JwtAuthGuard)
+    async getAuthStatus(@CurrentUser() user: any) {
+        return {
+            authenticated: true,
+            user: serializeAuthenticatedUser(user),
         };
     }
 }

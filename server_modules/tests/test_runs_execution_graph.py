@@ -711,6 +711,63 @@ class RunsExecutionGraphTests(unittest.TestCase):
         self.assertIn("custom_api.http_request", result["result_text"])
         self.assertEqual(result["result_data"]["workflow_execution"]["final_node_id"], "tool_1")
 
+    @patch(
+        "server_modules.runs_execution.generate_with_candidate_failover",
+        side_effect=AssertionError("LLM fallback should not be used for simple field extraction"),
+    )
+    @patch(
+        "server_modules.runs_execution.http_json_request",
+        return_value={
+            "status": 200,
+            "json": {"origin": "203.0.113.9"},
+            "text": '{"origin":"203.0.113.9"}',
+            "headers": {"Content-Type": "application/json"},
+        },
+    )
+    def test_execute_workflow_graph_extracts_simple_json_field_without_llm(self, _http_mock, _llm_mock):
+        definition = {
+            "version": "empyralist.workflow.v2",
+            "nodes": [
+                {"id": "trigger_1", "type": "trigger", "variant": "manual", "config": {}},
+                {
+                    "id": "tool_1",
+                    "type": "tool",
+                    "variant": "http",
+                    "config": {
+                        "method": "GET",
+                        "url": "https://httpbin.org/get",
+                    },
+                },
+                {
+                    "id": "agent_1",
+                    "type": "agent",
+                    "config": {
+                        "identity": {
+                            "name": "Extract origin",
+                            "goal": "Extract the origin field",
+                            "output_contract": "origin",
+                        }
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "e1", "source": "trigger_1", "target": "tool_1"},
+                {"id": "e2", "source": "tool_1", "target": "agent_1"},
+            ],
+        }
+
+        result = runs_execution._execute_workflow_graph(
+            "run-http-origin",
+            {"workflow_id": "wf_http_origin", "user_goal": "Fetch and extract origin", "metadata": {}},
+            queue.Queue(),
+            definition,
+        )
+
+        self.assertEqual(result["result_text"], "203.0.113.9")
+        final_data = result["result_data"]["workflow_execution"]["final_data"]
+        self.assertEqual(final_data["field_path"], "origin")
+        self.assertTrue(final_data["extracted_without_llm"])
+
     def test_execute_workflow_graph_blocks_custom_api_private_url(self):
         with self.assertRaises(RuntimeError):
             runs_execution._workflow_execute_connector_action(

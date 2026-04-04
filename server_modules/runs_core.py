@@ -1419,6 +1419,9 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
         "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
     }
+    owner_user_id = agent_machine_inherited_owner_user_id(str(metadata.get("owner_user_id") or "").strip())
+    if owner_user_id:
+        metadata["owner_user_id"] = owner_user_id
     metadata["tool_policy_precheck"] = _compute_tool_policy_precheck(preview_context)
     _apply_browser_execution_metadata(metadata)
     if metadata["tool_policy_precheck"].get("blocked_count"):
@@ -1431,7 +1434,21 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
         selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
     )
     metadata["policy_mode"] = runtime_policy.get("policy_mode")
+    agent_machine_full_trust = agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip())
+    browser_policy = (
+        metadata["tool_policy_precheck"].get("browser_automation_policy")
+        if isinstance(metadata.get("tool_policy_precheck"), dict)
+        else {}
+    )
+    if agent_machine_full_trust and isinstance(browser_policy, dict) and bool(browser_policy.get("reviewed_approval_required")):
+        metadata["browser_reviewed_approved"] = True
+        metadata["browser_reviewed_approved_at"] = datetime.utcnow().isoformat() + "Z"
     needs_local_confirmation = _local_execution_requires_start_confirmation(metadata, metadata["tool_policy_precheck"])
+    if needs_local_confirmation and agent_machine_full_trust:
+        _mark_local_execution_tools_approved(metadata)
+        metadata.pop("local_execution_waiting_confirmation", None)
+        metadata.pop("local_execution_waiting_approval", None)
+        needs_local_confirmation = False
     if needs_local_confirmation:
         metadata["local_execution_waiting_confirmation"] = True
         metadata["local_execution_waiting_approval"] = True

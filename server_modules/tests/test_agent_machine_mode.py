@@ -3,8 +3,29 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from server_modules import runtime_config, runtime_runs_api, runs_engine
-from server_modules import operator_chat
+from server_modules import autopilot_connectors, operator_chat, runtime_config, runtime_runs_api, runs_core, runs_engine
+from server_modules.connectors import discord_connector
+from server_modules.runtime_models import RunStartRequest
+
+
+class _AutoCompleteQueue:
+    def __init__(self, run: dict):
+        self._run = run
+        self.items: list[object] = []
+
+    def put(self, item: object) -> None:
+        self.items.append(item)
+        self._run["status"] = "completed"
+        self._run["result"] = "Done"
+        self._run["result_data"] = {"summary": "Done"}
+
+
+class _PassiveQueue:
+    def __init__(self):
+        self.items: list[object] = []
+
+    def put(self, item: object) -> None:
+        self.items.append(item)
 
 
 class AgentMachineModeTests(unittest.TestCase):
@@ -18,6 +39,16 @@ class AgentMachineModeTests(unittest.TestCase):
         with patch.object(runtime_config, "AGENT_MACHINE_MODE", "personal"):
             with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
                 self.assertFalse(runtime_config.agent_machine_full_trust_enabled("user-123"))
+
+    def test_agent_machine_inherited_owner_user_id_only_falls_back_in_agent_mode(self):
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                self.assertEqual(runtime_config.agent_machine_inherited_owner_user_id(""), "user-123")
+                self.assertEqual(runtime_config.agent_machine_inherited_owner_user_id("user-999"), "user-999")
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "personal"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                self.assertEqual(runtime_config.agent_machine_inherited_owner_user_id(""), "")
 
     def test_wait_for_human_decision_bypasses_prompt_for_matching_owner(self):
         run_id = "agent-machine-run"
@@ -58,6 +89,22 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertIsNone(payload)
 
+    def test_direct_tool_approval_payload_still_requires_prompt_for_owner_mismatch(self):
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                payload = operator_chat._build_direct_tool_approval_response(
+                    tool_calls=[
+                        {
+                            "name": "shell__exec",
+                            "arguments": {"command": "rm -rf /tmp/demo"},
+                        }
+                    ],
+                    tool_capabilities=[],
+                    session_ctx={"user_id": "user-456"},
+                )
+
+        self.assertIsNotNone(payload)
+
     def test_runtime_runs_api_threads_user_id_into_direct_chat_session_context(self):
         captured: dict[str, object] = {}
 
@@ -79,6 +126,263 @@ class AgentMachineModeTests(unittest.TestCase):
 
         self.assertEqual(payload["reply"], "ok")
         self.assertEqual((captured.get("session_ctx") or {}).get("user_id"), "user-123")
+
+    def test_runs_core_create_run_from_request_bypasses_local_confirmation_for_agent_machine(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Read a signed-in page",
+            metadata={"outcome_pack": "local-execution-v1", "execution_target": "local_companion"},
+        )
+        precheck = {
+            "blocked_count": 0,
+            "items": [
+                {
+                    "tool_id": "browser_automation",
+                    "decision": "approval_required",
+                    "execution_decision": "approval_required",
+                    "reason": "session-backed interactive browser automation requires approval",
+                }
+            ],
+            "allowed": [],
+            "require_confirmation": ["browser_automation"],
+            "require_confirmation_count": 1,
+            "approval_required": ["browser_automation"],
+            "approval_required_count": 1,
+            "capability_ids": ["browser_automation"],
+            "browser_automation_policy": {"reviewed_approval_required": True},
+        }
+        prepare_payload = {
+            "engine": "orion",
+            "metadata": {
+                "outcome_pack": "local-execution-v1",
+                "execution_target": "local_companion",
+            },
+            "workflow_snapshot": None,
+        }
+
+        with patch("server_modules.runs_core._prepare_run_start_request", return_value=prepare_payload):
+            with patch("server_modules.runs_core.decide_execution_target", return_value={"selected": "local_companion"}, create=True):
+                with patch("server_modules.runs_core.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                    with patch("server_modules.runs_core.build_doctor_run_gate_from_snapshot", return_value={"blocking": False}):
+                        with patch("server_modules.runs_execution._compute_tool_policy_precheck", return_value=precheck):
+                            with patch("server_modules.runs_execution.create_run", return_value="run-agent-local") as create_run_mock:
+                                with patch.object(runs_core, "agent_machine_inherited_owner_user_id", return_value="user-123"):
+                                    with patch.object(runs_core, "agent_machine_full_trust_enabled", return_value=True):
+                                        result = runs_core._create_run_from_request(request)
+
+        self.assertEqual(result["status"], "starting")
+        self.assertIsNone(result["pending_approval"])
+        create_kwargs = create_run_mock.call_args.kwargs
+        self.assertFalse(create_kwargs["defer_local_enqueue"])
+        metadata = create_kwargs["context"]["metadata"]
+        self.assertEqual(metadata["owner_user_id"], "user-123")
+        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 0)
+        self.assertTrue(metadata["browser_reviewed_approved"])
+        self.assertNotIn("local_execution_waiting_confirmation", metadata)
+        self.assertNotIn("local_execution_waiting_approval", metadata)
+
+    def test_runs_core_create_run_from_request_keeps_local_confirmation_for_owner_mismatch(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Read a signed-in page",
+            metadata={"outcome_pack": "local-execution-v1", "execution_target": "local_companion"},
+        )
+        precheck = {
+            "blocked_count": 0,
+            "items": [
+                {
+                    "tool_id": "browser_automation",
+                    "decision": "approval_required",
+                    "execution_decision": "approval_required",
+                    "reason": "session-backed interactive browser automation requires approval",
+                }
+            ],
+            "allowed": [],
+            "require_confirmation": ["browser_automation"],
+            "require_confirmation_count": 1,
+            "approval_required": ["browser_automation"],
+            "approval_required_count": 1,
+            "capability_ids": ["browser_automation"],
+            "browser_automation_policy": {"reviewed_approval_required": True},
+        }
+        prepare_payload = {
+            "engine": "orion",
+            "metadata": {
+                "outcome_pack": "local-execution-v1",
+                "execution_target": "local_companion",
+            },
+            "workflow_snapshot": None,
+        }
+
+        with patch("server_modules.runs_core._prepare_run_start_request", return_value=prepare_payload):
+            with patch("server_modules.runs_core.decide_execution_target", return_value={"selected": "local_companion"}, create=True):
+                with patch("server_modules.runs_core.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                    with patch("server_modules.runs_core.build_doctor_run_gate_from_snapshot", return_value={"blocking": False}):
+                        with patch("server_modules.runs_execution._compute_tool_policy_precheck", return_value=precheck):
+                            with patch("server_modules.runs_execution.create_run", return_value="run-personal-local") as create_run_mock:
+                                with patch("server_modules.runs_core._begin_run_pending_confirmation", return_value={"approval_id": "approval-local-1"}):
+                                    with patch.object(runs_core, "agent_machine_inherited_owner_user_id", return_value="user-456"):
+                                        with patch.object(runs_core, "agent_machine_full_trust_enabled", return_value=False):
+                                            result = runs_core._create_run_from_request(request)
+
+        self.assertEqual(result["status"], "waiting_for_input")
+        self.assertEqual(result["pending_approval"]["approval_id"], "approval-local-1")
+        create_kwargs = create_run_mock.call_args.kwargs
+        self.assertTrue(create_kwargs["defer_local_enqueue"])
+        metadata = create_kwargs["context"]["metadata"]
+        self.assertTrue(metadata["local_execution_waiting_confirmation"])
+        self.assertTrue(metadata["local_execution_waiting_approval"])
+        self.assertNotIn("browser_reviewed_approved", metadata)
+
+    def test_wait_for_run_terminal_status_auto_approves_matching_owner_confirmation(self):
+        run_id = "run-autopilot-auto-approve"
+        run = {
+            "status": "waiting_for_input",
+            "context": {"metadata": {"owner_user_id": "user-123"}},
+            "pending_confirmation": {"approval_id": "approval-1", "source": "runtime_wait"},
+        }
+        run["input_queue"] = _AutoCompleteQueue(run)
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
+                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
+                        with patch.object(autopilot_connectors, "_summarize_run_terminal_result", return_value="Done"):
+                            with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 1]):
+                                with patch.object(autopilot_connectors.time, "sleep", return_value=None):
+                                    result = autopilot_connectors._wait_for_run_terminal_status(run_id)
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["auto_approved"])
+        self.assertEqual(run["input_queue"].items, [{"approval_id": "approval-1", "decision": "proceed"}])
+
+    def test_wait_for_run_terminal_status_does_not_auto_approve_owner_mismatch(self):
+        run_id = "run-autopilot-owner-mismatch"
+        passive_queue = _PassiveQueue()
+        run = {
+            "status": "waiting_for_input",
+            "context": {"metadata": {"owner_user_id": "user-456"}},
+            "pending_confirmation": {"approval_id": "approval-2", "source": "runtime_wait"},
+            "input_queue": passive_queue,
+        }
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
+                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
+                        with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 31, 31, 31]):
+                            with patch.object(autopilot_connectors.time, "sleep", return_value=None):
+                                result = autopilot_connectors._wait_for_run_terminal_status(run_id, timeout_seconds=30)
+
+        self.assertEqual(result["status"], "timeout")
+        self.assertFalse(result["auto_approved"])
+        self.assertEqual(passive_queue.items, [])
+
+    def test_wait_for_run_terminal_status_does_not_auto_approve_workflow_human_node(self):
+        run_id = "run-autopilot-human-node"
+        passive_queue = _PassiveQueue()
+        run = {
+            "status": "waiting_for_input",
+            "context": {"metadata": {"owner_user_id": "user-123"}},
+            "pending_confirmation": {"approval_id": "approval-3", "source": "workflow_human_node"},
+            "input_queue": passive_queue,
+        }
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                with patch.object(autopilot_connectors, "runs", {run_id: run}, create=True):
+                    with patch.object(autopilot_connectors, "_latest_run_error_message", return_value=""):
+                        with patch.object(autopilot_connectors.time, "time", side_effect=[0, 0, 31, 31, 31]):
+                            with patch.object(autopilot_connectors.time, "sleep", return_value=None):
+                                result = autopilot_connectors._wait_for_run_terminal_status(run_id, timeout_seconds=30)
+
+        self.assertEqual(result["status"], "timeout")
+        self.assertFalse(result["auto_approved"])
+        self.assertEqual(passive_queue.items, [])
+
+    def test_telegram_autopilot_run_inherits_machine_owner(self):
+        captured: dict[str, object] = {}
+
+        def _fake_create_run(*, engine, context):
+            captured["engine"] = engine
+            captured["context"] = context
+            return "run-telegram-1"
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
+                    with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                        with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
+                            autopilot_connectors._create_telegram_run(
+                                goal="Investigate this issue",
+                                workspace_id="default",
+                                connector_id="cred-telegram",
+                                chat_id="123",
+                                sender_id="456",
+                                update_id=1,
+                            )
+
+        self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")
+
+    def test_whatsapp_autopilot_run_inherits_machine_owner(self):
+        captured: dict[str, object] = {}
+
+        def _fake_create_run(*, engine, context):
+            captured["engine"] = engine
+            captured["context"] = context
+            return "run-whatsapp-1"
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                with patch("server_modules.autopilot_connectors.decide_execution_target", return_value={"selected": "cloud"}, create=True):
+                    with patch("server_modules.autopilot_connectors.apply_execution_route_metadata", side_effect=lambda metadata, route: metadata, create=True):
+                        with patch("server_modules.autopilot_connectors.create_run", side_effect=_fake_create_run, create=True):
+                            autopilot_connectors._create_whatsapp_run(
+                                goal="Handle this request",
+                                workspace_id="default",
+                                connector_id="cred-whatsapp",
+                                from_number="whatsapp:+15551230000",
+                                to_number="whatsapp:+15559870000",
+                                message_sid="SM123",
+                                account_sid="AC123",
+                            )
+
+        self.assertEqual(captured["context"]["metadata"]["owner_user_id"], "user-123")
+
+    def test_discord_inbound_run_inherits_machine_owner(self):
+        parsed = discord_connector.parse_inbound_event(
+            {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "id": "msg-1",
+                    "channel_id": "123",
+                    "guild_id": "456",
+                    "content": "<@999> please investigate this",
+                    "author": {"id": "321", "username": "alice"},
+                    "mentions": [{"id": "999"}],
+                },
+            }
+        )
+        created: list[dict[str, object]] = []
+
+        def _fake_create_run(*, context):
+            created.append(context)
+            return "run-discord-1"
+
+        with patch.object(runtime_config, "AGENT_MACHINE_MODE", "agent"):
+            with patch.object(runtime_config, "AGENT_MACHINE_OWNER", "user-123"):
+                result = discord_connector.dispatch_inbound_event(
+                    parsed,
+                    connector_entry={"id": "cred-discord", "workspace_id": "default", "metadata": {}},
+                    credentials={"bot_token": "discord-token", "channel_id": "123", "guild_id": "456"},
+                    append_event_fn=None,
+                    create_run_fn=_fake_create_run,
+                )
+
+        self.assertTrue(result["triggered"])
+        self.assertEqual(created[0]["metadata"]["owner_user_id"], "user-123")
 
 
 if __name__ == "__main__":

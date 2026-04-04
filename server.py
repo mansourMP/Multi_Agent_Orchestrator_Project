@@ -54,9 +54,15 @@ for module in (
 
 def _log_machine_mode_startup() -> None:
     LOGGER.info("Registered tools: %s", registered_direct_chat_tool_names_for_logging())
+    configured_owner = str(runtime_config.AGENT_MACHINE_OWNER or "").strip()
     if runtime_config.AGENT_MACHINE_MODE == "agent":
-        LOGGER.warning("AGENT MACHINE MODE ACTIVE — all tool executions bypass approval for the configured machine owner.")
-        if not str(runtime_config.AGENT_MACHINE_OWNER or "").strip():
+        if configured_owner:
+            LOGGER.warning(
+                "AGENT MACHINE MODE ACTIVE — all tool executions bypass approval for configured machine owner %s.",
+                configured_owner,
+            )
+        else:
+            LOGGER.warning("AGENT MACHINE MODE ACTIVE but AGENT_MACHINE_OWNER is empty.")
             LOGGER.warning("AGENT MACHINE MODE is enabled but AGENT_MACHINE_OWNER is empty; falling back to personal-mode approvals.")
     else:
         LOGGER.info("Personal machine mode — approvals required for destructive tools")

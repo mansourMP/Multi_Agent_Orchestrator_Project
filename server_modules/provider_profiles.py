@@ -216,7 +216,6 @@ PROVIDER_CATALOG = {
         "default_auth_mode": "oauth_token",
         "default_model": "gpt-5.4",
         "note": "ChatGPT / Codex OAuth session for the Codex transport.",
-        "hidden": True,
     },
     "anthropic": {
         "label": "Anthropic",

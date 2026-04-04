@@ -110,7 +110,7 @@ const ASSISTANT_PROFILE_LIBRARY: AssistantProfileMeta[] = [
   { id: 'builder', label: 'Builder', subtitle: 'Product, coding, design, and workflows', backendRole: 'builder' },
   { id: 'crypto-analyst', label: 'Crypto Analyst', subtitle: 'Market research, watchlists, and risk review', backendRole: 'research' },
   { id: 'private-assistant', label: 'Personal', subtitle: 'Planning, study, reminders, and daily organization', backendRole: 'private-assistant' },
-  { id: 'custom', label: 'General', subtitle: 'Flexible general assistant for mixed work', backendRole: 'orchestrator' },
+  { id: 'custom', label: 'Assistant', subtitle: 'Flexible general assistant for mixed work', backendRole: 'orchestrator' },
 ];
 
 const CHAT_DEPTH_OPTIONS: Array<{ value: ChatDepthValue; label: string; description: string }> = [
@@ -1223,6 +1223,7 @@ export function AutopilotWorkspace() {
     localExecutionDraft,
     setLocalExecutionDraft,
     provider,
+    setProvider,
     model,
     setModel,
     providerOptions,
@@ -1293,7 +1294,7 @@ export function AutopilotWorkspace() {
   const [chatNoProviderStatus, setChatNoProviderStatus] = useState(false);
   const [chatAuthRequiredMessage, setChatAuthRequiredMessage] = useState<string | null>(null);
   const [simpleChatDepth, setSimpleChatDepth] = useState<ChatDepthValue>('medium');
-  const [, setSimplePermissionActionBusy] = useState<string | null>(null);
+  const [simplePermissionActionBusy, setSimplePermissionActionBusy] = useState<string | null>(null);
   const preloadQuerySignatureRef = useRef('');
 
   useEffect(() => {
@@ -2844,7 +2845,7 @@ export function AutopilotWorkspace() {
           }}
           chatBusy={Boolean(pendingSimpleChat)}
           messages={selectedChatMessages}
-          providerBanner={simpleChatProviderBanner}
+          providerBanner={selectedChatMessages.length === 0 ? simpleChatProviderBanner : null}
           targetLabel={defaultAssistantProfile.label}
           targetHref="/agents"
           selectedModel={model}
@@ -2858,7 +2859,24 @@ export function AutopilotWorkspace() {
           onSelectDepth={(value) => {
             if (value === 'low' || value === 'medium' || value === 'high') setSimpleChatDepth(value);
           }}
-          permissionPrompt={null}
+          permissionPrompt={simpleChatPermissionPrompt ? {
+            title: 'Confirmation required',
+            prompt: simpleChatPermissionPrompt.prompt,
+            labels: simpleChatPermissionPrompt.labels,
+            capabilities: simpleChatPermissionPrompt.capabilities,
+            actions: simpleChatPermissionPrompt.actions,
+            target: simpleChatPermissionPrompt.target,
+            scope: 'once',
+            reusable: simpleChatPermissionPrompt.reusable,
+            consequence: simpleChatPermissionPrompt.consequence,
+            busyKey: simplePermissionActionBusy,
+            onAllowOnce: () => {
+              void submitSimpleChatPermissionDecision('Proceed', 'once');
+            },
+            onDeny: () => {
+              void submitSimpleChatPermissionDecision('Hold', 'once');
+            },
+          } : null}
           identityDrawerOpen={chatIdentityDrawerOpen}
           onToggleIdentityDrawer={() => setChatIdentityDrawerOpen((current) => !current)}
           onCloseIdentityDrawer={() => setChatIdentityDrawerOpen(false)}

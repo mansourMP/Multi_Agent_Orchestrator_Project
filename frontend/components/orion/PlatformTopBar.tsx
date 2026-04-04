@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bell, Edit3 } from 'lucide-react';
+import { Bell, SquarePen } from 'lucide-react';
 import { forwardWheelToMainScroll } from '@/lib/shell/forwardWheelToMainScroll';
 import { useShellChromeVisibility } from '@/lib/shell/useShellChromeVisibility';
 import { usePlatformShell } from './PlatformShellContext';
@@ -33,6 +33,12 @@ export default function PlatformTopBar() {
   const router = useRouter();
   const { hideShellChrome } = useShellChromeVisibility(pathname);
   const { chatTopControls } = usePlatformShell();
+  const showRouteTitle = pathname !== '/';
+  const topNotice = chatTopControls?.notices.find(
+    (notice) => notice.id !== 'provider'
+      && (notice.tone === 'warn' || notice.tone === 'error')
+      && Boolean(notice.actions && notice.actions.length > 0),
+  ) || null;
 
   useEffect(() => {
     document.documentElement.style.setProperty('--topbar-height', hideShellChrome ? '0px' : '56px');
@@ -71,11 +77,22 @@ export default function PlatformTopBar() {
         }}
       >
         <div className="orion-shellbar-section orion-shellbar-section-left">
-          <div className="orion-shellbar-page">
-            <div className="orion-shellbar-page-row">
-              <span className="orion-shellbar-title">{routeTitle(pathname)}</span>
+          {showRouteTitle ? (
+            <div className="orion-shellbar-page">
+              <div className="orion-shellbar-page-row">
+                <span className="orion-shellbar-title">{routeTitle(pathname)}</span>
+              </div>
             </div>
-          </div>
+          ) : null}
+          {pathname === '/' ? (
+            <button
+              type="button"
+              className="orion-shellbar-action orion-shellbar-history-btn"
+              onClick={() => window.dispatchEvent(new Event('orion:open-history'))}
+            >
+              History
+            </button>
+          ) : null}
         </div>
         <div
           className="orion-shellbar-section orion-shellbar-section-center"
@@ -90,29 +107,15 @@ export default function PlatformTopBar() {
             whiteSpace: 'nowrap',
           }}
         >
-          {chatTopControls ? (
-            <>
-              <button type="button" className="orion-shellbar-status-inline is-runtime is-neutral" onClick={chatTopControls.onOpenContext}>
-                {chatTopControls.assistantLabel}
-              </button>
-              {chatTopControls.artifactCount > 0 ? (
-                <button
-                  type="button"
-                  className={`orion-shellbar-status-inline is-runtime${chatTopControls.artifactsOpen ? ' is-accent' : ' is-neutral'}`}
-                  onClick={chatTopControls.onToggleArtifacts}
-                >
-                  {chatTopControls.artifactsOpen ? 'Hide artifacts' : `Artifacts ${chatTopControls.artifactCount}`}
-                </button>
-              ) : null}
-              {chatTopControls.notices.map((notice) => (
+          {topNotice ? (
                 <div
-                  key={notice.id}
+                  key={topNotice.id}
                   className={`orion-shellbar-status-inline is-runtime ${
-                    notice.tone === 'error'
+                    topNotice.tone === 'error'
                       ? 'is-warn'
-                      : notice.tone === 'warn'
+                      : topNotice.tone === 'warn'
                         ? 'is-warn'
-                        : notice.tone === 'accent'
+                        : topNotice.tone === 'accent'
                           ? 'is-accent'
                           : 'is-neutral'
                   }`}
@@ -126,12 +129,12 @@ export default function PlatformTopBar() {
                   }}
                 >
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    <span style={{ fontWeight: 600 }}>{notice.label}</span>
-                    {notice.detail ? <span style={{ color: 'var(--text-secondary)' }}> {notice.detail}</span> : null}
+                    <span style={{ fontWeight: 600 }}>{topNotice.label}</span>
+                    {topNotice.detail ? <span style={{ color: 'var(--text-secondary)' }}> {topNotice.detail}</span> : null}
                   </span>
-                  {notice.actions && notice.actions.length > 0 ? (
+                  {topNotice.actions && topNotice.actions.length > 0 ? (
                     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'nowrap' }}>
-                      {notice.actions.map((action) => (
+                      {topNotice.actions.map((action) => (
                         <button
                           key={action.id}
                           type="button"
@@ -151,17 +154,20 @@ export default function PlatformTopBar() {
                     </span>
                   ) : null}
                 </div>
-              ))}
-            </>
           ) : null}
         </div>
         <div className="orion-shellbar-section orion-shellbar-section-right">
           <button type="button" className="orion-shellbar-icon-btn" aria-label="Notifications">
-            <Bell size={18} strokeWidth={2.2} />
+            <Bell size={16} strokeWidth={2.1} />
           </button>
-          <button type="button" className="orion-shellbar-action" onClick={handleNewChat}>
-            <Edit3 size={13} />
-            <span>New chat</span>
+          <button
+            type="button"
+            className="orion-shellbar-icon-btn is-compose"
+            aria-label="New chat"
+            onClick={handleNewChat}
+            title="New chat"
+          >
+            <SquarePen size={15} strokeWidth={2} />
           </button>
         </div>
       </div>

@@ -17,6 +17,52 @@ class RuntimePolicyShellCommandTests(unittest.TestCase):
         self.assertEqual(evaluation.get("reason"), "blocked_raw_shell_command")
         self.assertTrue(evaluation.get("uses_raw_command_path"))
         self.assertFalse(evaluation.get("uses_capability_path"))
+        self.assertFalse(evaluation.get("safe_raw_shell_command"))
+
+    def test_safe_raw_shell_command_is_allowed(self):
+        evaluation = evaluate_tool_policy_decision(
+            tool_id="execute_shell_command",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={
+                "pack_inputs": {
+                    "operations": [
+                        {
+                            "tool": "execute_shell_command",
+                            "command": "echo hello world",
+                        }
+                    ]
+                }
+            },
+            capability_ids=[],
+        )
+
+        self.assertEqual(evaluation.get("execution_decision"), "allow")
+        self.assertEqual(evaluation.get("reason"), "local_default_allow_local_reversible")
+        self.assertTrue(evaluation.get("uses_raw_command_path"))
+        self.assertTrue(evaluation.get("safe_raw_shell_command"))
+
+    def test_raw_shell_command_with_metacharacters_stays_blocked(self):
+        evaluation = evaluate_tool_policy_decision(
+            tool_id="execute_shell_command",
+            trust_mode="guarded",
+            target="local_companion",
+            metadata={
+                "pack_inputs": {
+                    "operations": [
+                        {
+                            "tool": "execute_shell_command",
+                            "command": "echo hello && whoami",
+                        }
+                    ]
+                }
+            },
+            capability_ids=[],
+        )
+
+        self.assertEqual(evaluation.get("execution_decision"), "deny")
+        self.assertEqual(evaluation.get("reason"), "blocked_raw_shell_command")
+        self.assertFalse(evaluation.get("safe_raw_shell_command"))
 
     def test_capability_backed_shell_command_uses_reviewable_path(self):
         evaluation = evaluate_tool_policy_decision(

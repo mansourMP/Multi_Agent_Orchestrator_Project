@@ -13,6 +13,7 @@
     "@fontsource/outfit": "^5.2.8",
     "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@fontsource/space-mono": "^5.2.9",
+    "@sentry/nextjs": "^10.47.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@xyflow/react": "^12.10.0",

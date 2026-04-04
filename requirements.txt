@@ -1,4 +1,6 @@
 fastapi==0.109.0
+sentry-sdk[fastapi]>=2.57.0
+SQLAlchemy>=2.0.0
 uvicorn[standard]==0.27.0
 sse-starlette==2.0.0
 openai
@@ -27,3 +29,7 @@ discord.py>=2.4.0
 PyNaCl>=1.5.0
 SpeechRecognition>=3.10.0
 playwright>=1.40.0
+pyautogui>=0.9.54
+pytesseract>=0.3.10
+pyperclip>=1.9.0
+psutil>=6.0.0

@@ -535,6 +535,17 @@ def agent_machine_full_trust_enabled(owner_user_id: Optional[str] = None) -> boo
         and bool(effective_owner)
         and secrets.compare_digest(effective_owner, configured_owner)
     )
+
+
+def agent_machine_inherited_owner_user_id(owner_user_id: Optional[str] = None) -> str:
+    effective_owner = str(owner_user_id or "").strip()
+    if effective_owner:
+        return effective_owner
+    if AGENT_MACHINE_MODE != "agent":
+        return ""
+    return str(AGENT_MACHINE_OWNER or "").strip()
+
+
 VAULT_KEY_FILE = _resolve_state_file(
     "CREDENTIAL_VAULT_KEY_FILE",
     "vault/key",

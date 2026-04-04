@@ -3887,6 +3887,7 @@ def _create_telegram_run(
     connector_entry: Optional[Dict[str, Any]] = None,
     connector_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _init()
     resolved_trace_id = str(trace_id or "").strip() or _telegram_trace_id(chat_id, update_id, message_id or "")
     metadata: Dict[str, Any] = {
         "source": "telegram_autopilot",
@@ -3904,6 +3905,9 @@ def _create_telegram_run(
             "message_id": str(message_id or "").strip(),
         },
     }
+    owner_user_id = _agent_machine_owned_entrypoint_owner_user_id()
+    if owner_user_id:
+        metadata["owner_user_id"] = owner_user_id
     if isinstance(connector_context, dict):
         available_connectors = (
             connector_context.get("available_connectors")
@@ -4033,11 +4037,51 @@ def _create_telegram_run(
     return {"run_id": run_id, "route": route}
 
 
+def _agent_machine_owned_entrypoint_owner_user_id(owner_user_id: Optional[str] = None) -> str:
+    from server_modules import runtime_config
+
+    return runtime_config.agent_machine_inherited_owner_user_id(owner_user_id)
+
+
+def _agent_machine_full_trust_for_run(run: Dict[str, Any]) -> bool:
+    from server_modules import runtime_config
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return runtime_config.agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip())
+
+
+def _pending_confirmation_payload(run: Dict[str, Any]) -> Dict[str, Any]:
+    pending = run.get("pending_confirmation")
+    if isinstance(pending, dict) and pending:
+        return pending
+    pending = run.get("pending_approval")
+    if isinstance(pending, dict):
+        return pending
+    return {}
+
+
+def _autopilot_can_auto_approve_wait(run: Dict[str, Any]) -> bool:
+    if not _agent_machine_full_trust_for_run(run):
+        return False
+    pending = _pending_confirmation_payload(run)
+    approval_id = str(pending.get("approval_id") or "").strip()
+    if not approval_id:
+        return False
+    source = str(pending.get("source") or "").strip().lower()
+    if source in {"runtime_wait", "local_execution_start"}:
+        return True
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return bool(metadata.get("local_execution_waiting_confirmation") or metadata.get("local_execution_waiting_approval"))
+
+
 def _wait_for_run_terminal_status(
     run_id: str,
     timeout_seconds: Optional[int] = None,
     max_reply_chars: Optional[int] = None,
 ) -> Dict[str, Any]:
+    _init()
     wait_timeout = max(30, int(timeout_seconds if timeout_seconds is not None else ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS))
     summary_limit = int(max_reply_chars if max_reply_chars is not None else ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS)
     deadline = time.time() + wait_timeout
@@ -4083,14 +4127,13 @@ def _wait_for_run_terminal_status(
                     }
             else:
                 no_worker_since = None
-        if status == "waiting_for_input" and not auto_approved:
-            pending = run.get("pending_approval") if isinstance(run.get("pending_approval"), dict) else {}
+        if status == "waiting_for_input" and not auto_approved and _autopilot_can_auto_approve_wait(run):
+            pending = _pending_confirmation_payload(run)
             approval_id = str(pending.get("approval_id") or "").strip()
-            if approval_id:
-                run["input_queue"].put({"approval_id": approval_id, "decision": "proceed"})
-            else:
-                run["input_queue"].put("proceed")
-            auto_approved = True
+            input_queue = run.get("input_queue")
+            if approval_id and hasattr(input_queue, "put"):
+                input_queue.put({"approval_id": approval_id, "decision": "proceed"})
+                auto_approved = True
         time.sleep(1.0)
     run = runs.get(run_id)
     if isinstance(run, dict):
@@ -4130,6 +4173,7 @@ def _create_whatsapp_run(
     account_sid: str,
     connector_entry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _init()
     trace_id = f"wa:{_telegram_safe_path_token(to_number or 'to')}:{_telegram_safe_path_token(message_sid or str(uuid.uuid4())[:10])}"
     metadata: Dict[str, Any] = {
         "source": "whatsapp_autopilot",
@@ -4146,6 +4190,9 @@ def _create_whatsapp_run(
             "account_sid": account_sid,
         },
     }
+    owner_user_id = _agent_machine_owned_entrypoint_owner_user_id()
+    if owner_user_id:
+        metadata["owner_user_id"] = owner_user_id
     assigned_role = _connector_assigned_agent_role(connector_entry or {})
     if assigned_role:
         metadata["agent_role"] = assigned_role

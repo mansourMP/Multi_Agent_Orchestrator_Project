@@ -176,6 +176,81 @@ class RunsDelegationTests(unittest.TestCase):
         self.assertIn("Run blocked by local execution policy", str(ctx.exception.detail))
         create_run_mock.assert_not_called()
 
+    @patch("server_modules.runs_delegation.build_doctor_run_gate_from_snapshot")
+    @patch("server_modules.runs_delegation.apply_execution_route_metadata", create=True)
+    @patch("server_modules.runs_delegation.decide_execution_target", create=True)
+    @patch("server_modules.runs_delegation._prepare_run_start_request")
+    @patch("server_modules.runs_delegation._compute_tool_policy_precheck", create=True)
+    @patch("server_modules.runs_delegation.create_run", create=True)
+    def test_create_run_from_request_bypasses_local_confirmation_for_agent_machine(
+        self,
+        create_run_mock,
+        precheck_mock,
+        prepare_mock,
+        decide_route_mock,
+        apply_route_mock,
+        doctor_mock,
+    ):
+        prepare_mock.return_value = {
+            "engine": "orion",
+            "metadata": {
+                "outcome_pack": "local-execution-v1",
+                "execution_target": "local_companion",
+                "trust_mode": "guarded",
+                "agent_role": "research",
+            },
+            "workflow_snapshot": None,
+        }
+        decide_route_mock.return_value = {"selected": "local_companion"}
+        apply_route_mock.side_effect = lambda metadata, route: metadata
+        doctor_mock.return_value = {"blocking": False}
+        precheck_mock.return_value = {
+            "blocked_count": 0,
+            "items": [
+                {
+                    "tool_id": "browser_automation",
+                    "decision": "approval_required",
+                    "execution_decision": "approval_required",
+                    "reason": "session-backed interactive browser automation requires approval",
+                }
+            ],
+            "allowed": [],
+            "require_confirmation": ["browser_automation"],
+            "require_confirmation_count": 1,
+            "approval_required": ["browser_automation"],
+            "approval_required_count": 1,
+            "capability_ids": ["browser_automation"],
+            "browser_automation_policy": {"reviewed_approval_required": True},
+        }
+        create_run_mock.return_value = "run-agent-delegation"
+
+        request = runs_delegation.RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="Read a signed-in page",
+            agent_role="research",
+            metadata={
+                "outcome_pack": "local-execution-v1",
+                "execution_target": "local_companion",
+                "trust_mode": "guarded",
+            },
+        )
+
+        with patch.object(runs_delegation, "agent_machine_inherited_owner_user_id", return_value="user-123"):
+            with patch.object(runs_delegation, "agent_machine_full_trust_enabled", return_value=True):
+                result = runs_delegation._create_run_from_request(request)
+
+        self.assertEqual(result["status"], "starting")
+        self.assertIsNone(result["pending_approval"])
+        create_kwargs = create_run_mock.call_args.kwargs
+        self.assertFalse(create_kwargs["defer_local_enqueue"])
+        metadata = create_kwargs["context"]["metadata"]
+        self.assertEqual(metadata["owner_user_id"], "user-123")
+        self.assertEqual(metadata["tool_policy_precheck"]["approval_required_count"], 0)
+        self.assertTrue(metadata["browser_reviewed_approved"])
+        self.assertNotIn("local_execution_waiting_confirmation", metadata)
+        self.assertNotIn("local_execution_waiting_approval", metadata)
+
     @patch.object(runs_delegation.threading, "Timer", _ImmediateTimer)
     def test_child_run_auto_retries_on_failure(self):
         parent_run_id = "11111111-1111-4111-8111-111111111111"

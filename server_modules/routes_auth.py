@@ -40,6 +40,13 @@ async def auth_me(current_user=Depends(get_current_user)):
     return get_authenticated_user_profile(current_user)
 
 
+@router.get("/auth/status")
+async def auth_status(current_user=Depends(get_current_user)):
+    profile = get_authenticated_user_profile(current_user)
+    user = profile.get("user") if isinstance(profile, dict) else None
+    return {"authenticated": True, "user": user}
+
+
 @router.patch("/auth/me")
 async def patch_auth_me(body: AuthMePatchRequest, current_user=Depends(get_current_user)):
     return update_authenticated_user_profile(current_user, name=body.name, avatar_url=body.avatar_url)

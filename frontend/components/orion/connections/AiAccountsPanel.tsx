@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
@@ -267,21 +266,20 @@ function ProviderMark({ provider, size }: { provider: ProviderId; size: number }
         overflow: 'hidden',
       }}
     >
-      <Image
+      <img
         src={visual.assetSrc}
         alt=""
         aria-hidden="true"
-        unoptimized
-        width={innerSize}
-        height={innerSize}
+        loading="eager"
         style={{
           width: innerSize,
-        height: innerSize,
-        objectFit: 'contain',
-        display: 'block',
-      }}
-    />
-  </div>
+          height: innerSize,
+          objectFit: 'contain',
+          display: 'block',
+          flexShrink: 0,
+        }}
+      />
+    </div>
   );
 }
 

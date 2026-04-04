@@ -12,9 +12,7 @@ import {
   LoaderCircle,
   Mic,
   Plus,
-  PanelLeft,
   Square,
-  SlidersHorizontal,
   Volume2,
   X,
 } from 'lucide-react';
@@ -657,12 +655,15 @@ function formatChatHistoryTimestamp(value: string): string {
   return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function buildChatHistoryPreview(session: ChatSessionRecord): string {
+function hasSavedChatHistory(session: ChatSessionRecord): boolean {
+  return session.messages.some((message) => message.role === 'user' && String(message.content || '').trim());
+}
+
+function buildChatHistoryTitle(session: ChatSessionRecord): string {
   const firstUserMessage = session.messages.find((message) => message.role === 'user' && String(message.content || '').trim());
-  const lastMessage = [...session.messages].reverse().find((message) => String(message.content || '').trim());
-  const previewSource = String(firstUserMessage?.content || lastMessage?.content || '').replace(/\s+/g, ' ').trim();
-  if (!previewSource) return 'No messages yet.';
-  return previewSource.length > 88 ? `${previewSource.slice(0, 85).trimEnd()}...` : previewSource;
+  const titleSource = String(firstUserMessage?.content || '').replace(/\s+/g, ' ').trim();
+  if (!titleSource) return 'New chat';
+  return titleSource.length > 48 ? `${titleSource.slice(0, 45).trimEnd()}...` : titleSource;
 }
 
 export function ChatSurface({
@@ -707,7 +708,6 @@ export function ChatSurface({
   const bottomRef = useRef<HTMLDivElement>(null);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [controlsMenuOpen, setControlsMenuOpen] = useState(false);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [artifactPanelWidth, setArtifactPanelWidth] = useState(ARTIFACT_PANEL_DEFAULT_WIDTH);
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
@@ -730,6 +730,10 @@ export function ChatSurface({
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const audioPlayerUrlRef = useRef<string | null>(null);
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const visibleHistorySessions = useMemo(
+    () => historySessions.filter(hasSavedChatHistory),
+    [historySessions],
+  );
   const visibleMessages = useMemo(() => messages, [messages]);
   const hasMessages = visibleMessages.length > 0;
   const isFirstThread = visibleMessages.length > 0 && visibleMessages.length <= 2;
@@ -797,6 +801,11 @@ export function ChatSurface({
     : null;
   const pendingStepLabel = formatPendingToolLabel(pendingStep);
   const pendingStepActive = pendingStep?.status === 'active';
+  const selectedModelLabel = useMemo(() => {
+    const value = String(selectedModel || '').trim();
+    if (!value) return 'Model';
+    return value.length > 18 ? `${value.slice(0, 18).trimEnd()}...` : value;
+  }, [selectedModel]);
   const latestRunCard = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant' && message.runCard)?.runCard || null,
     [messages],
@@ -878,15 +887,6 @@ export function ChatSurface({
             onClick: () => onRunApprovalDecision('deny'),
           },
         ],
-      });
-    }
-
-    if (latestAssistantLifecycle && (latestAssistantLifecycle.tone === 'thinking' || latestAssistantLifecycle.tone === 'working' || latestAssistantLifecycle.tone === 'confirmation')) {
-      notices.push({
-        id: 'lifecycle',
-        tone: latestAssistantLifecycle.tone === 'confirmation' ? 'warn' : 'neutral',
-        label: latestAssistantLifecycle.label,
-        detail: latestAssistantLifecycle.tone === 'working' ? 'Assistant is still processing this turn.' : null,
       });
     }
 
@@ -1358,20 +1358,18 @@ export function ChatSurface({
   }, [artifacts, isMobile, latestArtifactId, selectedArtifactId]);
 
   useEffect(() => {
-    if (!attachMenuOpen && !modelMenuOpen && !controlsMenuOpen) return;
+    if (!attachMenuOpen && !modelMenuOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       if (target.closest('[data-chat-menu-root]')) return;
       setAttachMenuOpen(false);
       setModelMenuOpen(false);
-      setControlsMenuOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setAttachMenuOpen(false);
       setModelMenuOpen(false);
-      setControlsMenuOpen(false);
     };
     window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
@@ -1379,7 +1377,7 @@ export function ChatSurface({
       window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [attachMenuOpen, controlsMenuOpen, modelMenuOpen]);
+  }, [attachMenuOpen, modelMenuOpen]);
 
   useEffect(() => {
     if (!identityDrawerOpen) return;
@@ -1389,6 +1387,12 @@ export function ChatSurface({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [identityDrawerOpen, onCloseIdentityDrawer]);
+
+  useEffect(() => {
+    const handler = () => setHistoryDrawerOpen(true);
+    window.addEventListener('orion:open-history', handler);
+    return () => window.removeEventListener('orion:open-history', handler);
+  }, []);
 
   const handleToggleArtifacts = useCallback(() => {
     if (artifacts.length === 0) return;
@@ -1424,7 +1428,7 @@ export function ChatSurface({
       artifactCount: artifacts.length,
       artifactsOpen: artifactPanelVisible,
       onToggleArtifacts: handleToggleArtifactsFromTopBar,
-      notices: topPanelNotices,
+      notices: topPanelNotices.filter((n) => n.id !== 'provider' && (n.tone === 'warn' || n.tone === 'error') && Array.isArray(n.actions) && n.actions.length > 0),
     });
   }, [
     artifactPanelVisible,
@@ -1468,73 +1472,37 @@ export function ChatSurface({
           <>
             <button
               type="button"
+              className="orion-chat-v2-history-backdrop"
               aria-label="Close chat history"
               onClick={() => setHistoryDrawerOpen(false)}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                border: 0,
-                background: 'rgba(15, 18, 24, 0.18)',
-                zIndex: 14,
-              }}
             />
             <aside
               aria-label="Chat history"
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: isMobile ? 'min(100%, 320px)' : 320,
-                zIndex: 15,
-                display: 'flex',
-                flexDirection: 'column',
-                minHeight: 0,
-                borderRight: '1px solid color-mix(in srgb, var(--border-default) 78%, transparent 22%)',
-                background: 'color-mix(in srgb, var(--bg-surface) 96%, var(--bg-element) 4%)',
-                boxShadow: '12px 0 32px rgba(0, 0, 0, 0.08)',
-              }}
+              className="orion-chat-v2-history"
+              style={isMobile ? { width: 'min(100%, 320px)' } : undefined}
             >
-              <div
-                style={{
-                  display: 'grid',
-                  gap: 12,
-                  padding: 18,
-                  borderBottom: '1px solid color-mix(in srgb, var(--border-default) 82%, transparent 18%)',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 650, color: 'var(--text-primary)' }}>Chats</div>
-                  <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                    Previous sessions from the local chat store.
+              <div className="orion-chat-v2-history-header">
+                <div className="orion-chat-v2-history-toolbar">
+                  <div>
+                    <div className="orion-chat-v2-history-title">Chats</div>
+                    <div className="orion-chat-v2-history-copy">Recent</div>
                   </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button type="button" className="orion-btn orion-btn-primary" style={{ minHeight: 44, flex: 1 }} onClick={onNewChat}>
-                    New chat
-                  </button>
-                  <button type="button" className="orion-btn orion-btn-ghost" style={{ minHeight: 44 }} onClick={() => setHistoryDrawerOpen(false)}>
-                    Close
-                  </button>
-                </div>
-              </div>
-              <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: 12, display: 'grid', gap: 8 }}>
-                {historySessions.length === 0 ? (
-                  <div
-                    style={{
-                      border: '1px dashed var(--border-subtle)',
-                      borderRadius: 16,
-                      padding: 16,
-                      fontSize: 12,
-                      lineHeight: 1.55,
-                      color: 'var(--text-secondary)',
-                      background: 'color-mix(in srgb, var(--bg-surface) 94%, transparent 6%)',
-                    }}
+                  <button
+                    type="button"
+                    className="orion-chat-v2-history-close"
+                    aria-label="Close chat history"
+                    onClick={() => setHistoryDrawerOpen(false)}
                   >
-                    No saved chats yet.
-                  </div>
+                    <X size={15} />
+                  </button>
+                </div>
+                <button type="button" className="orion-btn orion-chat-v2-history-new" onClick={onNewChat}>New chat</button>
+              </div>
+              <div className="orion-chat-v2-history-list">
+                {visibleHistorySessions.length === 0 ? (
+                  <div className="orion-chat-v2-history-empty">No saved chats yet.</div>
                 ) : (
-                  historySessions.map((session) => {
+                  visibleHistorySessions.map((session) => {
                     const active = session.id === selectedSessionId;
                     return (
                       <button
@@ -1545,49 +1513,11 @@ export function ChatSurface({
                           setHistoryDrawerOpen(false);
                         }}
                         aria-current={active ? 'page' : undefined}
-                        style={{
-                          width: '100%',
-                          border: '1px solid var(--border-subtle)',
-                          borderRadius: 16,
-                          background: active
-                            ? 'color-mix(in srgb, var(--bg-element) 88%, var(--bg-surface) 12%)'
-                            : 'var(--bg-shell)',
-                          padding: 12,
-                          display: 'grid',
-                          gap: 8,
-                          textAlign: 'left',
-                        }}
+                        className={`orion-chat-v2-history-item${active ? ' is-active' : ''}`}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                          <div
-                            style={{
-                              minWidth: 0,
-                              fontSize: 13,
-                              fontWeight: 650,
-                              color: 'var(--text-primary)',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                          >
-                            {buildChatHistoryPreview(session)}
-                          </div>
-                          <div style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--text-tertiary)' }}>
-                            {formatChatHistoryTimestamp(session.updatedAt)}
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 12,
-                            lineHeight: 1.55,
-                            color: 'var(--text-secondary)',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden',
-                          }}
-                        >
-                          {buildChatHistoryPreview(session)}
+                        <div className="orion-chat-v2-history-item-head">
+                          <div className="orion-chat-v2-history-item-title">{buildChatHistoryTitle(session)}</div>
+                          <div className="orion-chat-v2-history-item-time">{formatChatHistoryTimestamp(session.updatedAt)}</div>
                         </div>
                       </button>
                     );
@@ -1701,6 +1631,35 @@ export function ChatSurface({
                 </article>
               );
                 })}
+                {permissionPrompt ? (
+                  <article className="orion-chat-v2-turn is-assistant">
+                    <div className="orion-chat-v2-assistant">
+                      <div style={{ fontSize: 14, color: 'var(--text-primary)', marginBottom: 10 }}>
+                        {permissionPrompt.prompt}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="orion-btn orion-btn-primary"
+                          style={{ minHeight: 36, fontSize: 13, padding: '0 14px' }}
+                          disabled={Boolean(permissionPrompt.busyKey)}
+                          onClick={permissionPrompt.onAllowOnce}
+                        >
+                          Allow once
+                        </button>
+                        <button
+                          type="button"
+                          className="orion-btn"
+                          style={{ minHeight: 36, fontSize: 13, padding: '0 14px', border: '1px solid var(--border-default)' }}
+                          disabled={Boolean(permissionPrompt.busyKey)}
+                          onClick={permissionPrompt.onDeny}
+                        >
+                          Deny
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ) : null}
                 {shouldShowPendingRow ? (
                   <article className="orion-chat-v2-turn is-assistant is-pending">
                     <div className="orion-chat-v2-assistant">
@@ -1739,15 +1698,6 @@ export function ChatSurface({
 
               <div className="orion-chat-v2-composer-toolbar">
                 <div className="orion-chat-v2-composer-toolbar-left">
-                  <button
-                    type="button"
-                    className="orion-chat-v2-model-pill"
-                    onClick={() => setHistoryDrawerOpen(true)}
-                    aria-label="Open chat history"
-                  >
-                    <PanelLeft size={14} />
-                    <span>History</span>
-                  </button>
                   <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
                     <button
                       type="button"
@@ -1758,7 +1708,6 @@ export function ChatSurface({
                       onClick={() => {
                         setAttachMenuOpen((current) => !current);
                         setModelMenuOpen(false);
-                        setControlsMenuOpen(false);
                       }}
                     >
                       <Plus size={16} />
@@ -1806,10 +1755,9 @@ export function ChatSurface({
                       onClick={() => {
                         setModelMenuOpen((current) => !current);
                         setAttachMenuOpen(false);
-                        setControlsMenuOpen(false);
                       }}
                     >
-                      <span>Models</span>
+                      <span>{selectedModelLabel}</span>
                       <ChevronDown size={14} />
                     </button>
                     {modelMenuOpen ? (
@@ -1827,50 +1775,6 @@ export function ChatSurface({
                             {option}
                           </button>
                         ))}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="orion-chat-v2-composer-menu" data-chat-menu-root>
-                    <button
-                      type="button"
-                      className="orion-chat-v2-icon-btn"
-                      aria-label="More controls"
-                      aria-haspopup="menu"
-                      aria-expanded={controlsMenuOpen}
-                      onClick={() => {
-                        setControlsMenuOpen((current) => !current);
-                        setAttachMenuOpen(false);
-                        setModelMenuOpen(false);
-                      }}
-                    >
-                      <SlidersHorizontal size={16} />
-                    </button>
-                    {controlsMenuOpen ? (
-                      <div className="orion-chat-v2-menu is-controls" role="menu">
-                        <div className="orion-chat-v2-menu-section-label">Current access</div>
-                        <div className="orion-chat-v2-menu-meta">{trustLabel}</div>
-                        <div className="orion-chat-v2-menu-section-label">Response depth</div>
-                        <div className="orion-chat-v2-menu-meta">{depthLabel}</div>
-                        {depthOptions.map((option) => (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={`orion-chat-v2-menu-item${option.value === selectedDepth ? ' is-selected' : ''}`}
-                            onClick={() => {
-                              onSelectDepth(option.value);
-                              setControlsMenuOpen(false);
-                            }}
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); onToggleIdentityDrawer(); }}>
-                          Open context
-                        </button>
-                        <button type="button" className="orion-chat-v2-menu-item" onClick={() => { setControlsMenuOpen(false); router.push('/connectors'); }}>
-                          Open integrations
-                        </button>
                       </div>
                     ) : null}
                   </div>

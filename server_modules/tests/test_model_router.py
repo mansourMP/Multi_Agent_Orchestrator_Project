@@ -7,10 +7,10 @@ from server_modules import model_router
 class ModelRouterTests(unittest.TestCase):
     def test_resolve_model_aliases(self):
         self.assertEqual(model_router.resolve_model("claude-sonnet"), "anthropic/claude-3-5-sonnet-20241022")
-        self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-2.0-flash")
+        self.assertEqual(model_router.resolve_model("gemini-flash"), "gemini/gemini-1.5-flash")
         self.assertEqual(model_router.resolve_model("gpt-4o-mini"), "gpt-4o-mini")
-        self.assertEqual(model_router.resolve_model("vertex-gemini-flash"), "vertex_ai/gemini-2.0-flash-001")
-        self.assertEqual(model_router.resolve_model("gemini-2.0-flash-001", provider="vertex"), "vertex_ai/gemini-2.0-flash-001")
+        self.assertEqual(model_router.resolve_model("vertex-gemini-pro"), "vertex_ai/gemini-1.5-pro")
+        self.assertEqual(model_router.resolve_model("gemini-1.5-pro", provider="vertex"), "vertex_ai/gemini-1.5-pro")
 
     def test_normalize_messages_filters_invalid_shapes(self):
         messages = model_router.normalize_messages(
@@ -37,16 +37,17 @@ class ModelRouterTests(unittest.TestCase):
         self.assertIn("gpt-4o-mini", by_alias)
         self.assertIn("claude-sonnet", by_alias)
         self.assertIn("gemini-flash", by_alias)
-        self.assertIn("vertex-gemini-flash", by_alias)
+        self.assertIn("vertex-gemini-pro", by_alias)
 
         self.assertEqual(by_alias["gpt-4o-mini"]["provider"], "openai")
         self.assertEqual(by_alias["claude-sonnet"]["provider"], "anthropic")
         self.assertEqual(by_alias["gemini-flash"]["provider"], "gemini")
-        self.assertEqual(by_alias["vertex-gemini-flash"]["provider"], "vertex")
+        self.assertEqual(by_alias["vertex-gemini-pro"]["provider"], "vertex")
 
-        self.assertTrue(by_alias["gpt-4o-mini"]["is_global_default"])
+        self.assertTrue(by_alias["gpt-4o"]["is_global_default"])
+        self.assertFalse(by_alias["gpt-4o-mini"]["is_global_default"])
         self.assertTrue(by_alias["claude-sonnet"]["is_provider_default"])
-        self.assertTrue(by_alias["vertex-gemini-flash"]["is_provider_default"])
+        self.assertTrue(by_alias["vertex-gemini-pro"]["is_provider_default"])
         self.assertFalse(by_alias["gemini-flash"]["is_global_default"])
 
     @patch("server_modules.model_router.http_json_request")
@@ -102,18 +103,18 @@ class ModelRouterTests(unittest.TestCase):
                 {"role": "system", "content": "system prompt"},
                 {"role": "user", "content": "user prompt"},
             ],
-            model="gemini-2.0-flash-001",
+            model="gemini-1.5-pro",
             provider="vertex",
             credentials={"access_token": "token", "project_id": "proj", "location": "us-central1"},
         )
 
         self.assertEqual(result["content"], "vertex-ok")
         self.assertEqual(result["provider"], "vertex")
-        self.assertEqual(result["model"], "vertex_ai/gemini-2.0-flash-001")
+        self.assertEqual(result["model"], "vertex_ai/gemini-1.5-pro")
         self.assertEqual(result["usage"]["total_tokens"], 0)
         self.assertEqual(adapter.last_call["system_prompt"], "system prompt")
         self.assertEqual(adapter.last_call["user_input"], "user prompt")
-        self.assertEqual(adapter.last_call["model"], "gemini-2.0-flash-001")
+        self.assertEqual(adapter.last_call["model"], "gemini-1.5-pro")
 
 
 if __name__ == "__main__":

@@ -296,6 +296,13 @@ def default_local_companion_allow_prefixes(project_root: Path) -> List[str]:
     if context.is_windows:
         prefixes.extend(
             [
+                "echo",
+                "dir",
+                "type",
+                "findstr",
+                "python",
+                "py -3",
+                "pip",
                 "python -m unittest",
                 "py -3 -m unittest",
                 ".venv\\Scripts\\python.exe -m unittest",
@@ -307,8 +314,16 @@ def default_local_companion_allow_prefixes(project_root: Path) -> List[str]:
     else:
         prefixes.extend(
             [
+                "echo",
                 "ls",
                 "ls -la",
+                "cat",
+                "pwd",
+                "grep",
+                "python",
+                "python3",
+                "pip",
+                "pip3",
                 "python3 -m unittest",
                 ".venv/bin/python -m unittest",
                 "./bin/empyralis status",

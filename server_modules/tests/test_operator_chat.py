@@ -86,6 +86,51 @@ class OperatorChatTests(unittest.TestCase):
         self.assertEqual(provider, "codex_cli")
         self.assertEqual(credentials.get("auth_mode"), "oauth_token")
 
+    def test_preferred_provider_maps_openai_codex_token_to_codex_cli(self):
+        def fake_credentials(_workspace_id, provider):
+            if provider == "openai":
+                return {"credential_type": "codex_token", "access_token": "token"}
+            if provider == "codex_cli":
+                return {"auth_mode": "oauth_token", "oauth_token": "token"}
+            return {}
+
+        def fake_support(provider, credentials):
+            return provider == "codex_cli" and bool(credentials)
+
+        with patch("operator_chat_under_test._direct_chat_credentials", side_effect=fake_credentials):
+            with patch("operator_chat_under_test._supports_direct_message_native_chat", side_effect=fake_support):
+                provider, credentials = operator_chat._preferred_provider("default", "openai")
+
+        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials.get("auth_mode"), "oauth_token")
+
+    @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
+    @patch(
+        "operator_chat_under_test._execute_single_direct_tool_call",
+        return_value="1. Top headline\nURL: https://example.com\nSnippet: Example AI headline",
+    )
+    @patch(
+        "operator_chat_under_test.generate_chat_reply_stream_with_provider_fallback",
+        side_effect=AssertionError("generation path should not run for obvious direct tool prompts"),
+    )
+    def test_obvious_direct_tool_prompt_bypasses_generation(
+        self,
+        _generate_chat_reply_stream_with_provider_fallback,
+        _execute_single_direct_tool_call,
+        _capabilities,
+    ):
+        payload = build_direct_operator_reply(
+            message="Search for today's top AI news headline",
+            workspace_id="default",
+            requested_model="gpt-5.4",
+            requested_provider="openai",
+            availability={"ai_ready": True},
+        )
+
+        self.assertEqual(payload["mode"], "answer")
+        self.assertIn("Top headline", payload["reply"])
+        self.assertEqual(payload["context_used"]["fallback_reason"], "obvious_direct_tool_execution")
+
     @patch("operator_chat_under_test._can_auto_start_run_handoff", return_value=False)
     @patch("operator_chat_under_test.resolve_workspace_tool_capabilities", return_value=[])
     @patch("operator_chat_under_test._persist_direct_chat_memory_best_effort", return_value=None)
@@ -499,9 +544,12 @@ class OperatorChatTests(unittest.TestCase):
         )
 
         self.assertEqual(capability_payload["reply"], plain_payload["reply"])
-        self.assertIn("needs model reasoning", capability_payload["reply"])
-        self.assertEqual(capability_payload["mode"], "answer")
-        self.assertEqual(plain_payload["mode"], "answer")
+        self.assertEqual(capability_payload["mode"], "error")
+        self.assertEqual(plain_payload["mode"], "error")
+        self.assertEqual(capability_payload["error"], "no_provider")
+        self.assertEqual(plain_payload["error"], "no_provider")
+        self.assertEqual(capability_payload["message"], "No AI provider configured")
+        self.assertEqual(plain_payload["message"], "No AI provider configured")
         self.assertEqual(capability_payload["actions"], [])
         self.assertEqual(plain_payload["actions"], [])
         generate_reply.assert_not_called()

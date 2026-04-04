@@ -12,24 +12,48 @@ class ProviderValidationMessageTests(unittest.TestCase):
         provider_profiles._init()
 
     @patch("server_modules.provider_profiles.http_json_request")
-    def test_openai_oauth_token_validate_skips_standard_api_probe(self, http_json_request_mock):
+    def test_openai_oauth_token_validate_uses_standard_api_probe(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {"data": []},
+            "text": "",
+        }
         result = provider_profiles.OpenAIAdapter().validate(
             {"oauth_token": "token-123", "auth_mode": "oauth_token"}
         )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], 200)
-        self.assertIn("imported", result["message"].lower())
-        http_json_request_mock.assert_not_called()
+        self.assertIn("valid", result["message"].lower())
+        http_json_request_mock.assert_called_once()
 
     @patch("server_modules.provider_profiles.http_json_request")
-    def test_openai_oauth_token_list_models_returns_codex_catalog_without_probe(self, http_json_request_mock):
-        models = provider_profiles.OpenAIAdapter().list_models(
-            {"oauth_token": "token-123", "auth_mode": "oauth_token"}
+    def test_openai_codex_list_models_returns_codex_catalog_without_probe(self, http_json_request_mock):
+        models = provider_profiles.OpenAICodexAdapter().list_models(
+            {"oauth_token": "token-123", "account_id": "acct-123", "credential_type": "codex_token"}
         )
 
         self.assertEqual(models, provider_profiles.OPENAI_CODEX_MODEL_CATALOG)
         http_json_request_mock.assert_not_called()
+
+    @patch("server_modules.provider_profiles.http_json_request")
+    def test_openai_oauth_token_list_models_uses_standard_api_catalog(self, http_json_request_mock):
+        http_json_request_mock.return_value = {
+            "status": 200,
+            "json": {
+                "data": [
+                    {"id": "gpt-4o"},
+                    {"id": "gpt-4o-mini"},
+                ]
+            },
+            "text": "",
+        }
+        models = provider_profiles.OpenAIAdapter().list_models(
+            {"oauth_token": "token-123", "auth_mode": "oauth_token"}
+        )
+
+        self.assertEqual(models, ["gpt-4o", "gpt-4o-mini"])
+        http_json_request_mock.assert_called_once()
 
     @patch("server_modules.provider_profiles._openai_bearer_from_credentials", return_value="token-123")
     @patch("server_modules.provider_profiles.http_json_request")

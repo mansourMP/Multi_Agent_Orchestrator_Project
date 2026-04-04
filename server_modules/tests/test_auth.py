@@ -5,11 +5,14 @@ import hmac
 import importlib
 import json
 
+import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi import HTTPException
 
 import server_modules.auth as auth_module
 import server_modules.jwt_secret as jwt_secret_module
+import server_modules.routes_auth as routes_auth_module
 
 
 def _reload_auth(monkeypatch: pytest.MonkeyPatch, tmp_path, extra_env: dict[str, str] | None = None):
@@ -89,3 +92,40 @@ def test_expired_token_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Bearer token has expired."
+
+
+def _build_auth_test_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(routes_auth_module.router)
+    app.include_router(routes_auth_module.router, prefix="/api/v1")
+    return app
+
+
+@pytest.mark.anyio
+async def test_auth_status_returns_401_without_token():
+    transport = httpx.ASGITransport(app=_build_auth_test_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/auth/status")
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_auth_status_returns_authenticated_payload(monkeypatch: pytest.MonkeyPatch):
+    app = _build_auth_test_app()
+    app.dependency_overrides[routes_auth_module.get_current_user] = lambda: {"auth_type": "bearer", "user_id": "user-1"}
+    monkeypatch.setattr(
+        routes_auth_module,
+        "get_authenticated_user_profile",
+        lambda current_user: {"ok": True, "user": {"id": "user-1", "email": "user@example.com"}},
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/auth/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "authenticated": True,
+        "user": {"id": "user-1", "email": "user@example.com"},
+    }

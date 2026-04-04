@@ -45,8 +45,13 @@ export type ConnectorId =
   | 'instagram_business';
 export type ConnectorCatalogId =
   | ConnectorId
+  | 'gmail'
+  | 'google_calendar'
+  | 'google_drive'
   | 'discord'
   | 'microsoft_365'
+  | 'outlook'
+  | 'outlook_calendar'
   | 'x_twitter'
   | 'instagram_business'
   | 'youtube'
@@ -1349,6 +1354,30 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         connector: 'google_workspace',
       },
       {
+        id: 'gmail',
+        label: 'Gmail',
+        note: 'Inbox triage + drafts + send',
+        detail: 'Use the Google Workspace auth path, but show Gmail explicitly so inbox workflows are easy to find.',
+        status: 'native_now',
+        connector: 'google_workspace',
+      },
+      {
+        id: 'google_calendar',
+        label: 'Google Calendar',
+        note: 'Events, invites, and scheduling',
+        detail: 'Use the Google Workspace auth path, but surface Calendar directly for meeting and availability workflows.',
+        status: 'native_now',
+        connector: 'google_workspace',
+      },
+      {
+        id: 'google_drive',
+        label: 'Google Drive',
+        note: 'Drive browse + file workflows',
+        detail: 'Use the Google Workspace auth path, but show Drive directly for file and document workflows.',
+        status: 'native_now',
+        connector: 'google_workspace',
+      },
+      {
         id: 'smtp',
         label: 'SMTP Email',
         note: 'Generic SMTP server + approval-gated send',
@@ -1456,6 +1485,22 @@ export const CONNECTOR_CATALOG: ConnectorCatalogSection[] = [
         label: 'Microsoft 365',
         note: 'Outlook, Excel, Word, PowerPoint, OneDrive',
         detail: 'Best for Microsoft-first teams that need email, docs, spreadsheets, decks, and file workflows through Microsoft Graph before a deeper native layer exists.',
+        status: 'provider_next',
+        connector: 'microsoft_365',
+      },
+      {
+        id: 'outlook',
+        label: 'Outlook',
+        note: 'Email and mailbox workflows',
+        detail: 'Use the Microsoft 365 auth path, but surface Outlook directly for teams looking for email-first workflows.',
+        status: 'provider_next',
+        connector: 'microsoft_365',
+      },
+      {
+        id: 'outlook_calendar',
+        label: 'Outlook Calendar',
+        note: 'Calendar scheduling and invites',
+        detail: 'Use the Microsoft 365 auth path, but show Outlook Calendar explicitly for scheduling workflows.',
         status: 'provider_next',
         connector: 'microsoft_365',
       },

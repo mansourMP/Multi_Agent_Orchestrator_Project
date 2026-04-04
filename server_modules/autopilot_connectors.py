@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
-from scripts.platform_execution import stack_start_command_hint
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
 from server_modules.connectors.telegram_media_service import TelegramMediaService, telegram_safe_path_token
@@ -14,6 +13,7 @@ from server_modules.connectors.telegram_profile_service import (
     TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
     TelegramProfileService,
 )
+from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.installed_skills import query_active_installed_skills
@@ -231,6 +231,30 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
     select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
     skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
 )
+_TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
+
+
+def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
+    global _TELEGRAM_RUN_DISPATCH_SERVICE
+    if _TELEGRAM_RUN_DISPATCH_SERVICE is None:
+        _TELEGRAM_RUN_DISPATCH_SERVICE = TelegramRunDispatchService(
+            project_root=PROJECT_ROOT,
+            default_timeout_seconds=int(globals().get("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
+            default_max_reply_chars=int(globals().get("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
+            send_ack=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_SEND_ACK")),
+            include_run_meta=lambda: _autopilot_include_run_meta(),
+            humanize_run_summary=lambda text: _humanize_telegram_run_summary(text),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            runs_get=lambda run_id: runs.get(run_id),
+            latest_run_error_message=lambda run: _latest_run_error_message(run),
+            is_non_retryable_run_error=lambda error: _is_non_retryable_run_error(error),
+            friendly_run_error=lambda error: _friendly_autopilot_run_error(error),
+            summarize_run_terminal_result=lambda run, limit: _summarize_run_terminal_result(run, limit),
+            local_companion_snapshot=lambda: _local_companion_snapshot(),
+            can_auto_approve_wait=lambda run: _autopilot_can_auto_approve_wait(run),
+            pending_confirmation_payload=lambda run: _pending_confirmation_payload(run),
+        )
+    return _TELEGRAM_RUN_DISPATCH_SERVICE
 
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
@@ -2335,13 +2359,7 @@ def _autopilot_include_run_meta() -> bool:
 
 
 def _autopilot_run_reply_text(status: str, run_id: str, summary: str) -> str:
-    cleaned_summary = _humanize_telegram_run_summary(summary)
-    if not _autopilot_include_run_meta():
-        return cleaned_summary
-    status_label = "⬢ completed" if str(status or "").strip().lower() == "completed" else "⬢ failed"
-    if str(run_id or "").strip():
-        return f"{status_label}\nrun_id: {run_id}\n{cleaned_summary}"
-    return f"{status_label}\n{cleaned_summary}"
+    return _telegram_run_dispatch_service().run_reply_text(status, run_id, summary)
 
 
 def _cognitive_defaults() -> Dict[str, str]:
@@ -3143,85 +3161,11 @@ def _wait_for_run_terminal_status(
     max_reply_chars: Optional[int] = None,
 ) -> Dict[str, Any]:
     _init()
-    wait_timeout = max(30, int(timeout_seconds if timeout_seconds is not None else ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS))
-    summary_limit = int(max_reply_chars if max_reply_chars is not None else ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS)
-    deadline = time.time() + wait_timeout
-    auto_approved = False
-    last_status = "starting"
-    no_worker_since: Optional[float] = None
-    no_worker_grace_seconds = max(8.0, min(20.0, float(wait_timeout) * 0.2))
-    while time.time() < deadline:
-        run = runs.get(run_id)
-        if not isinstance(run, dict):
-            return {"status": "failed", "summary": "Run not found."}
-        latest_error = _latest_run_error_message(run)
-        if latest_error and _is_non_retryable_run_error(latest_error):
-            return {
-                "status": "failed",
-                "summary": _friendly_autopilot_run_error(latest_error),
-                "auto_approved": auto_approved,
-            }
-        status = str(run.get("status") or "").strip().lower()
-        if status:
-            last_status = status
-        if status in {"completed", "failed", "timeout"}:
-            summary = _summarize_run_terminal_result(run, summary_limit)
-            return {
-                "status": status,
-                "summary": summary,
-                "auto_approved": auto_approved,
-            }
-        if status in {"queued_local", "running_local"}:
-            local_state = _local_companion_snapshot()
-            if local_state["online_workers"] <= 0 and local_state["claimed_runs"] <= 0:
-                if no_worker_since is None:
-                    no_worker_since = time.time()
-                elif (time.time() - no_worker_since) >= no_worker_grace_seconds:
-                    return {
-                        "status": "failed",
-                        "summary": (
-                            "Local companion is offline. "
-                            f"pending={local_state['pending_runs']} claimed={local_state['claimed_runs']} online_workers={local_state['online_workers']}. "
-                            f"Start it with: {stack_start_command_hint(Path(__file__).resolve().parents[1])}"
-                        ),
-                        "auto_approved": auto_approved,
-                    }
-            else:
-                no_worker_since = None
-        if status == "waiting_for_input" and not auto_approved and _autopilot_can_auto_approve_wait(run):
-            pending = _pending_confirmation_payload(run)
-            approval_id = str(pending.get("approval_id") or "").strip()
-            input_queue = run.get("input_queue")
-            if approval_id and hasattr(input_queue, "put"):
-                input_queue.put({"approval_id": approval_id, "decision": "proceed"})
-                auto_approved = True
-        time.sleep(1.0)
-    run = runs.get(run_id)
-    if isinstance(run, dict):
-        latest_error = _latest_run_error_message(run)
-        if latest_error:
-            return {
-                "status": "failed",
-                "summary": _friendly_autopilot_run_error(latest_error),
-                "auto_approved": auto_approved,
-            }
-    if last_status in {"queued_local", "running_local"}:
-        local_state = _local_companion_snapshot()
-        return {
-            "status": "timeout",
-            "summary": (
-                "Run timed out waiting on Local Companion. "
-                f"last_status={last_status} pending={local_state['pending_runs']} claimed={local_state['claimed_runs']} online_workers={local_state['online_workers']}."
-            ),
-            "auto_approved": auto_approved,
-        }
-    if last_status:
-        return {
-            "status": "timeout",
-            "summary": f"Run timed out while waiting for completion (last_status={last_status}).",
-            "auto_approved": auto_approved,
-        }
-    return {"status": "timeout", "summary": "Run timed out while waiting for completion."}
+    return _telegram_run_dispatch_service().wait_for_terminal_status(
+        run_id,
+        timeout_seconds=timeout_seconds,
+        max_reply_chars=max_reply_chars,
+    )
 
 
 def _create_whatsapp_run(
@@ -4039,14 +3983,14 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                         action = "skill_reply"
                     else:
                         skill_override = routed.get("skill") if isinstance(routed.get("skill"), dict) else None
-                        run_info = _create_telegram_run(
-                            goal=run_goal,
+                        run_result = _telegram_run_dispatch_service().dispatch_run_action(
+                            bot_token=bot_token,
+                            chat_id=chat_id,
                             workspace_id=workspace_id,
                             connector_id=connector_id,
-                            chat_id=chat_id,
                             sender_id=sender_id,
                             update_id=update_id,
-                            message_id=inbound_message_id or None,
+                            inbound_message_id=inbound_message_id or None,
                             profile_context=chat_profile,
                             media_attachments=stored_attachments,
                             skill_override=skill_override,
@@ -4054,80 +3998,18 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                             source_event_id=source_event_id,
                             connector_entry=entry,
                             connector_context=connector_context,
-                        )
-                        run_id = str(run_info.get("run_id") or "")
-                        pending_message_id = ""
-                        if run_id and ORION_TELEGRAM_AUTOPILOT_SEND_ACK:
-                            _telegram_send_chat_action(bot_token, chat_id, action="typing")
-                            ack_text = "Thinking..."
-                            if _autopilot_include_run_meta():
-                                ack_text += f"\nrun_id: {run_id}"
-                            pending_message_id = _telegram_send_message(
-                                bot_token,
-                                chat_id,
-                                ack_text,
-                                workspace_id=workspace_id,
-                                action="thinking",
-                                run_id=run_id,
-                                connector_id=connector_id,
-                                parent_message_id=inbound_message_id or None,
-                                profile=profile,
-                                trace_id=trace_id,
-                                source_event_id=source_event_id,
-                            )
-
-                        result = _wait_for_run_terminal_status(run_id)
-                        status = str(result.get("status") or "").lower()
-                        summary = _truncate_one_line(str(result.get("summary") or "Run finished."), ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS)
-                        final_reply = _autopilot_run_reply_text(status, run_id, summary)
-                        _record_channel_event(
-                            channel="telegram",
-                            direction="system",
-                            event_type=f"run_{status if status in {'completed', 'failed', 'timeout'} else 'finished'}",
-                            text=summary,
-                            workspace_id=workspace_id,
                             session_key=session_key,
-                            session_id=session_key,
-                            parent_id=inbound_message_id or None,
-                            run_id=run_id,
+                            profile=profile,
                             action=action,
-                            metadata={
-                                "connector_id": connector_id,
-                                "profile_id": profile.get("id"),
-                                "trace_id": trace_id,
-                                "source_event_id": source_event_id,
-                            },
+                            goal=run_goal,
+                            create_run=_create_telegram_run,
+                            record_channel_event=_record_channel_event,
+                            send_chat_action=_telegram_send_chat_action,
+                            send_message=_telegram_send_message,
+                            edit_message=_telegram_edit_message,
                         )
-                        edited = False
-                        if pending_message_id:
-                            edited = _telegram_edit_message(
-                                bot_token,
-                                chat_id,
-                                pending_message_id,
-                                final_reply,
-                                workspace_id=workspace_id,
-                                action=action,
-                                run_id=run_id,
-                                connector_id=connector_id,
-                                parent_message_id=inbound_message_id or None,
-                                profile=profile,
-                                trace_id=trace_id,
-                                source_event_id=source_event_id,
-                            )
-                        if not edited:
-                            _telegram_send_message(
-                                bot_token,
-                                chat_id,
-                                final_reply,
-                                workspace_id=workspace_id,
-                                action=action,
-                                run_id=run_id,
-                                connector_id=connector_id,
-                                parent_message_id=inbound_message_id or None,
-                                profile=profile,
-                                trace_id=trace_id,
-                                source_event_id=source_event_id,
-                            )
+                        run_id = str(run_result.get("run_id") or "")
+                    # action remains "run" for downstream state updates
             else:
                 _telegram_send_message(
                     bot_token,

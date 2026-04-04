@@ -322,7 +322,7 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 chat_id,
                 field_name,
             ),
-            runtime_status_text=lambda workspace_id: _telegram_runtime_status_text(workspace_id),
+            runtime_status_text=lambda workspace_id: _runtime_status_service().runtime_status_text(workspace_id),
             approvals_list=lambda limit: _autopilot_approval_service().approvals_list(limit=limit),
             approvals_text=lambda payload, prefix: _autopilot_approval_service().approvals_text(payload, prefix=prefix),
             approval_resolve=lambda event_id, approved, note: _autopilot_approval_service().approval_resolve(
@@ -390,13 +390,13 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
             ),
             include_run_meta=lambda: _autopilot_include_run_meta(),
-            humanize_run_summary=lambda text: _humanize_telegram_run_summary(text),
+            humanize_run_summary=lambda text: _autopilot_runtime_support_service().humanize_telegram_run_summary(text),
             runs_get=lambda run_id: runs.get(run_id),
-            latest_run_error_message=lambda run: _latest_run_error_message(run),
-            is_non_retryable_run_error=lambda error: _is_non_retryable_run_error(error),
-            friendly_run_error=lambda error: _friendly_autopilot_run_error(error),
-            summarize_run_terminal_result=lambda run, limit: _summarize_run_terminal_result(run, limit),
-            local_companion_snapshot=lambda: _local_companion_snapshot(),
+            latest_run_error_message=lambda run: _autopilot_runtime_support_service().latest_run_error_message(run),
+            is_non_retryable_run_error=lambda error: _autopilot_runtime_support_service().is_non_retryable_run_error(error),
+            friendly_run_error=lambda error: _autopilot_runtime_support_service().friendly_run_error(error),
+            summarize_run_terminal_result=lambda run, limit: _autopilot_runtime_support_service().summarize_run_terminal_result(run, limit),
+            local_companion_snapshot=lambda: _autopilot_runtime_support_service().local_companion_snapshot(),
             can_auto_approve_wait=lambda run: _autopilot_run_entry_service().can_auto_approve_wait(run),
             pending_confirmation_payload=lambda run: _autopilot_run_entry_service().pending_confirmation_payload(run),
             sleep=lambda seconds: time.sleep(seconds),
@@ -522,7 +522,7 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
             route_message=lambda body, profile: _telegram_route_message(body, profile),
             help_text=lambda profile: _whatsapp_help_text(profile),
-            runtime_status_text=lambda workspace_id: _runtime_status_text(workspace_id),
+            runtime_status_text=lambda workspace_id: _runtime_status_service().runtime_status_text(workspace_id),
             approvals_list=lambda limit: _autopilot_approval_service().approvals_list(limit=limit),
             approvals_text=lambda payload, prefix: _autopilot_approval_service().approvals_text(payload, prefix=prefix),
             approval_resolve=lambda event_id, approved, note: _autopilot_approval_service().approval_resolve(
@@ -578,14 +578,6 @@ def _telegram_connector_support_service() -> TelegramConnectorSupportService:
             allow_any_chat=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", False)),
         )
     return _TELEGRAM_CONNECTOR_SUPPORT_SERVICE
-
-
-def _latest_runtime_run_summary() -> str:
-    return _autopilot_runtime_support_service().latest_runtime_run_summary()
-
-
-def _current_runtime_metrics() -> Dict[str, int]:
-    return _autopilot_runtime_support_service().current_runtime_metrics()
 
 
 def _runtime_status_service() -> RuntimeStatusService:
@@ -1429,22 +1421,6 @@ def _telegram_is_explicit_run_command(raw_text: str) -> bool:
     return _telegram_helper_registry().routing_service().is_explicit_run_command(raw_text)
 
 
-def _runtime_status_text(workspace_id: str) -> str:
-    return _runtime_status_service().runtime_status_text(workspace_id)
-
-
-def _autopilot_is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
-    return _autopilot_runtime_support_service().worker_online(record, now)
-
-
-def _local_companion_snapshot() -> Dict[str, int]:
-    return _autopilot_runtime_support_service().local_companion_snapshot()
-
-
-def _telegram_runtime_status_text(workspace_id: str) -> str:
-    return _runtime_status_text(workspace_id)
-
-
 def _whatsapp_help_text(profile: Dict[str, Any]) -> str:
     return _autopilot_profile_service().whatsapp_help_text(profile)
 
@@ -1479,30 +1455,6 @@ def _truncate_one_line(text: str, limit: int) -> str:
     if len(flat) <= cap:
         return flat
     return flat[: cap - 1].rstrip() + "…"
-
-
-def _extract_run_error_messages(run: Dict[str, Any]) -> List[str]:
-    return _autopilot_runtime_support_service().extract_run_error_messages(run)
-
-
-def _latest_run_error_message(run: Dict[str, Any]) -> str:
-    return _autopilot_runtime_support_service().latest_run_error_message(run)
-
-
-def _is_non_retryable_run_error(detail: str) -> bool:
-    return _autopilot_runtime_support_service().is_non_retryable_run_error(detail)
-
-
-def _friendly_autopilot_run_error(detail: str) -> str:
-    return _autopilot_runtime_support_service().friendly_run_error(detail)
-
-
-def _humanize_telegram_run_summary(summary: str) -> str:
-    return _autopilot_runtime_support_service().humanize_telegram_run_summary(summary)
-
-
-def _summarize_run_terminal_result(run: Dict[str, Any], summary_limit: int) -> str:
-    return _autopilot_runtime_support_service().summarize_run_terminal_result(run, summary_limit)
 
 
 def _autopilot_include_run_meta() -> bool:

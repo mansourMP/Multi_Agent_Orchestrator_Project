@@ -1305,6 +1305,72 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Runtime-Support Wrapper Band Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer carries the dead runtime-support wrapper band that only forwarded into the extracted runtime-support and runtime-status services.
+
+This is another compatibility-safe subtraction step. The stable run-entry shell remains, but the runtime-support aliases had no real external callers left.
+
+#### Completed Work
+
+- Rewired the Telegram service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted runtime-status and runtime-support services directly for:
+  - status text
+  - run summary humanization
+  - latest run error extraction
+  - non-retryable error checks
+  - friendly error shaping
+  - terminal result summarization
+  - local companion snapshot
+- Rewired the WhatsApp service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so runtime status text now calls the extracted runtime-status service directly.
+- Removed the dead runtime-support wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_latest_runtime_run_summary()`
+  - `_current_runtime_metrics()`
+  - `_runtime_status_text()`
+  - `_autopilot_is_worker_online()`
+  - `_local_companion_snapshot()`
+  - `_telegram_runtime_status_text()`
+  - `_extract_run_error_messages()`
+  - `_latest_run_error_message()`
+  - `_is_non_retryable_run_error()`
+  - `_friendly_autopilot_run_error()`
+  - `_humanize_telegram_run_summary()`
+  - `_summarize_run_terminal_result()`
+
+#### Current Truth
+
+- The deleted runtime-support wrapper names are fully gone from the monolith source.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `1692` lines to `1644` in this cut.
+- The remaining wrapper shell is now even more clearly limited to true runtime-facing entrypoints and the explicit run-entry compatibility layer.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still carries the stable compatibility wrappers for externally exercised run creation and terminal wait behavior.
+- Some additional pure helper wrappers still remain where they encapsulate actual logic rather than simple forwarding.
+- The final compatibility audit of the remaining shell is still not complete.
+
+#### Next Required Work
+
+1. Continue auditing the remaining stable wrapper names in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) against real runtime imports and tests.
+2. Delete any additional forwarding-only helpers that do not have a real external dependency.
+3. Keep the compatibility shell narrow and explicit instead of letting new helper aliases accumulate there again.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+  - [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py)
+  - [server_modules/connectors/autopilot_runtime_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_support_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_runtime_status_service`
+  - `server_modules.tests.test_autopilot_runtime_support_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+
 ### 2026-04-05 - Dead Helper Alias Band Removed
 
 #### Stage

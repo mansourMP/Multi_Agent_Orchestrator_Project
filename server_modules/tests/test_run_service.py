@@ -7,12 +7,14 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     PreparedRunCreationServices,
+    RunPreparationServices,
     RunCreationServices,
     RunExecutionServices,
     build_run_start_request_from_turn,
     create_run_from_prepared_request,
     create_run_result_from_request,
     execute_durable_turn_request,
+    prepare_run_start_request,
 )
 from server_modules.runtime_models import RunStartRequest
 
@@ -167,6 +169,56 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result["route"]["selected"], "cloud")
         self.assertEqual(result["metadata"]["policy_mode"], "guarded")
         self.assertEqual(result["created_run"]["active_profile_id"], "profile-1")
+
+    def test_prepare_run_start_request_applies_shared_normalization_and_postprocess(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            workflow_id="wf-1",
+            max_iterations=12,
+            metadata={
+                "trust_mode": "auto",
+                "execution_target": "cloud",
+                "delegated_by_role": "researcher",
+                "app_id": "crm",
+            },
+        )
+
+        prepared = prepare_run_start_request(
+            request,
+            services=RunPreparationServices(
+                engine_registry={"orion": object()},
+                engine_validation_errors=[],
+                supported_outcome_packs={"local_execution"},
+                normalize_requested_max_iterations=lambda value: 12,
+                normalize_trust_mode=lambda value: "guarded" if value == "auto" else value,
+                trust_mode_aliases={"auto": "guarded"},
+                valid_trust_modes={"guarded", "strict"},
+                normalize_execution_target=lambda value: str(value or "").strip().lower(),
+                valid_execution_targets={"auto", "cloud", "local_companion"},
+                normalize_run_id_token=lambda value: str(value or "").strip() or None,
+                normalize_agent_role=lambda value: str(value or "").strip().lower(),
+                detect_agent_role=lambda req, metadata: ("orchestrator", "detected"),
+                resolve_app_permissions=lambda app_id: {"allow": ["read"]},
+                action_policy_from_app_permissions=lambda permissions: {"allowed": permissions["allow"]},
+                merge_action_policies=lambda existing, new: {"merged": [existing["action_policy"], new["action_policy"]]},
+                fetch_workflow_snapshot=lambda workflow_id: {
+                    "definition": {"version": "v1"},
+                    "name": "Workflow",
+                    "status": "active",
+                },
+                postprocess_metadata=lambda req, metadata: {**metadata, "postprocessed": True},
+            ),
+        )
+
+        self.assertEqual(prepared["engine"], "orion")
+        self.assertEqual(prepared["metadata"]["trust_mode"], "guarded")
+        self.assertEqual(prepared["metadata"]["max_iterations"], 12)
+        self.assertEqual(prepared["metadata"]["agent_role"], "orchestrator")
+        self.assertEqual(prepared["metadata"]["agent_role_source"], "detected")
+        self.assertEqual(prepared["metadata"]["workflow_name"], "Workflow")
+        self.assertEqual(prepared["metadata"]["postprocessed"], True)
 
 
 if __name__ == "__main__":

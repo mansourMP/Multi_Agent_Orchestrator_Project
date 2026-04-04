@@ -1152,112 +1152,30 @@ def _normalize_requested_max_iterations(value: Any) -> Optional[int]:
 
 
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
-    engine = (req.engine or "orion").lower().strip()
-    metadata = dict(req.metadata) if isinstance(req.metadata, dict) else {}
-    normalized_max_iterations = _normalize_requested_max_iterations(getattr(req, "max_iterations", None))
-    outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
-    if engine not in ENGINE_REGISTRY:
-        raise HTTPException(status_code=400, detail=f"Unsupported engine '{engine}'")
-    if engine == "orion" and ORION_ENGINE_VALIDATION_ERRORS:
-        raise HTTPException(status_code=503, detail="Empyralis runtime validation failed.")
-    if engine == "orion" and outcome_pack and outcome_pack not in SUPPORTED_OUTCOME_PACKS:
-        raise HTTPException(status_code=400, detail=f"Unsupported outcome pack '{outcome_pack}'")
+    from server_modules.run_service import RunPreparationServices, prepare_run_start_request
 
-    if engine == "orion":
-        raw_trust_mode = str(metadata.get("trust_mode") or "").strip().lower()
-        normalized_trust_mode = normalize_trust_mode(raw_trust_mode)
-        if raw_trust_mode and raw_trust_mode not in TRUST_MODE_ALIASES and raw_trust_mode not in VALID_TRUST_MODES:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported trust_mode. Use one of: auto, guarded, strict, cost_guard, sensitive_guard.",
-            )
-        metadata["trust_mode"] = normalized_trust_mode
-
-        if "pack_inputs" in metadata and not isinstance(metadata.get("pack_inputs"), dict):
-            raise HTTPException(status_code=400, detail="metadata.pack_inputs must be an object.")
-        if "outcome_scope" in metadata and not isinstance(metadata.get("outcome_scope"), list):
-            raise HTTPException(status_code=400, detail="metadata.outcome_scope must be a list.")
-        if "connector_credential_id" in metadata and metadata.get("connector_credential_id") is not None:
-            if not isinstance(metadata.get("connector_credential_id"), str):
-                raise HTTPException(status_code=400, detail="metadata.connector_credential_id must be a string.")
-        if "approval_rules" in metadata and not isinstance(metadata.get("approval_rules"), dict):
-            raise HTTPException(status_code=400, detail="metadata.approval_rules must be an object.")
-        if "schedule" in metadata and not isinstance(metadata.get("schedule"), dict):
-            raise HTTPException(status_code=400, detail="metadata.schedule must be an object.")
-        if "execution_target" in metadata:
-            normalized_target = normalize_execution_target(metadata.get("execution_target"))
-            if normalized_target not in VALID_EXECUTION_TARGETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Unsupported execution_target. Use one of: auto, cloud, local_companion.",
-                )
-            metadata["execution_target"] = normalized_target
-
-    if normalized_max_iterations is not None:
-        metadata["max_iterations"] = normalized_max_iterations
-    else:
-        metadata.pop("max_iterations", None)
-
-    parent_run_id = _normalize_run_id_token(req.parent_run_id or metadata.get("parent_run_id"))
-    if parent_run_id:
-        metadata["parent_run_id"] = parent_run_id
-    elif "parent_run_id" in metadata:
-        metadata.pop("parent_run_id", None)
-
-    delegation_root_run_id = _normalize_run_id_token(metadata.get("delegation_root_run_id"))
-    if delegation_root_run_id:
-        metadata["delegation_root_run_id"] = delegation_root_run_id
-    elif "delegation_root_run_id" in metadata:
-        metadata.pop("delegation_root_run_id", None)
-
-    delegated_by_run_id = _normalize_run_id_token(metadata.get("delegated_by_run_id"))
-    if delegated_by_run_id:
-        metadata["delegated_by_run_id"] = delegated_by_run_id
-    elif "delegated_by_run_id" in metadata:
-        metadata.pop("delegated_by_run_id", None)
-
-    delegated_by_role = normalize_agent_role(metadata.get("delegated_by_role"))
-    if delegated_by_role:
-        metadata["delegated_by_role"] = delegated_by_role
-    elif "delegated_by_role" in metadata:
-        metadata.pop("delegated_by_role", None)
-
-    agent_role, agent_role_source = _detect_agent_role(req, metadata)
-    metadata["agent_role"] = agent_role
-    metadata["agent_role_source"] = agent_role_source
-
-    app_id = str(metadata.get("app_id") or "").strip()
-    if app_id:
-        app_permissions = resolve_app_permissions(app_id)
-        metadata["app_id"] = app_id
-        metadata["app_permissions"] = app_permissions
-        app_policy = action_policy_from_app_permissions(app_permissions)
-        existing_policy = metadata.get("action_policy") if isinstance(metadata.get("action_policy"), dict) else {}
-        metadata["action_policy"] = merge_action_policies(
-            {"action_policy": existing_policy},
-            {"action_policy": app_policy},
-        )
-
-    workflow_snapshot = None
-    if str(req.workflow_id or "").strip():
-        workflow_snapshot = fetch_workflow_snapshot(req.workflow_id)
-    if isinstance(workflow_snapshot, dict):
-            metadata["workflow_schema_version"] = str(
-                workflow_snapshot.get("definition", {}).get("version") or ""
-            ).strip() or None
-            if workflow_snapshot.get("name") and "workflow_name" not in metadata:
-                metadata["workflow_name"] = workflow_snapshot.get("name")
-            if workflow_snapshot.get("status"):
-                metadata["workflow_status"] = workflow_snapshot.get("status")
-
-    if engine == "orion":
-        metadata = _bind_obvious_connector_write_intent(req, metadata)
-
-    return {
-        "engine": engine,
-        "metadata": metadata,
-        "workflow_snapshot": workflow_snapshot,
-    }
+    return prepare_run_start_request(
+        req,
+        services=RunPreparationServices(
+            engine_registry=ENGINE_REGISTRY,
+            engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
+            supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
+            normalize_requested_max_iterations=_normalize_requested_max_iterations,
+            normalize_trust_mode=normalize_trust_mode,
+            trust_mode_aliases=TRUST_MODE_ALIASES,
+            valid_trust_modes=VALID_TRUST_MODES,
+            normalize_execution_target=normalize_execution_target,
+            valid_execution_targets=VALID_EXECUTION_TARGETS,
+            normalize_run_id_token=_normalize_run_id_token,
+            normalize_agent_role=normalize_agent_role,
+            detect_agent_role=_detect_agent_role,
+            resolve_app_permissions=resolve_app_permissions,
+            action_policy_from_app_permissions=action_policy_from_app_permissions,
+            merge_action_policies=merge_action_policies,
+            fetch_workflow_snapshot=fetch_workflow_snapshot,
+            postprocess_metadata=_bind_obvious_connector_write_intent,
+        ),
+    )
 
 
 def _local_execution_requires_start_confirmation(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:

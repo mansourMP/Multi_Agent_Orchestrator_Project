@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import HTTPException
 
@@ -56,6 +56,27 @@ class RunExecutionServices:
 @dataclass(slots=True)
 class RunCreationServices:
     create_run_from_request: Any
+
+
+@dataclass(slots=True)
+class RunPreparationServices:
+    engine_registry: Any
+    engine_validation_errors: Any
+    supported_outcome_packs: Any
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]]
+    normalize_trust_mode: Callable[[str], str]
+    trust_mode_aliases: Any
+    valid_trust_modes: Any
+    normalize_execution_target: Callable[[Any], str]
+    valid_execution_targets: Any
+    normalize_run_id_token: Callable[[Any], Optional[str]]
+    normalize_agent_role: Callable[[Any], str]
+    detect_agent_role: Callable[[RunStartRequest, Dict[str, Any]], tuple[str, str]]
+    resolve_app_permissions: Callable[[str], Any]
+    action_policy_from_app_permissions: Callable[[Any], Dict[str, Any]]
+    merge_action_policies: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
+    fetch_workflow_snapshot: Callable[[Any], Any]
+    postprocess_metadata: Optional[Callable[[RunStartRequest, Dict[str, Any]], Dict[str, Any]]] = None
 
 
 @dataclass(slots=True)
@@ -145,6 +166,123 @@ def build_run_start_request_from_turn(
         agents=_hint_list(getattr(base, "agents", None)),
         metadata=metadata,
     )
+
+
+def prepare_run_start_request(
+    req: RunStartRequest,
+    *,
+    services: RunPreparationServices,
+) -> Dict[str, Any]:
+    engine = (req.engine or "orion").lower().strip()
+    metadata = dict(req.metadata) if isinstance(req.metadata, dict) else {}
+    normalized_max_iterations = services.normalize_requested_max_iterations(getattr(req, "max_iterations", None))
+    outcome_pack = str(metadata.get("outcome_pack") or "").strip().lower()
+    if engine not in services.engine_registry:
+        raise HTTPException(status_code=400, detail=f"Unsupported engine '{engine}'")
+    if engine == "orion" and services.engine_validation_errors:
+        raise HTTPException(status_code=503, detail="Empyralis runtime validation failed.")
+    if engine == "orion" and outcome_pack and outcome_pack not in services.supported_outcome_packs:
+        raise HTTPException(status_code=400, detail=f"Unsupported outcome pack '{outcome_pack}'")
+
+    if engine == "orion":
+        raw_trust_mode = str(metadata.get("trust_mode") or "").strip().lower()
+        normalized_trust_mode = services.normalize_trust_mode(raw_trust_mode)
+        if (
+            raw_trust_mode
+            and raw_trust_mode not in services.trust_mode_aliases
+            and raw_trust_mode not in services.valid_trust_modes
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported trust_mode. Use one of: auto, guarded, strict, cost_guard, sensitive_guard.",
+            )
+        metadata["trust_mode"] = normalized_trust_mode
+
+        if "pack_inputs" in metadata and not isinstance(metadata.get("pack_inputs"), dict):
+            raise HTTPException(status_code=400, detail="metadata.pack_inputs must be an object.")
+        if "outcome_scope" in metadata and not isinstance(metadata.get("outcome_scope"), list):
+            raise HTTPException(status_code=400, detail="metadata.outcome_scope must be a list.")
+        if "connector_credential_id" in metadata and metadata.get("connector_credential_id") is not None:
+            if not isinstance(metadata.get("connector_credential_id"), str):
+                raise HTTPException(status_code=400, detail="metadata.connector_credential_id must be a string.")
+        if "approval_rules" in metadata and not isinstance(metadata.get("approval_rules"), dict):
+            raise HTTPException(status_code=400, detail="metadata.approval_rules must be an object.")
+        if "schedule" in metadata and not isinstance(metadata.get("schedule"), dict):
+            raise HTTPException(status_code=400, detail="metadata.schedule must be an object.")
+        if "execution_target" in metadata:
+            normalized_target = services.normalize_execution_target(metadata.get("execution_target"))
+            if normalized_target not in services.valid_execution_targets:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unsupported execution_target. Use one of: auto, cloud, local_companion.",
+                )
+            metadata["execution_target"] = normalized_target
+
+    if normalized_max_iterations is not None:
+        metadata["max_iterations"] = normalized_max_iterations
+    else:
+        metadata.pop("max_iterations", None)
+
+    parent_run_id = services.normalize_run_id_token(req.parent_run_id or metadata.get("parent_run_id"))
+    if parent_run_id:
+        metadata["parent_run_id"] = parent_run_id
+    elif "parent_run_id" in metadata:
+        metadata.pop("parent_run_id", None)
+
+    delegation_root_run_id = services.normalize_run_id_token(metadata.get("delegation_root_run_id"))
+    if delegation_root_run_id:
+        metadata["delegation_root_run_id"] = delegation_root_run_id
+    elif "delegation_root_run_id" in metadata:
+        metadata.pop("delegation_root_run_id", None)
+
+    delegated_by_run_id = services.normalize_run_id_token(metadata.get("delegated_by_run_id"))
+    if delegated_by_run_id:
+        metadata["delegated_by_run_id"] = delegated_by_run_id
+    elif "delegated_by_run_id" in metadata:
+        metadata.pop("delegated_by_run_id", None)
+
+    delegated_by_role = services.normalize_agent_role(metadata.get("delegated_by_role"))
+    if delegated_by_role:
+        metadata["delegated_by_role"] = delegated_by_role
+    elif "delegated_by_role" in metadata:
+        metadata.pop("delegated_by_role", None)
+
+    agent_role, agent_role_source = services.detect_agent_role(req, metadata)
+    metadata["agent_role"] = agent_role
+    metadata["agent_role_source"] = agent_role_source
+
+    app_id = str(metadata.get("app_id") or "").strip()
+    if app_id:
+        app_permissions = services.resolve_app_permissions(app_id)
+        metadata["app_id"] = app_id
+        metadata["app_permissions"] = app_permissions
+        app_policy = services.action_policy_from_app_permissions(app_permissions)
+        existing_policy = metadata.get("action_policy") if isinstance(metadata.get("action_policy"), dict) else {}
+        metadata["action_policy"] = services.merge_action_policies(
+            {"action_policy": existing_policy},
+            {"action_policy": app_policy},
+        )
+
+    workflow_snapshot = None
+    if str(req.workflow_id or "").strip():
+        workflow_snapshot = services.fetch_workflow_snapshot(req.workflow_id)
+        if isinstance(workflow_snapshot, dict):
+            metadata["workflow_schema_version"] = str(
+                workflow_snapshot.get("definition", {}).get("version") or ""
+            ).strip() or None
+            if workflow_snapshot.get("name") and "workflow_name" not in metadata:
+                metadata["workflow_name"] = workflow_snapshot.get("name")
+            if workflow_snapshot.get("status"):
+                metadata["workflow_status"] = workflow_snapshot.get("status")
+
+    if callable(services.postprocess_metadata):
+        metadata = services.postprocess_metadata(req, metadata)
+
+    return {
+        "engine": engine,
+        "metadata": metadata,
+        "workflow_snapshot": workflow_snapshot,
+    }
 
 
 def create_run_result_from_request(

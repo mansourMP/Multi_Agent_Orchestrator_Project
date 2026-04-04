@@ -659,6 +659,63 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Telegram Space-Status MCP Slice Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector decomposition has started with a bounded Telegram slice instead of a risky monolith rewrite.
+
+This does not split the full Telegram or WhatsApp autopilot module yet. It moves one isolated MCP-backed Telegram capability behind a dedicated connector service so the monolith stops owning that logic inline.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_space_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_space_service.py) as the dedicated service boundary for:
+  - space catalog discovery from `spaces/`
+  - question detection for space-status prompts
+  - space-id resolution
+  - MCP result payload normalization
+  - async MCP tool calls for `get_space_status`
+  - Telegram-ready answer rendering
+  - top-level handled/unhandled response shaping
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the live Telegram call site now delegates into the extracted service instead of owning the space-status helper block inline.
+- Removed the old inline Telegram space-status helper block from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_telegram_space_catalog()`
+  - `_telegram_looks_like_space_question()`
+  - `_telegram_resolve_space_id()`
+  - `_mcp_result_payload()`
+  - `_telegram_space_status_via_mcp_async()`
+  - `_telegram_render_space_answer()`
+  - `_telegram_space_question_via_mcp()`
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_space_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_space_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is still the Telegram and WhatsApp monolith, but it no longer owns this MCP-backed space-status slice.
+- The connector split is now happening by bounded capabilities, which matches the canonical architecture more safely than attempting a one-shot channel rewrite.
+- The extracted service is independent enough to test directly without going through the full autopilot polling loop.
+
+#### Open Gaps
+
+- The main Telegram autopilot loop still owns most channel behavior, profile handling, action routing, and message lifecycle management.
+- WhatsApp logic still lives in the same monolith.
+- No shared channel adapter contract exists yet for inbound event normalization across Telegram and WhatsApp.
+
+#### Next Required Work
+
+1. Continue carving [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) into bounded connector services instead of moving helper functions around inside the same file.
+2. Target the next self-contained Telegram or WhatsApp behavior slice with a direct test harness.
+3. Keep the monolith live-call-site stable while reducing its ownership block by block.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_space_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_space_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_space_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_space_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_space_service`
+
 ### 2026-04-04 - Direct Chat Runtime Loop Moved Behind Dedicated Runtime Service
 
 #### Stage

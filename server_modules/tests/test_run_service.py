@@ -6,9 +6,11 @@ from fastapi import HTTPException
 
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
+    PreparedRunCreationServices,
     RunCreationServices,
     RunExecutionServices,
     build_run_start_request_from_turn,
+    create_run_from_prepared_request,
     create_run_result_from_request,
     execute_durable_turn_request,
 )
@@ -120,6 +122,51 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-1")
         self.assertEqual(result["schedule_id"], "sched-1")
+
+    def test_create_run_from_prepared_request_returns_shared_creation_payload(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1"},
+        )
+        prepared = {
+            "engine": "orion",
+            "metadata": {"owner_user_id": "user-1", "agent_role": "orchestrator"},
+            "workflow_snapshot": None,
+        }
+
+        result = create_run_from_prepared_request(
+            request,
+            prepared=prepared,
+            services=PreparedRunCreationServices(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+                apply_execution_route_metadata=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                apply_browser_execution_metadata=lambda metadata: None,
+                local_execution_block_prompt=lambda precheck: "blocked",
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                local_execution_requires_start_confirmation=lambda metadata, precheck: False,
+                mark_local_execution_tools_approved=lambda metadata: None,
+                precheck_human_action_labels=lambda precheck, decision="require_confirmation": [],
+                local_execution_confirmation_prompt=lambda precheck: "confirm",
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"id": "approval-1"},
+                create_run=lambda **kwargs: "run-1",
+                load_created_run=lambda run_id: {"active_profile_id": "profile-1"},
+                now_iso=lambda: "2026-04-04T00:00:00Z",
+            ),
+        )
+
+        self.assertEqual(result["run_id"], "run-1")
+        self.assertEqual(result["status"], "starting")
+        self.assertEqual(result["route"]["selected"], "cloud")
+        self.assertEqual(result["metadata"]["policy_mode"], "guarded")
+        self.assertEqual(result["created_run"]["active_profile_id"], "profile-1")
 
 
 if __name__ == "__main__":

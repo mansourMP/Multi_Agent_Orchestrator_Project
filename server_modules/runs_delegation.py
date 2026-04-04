@@ -657,6 +657,8 @@ def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
+    from server_modules.run_service import PreparedRunCreationServices, create_run_from_prepared_request
+
     precheck_fn = globals().get("_compute_tool_policy_precheck")
     create_run_fn = globals().get("create_run")
     begin_confirmation_fn = globals().get("_begin_run_pending_confirmation") or globals().get("_begin_run_pending_approval")
@@ -667,118 +669,45 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     if not callable(begin_confirmation_fn):
         from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
 
-    prepared = _prepare_run_start_request(req)
-    engine = prepared["engine"]
-    metadata = prepared["metadata"]
-    workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
-    route = decide_execution_target(metadata, schedule_id=schedule_id)
-    metadata = dict(metadata)
-    metadata = apply_execution_route_metadata(metadata, route)
-    doctor_preflight = build_doctor_run_gate_from_snapshot(
-        execution_target=route["selected"],
-        metadata=metadata,
-        provider=req.provider,
-        credential_id=req.credential_id,
+    created = create_run_from_prepared_request(
+        req,
+        prepared=_prepare_run_start_request(req),
+        schedule_id=schedule_id,
+        services=PreparedRunCreationServices(
+            decide_execution_target=decide_execution_target,
+            apply_execution_route_metadata=apply_execution_route_metadata,
+            build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
+            agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+            compute_tool_policy_precheck=precheck_fn,
+            apply_browser_execution_metadata=_apply_browser_execution_metadata,
+            local_execution_block_prompt=_local_execution_block_prompt,
+            resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+            agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+            local_execution_requires_start_confirmation=_local_execution_requires_start_confirmation,
+            mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
+            precheck_human_action_labels=_precheck_human_action_labels,
+            local_execution_confirmation_prompt=_local_execution_confirmation_prompt,
+            begin_run_pending_confirmation=begin_confirmation_fn,
+            create_run=create_run_fn,
+            now_iso=lambda: datetime.utcnow().isoformat() + "Z",
+        ),
     )
-    if bool(doctor_preflight.get("blocking")):
-        raise HTTPException(
-            status_code=409,
-            detail=str(doctor_preflight.get("detail") or doctor_preflight.get("title") or "Run blocked by doctor policy."),
-        )
-    metadata["doctor_preflight"] = doctor_preflight
-
-    if schedule_id:
-        metadata["schedule_id"] = schedule_id
-        metadata["scheduled"] = True
-    preview_context = {
-        "workflow_id": req.workflow_id,
-        "workspace_id": req.workspace_id,
-        "user_goal": req.user_goal,
-        "business_plan": req.business_plan,
-        "max_iterations": getattr(req, "max_iterations", None),
-        "agent_role": req.agent_role,
-        "provider": req.provider,
-        "model": req.model,
-        "credential_id": req.credential_id,
-        "agents": req.agents or [],
-        "metadata": metadata,
-        "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
-        "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
-        "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
-    }
-    owner_user_id = agent_machine_inherited_owner_user_id(str(metadata.get("owner_user_id") or "").strip())
-    if owner_user_id:
-        metadata["owner_user_id"] = owner_user_id
-    metadata["tool_policy_precheck"] = precheck_fn(preview_context)
-    _apply_browser_execution_metadata(metadata)
-    if metadata["tool_policy_precheck"].get("blocked_count"):
-        raise HTTPException(
-            status_code=409,
-            detail=_local_execution_block_prompt(metadata["tool_policy_precheck"]),
-        )
-    runtime_policy = resolve_runtime_policy_mode(
-        metadata,
-        selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
-    )
-    metadata["policy_mode"] = runtime_policy.get("policy_mode")
-    agent_machine_full_trust = agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip())
-    browser_policy = (
-        metadata["tool_policy_precheck"].get("browser_automation_policy")
-        if isinstance(metadata.get("tool_policy_precheck"), dict)
-        else {}
-    )
-    if agent_machine_full_trust and isinstance(browser_policy, dict) and bool(browser_policy.get("reviewed_approval_required")):
-        metadata["browser_reviewed_approved"] = True
-        metadata["browser_reviewed_approved_at"] = datetime.utcnow().isoformat() + "Z"
-    needs_local_confirmation = _local_execution_requires_start_confirmation(metadata, metadata["tool_policy_precheck"])
-    if needs_local_confirmation and agent_machine_full_trust:
-        _mark_local_execution_tools_approved(metadata)
-        metadata.pop("local_execution_waiting_confirmation", None)
-        metadata.pop("local_execution_waiting_approval", None)
-        needs_local_confirmation = False
-    if needs_local_confirmation:
-        metadata["local_execution_waiting_confirmation"] = True
-        metadata["local_execution_waiting_approval"] = True
-        preview_context["metadata"] = metadata
-    run_id = create_run_fn(
-        engine=engine,
-        context=preview_context,
-        defer_local_enqueue=needs_local_confirmation,
-    )
-    status = "starting"
-    if needs_local_confirmation:
-        approval_labels = _precheck_human_action_labels(metadata["tool_policy_precheck"], decision="require_confirmation")
-        pending = begin_confirmation_fn(
-            run_id,
-            _local_execution_confirmation_prompt(metadata["tool_policy_precheck"]),
-            source="local_execution_start",
-            metadata={
-                "target": metadata.get("execution_target_selected"),
-                "policy_mode": metadata.get("policy_mode"),
-                "approval_actions": list(metadata["tool_policy_precheck"].get("require_confirmation") or []),
-                "approval_labels": approval_labels,
-                "approval_capabilities": list(metadata["tool_policy_precheck"].get("capability_ids") or []),
-                "outcome_pack": metadata.get("outcome_pack"),
-            },
-        )
-        status = "waiting_for_input"
-    else:
-        pending = None
+    metadata = created["metadata"]
     return {
-        "run_id": run_id,
-        "engine": engine,
-        "status": status,
+        "run_id": created["run_id"],
+        "engine": created["engine"],
+        "status": created["status"],
         "agent_role": metadata.get("agent_role"),
         "agent_role_source": metadata.get("agent_role_source"),
         "parent_run_id": metadata.get("parent_run_id"),
         "delegation_root_run_id": metadata.get("delegation_root_run_id"),
         "delegated_by_run_id": metadata.get("delegated_by_run_id"),
         "delegated_by_role": metadata.get("delegated_by_role"),
-        "route": route,
-        "doctor_preflight": doctor_preflight,
-        "pending_confirmation": pending,
+        "route": created["route"],
+        "doctor_preflight": created["doctor_preflight"],
+        "pending_confirmation": created["pending_confirmation"],
         # Deprecated compatibility alias. Prefer `pending_confirmation`.
-        "pending_approval": pending,
+        "pending_approval": created["pending_confirmation"],
     }
 
 

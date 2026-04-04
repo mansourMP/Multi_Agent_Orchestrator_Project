@@ -794,6 +794,68 @@ This is not the final run-service cutover yet. The legacy run modules still own 
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Shared Durable-Run Creation Body Moved Behind Run Service
+
+#### Stage
+
+Stage 2 continues. The duplicated durable-run creation body inside [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) no longer exists only in those legacy modules.
+
+The legacy modules still own their own request-preparation logic and final result shaping, but they now share a common creation body from [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `PreparedRunCreationServices`
+  - `create_run_from_prepared_request()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so `_create_run_from_request()` now:
+  - keeps `runs_core`-specific preparation behavior
+  - delegates the shared durable-run creation body into the run service
+  - preserves the richer `runs_core` return payload with active profile details
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so `_create_run_from_request()` now:
+  - keeps `runs_delegation`-specific preparation behavior
+  - delegates the shared durable-run creation body into the run service
+  - preserves the delegation-oriented return shape
+- Expanded focused coverage in:
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+
+#### Current Truth
+
+- The biggest shared part of durable-run creation is now centralized in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) are both thinner in the exact place where they were most duplicated.
+- Durable-run convergence is now happening both:
+  - at the API boundary
+  - inside the legacy run modules themselves
+
+#### Open Gaps
+
+- `_prepare_run_start_request()` still exists separately in:
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+- The run lifecycle after creation is still mostly owned by:
+  - [server_modules/runs_execution.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_execution.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+- The service boundary is better, but durable runs are still not yet fully centered on a single canonical run owner.
+
+#### Next Required Work
+
+1. Collapse or unify the duplicated `_prepare_run_start_request()` logic.
+2. Decide whether delegation planning/building becomes a first-class service or stays in the legacy delegation module temporarily.
+3. Keep pulling the durable lifecycle toward [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) until the old run modules are mostly adapters.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+
 ### 2026-04-04 - Direct Chat Durable-Run Handoff Lifecycle Moved Behind Dedicated Handoff Service
 
 #### Stage

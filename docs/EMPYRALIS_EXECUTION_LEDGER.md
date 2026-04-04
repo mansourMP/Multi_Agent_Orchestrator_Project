@@ -796,6 +796,66 @@ This is a real subtraction step. The chat module still orchestrates the no-provi
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Direct Tool Planning And Obvious-Intent Detection Moved Behind No-Provider Service
+
+#### Stage
+
+Stage 1 continues. The no-provider fallback service now owns not only fallback execution, but also direct-tool planning and the syntactic detector for “obvious” direct-tool requests.
+
+This is another routing-level subtraction step. [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still chooses when to invoke the service, but it no longer owns the planning heuristics that decide how lightweight no-provider requests map to direct tools.
+
+#### Completed Work
+
+- Expanded [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) with:
+  - `plan_tool_calls()`
+  - `has_obvious_direct_tool_intent()`
+- Updated `NoProviderExecutionServices` in [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) so it now carries the memory-read/write parsers needed by the moved routing heuristics.
+- Removed chat-module ownership from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) for:
+  - `_plan_no_provider_tool_calls()`
+  - the inline body of `_message_has_obvious_direct_tool_intent()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so:
+  - `_no_provider_execution_services()` passes the parser dependencies into the fallback service
+  - `_message_has_obvious_direct_tool_intent()` delegates to the fallback service
+- Expanded focused service coverage in:
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+
+#### Current Truth
+
+- The no-provider service now owns:
+  - lightweight fallback helpers
+  - no-provider fallback execution
+  - direct-tool planning heuristics for lightweight requests
+  - obvious-intent detection for direct-tool execution routing
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) continues to shrink toward a coordination role.
+- The chat module still owns higher-level direct-chat orchestration and approval/prompt decisions.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns provider routing, prompt assembly, approval orchestration, and the overall direct-chat execution flow.
+- The fallback service still depends on injected approval and tool-execution callbacks from the chat module.
+- The direct-chat stack is still not yet collapsed into a clearly layered orchestration path.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting approval shaping or direct-tool orchestration into dedicated services.
+2. Keep moving from helper extraction to control-flow extraction so the chat module becomes coordination-only.
+3. Preserve the exact behavior of the no-provider fast paths while reducing chat-module ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - No-Provider Fallback Executor Moved Behind Dedicated Service Boundary
 
 #### Stage

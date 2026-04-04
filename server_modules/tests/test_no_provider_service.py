@@ -125,8 +125,9 @@ class NoProviderServiceTests(unittest.TestCase):
             extract_first_path_reference=_extract_first_path_reference,
             extract_first_url=_extract_first_url,
             parse_page_state=lambda value: value,
+            parse_memory_write=lambda message: None,
+            parse_memory_read=lambda message: "name",
             handle_memory_request=lambda workspace_id, message: "name = TestUser",
-            plan_tool_calls=lambda message, tools: [],
             build_approval_response=lambda **kwargs: None,
             execute_single_tool_call=lambda **kwargs: "unused",
         )
@@ -154,8 +155,9 @@ class NoProviderServiceTests(unittest.TestCase):
             extract_first_path_reference=_extract_first_path_reference,
             extract_first_url=_extract_first_url,
             parse_page_state=lambda value: value,
+            parse_memory_write=lambda message: None,
+            parse_memory_read=lambda message: None,
             handle_memory_request=lambda workspace_id, message: None,
-            plan_tool_calls=lambda message, tools: [{"name": "http_request", "arguments": {"url": "https://httpbin.org/get"}}],
             build_approval_response=build_approval_response,
             execute_single_tool_call=execute_single_tool_call,
         )
@@ -173,6 +175,64 @@ class NoProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "Origin IP: 203.0.113.9")
         build_approval_response.assert_called_once()
         execute_single_tool_call.assert_called_once()
+
+    def test_plan_tool_calls_builds_browser_and_shell_actions(self) -> None:
+        tool_calls = no_provider_service.plan_tool_calls(
+            "Go to https://example.com and tell me the page title and main heading",
+            [
+                {"name": "browser__navigate"},
+                {"name": "browser__observe"},
+                {"name": "browser__extract_text"},
+                {"name": "http_request"},
+            ],
+            compact_text=_compact_text,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+        )
+
+        self.assertEqual(
+            tool_calls,
+            [
+                {"name": "browser__navigate", "arguments": {"url": "https://example.com"}},
+                {"name": "browser__observe", "arguments": {}},
+                {"name": "browser__extract_text", "arguments": {"selector": "h1"}},
+            ],
+        )
+
+    def test_has_obvious_direct_tool_intent_detects_directory_and_memory_requests(self) -> None:
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "List the first 2 files in /tmp/example",
+                [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
+        self.assertTrue(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "What is my name",
+                [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: "name",
+            )
+        )
+        self.assertFalse(
+            no_provider_service.has_obvious_direct_tool_intent(
+                "Explain the tradeoffs between SQLite and Postgres",
+                [],
+                compact_text=_compact_text,
+                extract_first_path_reference=_extract_first_path_reference,
+                extract_first_url=_extract_first_url,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+            )
+        )
 
 
 if __name__ == "__main__":

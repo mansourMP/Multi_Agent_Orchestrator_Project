@@ -3108,45 +3108,6 @@ def _resolve_chat_local_path(raw_path: str) -> Path:
     return candidate
 
 
-def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    compact = _compact_text(message)
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    planned: List[Dict[str, Any]] = []
-    path = _extract_first_path_reference(message)
-    file_requested = bool(
-        path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many"))
-    )
-    if file_requested and "file__read" in tool_names:
-        planned.append({"name": "file__read", "arguments": {"path": path}})
-
-    url = "" if file_requested else _extract_first_url(message)
-    browser_requested = bool(
-        url and any(token in compact for token in ("go to", "open", "visit", "what's on", "whats on", "page title", "main heading", "browser"))
-    )
-    if url and "http_request" in tool_names and not browser_requested:
-        planned.append({"name": "http_request", "arguments": {"method": "GET", "url": url}})
-    if url and "browser__navigate" in tool_names and browser_requested:
-        planned.append({"name": "browser__navigate", "arguments": {"url": url}})
-        if "browser__observe" in tool_names:
-            planned.append({"name": "browser__observe", "arguments": {}})
-        elif "browser__get_page_state" in tool_names:
-            planned.append({"name": "browser__get_page_state", "arguments": {}})
-        if "heading" in compact and "browser__extract_text" in tool_names:
-            planned.append({"name": "browser__extract_text", "arguments": {"selector": "h1"}})
-    shell_command = no_provider_service.extract_shell_command(
-        message,
-        compact_text=_compact_text,
-        extract_first_url=_extract_first_url,
-    )
-    if shell_command and "shell__exec" in tool_names:
-        planned.append({"name": "shell__exec", "arguments": {"command": shell_command}})
-    web_query = no_provider_service.extract_web_query(message)
-    if web_query and "web__search" in tool_names and not url:
-        planned.append({"name": "web__search", "arguments": {"query": web_query}})
-
-    return planned
-
-
 def _no_provider_execution_services() -> no_provider_service.NoProviderExecutionServices:
     return no_provider_service.NoProviderExecutionServices(
         compact_text=_compact_text,
@@ -3155,44 +3116,24 @@ def _no_provider_execution_services() -> no_provider_service.NoProviderExecution
         extract_first_path_reference=_extract_first_path_reference,
         extract_first_url=_extract_first_url,
         parse_page_state=parse_json_object_loose,
+        parse_memory_write=memory_service.parse_no_provider_memory_write,
+        parse_memory_read=memory_service.parse_no_provider_memory_read,
         handle_memory_request=memory_service.handle_no_provider_memory_request,
-        plan_tool_calls=_plan_no_provider_tool_calls,
         build_approval_response=_build_direct_tool_approval_response,
         execute_single_tool_call=_execute_single_direct_tool_call,
     )
 
 
 def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, Any]]) -> bool:
-    compact = _compact_text(message)
-    if not compact:
-        return False
-    if (
-        any(marker in compact for marker in (" then ", " after that ", " next step", " next steps"))
-        and any(token in compact for token in ("inspect", "prepare", "review", "analy", "summarize", "plan"))
-    ):
-        return False
-    path = _extract_first_path_reference(message)
-    if path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")):
-        return True
-    if no_provider_service.looks_like_directory_listing_request(message):
-        return True
-    if no_provider_service.extract_shell_command(
+    return no_provider_service.has_obvious_direct_tool_intent(
         message,
+        tools,
         compact_text=_compact_text,
+        extract_first_path_reference=_extract_first_path_reference,
         extract_first_url=_extract_first_url,
-    ):
-        return True
-    if memory_service.parse_no_provider_memory_write(message) is not None or memory_service.parse_no_provider_memory_read(message) is not None:
-        return True
-    if no_provider_service.extract_web_query(message):
-        return True
-    url = _extract_first_url(message)
-    if not url:
-        return False
-    if any(token in compact for token in ("go to", "open", "visit", "what's on", "whats on", "page title", "main heading", "browser")):
-        return True
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    return "http_request" in tool_names
+        parse_memory_write=memory_service.parse_no_provider_memory_write,
+        parse_memory_read=memory_service.parse_no_provider_memory_read,
+    )
 
 
 def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:

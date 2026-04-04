@@ -466,6 +466,77 @@ The monolith still owns the forever loop and thread lifecycle, but the per-itera
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - Autopilot Status Payload Assembly Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram and WhatsApp autopilot status endpoints no longer build their response payloads inline inside the monolith.
+
+This moves another top-level ownership block out of `autopilot_connectors.py`: snapshot-to-response assembly for the two active channel status surfaces is now service-owned and directly testable.
+
+#### Completed Work
+
+- Added `server_modules/connectors/autopilot_status_service.py`.
+- Moved Telegram autopilot status payload assembly behind that service:
+  - snapshot consumption
+  - connector-entry lookup
+  - per-connector payload shaping
+  - vault error capture
+- Moved WhatsApp autopilot status payload assembly behind that service:
+  - snapshot consumption
+  - connector-entry lookup
+  - per-connector payload shaping
+  - vault error capture
+- Updated `server_modules/autopilot_connectors.py` so:
+  - `handle_telegram_autopilot_status()` delegates to the status service
+  - `handle_whatsapp_autopilot_status()` delegates to the status service
+- Added focused coverage in `server_modules/tests/test_autopilot_status_service.py`.
+
+#### Current Truth
+
+- The active connector status surfaces are now service-owned rather than monolith-owned.
+- Telegram runtime control flow, status assembly, and most Telegram connector behavior are now behind bounded services.
+- `server_modules/autopilot_connectors.py` still contains shared autopilot runtime code and remaining non-extracted channel logic, but another top-level endpoint block has been removed.
+
+#### Open Gaps
+
+- The monolith still owns profile-list endpoint assembly and remaining shared runtime state helpers.
+- WhatsApp and shared autopilot lifecycle code still live in the same file.
+- The connector monolith is significantly smaller, but it is still not reduced to a thin coordination shell.
+
+#### Next Required Work
+
+1. Continue moving top-level autopilot endpoint and runtime payload assembly out of `server_modules/autopilot_connectors.py`.
+2. Keep extracting remaining WhatsApp and shared runtime control flow into bounded services.
+3. Reassess whether `autopilot_connectors.py` should split into channel supervisor modules once the remaining shared state helpers are smaller.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - `server_modules/connectors/autopilot_status_service.py`
+  - `server_modules/autopilot_connectors.py`
+  - `server_modules/tests/test_autopilot_status_service.py`
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

@@ -23,6 +23,7 @@ from scripts.orion_local_worker_llm import (
     provider_has_key,
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
+from server_modules import direct_chat_prompt_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -296,43 +297,20 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
-def _direct_chat_memory_recall_section(tools: List[Dict[str, Any]]) -> str:
-    available = {
-        str(item.get("name") or "").strip()
-        for item in tools
-        if isinstance(item, dict)
-    }
-    if not (_MEMORY_NOTEBOOK_TOOL_NAMES & available):
-        return ""
-    return (
-        "## Memory Recall\n"
-        "Before answering anything about prior work, decisions, dates, people, preferences, or todos: "
-        "run memory_search on MEMORY.md + memory/*.md, then use memory_get to read only the needed lines. "
-        "If memory results are weak, say you checked."
-    )
-
-
 def _build_direct_chat_system_prompt(
     *,
     workspace_id: str,
     availability: Dict[str, Any],
     tools: List[Dict[str, Any]],
 ) -> Optional[str]:
-    tool_lines = [
-        f"{str(item.get('name') or '').strip()}: {str(item.get('description') or '').strip()}"
-        for item in tools
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    ]
-    base_prompt = build_operator_system_prompt(
-        _availability_lines(workspace_id, availability),
-        tool_lines=tool_lines,
+    return direct_chat_prompt_service.build_system_prompt(
+        workspace_id=workspace_id,
+        availability=availability,
+        tools=tools,
+        availability_lines=_availability_lines,
+        build_operator_system_prompt=build_operator_system_prompt,
+        memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
     )
-    sections = [base_prompt.strip()] if str(base_prompt or "").strip() else []
-    memory_section = _direct_chat_memory_recall_section(tools)
-    if memory_section:
-        sections.append(memory_section)
-    prompt = "\n\n".join(section for section in sections if section).strip()
-    return prompt or None
 
 
 def _normalize_tool_capabilities(availability: Any) -> List[Dict[str, Any]]:
@@ -4215,11 +4193,10 @@ def build_direct_operator_reply(
         normalized_workspace_id,
         memory_query=normalized_message,
     )
-    if workspace_context_text:
-        if system_prompt:
-            system_prompt = workspace_context_text + "\n\n" + system_prompt
-        else:
-            system_prompt = workspace_context_text
+    system_prompt = direct_chat_prompt_service.combine_workspace_context(
+        system_prompt=system_prompt,
+        workspace_context_text=workspace_context_text,
+    )
     history_mode = "compacted_messages" if compaction.get("compacted") else ("raw_messages" if compacted_prior_messages else "none")
     prior_messages_used = bool(compacted_prior_messages)
     usage_masked: Dict[str, Any] = {}

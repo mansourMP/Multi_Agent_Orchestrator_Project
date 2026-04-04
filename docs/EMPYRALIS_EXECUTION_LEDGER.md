@@ -871,6 +871,59 @@ This moves attachment extraction, attachment storage, and attachment-aware goal 
   - `server_modules.tests.test_telegram_space_service`
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
 
+### 2026-04-04 - Telegram Routing And Help Flow Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector decomposition continued with the Telegram routing layer.
+
+This moves command parsing, prefix handling, explicit-run detection, and Telegram help text behind a dedicated connector service while keeping the live Telegram loop stable.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_routing_service.py) as the dedicated boundary for:
+  - Telegram prefix stripping
+  - command routing and action shaping
+  - explicit run-command detection
+  - Telegram help text rendering
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the Telegram routing path now delegates into the service instead of owning that parser inline.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_routing_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the top-level Telegram polling loop, but it no longer owns the full Telegram command-routing subsystem.
+- Telegram user-facing command interpretation is now directly testable without driving the full autopilot loop.
+- The connector monolith has now lost five bounded Telegram slices:
+  - MCP-backed space status
+  - profile and onboarding state
+  - guided automation camera-setup flow
+  - media attachment handling
+  - command routing and help text
+
+#### Open Gaps
+
+- The top-level Telegram polling and action orchestration still live in the monolith.
+- WhatsApp behavior is still co-located in the same file.
+- Channel adapter normalization and the loop lifecycle are still not separated.
+
+#### Next Required Work
+
+1. Continue extracting bounded Telegram slices from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially top-level message dispatch helpers and polling-loop orchestration.
+2. Keep adding direct service tests for each extracted connector subsystem.
+3. Only after more bounded slices are removed should the full Telegram loop be broken apart.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_routing_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_routing_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_routing_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Direct Chat Runtime Loop Moved Behind Dedicated Runtime Service
 
 #### Stage

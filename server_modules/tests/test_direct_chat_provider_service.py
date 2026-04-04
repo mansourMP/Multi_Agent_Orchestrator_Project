@@ -86,6 +86,56 @@ class DirectChatProviderServiceTests(unittest.TestCase):
         self.assertIn("not ready", payload["reply"])
         self.assertEqual(payload["actions"], [{"label": "Connect", "href": "/connect-ai"}])
 
+    def test_resolve_provider_for_direct_chat_message_forces_codex_for_connector_heavy_requests(self) -> None:
+        provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(
+            "default",
+            "openai",
+            "Send a Slack message to the team",
+            tools_present=True,
+            preferred_provider_fn=lambda _workspace_id, _requested_provider: ("openai", {"api_key": "sk-test"}),
+            direct_chat_credentials_fn=lambda _workspace_id, provider: {"oauth_token": "token"} if provider == "codex_cli" else {},
+            supports_direct_message_native_chat_fn=lambda provider, credentials: provider == "codex_cli" and bool(credentials),
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            mentions_any_fn=lambda text, keywords: any(keyword in text for keyword in keywords),
+            message_requests_local_file_tool_fn=lambda _message: False,
+            message_requests_local_shell_tool_fn=lambda _message: False,
+            message_requests_local_screenshot_tool_fn=lambda _message: False,
+            message_requests_local_computer_tool_fn=lambda _message: False,
+            google_workspace_keywords=("gmail",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        self.assertEqual(provider, "codex_cli")
+        self.assertEqual(credentials, {"oauth_token": "token"})
+
+    def test_resolve_provider_for_direct_chat_message_keeps_preferred_provider_when_codex_unavailable(self) -> None:
+        provider, credentials = direct_chat_provider_service.resolve_provider_for_direct_chat_message(
+            "default",
+            "openai",
+            "Take a screenshot of the current page",
+            tools_present=True,
+            preferred_provider_fn=lambda _workspace_id, _requested_provider: ("openai", {"api_key": "sk-test"}),
+            direct_chat_credentials_fn=lambda _workspace_id, _provider: {},
+            supports_direct_message_native_chat_fn=lambda _provider, _credentials: False,
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            mentions_any_fn=lambda text, keywords: any(keyword in text for keyword in keywords),
+            message_requests_local_file_tool_fn=lambda _message: False,
+            message_requests_local_shell_tool_fn=lambda _message: False,
+            message_requests_local_screenshot_tool_fn=lambda _message: True,
+            message_requests_local_computer_tool_fn=lambda _message: False,
+            google_workspace_keywords=("gmail",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        self.assertEqual(provider, "openai")
+        self.assertEqual(credentials, {"api_key": "sk-test"})
+
 
 if __name__ == "__main__":
     unittest.main()

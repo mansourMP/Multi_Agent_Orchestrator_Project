@@ -663,9 +663,7 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
 
 #### Stage
 
-Stage 1 continues. Direct-chat provider routing, credential lookup, native-chat readiness checks, and availability payload assembly no longer live inline as owned logic inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
-
-The chat module still decides when to force Codex for certain local or connector-heavy requests, but the provider-selection subsystem itself is now service-owned.
+Stage 1 continues. Direct-chat provider routing, credential lookup, native-chat readiness checks, availability payload assembly, and Codex-forcing policy for connector-heavy or local-machine requests no longer live inline as owned logic inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
 
 #### Completed Work
 
@@ -679,6 +677,8 @@ The chat module still decides when to force Codex for certain local or connector
   - `direct_chat_runtime_available()`
   - `resolve_direct_chat_availability()`
   - `connected_provider_tokens()`
+  - `message_prefers_codex_for_direct_chat()`
+  - `resolve_provider_for_direct_chat_message()`
 - Replaced inline provider ownership in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with thin compatibility wrappers for:
   - `_credential_auth_mode()`
   - `_supports_direct_message_native_chat()`
@@ -689,6 +689,10 @@ The chat module still decides when to force Codex for certain local or connector
   - `_direct_chat_runtime_available()`
   - `_resolve_direct_chat_availability()`
   - `_connected_provider_tokens()`
+- Moved the direct-chat Codex-forcing policy for:
+  - connector-heavy requests that benefit from direct connector tooling
+  - local file, shell, screenshot, and computer-control requests
+  behind `_resolve_provider_for_direct_chat_message()`, which now delegates into [server_modules/direct_chat_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_provider_service.py)
 - Added focused service coverage in:
   - [server_modules/tests/test_direct_chat_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_provider_service.py)
 
@@ -696,18 +700,18 @@ The chat module still decides when to force Codex for certain local or connector
 
 - Provider resolution for direct chat now has a dedicated service boundary instead of living as a large inline block in the chat module.
 - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still uses compatibility wrappers so the rest of the runtime and existing tests remain stable.
-- The direct-chat path still owns some higher-level provider forcing rules for local-computer and connector-heavy requests, but it no longer owns the reusable provider-selection subsystem itself.
+- The direct-chat path no longer owns the reusable provider-selection subsystem or the Codex-forcing decision policy for connector-heavy and local-machine requests.
 
 #### Open Gaps
 
-- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns the main streaming execution loop and the final provider-forcing policy around local tools and connector-heavy prompts.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns the main streaming execution loop and the surrounding orchestration around provider choice.
 - The provider service is currently a function-based module, not yet a richer injected service object.
 - Some older tests still patch the compatibility wrappers in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), so the chat module remains the public patch surface for now.
 
 #### Next Required Work
 
 1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the remaining direct-chat execution loop concerns behind service boundaries.
-2. Decide whether the provider-forcing policy for local-computer and connector-heavy prompts should live in the provider service or in a higher-level direct-chat orchestration service.
+2. Decide whether any remaining provider-choice orchestration should stay in the provider service or move into a higher-level direct-chat execution service.
 3. Keep replacing compatibility wrappers only after the downstream call sites and tests no longer need the chat module as the patch surface.
 
 #### Verification
@@ -726,6 +730,7 @@ The chat module still decides when to force Codex for certain local or connector
   - `server_modules.tests.test_direct_chat_prompt_service`
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
+  - second provider-service-focused rerun after the Codex-forcing extraction: `91 tests`, `OK`
 
 ### 2026-04-04 - No-Provider Memory Parsing Moved Behind Memory Service
 

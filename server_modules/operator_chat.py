@@ -539,6 +539,35 @@ def _connected_provider_tokens(workspace_id: str) -> List[str]:
     )
 
 
+def _resolve_provider_for_direct_chat_message(
+    workspace_id: str,
+    requested_provider: str,
+    message: str,
+    *,
+    tools_present: bool,
+) -> tuple[str, Dict[str, Any]]:
+    return direct_chat_provider_service.resolve_provider_for_direct_chat_message(
+        workspace_id,
+        requested_provider,
+        message,
+        tools_present=tools_present,
+        preferred_provider_fn=_preferred_provider,
+        direct_chat_credentials_fn=_direct_chat_credentials,
+        supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
+        compact_text_fn=_compact_text,
+        mentions_any_fn=_mentions_any,
+        message_requests_local_file_tool_fn=_message_requests_local_file_tool,
+        message_requests_local_shell_tool_fn=_message_requests_local_shell_tool,
+        message_requests_local_screenshot_tool_fn=_message_requests_local_screenshot_tool,
+        message_requests_local_computer_tool_fn=_message_requests_local_computer_tool,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+    )
+
+
 def _active_run_count(workspace_id: str) -> int:
     try:
         from server_modules.shared import runs as live_runs
@@ -3769,28 +3798,12 @@ def build_direct_operator_reply(
             }
             return
 
-    provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
-    if tools and (
-        _mentions_any(_compact_text(normalized_message), GOOGLE_WORKSPACE_KEYWORDS)
-        or _mentions_any(_compact_text(normalized_message), TELEGRAM_KEYWORDS)
-        or _mentions_any(_compact_text(normalized_message), SLACK_KEYWORDS)
-        or _mentions_any(_compact_text(normalized_message), DROPBOX_KEYWORDS)
-        or _mentions_any(_compact_text(normalized_message), S3_KEYWORDS)
-    ):
-        codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
-        if _supports_direct_message_native_chat("codex_cli", codex_credentials):
-            provider = "codex_cli"
-            direct_chat_credentials = codex_credentials
-    if (
-        _message_requests_local_file_tool(normalized_message)
-        or _message_requests_local_shell_tool(normalized_message)
-        or _message_requests_local_screenshot_tool(normalized_message)
-        or _message_requests_local_computer_tool(normalized_message)
-    ):
-        codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
-        if _supports_direct_message_native_chat("codex_cli", codex_credentials):
-            provider = "codex_cli"
-            direct_chat_credentials = codex_credentials
+    provider, direct_chat_credentials = _resolve_provider_for_direct_chat_message(
+        normalized_workspace_id,
+        normalized_requested_provider,
+        normalized_message,
+        tools_present=bool(tools),
+    )
     compact_message = _compact_text(normalized_message)
     prefer_durable_run_handoff = _prefer_durable_run_handoff(normalized_message, availability_payload)
     preview = _preview_run_response(normalized_message, availability_payload)

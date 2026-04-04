@@ -223,3 +223,80 @@ def connected_provider_tokens(
         if isinstance(credentials, dict) and credentials:
             connected.append(provider)
     return connected
+
+
+def message_prefers_codex_for_direct_chat(
+    message: str,
+    *,
+    tools_present: bool,
+    compact_text_fn: Callable[[Any], str],
+    mentions_any_fn: Callable[[str, tuple[str, ...] | list[str]], bool],
+    message_requests_local_file_tool_fn: Callable[[str], bool],
+    message_requests_local_shell_tool_fn: Callable[[str], bool],
+    message_requests_local_screenshot_tool_fn: Callable[[str], bool],
+    message_requests_local_computer_tool_fn: Callable[[str], bool],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+) -> bool:
+    compact_message = compact_text_fn(message)
+    connector_heavy = bool(tools_present) and (
+        mentions_any_fn(compact_message, google_workspace_keywords)
+        or mentions_any_fn(compact_message, telegram_keywords)
+        or mentions_any_fn(compact_message, slack_keywords)
+        or mentions_any_fn(compact_message, dropbox_keywords)
+        or mentions_any_fn(compact_message, s3_keywords)
+    )
+    local_machine_request = (
+        message_requests_local_file_tool_fn(message)
+        or message_requests_local_shell_tool_fn(message)
+        or message_requests_local_screenshot_tool_fn(message)
+        or message_requests_local_computer_tool_fn(message)
+    )
+    return connector_heavy or local_machine_request
+
+
+def resolve_provider_for_direct_chat_message(
+    workspace_id: str,
+    requested_provider: str,
+    message: str,
+    *,
+    tools_present: bool,
+    preferred_provider_fn: Callable[[str, str], tuple[str, Dict[str, Any]]],
+    direct_chat_credentials_fn: Callable[[str, str], Dict[str, Any]],
+    supports_direct_message_native_chat_fn: Callable[[str, Optional[Dict[str, Any]]], bool],
+    compact_text_fn: Callable[[Any], str],
+    mentions_any_fn: Callable[[str, tuple[str, ...] | list[str]], bool],
+    message_requests_local_file_tool_fn: Callable[[str], bool],
+    message_requests_local_shell_tool_fn: Callable[[str], bool],
+    message_requests_local_screenshot_tool_fn: Callable[[str], bool],
+    message_requests_local_computer_tool_fn: Callable[[str], bool],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+) -> tuple[str, Dict[str, Any]]:
+    provider, credentials = preferred_provider_fn(workspace_id, requested_provider)
+    if not message_prefers_codex_for_direct_chat(
+        message,
+        tools_present=tools_present,
+        compact_text_fn=compact_text_fn,
+        mentions_any_fn=mentions_any_fn,
+        message_requests_local_file_tool_fn=message_requests_local_file_tool_fn,
+        message_requests_local_shell_tool_fn=message_requests_local_shell_tool_fn,
+        message_requests_local_screenshot_tool_fn=message_requests_local_screenshot_tool_fn,
+        message_requests_local_computer_tool_fn=message_requests_local_computer_tool_fn,
+        google_workspace_keywords=google_workspace_keywords,
+        telegram_keywords=telegram_keywords,
+        slack_keywords=slack_keywords,
+        dropbox_keywords=dropbox_keywords,
+        s3_keywords=s3_keywords,
+    ):
+        return provider, credentials
+    codex_credentials = direct_chat_credentials_fn(workspace_id, "codex_cli")
+    if supports_direct_message_native_chat_fn("codex_cli", codex_credentials):
+        return "codex_cli", codex_credentials
+    return provider, credentials

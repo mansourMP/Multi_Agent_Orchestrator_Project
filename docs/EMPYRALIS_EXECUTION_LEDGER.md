@@ -1407,6 +1407,85 @@ This cut removed internal-only service-accessor functions that no longer represe
   - `server_modules.tests.test_telegram_autopilot_supervisor_service`
   - `server_modules.tests.test_telegram_autopilot_service_registry`
 
+### 2026-04-05 - Runtime Skill Flow Extracted And Workflow Setup Wrapper Band Removed
+
+#### Stage
+
+Stage 2 connector convergence continues. The helper-heavy middle band in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) took a larger reduction pass.
+
+This cut did two things at once:
+- extracted the runtime skill selection and skill-menu behavior into a dedicated service
+- removed the dead workflow-setup wrapper band that no longer had any live callers
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_skill_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_skill_service.py) to own:
+  - runtime skill snapshot loading
+  - builtin/custom skill normalization
+  - active-skill selection by scope
+  - Telegram skill-goal shaping
+  - skill lookup from text
+  - skills-menu text generation
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - the Telegram service registry now calls the skill service for `select_skill_from_text`, `skill_goal_builder`, and `skills_menu_text`
+  - the Telegram helper registry now calls the skill service for skill selection and goal shaping
+  - the Telegram menu service now calls the skill service for `runtime_active_skills`
+- Removed the old monolith-owned runtime-skill helper cluster from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py):
+  - `_runtime_skills_snapshot_safe()`
+  - `_runtime_builtin_skills()`
+  - `_normalize_runtime_skill_card()`
+  - `_runtime_active_skills()`
+  - `_telegram_skill_goal()`
+  - `_telegram_select_skill_from_text()`
+  - `_telegram_skills_menu_text()`
+- Removed the dead workflow-setup wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py):
+  - `_workspace_connector_flags()`
+  - `_primary_email_connector_id()`
+  - `_email_summary_workflow_definition()`
+  - `_lead_followup_workflow_definition()`
+  - `_create_published_workflow_record()`
+  - `_create_email_summary_visibility_record()`
+  - `_create_email_summary_execution_schedules()`
+  - `_create_lead_followup_execution_schedules()`
+  - `_create_lead_followup_visibility_record()`
+  - `_email_summary_completion_text()`
+  - `_lead_followup_completion_text()`
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_skill_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_skill_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1282` lines.
+- The removed workflow-setup wrapper names no longer exist in the monolith and had no external callers.
+- Runtime skill behavior still exists, but it now crosses [server_modules/connectors/autopilot_skill_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_skill_service.py) as a dedicated boundary instead of staying hidden in the connector shell.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns some helper logic around events, transport/context support, and small runtime utilities.
+- The remaining connector shell should still be audited against the true runtime import surface from [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py) and [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py).
+- Durable-run and direct-chat convergence still remain larger unfinished tracks than the connector shell now does.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by deleting remaining dead helper and wrapper bands that are not part of the runtime contract.
+2. Keep extracted behavior behind dedicated services rather than reintroducing helper logic into the connector shell.
+3. After the connector shell is thinner, shift more sustained effort back into the remaining durable-run and direct-chat convergence work.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_skill_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_skill_service.py)
+  - [server_modules/tests/test_autopilot_skill_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_skill_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_skill_service`
+  - `server_modules.tests.test_telegram_menu_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+
 ### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
 
 #### Stage

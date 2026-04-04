@@ -9,6 +9,7 @@ from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
+from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
 from server_modules.connectors.autopilot_runtime_support_service import AutopilotRuntimeSupportService
@@ -223,6 +224,7 @@ _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
+_AUTOPILOT_SKILL_SERVICE: Optional[AutopilotSkillService] = None
 _TELEGRAM_CONNECTOR_SUPPORT_SERVICE: Optional[TelegramConnectorSupportService] = None
 _AUTOPILOT_COMMON_SUPPORT_SERVICE: Optional[AutopilotCommonSupportService] = None
 _TELEGRAM_MENU_SERVICE: Optional[TelegramMenuService] = None
@@ -293,10 +295,10 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             ),
             mark_started=lambda started_at: _mark_telegram_autopilot_started(started_at),
             normalize_profile_field=lambda raw_value: _telegram_helper_registry().profile_service().normalize_profile_field(raw_value),
-            select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
-            skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
+            select_skill_from_text=lambda raw_text: _autopilot_skill_service().select_skill_from_text(raw_text),
+            skill_goal_builder=lambda skill: _autopilot_skill_service().telegram_skill_goal(skill),
             help_text=lambda profile: _telegram_helper_registry().routing_service().help_text(profile),
-            skills_menu_text=lambda profile: _telegram_skills_menu_text(profile),
+            skills_menu_text=lambda profile: _autopilot_skill_service().telegram_skills_menu_text(profile),
             menu_keyboard=lambda profile, menu_id: _telegram_menu_service().menu_keyboard(profile, menu_id),
             onboarding_prompt=lambda step_index, retry: _telegram_helper_registry().profile_service().onboarding_prompt(
                 step_index,
@@ -429,8 +431,8 @@ def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
             ),
             telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
             normalize_profile_field=lambda raw_value: _telegram_helper_registry().profile_service().normalize_profile_field(raw_value),
-            select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
-            skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
+            select_skill_from_text=lambda raw_text: _autopilot_skill_service().select_skill_from_text(raw_text),
+            skill_goal_builder=lambda skill: _autopilot_skill_service().telegram_skill_goal(skill),
         )
     return _TELEGRAM_AUTOPILOT_HELPER_REGISTRY
 
@@ -767,6 +769,18 @@ def _autopilot_runtime_support_service() -> AutopilotRuntimeSupportService:
         )
     return _AUTOPILOT_RUNTIME_SUPPORT_SERVICE
 
+
+def _autopilot_skill_service() -> AutopilotSkillService:
+    global _AUTOPILOT_SKILL_SERVICE
+    if _AUTOPILOT_SKILL_SERVICE is None:
+        _AUTOPILOT_SKILL_SERVICE = AutopilotSkillService(
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            init_runtime=lambda: _init(),
+            runtime_builtin_skills_getter=lambda: globals().get("RUNTIME_BUILTIN_SKILLS"),
+            runtime_skills_snapshot_getter=lambda: globals().get("_runtime_skills_snapshot"),
+        )
+    return _AUTOPILOT_SKILL_SERVICE
+
 def _load_telegram_autopilot_state() -> None:
     _telegram_service_registry().telegram_autopilot_state_service().load_state()
 
@@ -799,130 +813,6 @@ def _mark_telegram_autopilot_started(started_at: str) -> None:
         TELEGRAM_AUTOPILOT_STATE["active"] = True
         TELEGRAM_AUTOPILOT_STATE["started_at"] = started_at
         TELEGRAM_AUTOPILOT_STATE["enabled"] = True
-
-def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
-    _init()
-    fn = globals().get("_runtime_skills_snapshot")
-    if callable(fn):
-        try:
-            payload = fn()
-            if isinstance(payload, dict):
-                return payload
-        except Exception:
-            return {}
-    return {}
-
-
-def _runtime_builtin_skills() -> List[Dict[str, Any]]:
-    _init()
-    raw = globals().get("RUNTIME_BUILTIN_SKILLS")
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, dict)]
-    return []
-
-
-def _normalize_runtime_skill_card(raw: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(raw, dict):
-        return None
-    skill_id = str(raw.get("id") or "").strip().lower()
-    title = str(raw.get("title") or "").strip()
-    intent = str(raw.get("intent") or "").strip()
-    if not skill_id or not title or not intent:
-        return None
-    tools_raw = raw.get("tools")
-    tools: List[str] = []
-    if isinstance(tools_raw, list):
-        for item in tools_raw:
-            token = str(item or "").strip()
-            if token:
-                tools.append(token[:120])
-    guardrail = str(raw.get("guardrail") or "").strip()
-    return {
-        "id": skill_id[:80],
-        "title": title[:120],
-        "intent": intent[:1200],
-        "tools": tools[:30],
-        "guardrail": guardrail[:1200],
-    }
-
-
-def _runtime_active_skills(scope_key: str = "assistant_defaults", limit: int = 8) -> List[Dict[str, Any]]:
-    scope = "assistant_defaults" if str(scope_key or "").strip().lower() != "automation_defaults" else "automation_defaults"
-    snapshot = _runtime_skills_snapshot_safe()
-    custom = snapshot.get("custom_skills") if isinstance(snapshot.get("custom_skills"), list) else []
-    bindings = snapshot.get("bindings") if isinstance(snapshot.get("bindings"), dict) else {}
-    selected_ids_raw = bindings.get(scope) if isinstance(bindings.get(scope), list) else []
-    selected_ids = [str(item or "").strip().lower() for item in selected_ids_raw if str(item or "").strip()]
-    catalog: Dict[str, Dict[str, Any]] = {}
-    for item in _runtime_builtin_skills() + [entry for entry in custom if isinstance(entry, dict)]:
-        card = _normalize_runtime_skill_card(item)
-        if not card:
-            continue
-        catalog[card["id"]] = card
-    result: List[Dict[str, Any]] = []
-    if selected_ids:
-        for skill_id in selected_ids:
-            item = catalog.get(skill_id)
-            if item:
-                result.append(item)
-    else:
-        result = [_normalize_runtime_skill_card(item) for item in _runtime_builtin_skills()]
-        result = [item for item in result if isinstance(item, dict)]
-    return result[: max(1, int(limit or 8))]
-
-
-def _telegram_skill_goal(skill: Dict[str, Any]) -> str:
-    title = str(skill.get("title") or "").strip() or "Assistant Skill"
-    intent = str(skill.get("intent") or "").strip()
-    guardrail = str(skill.get("guardrail") or "").strip()
-    tools_raw = skill.get("tools") if isinstance(skill.get("tools"), list) else []
-    tools = ", ".join(str(item).strip() for item in tools_raw if str(item).strip()) or "none"
-    return (
-        f"Apply skill '{title}' for this conversation.\n"
-        f"Intent: {intent}\n"
-        f"Guardrail: {guardrail or 'none'}\n"
-        f"Preferred tools: {tools}\n\n"
-        "Use my current chat context and give concrete next actions."
-    )
-
-
-def _telegram_select_skill_from_text(raw_text: str) -> Optional[Dict[str, Any]]:
-    text = str(raw_text or "").strip()
-    if not text:
-        return None
-    token = text.lower()
-    if token.startswith("skill:"):
-        token = token.split(":", 1)[1].strip()
-    if token.startswith("skill "):
-        token = token.split(" ", 1)[1].strip()
-    active = _runtime_active_skills("assistant_defaults", limit=20)
-    for skill in active:
-        skill_id = str(skill.get("id") or "").strip().lower()
-        title = str(skill.get("title") or "").strip().lower()
-        if token == skill_id or token == title:
-            return skill
-    if len(token) >= 3:
-        for skill in active:
-            title = str(skill.get("title") or "").strip().lower()
-            if token in title:
-                return skill
-    return None
-
-
-def _telegram_skills_menu_text(profile: Dict[str, Any]) -> str:
-    skills = _runtime_active_skills("assistant_defaults", limit=8)
-    prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX).strip() or DEFAULT_CHAT_PREFIX
-    cmd_prefix = f"{prefix} " if bool(profile.get("require_prefix")) else ""
-    lines = ["Skills Menu"]
-    if not skills:
-        lines.append("- No active skills found. Configure skills in the Empyralis web UI.")
-    else:
-        lines.append("Tap a skill button or run one directly:")
-        for skill in skills:
-            lines.append(f"- {cmd_prefix}skill {skill.get('id')}")
-    lines.append(f"- {cmd_prefix}menu (back to main)")
-    return "\n".join(lines)
-
 
 def _init():
     global _server
@@ -1094,86 +984,6 @@ def _data_url_from_local_file(path_value: str, mime_type: str = "") -> str:
     return f"data:{guessed_mime};base64,{encoded}"
 
 
-def _workspace_connector_flags(workspace_id: str) -> Dict[str, bool]:
-    return _autopilot_workflow_setup_service().workspace_connector_flags(workspace_id)
-
-
-def _primary_email_connector_id(workspace_id: str) -> Optional[str]:
-    return _autopilot_workflow_setup_service().primary_email_connector_id(workspace_id)
-
-
-def _email_summary_workflow_definition(target_label: str, *, telegram_connected: bool) -> Dict[str, Any]:
-    return _autopilot_workflow_setup_service().email_summary_workflow_definition(
-        target_label,
-        telegram_connected=telegram_connected,
-    )
-
-
-def _lead_followup_workflow_definition(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Dict[str, Any]:
-    return _autopilot_workflow_setup_service().lead_followup_workflow_definition(
-        flow_label,
-        email_connected=email_connected,
-        telegram_connected=telegram_connected,
-    )
-
-
-def _create_published_workflow_record(name: str, description: str, definition: Dict[str, Any]) -> Optional[str]:
-    return _autopilot_workflow_setup_service().create_published_workflow_record(name, description, definition)
-
-
-def _create_email_summary_visibility_record(target_label: str, *, telegram_connected: bool) -> Optional[str]:
-    return _autopilot_workflow_setup_service().create_email_summary_visibility_record(
-        target_label,
-        telegram_connected=telegram_connected,
-    )
-
-
-def _create_email_summary_execution_schedules(workspace_id: str, target_label: str) -> int:
-    return _autopilot_workflow_setup_service().create_email_summary_execution_schedules(workspace_id, target_label)
-
-
-def _create_lead_followup_execution_schedules(workspace_id: str, flow_label: str) -> int:
-    return _autopilot_workflow_setup_service().create_lead_followup_execution_schedules(workspace_id, flow_label)
-
-
-def _create_lead_followup_visibility_record(flow_label: str, *, email_connected: bool, telegram_connected: bool) -> Optional[str]:
-    return _autopilot_workflow_setup_service().create_lead_followup_visibility_record(
-        flow_label,
-        email_connected=email_connected,
-        telegram_connected=telegram_connected,
-    )
-
-
-def _email_summary_completion_text(
-    target_label: str,
-    *,
-    schedule_count: int,
-    email_connected: bool,
-    workflow_id: Optional[str] = None,
-) -> str:
-    return _autopilot_workflow_setup_service().email_summary_completion_text(
-        target_label,
-        schedule_count=schedule_count,
-        email_connected=email_connected,
-        workflow_id=workflow_id,
-    )
-
-
-def _lead_followup_completion_text(
-    flow_label: str,
-    *,
-    schedule_count: int,
-    email_connected: bool,
-    workflow_id: Optional[str] = None,
-) -> str:
-    return _autopilot_workflow_setup_service().lead_followup_completion_text(
-        flow_label,
-        schedule_count=schedule_count,
-        email_connected=email_connected,
-        workflow_id=workflow_id,
-    )
-
-
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
     return _telegram_helper_registry().profile_service().build_goal_with_profile(goal, profile_data)
 
@@ -1236,7 +1046,7 @@ def _telegram_menu_service() -> TelegramMenuService:
         _TELEGRAM_MENU_SERVICE = TelegramMenuService(
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
             show_buttons=ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS,
-            runtime_active_skills=lambda scope_key, limit: _runtime_active_skills(scope_key, limit=limit),
+            runtime_active_skills=lambda scope_key, limit: _autopilot_skill_service().runtime_active_skills(scope_key, limit=limit),
         )
     return _TELEGRAM_MENU_SERVICE
 

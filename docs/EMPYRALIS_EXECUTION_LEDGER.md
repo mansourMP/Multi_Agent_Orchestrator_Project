@@ -978,6 +978,61 @@ Stage 2 connector convergence continues. The Telegram poll loop no longer owns i
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - Telegram Run Branch Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The main Telegram run branch no longer lives inline in the poll loop.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_run_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_action_service.py) to own:
+  - onboarding answer consumption for run-intent messages
+  - automatic onboarding gating before free-text runs
+  - help fallback for empty run goals
+  - run-goal assembly with profile, attachments, connector context, MCP space status, and installed-skill prompt append
+  - direct-response short-circuit handling for MCP/skill replies
+  - final handoff into the Telegram run dispatch service
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the Telegram poll loop delegates the run branch to the service.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_run_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_run_action_service.py)
+
+#### Current Truth
+
+- Telegram sender filtering, non-run actions, run branching, run dispatch, routing, media, profile flow, and poll state patching now all cross dedicated service boundaries.
+- The Telegram poll loop is now much closer to transport and sequencing glue than business-logic ownership.
+
+#### Open Gaps
+
+- The poll loop still assembles the inbound message/update context inline before handing off to services.
+- A few remaining compatibility wrappers still live in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+#### Next Required Work
+
+1. Extract inbound update/message context assembly from the Telegram poll loop.
+2. Continue reducing remaining channel-agnostic helpers out of the monolith.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_run_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_run_action_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_run_action_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_run_action_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Telegram Space-Status MCP Slice Moved Behind Connector Service
 
 #### Stage

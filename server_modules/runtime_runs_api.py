@@ -29,7 +29,7 @@ from server_modules.direct_chat_service import (
 )
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
-from server_modules.run_service import RunExecutionServices
+from server_modules.run_service import RunCreationServices, RunExecutionServices, create_run_result_from_request
 from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
@@ -95,6 +95,28 @@ def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
 def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
     with _HEARTBEAT_SCHEDULER_LOCK:
         return _HEARTBEAT_SCHEDULER
+
+
+def _run_creation_services() -> RunCreationServices:
+    return RunCreationServices(
+        create_run_from_request=_late_server_export("_create_run_from_request"),
+    )
+
+
+def _run_execution_services() -> RunExecutionServices:
+    return RunExecutionServices(
+        stamp_request_owner=_stamp_request_owner,
+        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+        create_run_from_request=_late_server_export("_create_run_from_request"),
+    )
+
+
+def _create_run_result(request: RunStartRequest, *, schedule_id: Optional[str] = None) -> Dict[str, Any]:
+    return create_run_result_from_request(
+        request,
+        services=_run_creation_services(),
+        schedule_id=schedule_id,
+    )
 
 
 def _load_webhook_triggers() -> None:
@@ -1098,7 +1120,7 @@ def register_run_routes(app) -> None:
                 "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
             },
         )
-        result = _late_server_export("_create_run_from_request")(request)
+        result = _create_run_result(request)
         return {
             "acted": True,
             **(result if isinstance(result, dict) else {}),
@@ -1137,11 +1159,7 @@ def register_run_routes(app) -> None:
             turn_request=run_turn_request,
             current_user=current_user,
             services=TurnExecutionServices(
-                run_execution=RunExecutionServices(
-                    stamp_request_owner=_stamp_request_owner,
-                    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-                    create_run_from_request=_late_server_export("_create_run_from_request"),
-                ),
+                run_execution=_run_execution_services(),
                 direct_chat=_direct_chat_execution_services(),
             ),
             run_request=req,
@@ -1176,11 +1194,7 @@ def register_run_routes(app) -> None:
             turn_request=direct_turn_request,
             current_user=current_user,
             services=TurnExecutionServices(
-                run_execution=RunExecutionServices(
-                    stamp_request_owner=_stamp_request_owner,
-                    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-                    create_run_from_request=_late_server_export("_create_run_from_request"),
-                ),
+                run_execution=_run_execution_services(),
                 direct_chat=_direct_chat_execution_services(),
             ),
             chat_body=body,
@@ -1374,7 +1388,7 @@ def register_run_routes(app) -> None:
                 **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
             },
         )
-        result = _late_server_export("_create_run_from_request")(request_payload)
+        result = _create_run_result(request_payload)
         return {
             "ok": True,
             "run_id": str((result or {}).get("run_id") or "").strip() or None,
@@ -1409,7 +1423,7 @@ def register_run_routes(app) -> None:
                 "metadata": child.metadata if isinstance(child.metadata, dict) else {},
             }
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _late_server_export("_create_run_from_request")(delegated_req)
+            result = _create_run_result(delegated_req)
             created.append(
                 {
                     **result,
@@ -1463,7 +1477,7 @@ def register_run_routes(app) -> None:
         created: List[Dict[str, Any]] = []
         for child in plan:
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child, note=note)
-            result = _late_server_export("_create_run_from_request")(delegated_req)
+            result = _create_run_result(delegated_req)
             created.append(
                 {
                     **result,
@@ -1549,7 +1563,7 @@ def register_run_routes(app) -> None:
         for child in failed_effective_children:
             child_payload = _build_retry_child_payload(parent_snapshot, child, note=note)
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _late_server_export("_create_run_from_request")(delegated_req)
+            result = _create_run_result(delegated_req)
             created.append(
                 {
                     **result,
@@ -1945,7 +1959,7 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=400, detail="Replay request is not available for this run.")
         try:
             req = RunStartRequest(**replay_payload)
-            return _late_server_export("_create_run_from_request")(req)
+            return _create_run_result(req)
         except HTTPException:
             raise
         except Exception as exc:

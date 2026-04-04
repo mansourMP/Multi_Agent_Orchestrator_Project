@@ -6,8 +6,10 @@ from fastapi import HTTPException
 
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
+    RunCreationServices,
     RunExecutionServices,
     build_run_start_request_from_turn,
+    create_run_result_from_request,
     execute_durable_turn_request,
 )
 from server_modules.runtime_models import RunStartRequest
@@ -104,6 +106,20 @@ class RunServiceTests(unittest.TestCase):
                 )
 
         self.assertEqual(error.exception.status_code, 409)
+
+    def test_create_run_result_from_request_normalizes_mapping_result(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+
+        result = create_run_result_from_request(
+            request,
+            services=RunCreationServices(
+                create_run_from_request=lambda req, schedule_id=None: {"run_id": "run-1", "schedule_id": schedule_id}
+            ),
+            schedule_id="sched-1",
+        )
+
+        self.assertEqual(result["run_id"], "run-1")
+        self.assertEqual(result["schedule_id"], "sched-1")
 
 
 if __name__ == "__main__":

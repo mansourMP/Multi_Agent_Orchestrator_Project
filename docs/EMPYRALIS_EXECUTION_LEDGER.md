@@ -731,6 +731,69 @@ This is the biggest direct-chat orchestration collapse so far. The chat module n
   - `server_modules.tests.test_direct_chat_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Runtime Run Creation Routed Through Run Service
+
+#### Stage
+
+Stage 2 continues. Raw durable-run creation in the API layer is now less scattered and more explicitly routed through [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+This is not the final run-service cutover yet. The legacy run modules still own the underlying heavy run lifecycle, but [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) now reaches that legacy entrypoint through a service-owned boundary instead of repeating direct calls everywhere.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `RunCreationServices`
+  - `create_run_result_from_request()`
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) with:
+  - `_run_creation_services()`
+  - `_run_execution_services()`
+  - `_create_run_result()`
+- Replaced repeated direct `_create_run_from_request` calls in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) for:
+  - heartbeat-triggered run creation
+  - webhook-triggered run creation
+  - delegated child-run creation
+  - auto-delegated child-run creation
+  - retry-failed child-run creation
+  - replay-triggered run creation
+  - the canonical `/runs/start` and `/chat/respond` service wiring now also shares `_run_execution_services()`
+- Added focused coverage in:
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+
+#### Current Truth
+
+- The runtime API no longer constructs durable-run execution services inline in multiple places.
+- The runtime API now uses service helpers for both:
+  - turn-based durable execution wiring
+  - raw run creation from already-built `RunStartRequest` payloads
+- [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) now owns more of the durable-run boundary, even though the underlying run engine is still legacy-heavy.
+
+#### Open Gaps
+
+- The actual run lifecycle logic still lives primarily in:
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_execution.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_execution.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+- [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) is still not the single durable-run owner envisioned by the canonical architecture.
+- Delegation and replay still depend on late-bound legacy helpers even though the API call sites are cleaner now.
+
+#### Next Required Work
+
+1. Move more of `_create_run_from_request` ownership out of the legacy run modules and into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Decide whether run preparation, replay normalization, and delegation request assembly should each get first-class service boundaries.
+3. Keep collapsing API-layer orchestration so durable runs converge on the canonical turn/runtime path.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Chat Durable-Run Handoff Lifecycle Moved Behind Dedicated Handoff Service
 
 #### Stage

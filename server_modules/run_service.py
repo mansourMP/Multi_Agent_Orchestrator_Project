@@ -53,6 +53,11 @@ class RunExecutionServices:
     create_run_from_request: Any
 
 
+@dataclass(slots=True)
+class RunCreationServices:
+    create_run_from_request: Any
+
+
 def is_valid_run_state(value: str) -> bool:
     return value in RUN_STATES
 
@@ -119,6 +124,19 @@ def build_run_start_request_from_turn(
         agents=_hint_list(getattr(base, "agents", None)),
         metadata=metadata,
     )
+
+
+def create_run_result_from_request(
+    request: RunStartRequest,
+    *,
+    services: RunCreationServices,
+    schedule_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if schedule_id is not None:
+        result = services.create_run_from_request(request, schedule_id=schedule_id)
+    else:
+        result = services.create_run_from_request(request)
+    return dict(result) if isinstance(result, dict) else {"result": result}
 
 
 async def execute_durable_turn_request(

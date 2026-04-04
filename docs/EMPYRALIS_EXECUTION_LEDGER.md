@@ -782,18 +782,18 @@ Stage 2 connector convergence continues. The WhatsApp webhook routing flow no lo
 
 #### Completed Work
 
-- Added `server_modules/connectors/whatsapp_webhook_service.py` with service-owned:
+- Added [server_modules/connectors/whatsapp_webhook_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_service.py) with service-owned:
   - inbound form parsing
   - connector matching and profile routing
   - action execution and response shaping
   - connector state patching and processed-message tracking
   - outbound event recording and response text return
-- Updated `server_modules/autopilot_connectors.py` so:
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
   - `_parse_form_urlencoded()` delegates to the service
   - `handle_whatsapp_twilio_webhook()` delegates to the service for the full routing flow
   - processed-message increment now uses a dedicated `_whatsapp_autopilot_increment_processed()` helper
 - Added focused coverage in:
-  - `server_modules/tests/test_whatsapp_webhook_service.py`
+  - [server_modules/tests/test_whatsapp_webhook_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_webhook_service.py)
 
 #### Current Truth
 
@@ -818,6 +818,52 @@ Stage 2 connector convergence continues. The WhatsApp webhook routing flow no lo
   - `server_modules/autopilot_connectors.py`
   - `server_modules/tests/test_whatsapp_webhook_service.py`
 - Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
+### 2026-04-04 - Telegram Sender Filter Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram “sender not allowed” handling no longer lives inline inside the poll loop.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_sender_filter_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_sender_filter_service.py) to own:
+  - drop event recording
+  - connector-state patching for denied senders
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the poll loop delegates denied-sender handling to the service.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_sender_filter_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_sender_filter_service.py)
+
+#### Current Truth
+
+- Telegram sender filtering is now a service boundary, keeping the poll loop thinner.
+
+#### Open Gaps
+
+- The top-level Telegram polling loop still owns most action handling and state patching.
+
+#### Next Required Work
+
+1. Continue extracting the remaining Telegram poll-loop action handling into a dedicated service or a smaller set of dedicated services.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_sender_filter_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_sender_filter_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_sender_filter_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_sender_filter_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_sender_filter_service`
   - `server_modules.tests.test_whatsapp_webhook_service`
   - `server_modules.tests.test_whatsapp_run_dispatch_service`
   - `server_modules.tests.test_telegram_run_dispatch_service`

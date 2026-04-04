@@ -15,6 +15,7 @@ from server_modules.connectors.telegram_profile_service import (
 )
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
+from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
 from server_modules.connectors.whatsapp_webhook_service import WhatsAppWebhookService
@@ -234,6 +235,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
     skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
 )
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
+_TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 _WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
@@ -259,6 +261,17 @@ def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
             pending_confirmation_payload=lambda run: _pending_confirmation_payload(run),
         )
     return _TELEGRAM_RUN_DISPATCH_SERVICE
+
+
+def _telegram_sender_filter_service() -> TelegramSenderFilterService:
+    global _TELEGRAM_SENDER_FILTER_SERVICE
+    if _TELEGRAM_SENDER_FILTER_SERVICE is None:
+        _TELEGRAM_SENDER_FILTER_SERVICE = TelegramSenderFilterService(
+            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
+            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
+            utc_now_iso=lambda: _utc_now_iso(),
+        )
+    return _TELEGRAM_SENDER_FILTER_SERVICE
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
@@ -3458,44 +3471,19 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
             if not _telegram_sender_allowed(sender, allow_from):
                 sender_id = str(sender.get("id") or "").strip()
                 sender_username = str(sender.get("username") or "").strip().lower()
-                _record_channel_event_throttled(
-                    channel="telegram",
-                    direction="system",
-                    event_type="drop_sender_not_allowed",
-                    text=(
-                        f"Dropped Telegram inbound from sender_id={sender_id or '-'} "
-                        f"username=@{sender_username or '-'} (not in allow_from)."
-                    ),
-                    workspace_id=workspace_id,
-                    session_key=_telegram_session_key(str(chat.get("id") or configured_chat_id)),
-                    action="drop",
-                    metadata={
-                        "connector_id": connector_id,
-                        "chat_id": str(chat.get("id") or configured_chat_id).strip(),
-                        "sender_id": sender_id,
-                        "sender_username": sender_username,
-                        "allow_from": list(allow_from),
-                    },
-                    dedupe_seconds=8.0,
-                )
                 dropped_count = int(connector_state.get("dropped_sender_count") or 0) + 1
-                _set_telegram_connector_state(
-                    connector_id,
-                    {
-                        "label": label,
-                        "workspace_id": workspace_id,
-                        "last_update_id": update_id,
-                        "last_poll_at": _utc_now_iso(),
-                        "last_error": None,
-                        "last_error_category": None,
-                        "last_error_at": None,
-                        "profile_id": profile.get("id"),
-                        "allow_from": list(allow_from),
-                        "dropped_sender_count": dropped_count,
-                        "last_dropped_sender_id": sender_id,
-                        "last_dropped_sender_username": sender_username,
-                        "last_dropped_at": _utc_now_iso(),
-                    },
+                _telegram_sender_filter_service().handle_denied_sender(
+                    connector_id=connector_id,
+                    label=label,
+                    workspace_id=workspace_id,
+                    update_id=update_id,
+                    profile_id=str(profile.get("id") or ""),
+                    allow_from=list(allow_from),
+                    sender_id=sender_id,
+                    sender_username=sender_username,
+                    chat_id=_telegram_session_key(str(chat.get("id") or configured_chat_id)),
+                    dropped_count=dropped_count,
+                    dedupe_seconds=8.0,
                 )
                 continue
 

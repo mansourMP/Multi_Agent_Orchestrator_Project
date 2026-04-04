@@ -1553,6 +1553,96 @@ This is a composition-layer cleanup that removes more container-style ownership 
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-05 - Profile Resolution And Runtime Status Moved Behind Shared Helper Services
+
+#### Stage
+
+Stage 2 connector convergence continues. Shared profile resolution and runtime-status rendering no longer live inline as owned helper blocks inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut does not change transport behavior. It removes another chunk of shared support logic from the monolith and puts it behind dedicated helper services with direct tests.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_profile_service.py) to own:
+  - Telegram autopilot profile resolution
+  - WhatsApp autopilot profile resolution
+  - WhatsApp help-text rendering
+- Added [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py) to own:
+  - runtime status text rendering from metrics, local companion snapshot, and latest-run summary
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_resolve_telegram_autopilot_profile()` now delegates to the profile service
+  - `_resolve_whatsapp_autopilot_profile()` now delegates to the profile service
+  - `_whatsapp_help_text()` now delegates to the profile service
+  - `_runtime_status_text()` now delegates to the runtime status service
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_profile_service.py)
+  - [server_modules/tests/test_runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runtime_status_service.py)
+
+#### Current Truth
+
+- Shared service construction is externalized:
+  - [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py)
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+- Shared helper ownership is thinner in the monolith:
+  - [server_modules/connectors/autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_profile_service.py)
+  - [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `3261` lines from `3314` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns large shared helper blocks around connector-context assembly, workflow-definition/chat-bridge helpers, and some transport utilities.
+- Runtime skill-card helpers and connector-context logic are still inline.
+- The file is clearly thinner, but it is still not reduced to transport and compatibility glue only.
+
+#### Next Required Work
+
+1. Continue extracting shared helper ownership from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially connector-context and workflow-definition helpers.
+2. Keep preferring bounded, directly testable helper-service moves over cosmetic helper shuffles.
+3. Maintain the full focused connector suite as the regression gate.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_profile_service.py)
+  - [server_modules/connectors/runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/runtime_status_service.py)
+  - [server_modules/tests/test_autopilot_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_profile_service.py)
+  - [server_modules/tests/test_runtime_status_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runtime_status_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_profile_service`
+  - `server_modules.tests.test_runtime_status_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_autopilot_shared_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_state_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_connector_poll_service`
+  - `server_modules.tests.test_telegram_autopilot_supervisor_service`
+  - `server_modules.tests.test_telegram_autopilot_runtime_service`
+  - `server_modules.tests.test_telegram_autopilot_state_service`
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-05 - Telegram Connector Poll Execution And Supervisor Loop Moved Behind Dedicated Services
 
 #### Stage

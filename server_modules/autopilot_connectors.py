@@ -8,6 +8,8 @@ from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
+from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
+from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
 from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
@@ -202,6 +204,8 @@ _AUTOPILOT_SHARED_SERVICE_REGISTRY: Optional[AutopilotSharedServiceRegistry] = N
 _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY: Optional[TelegramAutopilotServiceRegistry] = None
 _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY: Optional[WhatsAppAutopilotServiceRegistry] = None
 _TELEGRAM_AUTOPILOT_HELPER_REGISTRY: Optional[TelegramAutopilotHelperRegistry] = None
+_AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
+_RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 
 
 def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
@@ -450,6 +454,57 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
         )
     return _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY
+
+
+def _autopilot_profile_service() -> AutopilotProfileService:
+    global _AUTOPILOT_PROFILE_SERVICE
+    if _AUTOPILOT_PROFILE_SERVICE is None:
+        _AUTOPILOT_PROFILE_SERVICE = AutopilotProfileService(
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            bool_from_any=lambda value, default=False: _bool_from_any(value, default),
+            telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
+            telegram_default_prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
+            telegram_default_require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
+            telegram_profile_catalog=TELEGRAM_AUTOPILOT_PROFILE_CATALOG,
+            whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
+            whatsapp_default_prefix=ORION_WHATSAPP_AUTOPILOT_PREFIX,
+            whatsapp_default_require_prefix=ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
+            whatsapp_profile_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
+        )
+    return _AUTOPILOT_PROFILE_SERVICE
+
+
+def _latest_runtime_run_summary() -> str:
+    recent_line = "none"
+    with RUN_HISTORY_LOCK:
+        if RUN_HISTORY:
+            latest = RUN_HISTORY[0] if isinstance(RUN_HISTORY[0], dict) else {}
+            rid = str(latest.get("run_id") or "")[:8]
+            status = str(latest.get("status") or "unknown")
+            recent_line = f"{rid} {status}" if rid else status
+    return recent_line
+
+
+def _current_runtime_metrics() -> Dict[str, int]:
+    with METRICS_LOCK:
+        return {
+            "runs_started": int(RUNTIME_METRICS.get("runs_started") or 0),
+            "runs_completed": int(RUNTIME_METRICS.get("runs_completed") or 0),
+            "runs_failed": int(RUNTIME_METRICS.get("runs_failed") or 0),
+            "runs_timeout": int(RUNTIME_METRICS.get("runs_timeout") or 0),
+        }
+
+
+def _runtime_status_service() -> RuntimeStatusService:
+    global _RUNTIME_STATUS_SERVICE
+    if _RUNTIME_STATUS_SERVICE is None:
+        _RUNTIME_STATUS_SERVICE = RuntimeStatusService(
+            local_companion_snapshot=lambda: _local_companion_snapshot(),
+            current_metrics=lambda: _current_runtime_metrics(),
+            latest_run_summary=lambda: _latest_runtime_run_summary(),
+            runtime_valid=lambda: not ORION_ENGINE_VALIDATION_ERRORS,
+        )
+    return _RUNTIME_STATUS_SERVICE
 
 
 def _whatsapp_autopilot_state_service():
@@ -1947,66 +2002,11 @@ def _telegram_strip_prefix(text: str, prefix: str) -> Dict[str, Any]:
 
 
 def _resolve_telegram_autopilot_profile(entry: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-    requested_profile = str(metadata.get("autopilot_profile") or ORION_TELEGRAM_AUTOPILOT_PROFILE).strip().lower()
-    if requested_profile not in TELEGRAM_AUTOPILOT_PROFILE_CATALOG:
-        requested_profile = "assistant"
-    profile_base = TELEGRAM_AUTOPILOT_PROFILE_CATALOG.get(requested_profile, TELEGRAM_AUTOPILOT_PROFILE_CATALOG["assistant"])
-
-    prefix = str(metadata.get("autopilot_prefix") or ORION_TELEGRAM_AUTOPILOT_PREFIX).strip() or ORION_TELEGRAM_AUTOPILOT_PREFIX
-    require_prefix = _bool_from_any(metadata.get("autopilot_require_prefix"), ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX)
-    allow_free_text = _bool_from_any(metadata.get("autopilot_allow_free_text"), bool(profile_base.get("allow_free_text")))
-    allow_status = _bool_from_any(metadata.get("autopilot_allow_status"), bool(profile_base.get("allow_status")))
-    allow_help = _bool_from_any(metadata.get("autopilot_allow_help"), bool(profile_base.get("allow_help")))
-
-    return {
-        "id": requested_profile,
-        "label": profile_base.get("label"),
-        "description": profile_base.get("description"),
-        "prefix": prefix,
-        "require_prefix": require_prefix,
-        "allow_free_text": allow_free_text,
-        "allow_status": allow_status,
-        "allow_help": allow_help,
-    }
+    return _autopilot_profile_service().resolve_telegram_profile(entry)
 
 
 def _resolve_whatsapp_autopilot_profile(entry: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-    requested_profile = str(
-        metadata.get("autopilot_profile_whatsapp")
-        or metadata.get("autopilot_profile")
-        or ORION_WHATSAPP_AUTOPILOT_PROFILE
-    ).strip().lower()
-    if requested_profile not in WHATSAPP_AUTOPILOT_PROFILE_CATALOG:
-        requested_profile = "assistant"
-    profile_base = WHATSAPP_AUTOPILOT_PROFILE_CATALOG.get(requested_profile, WHATSAPP_AUTOPILOT_PROFILE_CATALOG["assistant"])
-
-    prefix = str(
-        metadata.get("autopilot_prefix_whatsapp")
-        or metadata.get("autopilot_prefix")
-        or ORION_WHATSAPP_AUTOPILOT_PREFIX
-    ).strip() or ORION_WHATSAPP_AUTOPILOT_PREFIX
-    require_prefix = _bool_from_any(
-        metadata.get("autopilot_require_prefix_whatsapp")
-        if metadata.get("autopilot_require_prefix_whatsapp") is not None
-        else metadata.get("autopilot_require_prefix"),
-        ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
-    )
-    allow_free_text = _bool_from_any(metadata.get("autopilot_allow_free_text"), bool(profile_base.get("allow_free_text")))
-    allow_status = _bool_from_any(metadata.get("autopilot_allow_status"), bool(profile_base.get("allow_status")))
-    allow_help = _bool_from_any(metadata.get("autopilot_allow_help"), bool(profile_base.get("allow_help")))
-
-    return {
-        "id": requested_profile,
-        "label": profile_base.get("label"),
-        "description": profile_base.get("description"),
-        "prefix": prefix,
-        "require_prefix": require_prefix,
-        "allow_free_text": allow_free_text,
-        "allow_status": allow_status,
-        "allow_help": allow_help,
-    }
+    return _autopilot_profile_service().resolve_whatsapp_profile(entry)
 
 
 def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -2022,44 +2022,7 @@ def _telegram_is_explicit_run_command(raw_text: str) -> bool:
 
 
 def _runtime_status_text(workspace_id: str) -> str:
-    runtime_valid = not ORION_ENGINE_VALIDATION_ERRORS
-    runtime_status = "healthy" if runtime_valid else "check"
-
-    with METRICS_LOCK:
-        runs_started = int(RUNTIME_METRICS.get("runs_started") or 0)
-        runs_completed = int(RUNTIME_METRICS.get("runs_completed") or 0)
-        runs_failed = int(RUNTIME_METRICS.get("runs_failed") or 0)
-        runs_timeout = int(RUNTIME_METRICS.get("runs_timeout") or 0)
-
-    with LOCAL_QUEUE_LOCK:
-        pending_runs = len(LOCAL_PENDING_RUN_IDS)
-        claimed_runs = len(LOCAL_CLAIMED_RUNS)
-        now = _utc_now()
-        online_workers = len(
-            [
-                record
-                for record in LOCAL_WORKER_REGISTRY.values()
-                if isinstance(record, dict) and _autopilot_is_worker_online(record, now)
-            ]
-        )
-
-    recent_line = "none"
-    with RUN_HISTORY_LOCK:
-        if RUN_HISTORY:
-            latest = RUN_HISTORY[0] if isinstance(RUN_HISTORY[0], dict) else {}
-            rid = str(latest.get("run_id") or "")[:8]
-            status = str(latest.get("status") or "unknown")
-            recent_line = f"{rid} {status}" if rid else status
-
-    lines = [
-        "Empyralis Runtime Status",
-        f"- workspace: {workspace_id}",
-        f"- runtime: {runtime_status}",
-        f"- runs: started={runs_started} completed={runs_completed} failed={runs_failed} timeout={runs_timeout}",
-        f"- local companion: online_workers={online_workers} pending={pending_runs} claimed={claimed_runs}",
-        f"- recent: {recent_line}",
-    ]
-    return "\n".join(lines)
+    return _runtime_status_service().runtime_status_text(workspace_id)
 
 
 def _autopilot_is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) -> bool:
@@ -2104,23 +2067,7 @@ def _telegram_runtime_status_text(workspace_id: str) -> str:
 
 
 def _whatsapp_help_text(profile: Dict[str, Any]) -> str:
-    prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX).strip() or DEFAULT_CHAT_PREFIX
-    lines = [
-        "Empyralis WhatsApp Commands",
-        f"- {prefix} run <goal>",
-    ]
-    if bool(profile.get("allow_status")):
-        lines.append(f"- {prefix} status")
-    lines.append(f"- {prefix} approvals [limit]")
-    lines.append(f"- {prefix} approve <event_id> [note]")
-    lines.append(f"- {prefix} reject <event_id> [reason]")
-    if bool(profile.get("allow_help")):
-        lines.append(f"- {prefix} help")
-    if bool(profile.get("allow_free_text")):
-        lines.append("- Or send plain text to start a run.")
-    else:
-        lines.append("- Plain text is ignored in this profile.")
-    return "\n".join(lines)
+    return _autopilot_profile_service().whatsapp_help_text(profile)
 
 
 def _normalize_whatsapp_number(raw_value: Any) -> str:

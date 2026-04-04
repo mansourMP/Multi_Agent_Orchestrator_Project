@@ -14,6 +14,7 @@ from server_modules.connectors.telegram_profile_service import (
     TelegramProfileService,
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
+from server_modules.connectors.autopilot_endpoint_service import AutopilotEndpointService
 from server_modules.connectors.autopilot_status_service import AutopilotStatusService
 from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
 from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
@@ -243,6 +244,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
     skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
+_AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
@@ -292,6 +294,13 @@ def _autopilot_status_service() -> AutopilotStatusService:
             resolve_whatsapp_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
         )
     return _AUTOPILOT_STATUS_SERVICE
+
+
+def _autopilot_endpoint_service() -> AutopilotEndpointService:
+    global _AUTOPILOT_ENDPOINT_SERVICE
+    if _AUTOPILOT_ENDPOINT_SERVICE is None:
+        _AUTOPILOT_ENDPOINT_SERVICE = AutopilotEndpointService()
+    return _AUTOPILOT_ENDPOINT_SERVICE
 
 
 def _telegram_sender_filter_service() -> TelegramSenderFilterService:
@@ -3739,21 +3748,22 @@ def _run_telegram_autopilot_forever():
 # --- COPIED ENDPOINTS ---
 async def handle_whatsapp_twilio_webhook(request: Request):
     _init()
-    if not ORION_WHATSAPP_AUTOPILOT_ENABLED:
-        return _whatsapp_twiml("Empyralis WhatsApp autopilot is disabled.")
-
-    if ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET:
-        provided_secret = str(
-            request.query_params.get("secret")
-            or request.headers.get("x-orion-webhook-secret")
-            or ""
-        ).strip()
-        if provided_secret != ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET:
-            return Response(status_code=403, content="forbidden")
-
     form = await _parse_form_urlencoded(request)
-    response_text = _whatsapp_webhook_service().handle_inbound(form)
-    return _whatsapp_twiml(response_text)
+    provided_secret = str(
+        request.query_params.get("secret")
+        or request.headers.get("x-orion-webhook-secret")
+        or ""
+    ).strip()
+    result = _autopilot_endpoint_service().whatsapp_webhook_result(
+        enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+        configured_secret=ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET,
+        provided_secret=provided_secret,
+        form=form,
+        handle_inbound=lambda payload: _whatsapp_webhook_service().handle_inbound(payload),
+    )
+    if int(result.get("status_code") or 200) == 403:
+        return Response(status_code=403, content=str(result.get("content") or "forbidden"))
+    return _whatsapp_twiml(str(result.get("text") or ""))
 
 
 async def handle_telegram_autopilot_status():
@@ -3768,40 +3778,12 @@ async def handle_whatsapp_autopilot_status():
 
 async def handle_list_autopilot_profiles():
     _init()
-    telegram_profiles = []
-    for profile_id, info in TELEGRAM_AUTOPILOT_PROFILE_CATALOG.items():
-        telegram_profiles.append(
-            {
-                "id": profile_id,
-                "label": info.get("label", profile_id),
-                "description": info.get("description", ""),
-                "allow_free_text": bool(info.get("allow_free_text")),
-                "allow_status": bool(info.get("allow_status")),
-                "allow_help": bool(info.get("allow_help")),
-            }
-        )
-    return {
-        "channels": {
-            "telegram": {
-                "enabled": bool(ORION_TELEGRAM_AUTOPILOT_ENABLED),
-                "default_profile": ORION_TELEGRAM_AUTOPILOT_PROFILE,
-                "profiles": telegram_profiles,
-            },
-            "whatsapp": {
-                "enabled": bool(ORION_WHATSAPP_AUTOPILOT_ENABLED),
-                "default_profile": ORION_WHATSAPP_AUTOPILOT_PROFILE,
-                "profiles": [
-                    {
-                        "id": profile_id,
-                        "label": info.get("label", profile_id),
-                        "description": info.get("description", ""),
-                        "allow_free_text": bool(info.get("allow_free_text")),
-                        "allow_status": bool(info.get("allow_status")),
-                        "allow_help": bool(info.get("allow_help")),
-                    }
-                    for profile_id, info in WHATSAPP_AUTOPILOT_PROFILE_CATALOG.items()
-                ],
-                "webhook_path": "/channels/whatsapp/twilio/webhook",
-            },
-        }
-    }
+    return _autopilot_endpoint_service().autopilot_profiles_payload(
+        telegram_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+        telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
+        telegram_catalog=TELEGRAM_AUTOPILOT_PROFILE_CATALOG,
+        whatsapp_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+        whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
+        whatsapp_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
+        whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+    )

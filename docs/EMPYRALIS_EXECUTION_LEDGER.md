@@ -537,6 +537,76 @@ This moves another top-level ownership block out of `autopilot_connectors.py`: s
   - `server_modules.tests.test_whatsapp_webhook_service`
   - `server_modules.tests.test_whatsapp_run_dispatch_service`
 
+### 2026-04-04 - Autopilot Endpoint Wrappers Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining inline endpoint wrapper logic for WhatsApp webhook handling and autopilot profile catalog payload assembly no longer lives in the monolith.
+
+This removes another top-level endpoint ownership block from `server_modules/autopilot_connectors.py`: the file no longer assembles autopilot profile payloads itself and no longer owns the WhatsApp webhook gate logic inline.
+
+#### Completed Work
+
+- Added `server_modules/connectors/autopilot_endpoint_service.py`.
+- Moved WhatsApp webhook endpoint wrapper behavior behind that service:
+  - disabled-autopilot response selection
+  - webhook secret validation result
+  - inbound form handoff result shaping
+- Moved autopilot profile catalog payload assembly behind that service:
+  - Telegram profile list shaping
+  - WhatsApp profile list shaping
+  - static webhook path exposure
+- Updated `server_modules/autopilot_connectors.py` so:
+  - `handle_whatsapp_twilio_webhook()` delegates to the endpoint service
+  - `handle_list_autopilot_profiles()` delegates to the endpoint service
+- Added focused coverage in `server_modules/tests/test_autopilot_endpoint_service.py`.
+
+#### Current Truth
+
+- The top-level autopilot HTTP/status/profile endpoint surfaces are increasingly service-owned.
+- Telegram runtime control flow, status assembly, and profile/status endpoint payloads are no longer monolith-owned blocks.
+- `server_modules/autopilot_connectors.py` still contains shared runtime state helpers and remaining channel logic, but another endpoint slice has been removed cleanly.
+
+#### Open Gaps
+
+- Shared autopilot state/snapshot helpers still live in `server_modules/autopilot_connectors.py`.
+- WhatsApp runtime state and shared connector registry helpers remain in the monolith.
+- The monolith is smaller, but it is still not yet reduced to a thin coordination layer.
+
+#### Next Required Work
+
+1. Continue extracting shared autopilot state and registry helpers from `server_modules/autopilot_connectors.py`.
+2. Move more WhatsApp/shared lifecycle behavior into bounded connector services.
+3. Reassess whether the remaining state helpers should split into dedicated Telegram and WhatsApp runtime modules rather than staying in one shared monolith.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - `server_modules/connectors/autopilot_endpoint_service.py`
+  - `server_modules/autopilot_connectors.py`
+  - `server_modules/tests/test_autopilot_endpoint_service.py`
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_telegram_autopilot_loop_service`
+  - `server_modules.tests.test_telegram_poll_cycle_service`
+  - `server_modules.tests.test_telegram_poll_dispatch_service`
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

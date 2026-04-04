@@ -23,6 +23,7 @@ from server_modules.connectors.autopilot_runtime_service_registry import Autopil
 from server_modules.connectors.autopilot_support_service_registry import AutopilotSupportServiceRegistry
 from server_modules.connectors.runtime_status_service import RuntimeStatusService
 from server_modules.connectors.telegram_autopilot_helper_registry import TelegramAutopilotHelperRegistry
+from server_modules.connectors.telegram_helper_registry_bridge_service import TelegramHelperRegistryBridgeService
 from server_modules.connectors.telegram_compatibility_bridge_service import TelegramCompatibilityBridgeService
 from server_modules.connectors.telegram_connector_context_service import TelegramConnectorContextService
 from server_modules.connectors.telegram_connector_support_service import TelegramConnectorSupportService
@@ -223,7 +224,6 @@ _AUTOPILOT_CHANNEL_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotChannelRegistryBri
 _AUTOPILOT_SHARED_SERVICE_REGISTRY: Optional[AutopilotSharedServiceRegistry] = None
 _AUTOPILOT_RUNTIME_SERVICE_REGISTRY: Optional[AutopilotRuntimeServiceRegistry] = None
 _AUTOPILOT_SUPPORT_SERVICE_REGISTRY: Optional[AutopilotSupportServiceRegistry] = None
-_TELEGRAM_AUTOPILOT_HELPER_REGISTRY: Optional[TelegramAutopilotHelperRegistry] = None
 _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
@@ -236,6 +236,7 @@ _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] =
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
 _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
+_TELEGRAM_HELPER_REGISTRY_BRIDGE_SERVICE: Optional[TelegramHelperRegistryBridgeService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
 _AUTOPILOT_SKILL_SERVICE: Optional[AutopilotSkillService] = None
@@ -312,10 +313,10 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
     return _autopilot_channel_registry_bridge_service().telegram_service_registry()
 
 
-def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
-    global _TELEGRAM_AUTOPILOT_HELPER_REGISTRY
-    if _TELEGRAM_AUTOPILOT_HELPER_REGISTRY is None:
-        _TELEGRAM_AUTOPILOT_HELPER_REGISTRY = TelegramAutopilotHelperRegistry(
+def _telegram_helper_registry_bridge_service() -> TelegramHelperRegistryBridgeService:
+    global _TELEGRAM_HELPER_REGISTRY_BRIDGE_SERVICE
+    if _TELEGRAM_HELPER_REGISTRY_BRIDGE_SERVICE is None:
+        _TELEGRAM_HELPER_REGISTRY_BRIDGE_SERVICE = TelegramHelperRegistryBridgeService(
             profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
             onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
             camera_setup_state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
@@ -344,7 +345,11 @@ def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
             select_skill_from_text=lambda raw_text: _autopilot_skill_service().select_skill_from_text(raw_text),
             skill_goal_builder=lambda skill: _autopilot_skill_service().telegram_skill_goal(skill),
         )
-    return _TELEGRAM_AUTOPILOT_HELPER_REGISTRY
+    return _TELEGRAM_HELPER_REGISTRY_BRIDGE_SERVICE
+
+
+def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
+    return _telegram_helper_registry_bridge_service().telegram_helper_registry()
 
 
 def _telegram_run_dispatch_service():

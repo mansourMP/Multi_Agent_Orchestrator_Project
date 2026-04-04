@@ -1370,6 +1370,65 @@ This is a composition cut, not just another helper wrapper. The live getter name
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Telegram Helper Registry Bootstrap Moved Behind Dedicated Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The autopilot connector module no longer owns the inline bootstrap for the Telegram helper registry.
+
+This is a smaller composition cut than the channel-registry bridge, but it removes another constructor band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) while keeping the exported `_telegram_helper_registry()` entrypoint stable.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_helper_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_helper_registry_bridge_service.py) to own:
+  - Telegram helper-registry construction
+  - helper-registry caching
+  - callback wiring for profile/media/routing helper dependencies
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_telegram_helper_registry_bridge_service()` owns bridge construction
+  - `_telegram_helper_registry()` now delegates through the bridge
+  - the duplicate module-level helper-registry cache layer was removed
+  - late-bound lookup semantics were preserved for `_safe_read_json`, `_safe_write_json`, and `_utc_now_iso` so direct module imports still work before runtime initialization
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_helper_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_helper_registry_bridge_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports `_telegram_helper_registry()`, but it no longer owns the helper-registry constructor body inline.
+- The helper bootstrap boundary is now:
+  - [server_modules/connectors/telegram_helper_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_helper_registry_bridge_service.py)
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+- The direct import path used by the terminal profile-command tests remains compatible after restoring late-bound callback resolution.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the large support/runtime registry assembly blocks inline.
+- The shared endpoint/status registry construction is still part of the connector module rather than a dedicated composition bridge.
+- The connector module is still a composition-heavy shell, not yet the minimal runtime entry surface described by the architecture document.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by moving the support/runtime registry construction bands behind dedicated bridge services.
+2. Keep preserving late-bound behavior for direct module import tests whenever constructor wiring moves behind new bridges.
+3. Prefer extraction boundaries that remove composition ownership without changing the historical exported getter and endpoint names.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/telegram_helper_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_helper_registry_bridge_service.py)
+  - [server_modules/tests/test_telegram_helper_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_helper_registry_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_helper_registry_bridge_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Machine-Mode Run Wrapper Band Removed From Autopilot Connectors
 
 #### Stage

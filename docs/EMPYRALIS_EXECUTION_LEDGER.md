@@ -716,6 +716,57 @@ This does not split the full Telegram or WhatsApp autopilot module yet. It moves
 - Focused unit tests passed in the project virtualenv:
   - `server_modules.tests.test_telegram_space_service`
 
+### 2026-04-04 - Telegram Profile And Onboarding State Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector decomposition continued with a second Telegram slice: profile context and onboarding state.
+
+This keeps the live Telegram loop stable while moving another stateful subsystem behind a dedicated connector service. It also restores profile-context goal merging so saved Telegram context actually affects run goals again.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_profile_service.py) as the dedicated boundary for:
+  - Telegram profile field normalization
+  - profile state load, persist, get, set, and clear
+  - onboarding state load, persist, get, start, and advance
+  - onboarding prompt generation and answer consumption
+  - profile text and help text rendering
+  - profile-context goal shaping
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the monolith now delegates the Telegram profile and onboarding subsystem instead of owning those rules and state transitions inline.
+- Fixed the Telegram profile-context run-goal merge by routing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) through the new service-owned goal builder.
+- Added focused coverage in:
+  - [server_modules/tests/test_telegram_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_profile_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the main Telegram polling and action loop, but it no longer owns the full profile/onboarding subsystem implementation.
+- Telegram saved-context behavior is again part of the actual goal-building path instead of being silently dropped.
+- The connector monolith is now losing both stateless and stateful bounded slices under direct test coverage.
+
+#### Open Gaps
+
+- Telegram command routing and message lifecycle orchestration still live in the monolith.
+- Camera setup, media handling, and WhatsApp state still remain inside the same file.
+- A shared adapter contract for Telegram and WhatsApp still does not exist yet.
+
+#### Next Required Work
+
+1. Continue extracting bounded Telegram subsystems from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially camera-setup or media-handling state.
+2. Keep validating extracted Telegram slices with direct service tests plus the existing Telegram command tests.
+3. Only after more bounded slices are removed should the main channel loop itself be broken apart.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_profile_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_profile_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_profile_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_profile_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `server_modules.tests.test_telegram_space_service`
+
 ### 2026-04-04 - Direct Chat Runtime Loop Moved Behind Dedicated Runtime Service
 
 #### Stage

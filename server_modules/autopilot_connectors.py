@@ -8,6 +8,10 @@ from urllib.parse import urlencode, quote_plus, parse_qs
 from urllib import request as urlrequest, error as urlerror
 from scripts.platform_execution import stack_start_command_hint
 from server_modules.automation_intents import classify_automation_intent
+from server_modules.connectors.telegram_profile_service import (
+    TELEGRAM_PROFILE_FIELDS as _TELEGRAM_PROFILE_FIELDS,
+    TelegramProfileService,
+)
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.installed_skills import query_active_installed_skills
 try:
@@ -171,65 +175,11 @@ ORION_TELEGRAM_ONBOARDING_STATE_FILE = _resolve_state_file(
     "channels/telegram/chat_onboarding.json",
     ".orion_telegram_chat_onboarding.json",
 )
-_TELEGRAM_PROFILE_LOCK = threading.Lock()
-_TELEGRAM_PROFILE_STATE: Dict[str, Any] = {
-    "loaded": False,
-    "profiles": {},
-}
-_TELEGRAM_ONBOARDING_LOCK = threading.Lock()
-_TELEGRAM_ONBOARDING_STATE: Dict[str, Any] = {
-    "loaded": False,
-    "items": {},
-}
 _TELEGRAM_CAMERA_SETUP_LOCK = threading.Lock()
 _TELEGRAM_CAMERA_SETUP_STATE: Dict[str, Any] = {
     "loaded": False,
     "items": {},
 }
-_TELEGRAM_PROFILE_FIELDS: Dict[str, str] = {
-    "about": "About me",
-    "project": "Project",
-    "exam": "Exam prep",
-    "preferences": "Preferences",
-}
-_TELEGRAM_PROFILE_FIELD_ALIASES: Dict[str, str] = {
-    "about": "about",
-    "bio": "about",
-    "me": "about",
-    "project": "project",
-    "work": "project",
-    "business": "project",
-    "startup": "project",
-    "exam": "exam",
-    "study": "exam",
-    "school": "exam",
-    "prep": "exam",
-    "preferences": "preferences",
-    "preference": "preferences",
-    "prefs": "preferences",
-    "style": "preferences",
-    "tone": "preferences",
-}
-_TELEGRAM_ONBOARDING_STEPS: List[Dict[str, str]] = [
-    {
-        "field": "about",
-        "label": "About me",
-        "question": "What's your name, and what are you working on right now?",
-        "example": "Example: I'm Mansur, building an AI ops platform for my business.",
-    },
-    {
-        "field": "project",
-        "label": "Project",
-        "question": "What does a great day look like for you? What should I help with most?",
-        "example": "Example: End the day with top priorities executed and client follow-ups sent.",
-    },
-    {
-        "field": "preferences",
-        "label": "Preferences",
-        "question": "Anything I should always prioritize or never touch?",
-        "example": "Example: Prioritize urgent revenue tasks. Never send external messages without asking me first.",
-    },
-]
 _TELEGRAM_QUICK_GOAL_TEMPLATES: Dict[str, str] = {
     "project update": "Give me a concise update for my current project with top priorities, blockers, and next 3 actions.",
     "today priorities": "Set my top priorities for today with a realistic execution order and time blocks.",
@@ -251,6 +201,15 @@ _TELEGRAM_MENU_GOAL_TEMPLATES: Dict[str, str] = {
     "exam plan": "Build my exam preparation plan for this week with daily tasks, time blocks, and revision checkpoints.",
 }
 DEFAULT_CHAT_PREFIX = "/empyralis"
+_TELEGRAM_PROFILE_SERVICE = TelegramProfileService(
+    profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
+    onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
+    default_chat_prefix=DEFAULT_CHAT_PREFIX,
+    read_json=lambda path, default: _safe_read_json(path, default),
+    write_json=lambda path, payload: _safe_write_json(path, payload),
+    now_iso=lambda: _utc_now_iso(),
+    truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+)
 
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
@@ -578,227 +537,63 @@ def _whatsapp_session_key(from_number: str, to_number: str) -> str:
 
 
 def _telegram_profile_key(workspace_id: str, chat_id: str) -> str:
-    ws = str(workspace_id or "").strip() or "default"
-    cid = str(chat_id or "").strip() or "unknown"
-    return f"{ws}:{cid}"
+    return _TELEGRAM_PROFILE_SERVICE.telegram_profile_key(workspace_id, chat_id)
 
 
 def _load_telegram_profile_state() -> None:
-    _init()
-    payload = _safe_read_json(
-        ORION_TELEGRAM_PROFILE_STATE_FILE,
-        {"version": 1, "items": {}},
-    )
-    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
-    parsed_profiles: Dict[str, Dict[str, str]] = {}
-    for key, value in items.items():
-        if not isinstance(value, dict):
-            continue
-        cleaned: Dict[str, str] = {}
-        for field_name in _TELEGRAM_PROFILE_FIELDS:
-            raw_value = str(value.get(field_name) or "").strip()
-            if raw_value:
-                cleaned[field_name] = raw_value[:2000]
-        updated_at = str(value.get("updated_at") or "").strip()
-        if cleaned:
-            cleaned["updated_at"] = updated_at or _utc_now_iso()
-            parsed_profiles[str(key)] = cleaned
-    with _TELEGRAM_PROFILE_LOCK:
-        _TELEGRAM_PROFILE_STATE["profiles"] = parsed_profiles
-        _TELEGRAM_PROFILE_STATE["loaded"] = True
+    _TELEGRAM_PROFILE_SERVICE.load_profile_state()
 
 
 def _ensure_telegram_profile_state_loaded() -> None:
-    with _TELEGRAM_PROFILE_LOCK:
-        loaded = bool(_TELEGRAM_PROFILE_STATE.get("loaded"))
-    if not loaded:
-        _load_telegram_profile_state()
+    _TELEGRAM_PROFILE_SERVICE.ensure_profile_state_loaded()
 
 
 def _persist_telegram_profile_state() -> None:
-    _init()
-    with _TELEGRAM_PROFILE_LOCK:
-        profiles = _TELEGRAM_PROFILE_STATE.get("profiles")
-        data = dict(profiles) if isinstance(profiles, dict) else {}
-    _safe_write_json(
-        ORION_TELEGRAM_PROFILE_STATE_FILE,
-        {"version": 1, "items": data},
-    )
+    _TELEGRAM_PROFILE_SERVICE.persist_profile_state()
 
 
 def _normalize_telegram_profile_field(raw_value: str) -> str:
-    token = str(raw_value or "").strip().lower()
-    if not token:
-        return ""
-    token = token.lstrip("/")
-    return _TELEGRAM_PROFILE_FIELD_ALIASES.get(token, "")
+    return _TELEGRAM_PROFILE_SERVICE.normalize_profile_field(raw_value)
 
 
 def _get_telegram_profile(workspace_id: str, chat_id: str) -> Dict[str, str]:
-    _ensure_telegram_profile_state_loaded()
-    key = _telegram_profile_key(workspace_id, chat_id)
-    with _TELEGRAM_PROFILE_LOCK:
-        item = _TELEGRAM_PROFILE_STATE.get("profiles", {}).get(key)
-        profile = dict(item) if isinstance(item, dict) else {}
-    out: Dict[str, str] = {}
-    for field_name in _TELEGRAM_PROFILE_FIELDS:
-        out[field_name] = str(profile.get(field_name) or "").strip()
-    out["updated_at"] = str(profile.get("updated_at") or "").strip()
-    return out
+    return _TELEGRAM_PROFILE_SERVICE.get_profile(workspace_id, chat_id)
 
 
 def _set_telegram_profile_field(workspace_id: str, chat_id: str, field_name: str, value: str) -> Dict[str, str]:
-    _ensure_telegram_profile_state_loaded()
-    key = _telegram_profile_key(workspace_id, chat_id)
-    cleaned_value = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not cleaned_value:
-        raise RuntimeError("Value is required.")
-    cleaned_value = cleaned_value[:2000]
-    with _TELEGRAM_PROFILE_LOCK:
-        profiles = _TELEGRAM_PROFILE_STATE.get("profiles")
-        if not isinstance(profiles, dict):
-            profiles = {}
-            _TELEGRAM_PROFILE_STATE["profiles"] = profiles
-        current = profiles.get(key)
-        record = dict(current) if isinstance(current, dict) else {}
-        record[field_name] = cleaned_value
-        record["updated_at"] = _utc_now_iso()
-        profiles[key] = record
-    _persist_telegram_profile_state()
-    return _get_telegram_profile(workspace_id, chat_id)
+    return _TELEGRAM_PROFILE_SERVICE.set_profile_field(workspace_id, chat_id, field_name, value)
 
 
 def _clear_telegram_profile(workspace_id: str, chat_id: str, field_name: str = "") -> Dict[str, str]:
-    _ensure_telegram_profile_state_loaded()
-    key = _telegram_profile_key(workspace_id, chat_id)
-    with _TELEGRAM_PROFILE_LOCK:
-        profiles = _TELEGRAM_PROFILE_STATE.get("profiles")
-        if not isinstance(profiles, dict):
-            profiles = {}
-            _TELEGRAM_PROFILE_STATE["profiles"] = profiles
-        record = profiles.get(key)
-        if not isinstance(record, dict):
-            record = {}
-        if field_name:
-            record.pop(field_name, None)
-            if any(str(record.get(name) or "").strip() for name in _TELEGRAM_PROFILE_FIELDS):
-                record["updated_at"] = _utc_now_iso()
-                profiles[key] = record
-            else:
-                profiles.pop(key, None)
-        else:
-            profiles.pop(key, None)
-    _persist_telegram_profile_state()
-    return _get_telegram_profile(workspace_id, chat_id)
+    return _TELEGRAM_PROFILE_SERVICE.clear_profile(workspace_id, chat_id, field_name)
 
 
 def _telegram_onboarding_key(workspace_id: str, chat_id: str) -> str:
-    return _telegram_profile_key(workspace_id, chat_id)
+    return _TELEGRAM_PROFILE_SERVICE.telegram_onboarding_key(workspace_id, chat_id)
 
 
 def _load_telegram_onboarding_state() -> None:
-    _init()
-    payload = _safe_read_json(
-        ORION_TELEGRAM_ONBOARDING_STATE_FILE,
-        {"version": 1, "items": {}},
-    )
-    items = payload.get("items") if isinstance(payload.get("items"), dict) else {}
-    parsed: Dict[str, Dict[str, Any]] = {}
-    for key, value in items.items():
-        if not isinstance(value, dict):
-            continue
-        active = bool(value.get("active"))
-        step_index = int(value.get("step_index") or 0)
-        started_at = str(value.get("started_at") or "").strip()
-        updated_at = str(value.get("updated_at") or "").strip()
-        if not active and step_index <= 0:
-            continue
-        parsed[str(key)] = {
-            "active": active,
-            "step_index": max(0, min(step_index, len(_TELEGRAM_ONBOARDING_STEPS))),
-            "started_at": started_at or _utc_now_iso(),
-            "updated_at": updated_at or _utc_now_iso(),
-        }
-    with _TELEGRAM_ONBOARDING_LOCK:
-        _TELEGRAM_ONBOARDING_STATE["items"] = parsed
-        _TELEGRAM_ONBOARDING_STATE["loaded"] = True
+    _TELEGRAM_PROFILE_SERVICE.load_onboarding_state()
 
 
 def _ensure_telegram_onboarding_state_loaded() -> None:
-    with _TELEGRAM_ONBOARDING_LOCK:
-        loaded = bool(_TELEGRAM_ONBOARDING_STATE.get("loaded"))
-    if not loaded:
-        _load_telegram_onboarding_state()
+    _TELEGRAM_PROFILE_SERVICE.ensure_onboarding_state_loaded()
 
 
 def _persist_telegram_onboarding_state() -> None:
-    _init()
-    with _TELEGRAM_ONBOARDING_LOCK:
-        items = _TELEGRAM_ONBOARDING_STATE.get("items")
-        data = dict(items) if isinstance(items, dict) else {}
-    _safe_write_json(
-        ORION_TELEGRAM_ONBOARDING_STATE_FILE,
-        {"version": 1, "items": data},
-    )
+    _TELEGRAM_PROFILE_SERVICE.persist_onboarding_state()
 
 
 def _get_telegram_onboarding_state(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    _ensure_telegram_onboarding_state_loaded()
-    key = _telegram_onboarding_key(workspace_id, chat_id)
-    with _TELEGRAM_ONBOARDING_LOCK:
-        item = _TELEGRAM_ONBOARDING_STATE.get("items", {}).get(key)
-        out = dict(item) if isinstance(item, dict) else {}
-    return {
-        "active": bool(out.get("active")),
-        "step_index": int(out.get("step_index") or 0),
-        "started_at": str(out.get("started_at") or "").strip(),
-        "updated_at": str(out.get("updated_at") or "").strip(),
-    }
+    return _TELEGRAM_PROFILE_SERVICE.get_onboarding_state(workspace_id, chat_id)
 
 
 def _start_telegram_onboarding(workspace_id: str, chat_id: str) -> Dict[str, Any]:
-    _ensure_telegram_onboarding_state_loaded()
-    key = _telegram_onboarding_key(workspace_id, chat_id)
-    profile_data = _get_telegram_profile(workspace_id, chat_id)
-    start_index = _telegram_next_onboarding_step_index(profile_data)
-    should_activate = start_index < len(_TELEGRAM_ONBOARDING_STEPS)
-    now = _utc_now_iso()
-    with _TELEGRAM_ONBOARDING_LOCK:
-        items = _TELEGRAM_ONBOARDING_STATE.get("items")
-        if not isinstance(items, dict):
-            items = {}
-            _TELEGRAM_ONBOARDING_STATE["items"] = items
-        items[key] = {
-            "active": should_activate,
-            "step_index": start_index,
-            "started_at": now,
-            "updated_at": now,
-        }
-    _persist_telegram_onboarding_state()
-    return _get_telegram_onboarding_state(workspace_id, chat_id)
+    return _TELEGRAM_PROFILE_SERVICE.start_onboarding(workspace_id, chat_id)
 
 
 def _advance_telegram_onboarding(workspace_id: str, chat_id: str, step_index: int, active: bool) -> Dict[str, Any]:
-    _ensure_telegram_onboarding_state_loaded()
-    key = _telegram_onboarding_key(workspace_id, chat_id)
-    now = _utc_now_iso()
-    with _TELEGRAM_ONBOARDING_LOCK:
-        items = _TELEGRAM_ONBOARDING_STATE.get("items")
-        if not isinstance(items, dict):
-            items = {}
-            _TELEGRAM_ONBOARDING_STATE["items"] = items
-        if active:
-            current = items.get(key)
-            record = dict(current) if isinstance(current, dict) else {}
-            record["active"] = True
-            record["step_index"] = max(0, min(int(step_index), len(_TELEGRAM_ONBOARDING_STEPS)))
-            record["started_at"] = str(record.get("started_at") or now)
-            record["updated_at"] = now
-            items[key] = record
-        else:
-            items.pop(key, None)
-    _persist_telegram_onboarding_state()
-    return _get_telegram_onboarding_state(workspace_id, chat_id)
+    return _TELEGRAM_PROFILE_SERVICE.advance_onboarding(workspace_id, chat_id, step_index, active)
 
 
 def _telegram_camera_setup_key(workspace_id: str, chat_id: str) -> str:
@@ -1355,51 +1150,19 @@ def _telegram_handle_guided_automation_setup(
 
 
 def _telegram_profile_has_context(profile_data: Dict[str, str]) -> bool:
-    return any(str(profile_data.get(field_name) or "").strip() for field_name in _TELEGRAM_PROFILE_FIELDS)
+    return _TELEGRAM_PROFILE_SERVICE.profile_has_context(profile_data)
 
 
 def _telegram_next_onboarding_step_index(profile_data: Dict[str, str]) -> int:
-    for idx, step in enumerate(_TELEGRAM_ONBOARDING_STEPS):
-        field_name = str(step.get("field") or "").strip().lower()
-        if not field_name:
-            continue
-        if not str(profile_data.get(field_name) or "").strip():
-            return idx
-    return len(_TELEGRAM_ONBOARDING_STEPS)
+    return _TELEGRAM_PROFILE_SERVICE.next_onboarding_step_index(profile_data)
 
 
 def _is_low_quality_onboarding_answer(raw_value: str) -> bool:
-    text = re.sub(r"\s+", " ", str(raw_value or "").strip())
-    if not text:
-        return True
-    lower = text.lower()
-    if lower in {"idk", "dont know", "don't know", "none", "nothing", "n/a", "na"}:
-        return True
-    if len(text) < 8:
-        return True
-    words = [w for w in re.split(r"\s+", lower) if w]
-    if len(words) < 2 and len(text) < 12:
-        return True
-    letters_only = re.sub(r"[^a-z]", "", lower)
-    if letters_only and len(set(letters_only)) <= 3 and len(letters_only) <= 8:
-        return True
-    return False
+    return _TELEGRAM_PROFILE_SERVICE.is_low_quality_onboarding_answer(raw_value)
 
 
 def _telegram_onboarding_prompt(step_index: int, retry: bool = False) -> str:
-    idx = max(0, min(int(step_index), len(_TELEGRAM_ONBOARDING_STEPS) - 1))
-    step = _TELEGRAM_ONBOARDING_STEPS[idx]
-    lead = "Let's set your context (quick 3 questions)." if idx == 0 and not retry else "Thanks. Next question."
-    if retry:
-        lead = "I need a bit more detail for that answer."
-    return "\n".join(
-        [
-            lead,
-            f"{idx + 1}/{len(_TELEGRAM_ONBOARDING_STEPS)} {step.get('question')}",
-            str(step.get("example") or "").strip(),
-            "Reply with your answer, or type 'skip'.",
-        ]
-    ).strip()
+    return _TELEGRAM_PROFILE_SERVICE.onboarding_prompt(step_index, retry=retry)
 
 
 def _telegram_onboarding_consume_answer(
@@ -1407,91 +1170,23 @@ def _telegram_onboarding_consume_answer(
     chat_id: str,
     answer_text: str,
 ) -> Dict[str, Any]:
-    state = _get_telegram_onboarding_state(workspace_id, chat_id)
-    if not bool(state.get("active")):
-        state = _start_telegram_onboarding(workspace_id, chat_id)
-    idx = max(0, min(int(state.get("step_index") or 0), len(_TELEGRAM_ONBOARDING_STEPS) - 1))
-    step = _TELEGRAM_ONBOARDING_STEPS[idx]
-    field_name = str(step.get("field") or "").strip().lower()
-    answer = re.sub(r"\s+", " ", str(answer_text or "").strip())
-    answer_lower = answer.lower()
-
-    if answer_lower not in {"skip", "/skip", "later"} and _is_low_quality_onboarding_answer(answer):
-        return {
-            "completed": False,
-            "saved": False,
-            "reply": _telegram_onboarding_prompt(idx, retry=True),
-            "next_state": state,
-        }
-
-    saved = False
-    if answer_lower not in {"skip", "/skip", "later"} and field_name in _TELEGRAM_PROFILE_FIELDS:
-        _set_telegram_profile_field(workspace_id, chat_id, field_name, answer)
-        saved = True
-
-    next_idx = idx + 1
-    if next_idx >= len(_TELEGRAM_ONBOARDING_STEPS):
-        _advance_telegram_onboarding(workspace_id, chat_id, next_idx, active=False)
-        profile_data = _get_telegram_profile(workspace_id, chat_id)
-        return {
-            "completed": True,
-            "saved": saved,
-            "reply": "Onboarding complete.\n\n" + _telegram_profile_text({"prefix": DEFAULT_CHAT_PREFIX, "require_prefix": False}, profile_data),
-            "next_state": {"active": False, "step_index": next_idx},
-        }
-
-    next_state = _advance_telegram_onboarding(workspace_id, chat_id, next_idx, active=True)
-    return {
-        "completed": False,
-        "saved": saved,
-        "reply": _telegram_onboarding_prompt(next_idx, retry=False),
-        "next_state": next_state,
-    }
+    return _TELEGRAM_PROFILE_SERVICE.onboarding_consume_answer(workspace_id, chat_id, answer_text)
 
 
 def _telegram_profile_lines(profile_data: Dict[str, str]) -> List[str]:
-    lines: List[str] = []
-    for field_name, label in _TELEGRAM_PROFILE_FIELDS.items():
-        value = str(profile_data.get(field_name) or "").strip()
-        if value:
-            lines.append(f"- {label}: {_truncate_one_line(value, 140)}")
-    if not lines:
-        lines.append("- No context saved yet.")
-    return lines
+    return _TELEGRAM_PROFILE_SERVICE.profile_lines(profile_data)
 
 
 def _telegram_profile_text(profile: Dict[str, Any], profile_data: Dict[str, str]) -> str:
-    prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX).strip() or DEFAULT_CHAT_PREFIX
-    cmd_prefix = f"{prefix} " if bool(profile.get("require_prefix")) else ""
-    lines = ["Saved context", *_telegram_profile_lines(profile_data), ""]
-    lines.extend(
-        [
-            f"Review or update later with `{cmd_prefix}me`.",
-            f"Quick edit: `{cmd_prefix}me set project <details>`",
-            f"Clear a field: `{cmd_prefix}me clear [project|exam|about|preferences]`",
-        ]
-    )
-    return "\n".join(lines).strip()
+    return _TELEGRAM_PROFILE_SERVICE.profile_text(profile, profile_data)
 
 
 def _telegram_profile_help_text(profile: Dict[str, Any]) -> str:
-    prefix = str(profile.get("prefix") or DEFAULT_CHAT_PREFIX).strip() or DEFAULT_CHAT_PREFIX
-    cmd_prefix = f"{prefix} " if bool(profile.get("require_prefix")) else ""
-    return "\n".join(
-        [
-            "Profile commands",
-            f"- {cmd_prefix}me",
-            f"- {cmd_prefix}me set project <details>",
-            f"- {cmd_prefix}me set exam <details>",
-            f"- {cmd_prefix}me set about <details>",
-            f"- {cmd_prefix}me set preferences <details>",
-            f"- {cmd_prefix}me clear [project|exam|about|preferences]",
-        ]
-    )
+    return _TELEGRAM_PROFILE_SERVICE.profile_help_text(profile)
 
 
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
-    return str(goal or "").strip()
+    return _TELEGRAM_PROFILE_SERVICE.build_goal_with_profile(goal, profile_data)
 
 
 def _connector_capability_summary(connector_id: str) -> str:

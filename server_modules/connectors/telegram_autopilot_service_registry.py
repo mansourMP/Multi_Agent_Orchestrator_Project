@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+from server_modules.connectors.telegram_action_service import TelegramActionService
+from server_modules.connectors.telegram_autopilot_loop_service import TelegramAutopilotLoopService
+from server_modules.connectors.telegram_autopilot_runtime_service import TelegramAutopilotRuntimeService
+from server_modules.connectors.telegram_autopilot_state_service import TelegramAutopilotStateService
+from server_modules.connectors.telegram_autopilot_supervisor_service import TelegramAutopilotSupervisorService
+from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
+from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
+from server_modules.connectors.telegram_poll_cycle_service import TelegramPollCycleService
+from server_modules.connectors.telegram_poll_dispatch_service import TelegramPollDispatchService
+from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
+from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
+from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
+from server_modules.connectors.telegram_sender_filter_service import TelegramSenderFilterService
+
+
+class TelegramAutopilotServiceRegistry:
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        default_workspace_id: str,
+        default_chat_prefix: str,
+        onboarding_enabled: bool,
+        require_prefix: bool,
+        prefix: str,
+        space_status_enabled: bool,
+        media_max_items: int,
+        max_updates: int,
+        poll_seconds: float,
+        run_timeout_seconds: int,
+        max_reply_chars: int,
+        send_ack: bool,
+        state: Dict[str, Any],
+        lock: Any,
+        state_file: Path,
+        read_json: Callable[[Path, Any], Any],
+        write_json: Callable[[Path, Any], Any],
+        persist_state: Callable[[], Any],
+        utc_now_iso: Callable[[], str],
+        classify_error: Callable[[str], str],
+        iso_from_epoch: Callable[[float], str],
+        normalize_workspace_id: Callable[[Any], str],
+        thread_alive: Callable[[], bool],
+        enabled: bool,
+        default_profile: str,
+        list_connector_entries: Callable[[], List[Dict[str, Any]]],
+        resolve_profile: Callable[[Dict[str, Any]], Dict[str, Any]],
+        resolve_allow_from: Callable[[Dict[str, Any]], List[str]],
+        connector_state: Callable[[str], Dict[str, Any]],
+        set_connector_state: Callable[[str, Dict[str, Any]], Any],
+        resolve_secret: Callable[[Dict[str, Any]], Dict[str, Any]],
+        load_vault: Callable[[], Any],
+        workspace_visible: Callable[[str, Any], bool],
+        connector_paused: Callable[[Any], bool],
+        get_updates_process_lock: Callable[[str], Any],
+        notify_pending_approvals: Callable[..., Dict[str, Any]],
+        telegram_api_request: Callable[..., Dict[str, Any]],
+        record_channel_event: Callable[..., Any],
+        record_channel_event_throttled: Callable[..., Any],
+        send_message: Callable[..., Any],
+        send_chat_action: Callable[..., Any],
+        edit_message: Callable[..., Any],
+        autopilot_log: Callable[[str], Any],
+        autopilot_mark_error: Callable[[str, str], float],
+        mark_poll: Callable[[bool], Any],
+        mark_started: Callable[[str], Any],
+        normalize_profile_field: Callable[[Any], str],
+        select_skill_from_text: Callable[[str], Optional[Dict[str, Any]]],
+        skill_goal_builder: Callable[[Dict[str, Any]], str],
+        help_text: Callable[[Dict[str, Any]], str],
+        skills_menu_text: Callable[[Dict[str, Any]], str],
+        menu_keyboard: Callable[[Dict[str, Any], str], Dict[str, Any]],
+        onboarding_prompt: Callable[[int, bool], str],
+        onboarding_start: Callable[[str, str], Dict[str, Any]],
+        profile_text: Callable[[Dict[str, Any], Dict[str, Any]], str],
+        profile_help_text: Callable[[Dict[str, Any]], str],
+        profile_set: Callable[[str, str, str, str], Any],
+        profile_clear: Callable[[str, str, str], Any],
+        runtime_status_text: Callable[[str], str],
+        approvals_list: Callable[[int], Dict[str, Any]],
+        approvals_text: Callable[[Dict[str, Any], str], str],
+        approval_resolve: Callable[[str, bool, str], Dict[str, Any]],
+        approval_result_text: Callable[[Dict[str, Any], bool], str],
+        extract_message: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+        chat_matches: Callable[[str, Dict[str, Any]], bool],
+        store_attachments: Callable[..., List[Dict[str, Any]]],
+        route_message: Callable[[str, Dict[str, Any]], Dict[str, Any]],
+        session_key_builder: Callable[[str], str],
+        trace_id_builder: Callable[[str, Any, Any], str],
+        guided_setup_handler: Callable[..., Dict[str, Any]],
+        sender_allowed: Callable[[Dict[str, Any], List[str]], bool],
+        get_chat_profile: Callable[[str, str], Dict[str, Any]],
+        explicit_run_command: Callable[[str], bool],
+        onboarding_get_state: Callable[[str, str], Dict[str, Any]],
+        onboarding_consume_answer: Callable[[str, str, str], Dict[str, Any]],
+        profile_get: Callable[[str, str], Dict[str, Any]],
+        profile_has_context: Callable[[Dict[str, Any]], bool],
+        build_goal_with_profile: Callable[[str, Dict[str, Any]], str],
+        build_goal_with_attachments: Callable[[str, List[Dict[str, Any]]], str],
+        workspace_connector_context: Callable[..., Dict[str, Any]],
+        build_goal_with_connector_context: Callable[[str, str], str],
+        space_question_via_mcp: Callable[..., Dict[str, Any]],
+        installed_skill_query: Callable[..., Dict[str, Any]],
+        truncate_one_line: Callable[[str, int], str],
+        create_run: Callable[..., Dict[str, Any]],
+        include_run_meta: Callable[[], bool],
+        humanize_run_summary: Callable[[str], str],
+        runs_get: Callable[[str], Any],
+        latest_run_error_message: Callable[[Any], str],
+        is_non_retryable_run_error: Callable[[str], bool],
+        friendly_run_error: Callable[[str], str],
+        summarize_run_terminal_result: Callable[[Any, int], str],
+        local_companion_snapshot: Callable[[], Dict[str, Any]],
+        can_auto_approve_wait: Callable[[Any], bool],
+        pending_confirmation_payload: Callable[[Any], Dict[str, Any]],
+        sleep: Callable[[float], Any],
+    ) -> None:
+        self.project_root = Path(project_root)
+        self.default_workspace_id = str(default_workspace_id or "default").strip() or "default"
+        self.default_chat_prefix = default_chat_prefix
+        self.onboarding_enabled = bool(onboarding_enabled)
+        self.require_prefix = bool(require_prefix)
+        self.prefix = str(prefix or "")
+        self.space_status_enabled = bool(space_status_enabled)
+        self.media_max_items = int(media_max_items)
+        self.max_updates = int(max_updates)
+        self.poll_seconds = float(poll_seconds)
+        self.run_timeout_seconds = int(run_timeout_seconds)
+        self.max_reply_chars = int(max_reply_chars)
+        self.send_ack = bool(send_ack)
+        self.state = state
+        self.lock = lock
+        self.state_file = Path(state_file)
+        self.read_json = read_json
+        self.write_json = write_json
+        self.persist_state = persist_state
+        self.utc_now_iso = utc_now_iso
+        self.classify_error = classify_error
+        self.iso_from_epoch = iso_from_epoch
+        self.normalize_workspace_id = normalize_workspace_id
+        self.thread_alive = thread_alive
+        self.enabled = bool(enabled)
+        self.default_profile = str(default_profile or "")
+        self.list_connector_entries = list_connector_entries
+        self.resolve_profile = resolve_profile
+        self.resolve_allow_from = resolve_allow_from
+        self.connector_state = connector_state
+        self.set_connector_state = set_connector_state
+        self.resolve_secret = resolve_secret
+        self.load_vault = load_vault
+        self.workspace_visible = workspace_visible
+        self.connector_paused = connector_paused
+        self.get_updates_process_lock = get_updates_process_lock
+        self.notify_pending_approvals = notify_pending_approvals
+        self.telegram_api_request = telegram_api_request
+        self.record_channel_event = record_channel_event
+        self.record_channel_event_throttled = record_channel_event_throttled
+        self.send_message = send_message
+        self.send_chat_action = send_chat_action
+        self.edit_message = edit_message
+        self.autopilot_log = autopilot_log
+        self.autopilot_mark_error = autopilot_mark_error
+        self.mark_poll = mark_poll
+        self.mark_started = mark_started
+        self.normalize_profile_field = normalize_profile_field
+        self.select_skill_from_text = select_skill_from_text
+        self.skill_goal_builder = skill_goal_builder
+        self.help_text = help_text
+        self.skills_menu_text = skills_menu_text
+        self.menu_keyboard = menu_keyboard
+        self.onboarding_prompt = onboarding_prompt
+        self.onboarding_start = onboarding_start
+        self.profile_text = profile_text
+        self.profile_help_text = profile_help_text
+        self.profile_set = profile_set
+        self.profile_clear = profile_clear
+        self.runtime_status_text = runtime_status_text
+        self.approvals_list = approvals_list
+        self.approvals_text = approvals_text
+        self.approval_resolve = approval_resolve
+        self.approval_result_text = approval_result_text
+        self.extract_message = extract_message
+        self.chat_matches = chat_matches
+        self.store_attachments = store_attachments
+        self.route_message = route_message
+        self.session_key_builder = session_key_builder
+        self.trace_id_builder = trace_id_builder
+        self.guided_setup_handler = guided_setup_handler
+        self.sender_allowed = sender_allowed
+        self.get_chat_profile = get_chat_profile
+        self.explicit_run_command = explicit_run_command
+        self.onboarding_get_state = onboarding_get_state
+        self.onboarding_consume_answer = onboarding_consume_answer
+        self.profile_get = profile_get
+        self.profile_has_context = profile_has_context
+        self.build_goal_with_profile = build_goal_with_profile
+        self.build_goal_with_attachments = build_goal_with_attachments
+        self.workspace_connector_context = workspace_connector_context
+        self.build_goal_with_connector_context = build_goal_with_connector_context
+        self.space_question_via_mcp = space_question_via_mcp
+        self.installed_skill_query = installed_skill_query
+        self.truncate_one_line = truncate_one_line
+        self.create_run = create_run
+        self.include_run_meta = include_run_meta
+        self.humanize_run_summary = humanize_run_summary
+        self.runs_get = runs_get
+        self.latest_run_error_message = latest_run_error_message
+        self.is_non_retryable_run_error = is_non_retryable_run_error
+        self.friendly_run_error = friendly_run_error
+        self.summarize_run_terminal_result = summarize_run_terminal_result
+        self.local_companion_snapshot = local_companion_snapshot
+        self.can_auto_approve_wait = can_auto_approve_wait
+        self.pending_confirmation_payload = pending_confirmation_payload
+        self.sleep = sleep
+
+        self._run_dispatch_service: Optional[TelegramRunDispatchService] = None
+        self._autopilot_state_service: Optional[TelegramAutopilotStateService] = None
+        self._autopilot_runtime_service: Optional[TelegramAutopilotRuntimeService] = None
+        self._sender_filter_service: Optional[TelegramSenderFilterService] = None
+        self._action_service: Optional[TelegramActionService] = None
+        self._inbound_context_service: Optional[TelegramInboundContextService] = None
+        self._autopilot_loop_service: Optional[TelegramAutopilotLoopService] = None
+        self._poll_cycle_service: Optional[TelegramPollCycleService] = None
+        self._poll_dispatch_service: Optional[TelegramPollDispatchService] = None
+        self._poll_state_service: Optional[TelegramPollStateService] = None
+        self._run_action_service: Optional[TelegramRunActionService] = None
+        self._connector_poll_service: Optional[TelegramConnectorPollService] = None
+        self._autopilot_supervisor_service: Optional[TelegramAutopilotSupervisorService] = None
+
+    def telegram_run_dispatch_service(self) -> TelegramRunDispatchService:
+        if self._run_dispatch_service is None:
+            self._run_dispatch_service = TelegramRunDispatchService(
+                project_root=self.project_root,
+                default_timeout_seconds=self.run_timeout_seconds,
+                default_max_reply_chars=self.max_reply_chars,
+                send_ack=self.send_ack,
+                include_run_meta=self.include_run_meta,
+                humanize_run_summary=self.humanize_run_summary,
+                truncate_one_line=self.truncate_one_line,
+                runs_get=self.runs_get,
+                latest_run_error_message=self.latest_run_error_message,
+                is_non_retryable_run_error=self.is_non_retryable_run_error,
+                friendly_run_error=self.friendly_run_error,
+                summarize_run_terminal_result=self.summarize_run_terminal_result,
+                local_companion_snapshot=self.local_companion_snapshot,
+                can_auto_approve_wait=self.can_auto_approve_wait,
+                pending_confirmation_payload=self.pending_confirmation_payload,
+            )
+        return self._run_dispatch_service
+
+    def telegram_autopilot_state_service(self) -> TelegramAutopilotStateService:
+        if self._autopilot_state_service is None:
+            self._autopilot_state_service = TelegramAutopilotStateService(
+                state=self.state,
+                lock=self.lock,
+                read_json=self.read_json,
+                write_json=self.write_json,
+                state_file=self.state_file,
+                utc_now_iso=self.utc_now_iso,
+                normalize_workspace_id=self.normalize_workspace_id,
+                load_vault=self.load_vault,
+                workspace_visible=self.workspace_visible,
+                connector_paused=self.connector_paused,
+                resolve_secret=self.resolve_secret,
+                enabled=self.enabled,
+                default_profile=self.default_profile,
+                require_prefix=self.require_prefix,
+                prefix=self.prefix,
+                poll_seconds=self.poll_seconds,
+                max_updates=self.max_updates,
+                run_timeout_seconds=self.run_timeout_seconds,
+                max_reply_chars=self.max_reply_chars,
+                thread_alive=self.thread_alive,
+            )
+        return self._autopilot_state_service
+
+    def telegram_autopilot_runtime_service(self) -> TelegramAutopilotRuntimeService:
+        if self._autopilot_runtime_service is None:
+            self._autopilot_runtime_service = TelegramAutopilotRuntimeService(
+                state=self.state,
+                lock=self.lock,
+                utc_now_iso=self.utc_now_iso,
+                classify_error=self.classify_error,
+                iso_from_epoch=self.iso_from_epoch,
+                persist_state=self.persist_state,
+                poll_seconds=self.poll_seconds,
+            )
+        return self._autopilot_runtime_service
+
+    def telegram_sender_filter_service(self) -> TelegramSenderFilterService:
+        if self._sender_filter_service is None:
+            self._sender_filter_service = TelegramSenderFilterService(
+                record_channel_event_throttled=self.record_channel_event_throttled,
+                set_connector_state=self.set_connector_state,
+                utc_now_iso=self.utc_now_iso,
+            )
+        return self._sender_filter_service
+
+    def telegram_action_service(self) -> TelegramActionService:
+        if self._action_service is None:
+            self._action_service = TelegramActionService(
+                default_chat_prefix=self.default_chat_prefix,
+                onboarding_enabled=self.onboarding_enabled,
+                help_text=self.help_text,
+                skills_menu_text=self.skills_menu_text,
+                menu_keyboard=self.menu_keyboard,
+                onboarding_prompt=self.onboarding_prompt,
+                onboarding_start=self.onboarding_start,
+                profile_text=self.profile_text,
+                profile_help_text=self.profile_help_text,
+                profile_set=self.profile_set,
+                profile_clear=self.profile_clear,
+                runtime_status_text=self.runtime_status_text,
+                approvals_list=self.approvals_list,
+                approvals_text=self.approvals_text,
+                approval_resolve=self.approval_resolve,
+                approval_result_text=self.approval_result_text,
+                send_message=self.send_message,
+            )
+        return self._action_service
+
+    def telegram_inbound_context_service(self) -> TelegramInboundContextService:
+        if self._inbound_context_service is None:
+            self._inbound_context_service = TelegramInboundContextService(
+                media_max_items=self.media_max_items,
+                extract_message=self.extract_message,
+                chat_matches=self.chat_matches,
+                store_attachments=self.store_attachments,
+                route_message=self.route_message,
+                session_key_builder=self.session_key_builder,
+                trace_id_builder=self.trace_id_builder,
+                record_channel_event=self.record_channel_event,
+                guided_setup_handler=self.guided_setup_handler,
+                send_message=self.send_message,
+            )
+        return self._inbound_context_service
+
+    def telegram_autopilot_loop_service(self) -> TelegramAutopilotLoopService:
+        if self._autopilot_loop_service is None:
+            self._autopilot_loop_service = TelegramAutopilotLoopService(
+                poll_seconds=self.poll_seconds,
+                list_connector_entries=self.list_connector_entries,
+                set_connectors_seen=lambda count: self.telegram_autopilot_runtime_service().set_connectors_seen(count),
+                mark_poll=self.mark_poll,
+                poll_connector=lambda entry: self.telegram_connector_poll_service().poll_connector(entry),
+                autopilot_log=self.autopilot_log,
+                record_channel_event_throttled=self.record_channel_event_throttled,
+                normalize_workspace_id=self.normalize_workspace_id,
+                persist_state=self.persist_state,
+                autopilot_mark_error=self.autopilot_mark_error,
+            )
+        return self._autopilot_loop_service
+
+    def telegram_poll_cycle_service(self) -> TelegramPollCycleService:
+        if self._poll_cycle_service is None:
+            self._poll_cycle_service = TelegramPollCycleService(
+                max_updates=self.max_updates,
+                poll_seconds=self.poll_seconds,
+                notify_pending_approvals=self.notify_pending_approvals,
+                get_updates_process_lock=self.get_updates_process_lock,
+                autopilot_log=self.autopilot_log,
+                telegram_api_request=self.telegram_api_request,
+                poll_state_service=lambda: self.telegram_poll_state_service(),
+                record_channel_event_throttled=self.record_channel_event_throttled,
+                classify_error=self.classify_error,
+                autopilot_mark_error=self.autopilot_mark_error,
+            )
+        return self._poll_cycle_service
+
+    def telegram_poll_dispatch_service(self) -> TelegramPollDispatchService:
+        if self._poll_dispatch_service is None:
+            self._poll_dispatch_service = TelegramPollDispatchService(
+                sender_allowed=self.sender_allowed,
+                session_key_builder=self.session_key_builder,
+                inbound_context_service=lambda: self.telegram_inbound_context_service(),
+                sender_filter_service=lambda: self.telegram_sender_filter_service(),
+                action_service=lambda: self.telegram_action_service(),
+                run_action_service=lambda: self.telegram_run_action_service(),
+                get_chat_profile=self.get_chat_profile,
+                explicit_run_command=self.explicit_run_command,
+                help_text=self.help_text,
+                send_message=self.send_message,
+            )
+        return self._poll_dispatch_service
+
+    def telegram_poll_state_service(self) -> TelegramPollStateService:
+        if self._poll_state_service is None:
+            self._poll_state_service = TelegramPollStateService(
+                set_connector_state=self.set_connector_state,
+                utc_now_iso=self.utc_now_iso,
+                increment_processed_updates=lambda: self.telegram_autopilot_runtime_service().increment_processed_updates(),
+            )
+        return self._poll_state_service
+
+    def telegram_run_action_service(self) -> TelegramRunActionService:
+        if self._run_action_service is None:
+            self._run_action_service = TelegramRunActionService(
+                onboarding_enabled=self.onboarding_enabled,
+                space_status_enabled=self.space_status_enabled,
+                max_reply_chars=self.max_reply_chars,
+                project_root=self.project_root,
+                onboarding_get_state=self.onboarding_get_state,
+                onboarding_start=self.onboarding_start,
+                onboarding_consume_answer=self.onboarding_consume_answer,
+                onboarding_prompt=self.onboarding_prompt,
+                profile_get=self.profile_get,
+                profile_has_context=self.profile_has_context,
+                help_text=self.help_text,
+                build_goal_with_profile=self.build_goal_with_profile,
+                build_goal_with_attachments=self.build_goal_with_attachments,
+                workspace_connector_context=self.workspace_connector_context,
+                build_goal_with_connector_context=self.build_goal_with_connector_context,
+                space_question_via_mcp=self.space_question_via_mcp,
+                installed_skill_query=self.installed_skill_query,
+                truncate_one_line=self.truncate_one_line,
+                send_message=self.send_message,
+                send_chat_action=self.send_chat_action,
+                edit_message=self.edit_message,
+                record_channel_event=self.record_channel_event,
+                run_dispatch_service=lambda: self.telegram_run_dispatch_service(),
+                create_run=self.create_run,
+            )
+        return self._run_action_service
+
+    def telegram_connector_poll_service(self) -> TelegramConnectorPollService:
+        if self._connector_poll_service is None:
+            self._connector_poll_service = TelegramConnectorPollService(
+                default_workspace_id=self.default_workspace_id,
+                normalize_workspace_id=self.normalize_workspace_id,
+                resolve_profile=self.resolve_profile,
+                resolve_allow_from=self.resolve_allow_from,
+                connector_state=self.connector_state,
+                resolve_secret=self.resolve_secret,
+                poll_cycle_service=lambda: self.telegram_poll_cycle_service(),
+                inbound_context_service=lambda: self.telegram_inbound_context_service(),
+                poll_dispatch_service=lambda: self.telegram_poll_dispatch_service(),
+                poll_state_service=lambda: self.telegram_poll_state_service(),
+            )
+        return self._connector_poll_service
+
+    def telegram_autopilot_supervisor_service(self) -> TelegramAutopilotSupervisorService:
+        if self._autopilot_supervisor_service is None:
+            self._autopilot_supervisor_service = TelegramAutopilotSupervisorService(
+                poll_seconds=self.poll_seconds,
+                utc_now_iso=self.utc_now_iso,
+                mark_started=self.mark_started,
+                persist_state=self.persist_state,
+                autopilot_log=self.autopilot_log,
+                require_prefix=self.require_prefix,
+                prefix=self.prefix,
+                loop_service=lambda: self.telegram_autopilot_loop_service(),
+                sleep=self.sleep,
+            )
+        return self._autopilot_supervisor_service

@@ -8,6 +8,7 @@ from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
+from server_modules.connectors.telegram_autopilot_service_registry import TelegramAutopilotServiceRegistry
 from server_modules.connectors.telegram_connector_poll_service import TelegramConnectorPollService
 from server_modules.connectors.telegram_media_service import TelegramMediaService, telegram_safe_path_token
 from server_modules.connectors.telegram_profile_service import (
@@ -250,35 +251,131 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _AUTOPILOT_STATUS_SERVICE: Optional[AutopilotStatusService] = None
 _AUTOPILOT_ENDPOINT_SERVICE: Optional[AutopilotEndpointService] = None
-_TELEGRAM_AUTOPILOT_RUNTIME_SERVICE: Optional[TelegramAutopilotRuntimeService] = None
-_TELEGRAM_AUTOPILOT_STATE_SERVICE: Optional[TelegramAutopilotStateService] = None
 _WHATSAPP_AUTOPILOT_STATE_SERVICE: Optional[WhatsAppAutopilotStateService] = None
-_TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
-_TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
-_TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
-_TELEGRAM_INBOUND_CONTEXT_SERVICE: Optional[TelegramInboundContextService] = None
-_TELEGRAM_AUTOPILOT_LOOP_SERVICE: Optional[TelegramAutopilotLoopService] = None
-_TELEGRAM_POLL_CYCLE_SERVICE: Optional[TelegramPollCycleService] = None
-_TELEGRAM_POLL_DISPATCH_SERVICE: Optional[TelegramPollDispatchService] = None
-_TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
-_TELEGRAM_RUN_ACTION_SERVICE: Optional[TelegramRunActionService] = None
-_TELEGRAM_CONNECTOR_POLL_SERVICE: Optional[TelegramConnectorPollService] = None
-_TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE: Optional[TelegramAutopilotSupervisorService] = None
+_TELEGRAM_AUTOPILOT_SERVICE_REGISTRY: Optional[TelegramAutopilotServiceRegistry] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 _WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
 
-def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
-    global _TELEGRAM_RUN_DISPATCH_SERVICE
-    if _TELEGRAM_RUN_DISPATCH_SERVICE is None:
-        _TELEGRAM_RUN_DISPATCH_SERVICE = TelegramRunDispatchService(
+def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
+    global _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY
+    if _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY is None:
+        _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY = TelegramAutopilotServiceRegistry(
             project_root=PROJECT_ROOT,
-            default_timeout_seconds=int(globals().get("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
-            default_max_reply_chars=int(globals().get("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
+            default_workspace_id=ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID or "default",
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+            onboarding_enabled=ORION_TELEGRAM_ONBOARDING_ENABLED,
+            require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
+            prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
+            space_status_enabled=ORION_TELEGRAM_SPACE_STATUS_ENABLED,
+            media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+            max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
+            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
+            run_timeout_seconds=int(globals().get("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
+            max_reply_chars=int(globals().get("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
             send_ack=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_SEND_ACK")),
+            state=TELEGRAM_AUTOPILOT_STATE,
+            lock=TELEGRAM_AUTOPILOT_LOCK,
+            state_file=ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
+            read_json=lambda path, default: _safe_read_json(path, default),
+            write_json=lambda path, payload: _safe_write_json(path, payload),
+            persist_state=lambda: _persist_telegram_autopilot_state(),
+            utc_now_iso=lambda: _utc_now_iso(),
+            classify_error=lambda detail: _classify_autopilot_error(detail),
+            iso_from_epoch=lambda ts: _iso_from_epoch(ts),
+            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            thread_alive=lambda: bool(
+                (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD)
+                and (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD).is_alive()
+            ),
+            enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+            default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
+            list_connector_entries=lambda: _list_telegram_connector_entries(),
+            resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
+            resolve_allow_from=lambda entry: _telegram_resolve_allow_from(entry),
+            connector_state=lambda connector_id: _telegram_connector_state(connector_id),
+            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
+            resolve_secret=lambda entry: _telegram_get_secret(entry),
+            load_vault=lambda: load_vault(),
+            workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
+            connector_paused=lambda item: _connector_paused(item),
+            get_updates_process_lock=lambda bot_token: _telegram_get_updates_process_lock(bot_token),
+            notify_pending_approvals=lambda **kwargs: _telegram_notify_pending_approvals(**kwargs),
+            telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
+            send_message=lambda *args, **kwargs: _telegram_send_message(*args, **kwargs),
+            send_chat_action=lambda *args, **kwargs: _telegram_send_chat_action(*args, **kwargs),
+            edit_message=lambda *args, **kwargs: _telegram_edit_message(*args, **kwargs),
+            autopilot_log=lambda message: _telegram_autopilot_log(message),
+            autopilot_mark_error=lambda detail, source: _telegram_autopilot_mark_error(detail, source=source),
+            mark_poll=lambda clear_error: _telegram_autopilot_mark_poll(clear_error=clear_error),
+            mark_started=lambda started_at: _mark_telegram_autopilot_started(started_at),
+            normalize_profile_field=lambda raw_value: _normalize_telegram_profile_field(raw_value),
+            select_skill_from_text=lambda raw_text: _telegram_select_skill_from_text(raw_text),
+            skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
+            help_text=lambda profile: _telegram_help_text(profile),
+            skills_menu_text=lambda profile: _telegram_skills_menu_text(profile),
+            menu_keyboard=lambda profile, menu_id: _telegram_menu_keyboard(profile, menu_id),
+            onboarding_prompt=lambda step_index, retry: _telegram_onboarding_prompt(step_index, retry),
+            onboarding_start=lambda workspace_id, chat_id: _start_telegram_onboarding(workspace_id, chat_id),
+            profile_text=lambda profile, chat_profile: _telegram_profile_text(profile, chat_profile),
+            profile_help_text=lambda profile: _telegram_profile_help_text(profile),
+            profile_set=lambda workspace_id, chat_id, field_name, value: _set_telegram_profile_field(
+                workspace_id,
+                chat_id,
+                field_name,
+                value,
+            ),
+            profile_clear=lambda workspace_id, chat_id, field_name: _clear_telegram_profile(
+                workspace_id,
+                chat_id,
+                field_name,
+            ),
+            runtime_status_text=lambda workspace_id: _telegram_runtime_status_text(workspace_id),
+            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+                event_id=event_id,
+                approved=approved,
+                note=note,
+            ),
+            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            extract_message=lambda update: _telegram_extract_message(update),
+            chat_matches=lambda configured_chat_id, chat: _telegram_chat_matches(configured_chat_id, chat),
+            store_attachments=lambda **kwargs: _telegram_store_attachments(**kwargs),
+            route_message=lambda message_text, profile: _telegram_route_message(message_text, profile),
+            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
+            trace_id_builder=lambda chat_id, update_id, message_id: _telegram_trace_id(chat_id, update_id, message_id),
+            guided_setup_handler=lambda **kwargs: _telegram_handle_guided_automation_setup(**kwargs),
+            sender_allowed=lambda sender, allow_from: _telegram_sender_allowed(sender, allow_from),
+            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            explicit_run_command=lambda raw_text: _telegram_is_explicit_run_command(raw_text),
+            onboarding_get_state=lambda workspace_id, chat_id: _get_telegram_onboarding_state(workspace_id, chat_id),
+            onboarding_consume_answer=lambda workspace_id, chat_id, text: _telegram_onboarding_consume_answer(
+                workspace_id,
+                chat_id,
+                text,
+            ),
+            profile_get=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
+            profile_has_context=lambda chat_profile: _telegram_profile_has_context(chat_profile),
+            build_goal_with_profile=lambda goal, chat_profile: _telegram_build_goal_with_profile(goal, chat_profile),
+            build_goal_with_attachments=lambda goal, attachments: _telegram_build_goal_with_attachments(goal, attachments),
+            workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
+            build_goal_with_connector_context=lambda goal, prompt_append: _telegram_build_goal_with_connector_context(
+                goal,
+                prompt_append,
+            ),
+            space_question_via_mcp=lambda goal, enabled, project_root: telegram_space_question_via_mcp(
+                goal,
+                enabled=enabled,
+                project_root=project_root,
+            ),
+            installed_skill_query=lambda **kwargs: _telegram_installed_skill_query(**kwargs),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            create_run=lambda **kwargs: _create_telegram_run(**kwargs),
             include_run_meta=lambda: _autopilot_include_run_meta(),
             humanize_run_summary=lambda text: _humanize_telegram_run_summary(text),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
             runs_get=lambda run_id: runs.get(run_id),
             latest_run_error_message=lambda run: _latest_run_error_message(run),
             is_non_retryable_run_error=lambda error: _is_non_retryable_run_error(error),
@@ -287,8 +384,13 @@ def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
             local_companion_snapshot=lambda: _local_companion_snapshot(),
             can_auto_approve_wait=lambda run: _autopilot_can_auto_approve_wait(run),
             pending_confirmation_payload=lambda run: _pending_confirmation_payload(run),
+            sleep=lambda seconds: time.sleep(seconds),
         )
-    return _TELEGRAM_RUN_DISPATCH_SERVICE
+    return _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY
+
+
+def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
+    return _telegram_service_registry().telegram_run_dispatch_service()
 
 
 def _autopilot_status_service() -> AutopilotStatusService:
@@ -341,260 +443,55 @@ def _whatsapp_autopilot_state_service() -> WhatsAppAutopilotStateService:
 
 
 def _telegram_autopilot_state_service() -> TelegramAutopilotStateService:
-    global _TELEGRAM_AUTOPILOT_STATE_SERVICE
-    if _TELEGRAM_AUTOPILOT_STATE_SERVICE is None:
-        _TELEGRAM_AUTOPILOT_STATE_SERVICE = TelegramAutopilotStateService(
-            state=TELEGRAM_AUTOPILOT_STATE,
-            lock=TELEGRAM_AUTOPILOT_LOCK,
-            read_json=lambda path, default: _safe_read_json(path, default),
-            write_json=lambda path, payload: _safe_write_json(path, payload),
-            state_file=ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
-            utc_now_iso=lambda: _utc_now_iso(),
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
-            load_vault=lambda: load_vault(),
-            workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
-            connector_paused=lambda item: _connector_paused(item),
-            resolve_secret=lambda entry: _telegram_get_secret(entry),
-            enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
-            default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
-            require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
-            prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
-            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
-            run_timeout_seconds=ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS,
-            max_reply_chars=ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS,
-            thread_alive=lambda: bool(
-                (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD)
-                and (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD).is_alive()
-            ),
-        )
-    return _TELEGRAM_AUTOPILOT_STATE_SERVICE
+    return _telegram_service_registry().telegram_autopilot_state_service()
 
 
 def _telegram_autopilot_runtime_service() -> TelegramAutopilotRuntimeService:
-    global _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE
-    if _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE is None:
-        _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE = TelegramAutopilotRuntimeService(
-            state=TELEGRAM_AUTOPILOT_STATE,
-            lock=TELEGRAM_AUTOPILOT_LOCK,
-            utc_now_iso=lambda: _utc_now_iso(),
-            classify_error=lambda detail: _classify_autopilot_error(detail),
-            iso_from_epoch=lambda ts: _iso_from_epoch(ts),
-            persist_state=lambda: _persist_telegram_autopilot_state(),
-            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-        )
-    return _TELEGRAM_AUTOPILOT_RUNTIME_SERVICE
+    return _telegram_service_registry().telegram_autopilot_runtime_service()
 
 
 def _telegram_sender_filter_service() -> TelegramSenderFilterService:
-    global _TELEGRAM_SENDER_FILTER_SERVICE
-    if _TELEGRAM_SENDER_FILTER_SERVICE is None:
-        _TELEGRAM_SENDER_FILTER_SERVICE = TelegramSenderFilterService(
-            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
-            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
-            utc_now_iso=lambda: _utc_now_iso(),
-        )
-    return _TELEGRAM_SENDER_FILTER_SERVICE
+    return _telegram_service_registry().telegram_sender_filter_service()
 
 
 def _telegram_action_service() -> TelegramActionService:
-    global _TELEGRAM_ACTION_SERVICE
-    if _TELEGRAM_ACTION_SERVICE is None:
-        _TELEGRAM_ACTION_SERVICE = TelegramActionService(
-            default_chat_prefix=DEFAULT_CHAT_PREFIX,
-            onboarding_enabled=ORION_TELEGRAM_ONBOARDING_ENABLED,
-            help_text=lambda profile: _telegram_help_text(profile),
-            skills_menu_text=lambda profile: _telegram_skills_menu_text(profile),
-            menu_keyboard=lambda profile, menu_id: _telegram_menu_keyboard(profile, menu_id),
-            onboarding_prompt=lambda step_index, retry: _telegram_onboarding_prompt(step_index, retry),
-            onboarding_start=lambda workspace_id, chat_id: _start_telegram_onboarding(workspace_id, chat_id),
-            profile_text=lambda profile, chat_profile: _telegram_profile_text(profile, chat_profile),
-            profile_help_text=lambda profile: _telegram_profile_help_text(profile),
-            profile_set=lambda workspace_id, chat_id, field_name, value: _set_telegram_profile_field(
-                workspace_id,
-                chat_id,
-                field_name,
-                value,
-            ),
-            profile_clear=lambda workspace_id, chat_id, field_name: _clear_telegram_profile(
-                workspace_id,
-                chat_id,
-                field_name,
-            ),
-            runtime_status_text=lambda workspace_id: _telegram_runtime_status_text(workspace_id),
-            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
-            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
-            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
-                event_id=event_id,
-                approved=approved,
-                note=note,
-            ),
-            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
-            send_message=lambda **kwargs: _telegram_send_message(
-                bot_token=kwargs.pop("bot_token", ""),
-                chat_id=kwargs.pop("chat_id", ""),
-                text=kwargs.pop("text", ""),
-                **kwargs,
-            ),
-        )
-    return _TELEGRAM_ACTION_SERVICE
+    return _telegram_service_registry().telegram_action_service()
 
 
 def _telegram_inbound_context_service() -> TelegramInboundContextService:
-    global _TELEGRAM_INBOUND_CONTEXT_SERVICE
-    if _TELEGRAM_INBOUND_CONTEXT_SERVICE is None:
-        _TELEGRAM_INBOUND_CONTEXT_SERVICE = TelegramInboundContextService(
-            media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-            extract_message=lambda update: _telegram_extract_message(update),
-            chat_matches=lambda configured_chat_id, chat: _telegram_chat_matches(configured_chat_id, chat),
-            store_attachments=lambda **kwargs: _telegram_store_attachments(**kwargs),
-            route_message=lambda message_text, profile: _telegram_route_message(message_text, profile),
-            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
-            trace_id_builder=lambda chat_id, update_id, message_id: _telegram_trace_id(chat_id, update_id, message_id),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            guided_setup_handler=lambda **kwargs: _telegram_handle_guided_automation_setup(**kwargs),
-            send_message=lambda **kwargs: _telegram_send_message(
-                kwargs.pop("bot_token", ""),
-                kwargs.pop("chat_id", ""),
-                kwargs.pop("text", ""),
-                **kwargs,
-            ),
-        )
-    return _TELEGRAM_INBOUND_CONTEXT_SERVICE
+    return _telegram_service_registry().telegram_inbound_context_service()
 
 
 def _telegram_autopilot_loop_service() -> TelegramAutopilotLoopService:
-    global _TELEGRAM_AUTOPILOT_LOOP_SERVICE
-    if _TELEGRAM_AUTOPILOT_LOOP_SERVICE is None:
-        _TELEGRAM_AUTOPILOT_LOOP_SERVICE = TelegramAutopilotLoopService(
-            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            list_connector_entries=lambda: _list_telegram_connector_entries(),
-            set_connectors_seen=lambda count: _telegram_set_connectors_seen(count),
-            mark_poll=lambda clear_error: _telegram_autopilot_mark_poll(clear_error=clear_error),
-            poll_connector=lambda entry: _telegram_poll_connector(entry),
-            autopilot_log=lambda message: _telegram_autopilot_log(message),
-            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
-            persist_state=lambda: _persist_telegram_autopilot_state(),
-            autopilot_mark_error=lambda detail, source: _telegram_autopilot_mark_error(detail, source=source),
-        )
-    return _TELEGRAM_AUTOPILOT_LOOP_SERVICE
+    return _telegram_service_registry().telegram_autopilot_loop_service()
 
 
 def _telegram_poll_cycle_service() -> TelegramPollCycleService:
-    global _TELEGRAM_POLL_CYCLE_SERVICE
-    if _TELEGRAM_POLL_CYCLE_SERVICE is None:
-        _TELEGRAM_POLL_CYCLE_SERVICE = TelegramPollCycleService(
-            max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
-            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            notify_pending_approvals=lambda **kwargs: _telegram_notify_pending_approvals(**kwargs),
-            get_updates_process_lock=lambda bot_token: _telegram_get_updates_process_lock(bot_token),
-            autopilot_log=lambda message: _telegram_autopilot_log(message),
-            telegram_api_request=lambda bot_token, method, **kwargs: _telegram_api_request(bot_token, method, **kwargs),
-            poll_state_service=lambda: _telegram_poll_state_service(),
-            record_channel_event_throttled=lambda **kwargs: _record_channel_event_throttled(**kwargs),
-            classify_error=lambda detail: _classify_autopilot_error(detail),
-            autopilot_mark_error=lambda detail, source: _telegram_autopilot_mark_error(detail, source=source),
-        )
-    return _TELEGRAM_POLL_CYCLE_SERVICE
+    return _telegram_service_registry().telegram_poll_cycle_service()
 
 
 def _telegram_poll_dispatch_service() -> TelegramPollDispatchService:
-    global _TELEGRAM_POLL_DISPATCH_SERVICE
-    if _TELEGRAM_POLL_DISPATCH_SERVICE is None:
-        _TELEGRAM_POLL_DISPATCH_SERVICE = TelegramPollDispatchService(
-            sender_allowed=lambda sender, allow_from: _telegram_sender_allowed(sender, allow_from),
-            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
-            inbound_context_service=lambda: _telegram_inbound_context_service(),
-            sender_filter_service=lambda: _telegram_sender_filter_service(),
-            action_service=lambda: _telegram_action_service(),
-            run_action_service=lambda: _telegram_run_action_service(),
-            get_chat_profile=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
-            explicit_run_command=lambda raw_text: _telegram_is_explicit_run_command(raw_text),
-            help_text=lambda profile: _telegram_help_text(profile),
-            send_message=lambda *args, **kwargs: _telegram_send_message(*args, **kwargs),
-        )
-    return _TELEGRAM_POLL_DISPATCH_SERVICE
+    return _telegram_service_registry().telegram_poll_dispatch_service()
 
 
 def _telegram_increment_processed_updates() -> None:
-    _telegram_autopilot_runtime_service().increment_processed_updates()
+    _telegram_service_registry().telegram_autopilot_runtime_service().increment_processed_updates()
 
 
 def _telegram_set_connectors_seen(count: int) -> None:
-    _telegram_autopilot_runtime_service().set_connectors_seen(count)
+    _telegram_service_registry().telegram_autopilot_runtime_service().set_connectors_seen(count)
 
 
 def _telegram_poll_state_service() -> TelegramPollStateService:
-    global _TELEGRAM_POLL_STATE_SERVICE
-    if _TELEGRAM_POLL_STATE_SERVICE is None:
-        _TELEGRAM_POLL_STATE_SERVICE = TelegramPollStateService(
-            set_connector_state=lambda connector_id, patch: _set_telegram_connector_state(connector_id, patch),
-            utc_now_iso=lambda: _utc_now_iso(),
-            increment_processed_updates=lambda: _telegram_increment_processed_updates(),
-        )
-    return _TELEGRAM_POLL_STATE_SERVICE
+    return _telegram_service_registry().telegram_poll_state_service()
 
 
 def _telegram_run_action_service() -> TelegramRunActionService:
-    global _TELEGRAM_RUN_ACTION_SERVICE
-    if _TELEGRAM_RUN_ACTION_SERVICE is None:
-        _TELEGRAM_RUN_ACTION_SERVICE = TelegramRunActionService(
-            onboarding_enabled=ORION_TELEGRAM_ONBOARDING_ENABLED,
-            space_status_enabled=ORION_TELEGRAM_SPACE_STATUS_ENABLED,
-            max_reply_chars=ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS,
-            project_root=PROJECT_ROOT,
-            onboarding_get_state=lambda workspace_id, chat_id: _get_telegram_onboarding_state(workspace_id, chat_id),
-            onboarding_start=lambda workspace_id, chat_id: _start_telegram_onboarding(workspace_id, chat_id),
-            onboarding_consume_answer=lambda workspace_id, chat_id, text: _telegram_onboarding_consume_answer(
-                workspace_id,
-                chat_id,
-                text,
-            ),
-            onboarding_prompt=lambda step_index, retry: _telegram_onboarding_prompt(step_index, retry=retry),
-            profile_get=lambda workspace_id, chat_id: _get_telegram_profile(workspace_id, chat_id),
-            profile_has_context=lambda chat_profile: _telegram_profile_has_context(chat_profile),
-            help_text=lambda profile: _telegram_help_text(profile),
-            build_goal_with_profile=lambda goal, chat_profile: _telegram_build_goal_with_profile(goal, chat_profile),
-            build_goal_with_attachments=lambda goal, attachments: _telegram_build_goal_with_attachments(goal, attachments),
-            workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
-            build_goal_with_connector_context=lambda goal, prompt_append: _telegram_build_goal_with_connector_context(
-                goal,
-                prompt_append,
-            ),
-            space_question_via_mcp=lambda goal, enabled, project_root: telegram_space_question_via_mcp(
-                goal,
-                enabled=enabled,
-                project_root=project_root,
-            ),
-            installed_skill_query=lambda **kwargs: _telegram_installed_skill_query(**kwargs),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            send_message=lambda *args, **kwargs: _telegram_send_message(*args, **kwargs),
-            send_chat_action=lambda *args, **kwargs: _telegram_send_chat_action(*args, **kwargs),
-            edit_message=lambda *args, **kwargs: _telegram_edit_message(*args, **kwargs),
-            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            run_dispatch_service=lambda: _telegram_run_dispatch_service(),
-            create_run=lambda **kwargs: _create_telegram_run(**kwargs),
-        )
-    return _TELEGRAM_RUN_ACTION_SERVICE
+    return _telegram_service_registry().telegram_run_action_service()
 
 
 def _telegram_connector_poll_service() -> TelegramConnectorPollService:
-    global _TELEGRAM_CONNECTOR_POLL_SERVICE
-    if _TELEGRAM_CONNECTOR_POLL_SERVICE is None:
-        _TELEGRAM_CONNECTOR_POLL_SERVICE = TelegramConnectorPollService(
-            default_workspace_id=ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID or "default",
-            normalize_workspace_id=lambda value: _normalize_workspace_id(value),
-            resolve_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
-            resolve_allow_from=lambda entry: _telegram_resolve_allow_from(entry),
-            connector_state=lambda connector_id: _telegram_connector_state(connector_id),
-            resolve_secret=lambda entry: _telegram_get_secret(entry),
-            poll_cycle_service=lambda: _telegram_poll_cycle_service(),
-            inbound_context_service=lambda: _telegram_inbound_context_service(),
-            poll_dispatch_service=lambda: _telegram_poll_dispatch_service(),
-            poll_state_service=lambda: _telegram_poll_state_service(),
-        )
-    return _TELEGRAM_CONNECTOR_POLL_SERVICE
+    return _telegram_service_registry().telegram_connector_poll_service()
 
 
 def _mark_telegram_autopilot_started(started_at: str) -> None:
@@ -605,20 +502,7 @@ def _mark_telegram_autopilot_started(started_at: str) -> None:
 
 
 def _telegram_autopilot_supervisor_service() -> TelegramAutopilotSupervisorService:
-    global _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE
-    if _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE is None:
-        _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE = TelegramAutopilotSupervisorService(
-            poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            utc_now_iso=lambda: _utc_now_iso(),
-            mark_started=lambda started_at: _mark_telegram_autopilot_started(started_at),
-            persist_state=lambda: _persist_telegram_autopilot_state(),
-            autopilot_log=lambda message: _telegram_autopilot_log(message),
-            require_prefix=ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX,
-            prefix=ORION_TELEGRAM_AUTOPILOT_PREFIX,
-            loop_service=lambda: _telegram_autopilot_loop_service(),
-            sleep=lambda seconds: time.sleep(seconds),
-        )
-    return _TELEGRAM_AUTOPILOT_SUPERVISOR_SERVICE
+    return _telegram_service_registry().telegram_autopilot_supervisor_service()
 
 
 def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:

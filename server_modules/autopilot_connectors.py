@@ -389,6 +389,16 @@ def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
     if _AUTOPILOT_SHARED_SERVICE_REGISTRY is None:
         _AUTOPILOT_SHARED_SERVICE_REGISTRY = AutopilotSharedServiceRegistry(
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
+            append_channel_event=lambda **kwargs: globals().get("_append_channel_event")(**kwargs),
+            utc_now_iso=lambda: _utc_now_iso(),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            json_safe=lambda value: (globals().get("_json_safe") or (lambda item: item))(value),
+            dead_letter_lock=_CHANNEL_DEAD_LETTER_LOCK,
+            read_dead_letter_json=lambda path, default: _safe_read_json(path, default),
+            write_dead_letter_json=lambda path, payload: _safe_write_json(path, payload),
+            dead_letter_file=ORION_CHANNEL_DEAD_LETTER_FILE,
+            dead_letter_limit=ORION_CHANNEL_DEAD_LETTER_LIMIT,
+            collapse_whitespace=lambda text: re.sub(r"\s+", " ", str(text or "").strip().lower()),
             telegram_snapshot=lambda: _telegram_autopilot_snapshot(include_connectors=True),
             telegram_list_entries=lambda: _list_telegram_connector_entries(),
             resolve_telegram_profile=lambda entry: _resolve_telegram_autopilot_profile(entry),
@@ -405,6 +415,10 @@ def _autopilot_status_service():
 
 def _autopilot_endpoint_service():
     return _autopilot_shared_service_registry().autopilot_endpoint_service()
+
+
+def _autopilot_event_service():
+    return _autopilot_shared_service_registry().autopilot_event_service()
 
 
 def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
@@ -885,26 +899,20 @@ def _record_channel_event(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     _init()
-    append_fn = globals().get("_append_channel_event")
-    if not callable(append_fn):
-        return None
-    try:
-        return append_fn(
-            channel=channel,
-            direction=direction,
-            event_type=event_type,
-            text=text,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            session_id=session_id,
-            message_id=message_id,
-            parent_id=parent_id,
-            run_id=run_id,
-            action=action,
-            metadata=metadata or {},
-        )
-    except Exception:
-        return None
+    return _autopilot_event_service().record_event(
+        channel=channel,
+        direction=direction,
+        event_type=event_type,
+        text=text,
+        workspace_id=workspace_id,
+        session_key=session_key,
+        session_id=session_id,
+        message_id=message_id,
+        parent_id=parent_id,
+        run_id=run_id,
+        action=action,
+        metadata=metadata,
+    )
 
 
 def _append_channel_dead_letter(
@@ -924,31 +932,21 @@ def _append_channel_dead_letter(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     _init()
-    item = {
-        "id": str(uuid.uuid4()),
-        "ts": _utc_now_iso(),
-        "channel": str(channel or "").strip().lower(),
-        "direction": str(direction or "").strip().lower() or "outbound",
-        "event_type": str(event_type or "").strip().lower() or "message",
-        "workspace_id": _normalize_workspace_id(workspace_id),
-        "session_key": str(session_key or "").strip(),
-        "run_id": str(run_id or "").strip(),
-        "action": str(action or "").strip().lower(),
-        "reason": _truncate_one_line(str(reason or "").strip(), 240),
-        "text": _truncate_one_line(str(text or "").strip(), 1600),
-        "connector_id": str(connector_id or "").strip(),
-        "trace_id": str(trace_id or "").strip(),
-        "source_event_id": str(source_event_id or "").strip(),
-        "metadata": _json_safe(metadata if isinstance(metadata, dict) else {}),
-    }
-    with _CHANNEL_DEAD_LETTER_LOCK:
-        payload = _safe_read_json(ORION_CHANNEL_DEAD_LETTER_FILE, {"version": 1, "items": []})
-        items = payload.get("items") if isinstance(payload.get("items"), list) else []
-        items.insert(0, item)
-        payload["version"] = 1
-        payload["updated_at"] = _utc_now_iso()
-        payload["items"] = items[:ORION_CHANNEL_DEAD_LETTER_LIMIT]
-        _safe_write_json(ORION_CHANNEL_DEAD_LETTER_FILE, payload)
+    _autopilot_event_service().append_dead_letter(
+        channel=channel,
+        direction=direction,
+        event_type=event_type,
+        reason=reason,
+        text=text,
+        workspace_id=workspace_id,
+        session_key=session_key,
+        run_id=run_id,
+        action=action,
+        connector_id=connector_id,
+        trace_id=trace_id,
+        source_event_id=source_event_id,
+        metadata=metadata,
+    )
 
 
 def _record_channel_event_throttled(
@@ -968,39 +966,7 @@ def _record_channel_event_throttled(
     dedupe_seconds: float = 30.0,
 ) -> bool:
     _init()
-    normalize_workspace = globals().get("_normalize_workspace_id")
-    normalized_workspace_id = workspace_id
-    if callable(normalize_workspace):
-        try:
-            normalized_workspace_id = normalize_workspace(workspace_id)
-        except Exception:
-            normalized_workspace_id = workspace_id
-    normalized_text = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    key = "|".join(
-        [
-            str(channel or "").strip().lower(),
-            str(direction or "").strip().lower(),
-            str(event_type or "").strip().lower(),
-            str(action or "").strip().lower(),
-            str(normalized_workspace_id or ""),
-            normalized_text[:220],
-        ]
-    )
-    now_ts = time.time()
-    window = max(0.0, float(dedupe_seconds))
-    if window > 0.0:
-        with _AUTOPILOT_EVENT_DEDUP_LOCK:
-            last_ts = float(_AUTOPILOT_EVENT_DEDUP.get(key) or 0.0)
-            if (now_ts - last_ts) < window:
-                return False
-            _AUTOPILOT_EVENT_DEDUP[key] = now_ts
-            # Keep in-memory index bounded.
-            if len(_AUTOPILOT_EVENT_DEDUP) > 2048:
-                cutoff = now_ts - max(window * 4.0, 120.0)
-                stale = [k for k, ts in _AUTOPILOT_EVENT_DEDUP.items() if ts < cutoff]
-                for stale_key in stale[:1024]:
-                    _AUTOPILOT_EVENT_DEDUP.pop(stale_key, None)
-    _record_channel_event(
+    return _autopilot_event_service().record_event_throttled(
         channel=channel,
         direction=direction,
         event_type=event_type,
@@ -1013,8 +979,8 @@ def _record_channel_event_throttled(
         run_id=run_id,
         action=action,
         metadata=metadata,
+        dedupe_seconds=dedupe_seconds,
     )
-    return True
 
 
 def _telegram_session_key(chat_id: str) -> str:

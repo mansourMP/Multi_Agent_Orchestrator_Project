@@ -1305,6 +1305,65 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Shared Channel Event And Dead-Letter Flow Moved Behind Event Service
+
+#### Stage
+
+Stage 3 connector-monolith reduction continues. The remaining shared Telegram/WhatsApp event-recording and dead-letter block no longer lives as inline implementation inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is shared infrastructure, not channel-specific behavior. The goal of this cut was to move mixed-channel runtime support out of the monolith without changing the surrounding connector flow.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_service.py) with:
+  - shared channel event recording
+  - throttled event recording with in-memory dedupe
+  - channel dead-letter append behavior
+- Expanded [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py) so the shared registry now owns:
+  - lazy event-service creation
+  - dead-letter file/limit/lock wiring
+  - shared append-channel-event dependency injection
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these helpers now delegate instead of owning implementation inline:
+  - `_record_channel_event()`
+  - `_append_channel_dead_letter()`
+  - `_record_channel_event_throttled()`
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_event_service.py)
+  - [server_modules/tests/test_autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_shared_service_registry.py)
+
+#### Current Truth
+
+- Shared connector infrastructure now has a dedicated event-service boundary instead of living in the monolith.
+- The shared registry now owns status, endpoint, and event services, which is closer to the intended composition role in the architecture.
+- Channel services still call wrappers in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), but the mixed-channel implementation under those wrappers is now externalized.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `2312` lines to `2278` lines in this cut.
+
+#### Open Gaps
+
+- The monolith still owns some remaining shared runtime glue, including top-level initialization helpers, runtime status helpers, and other cross-channel wrappers.
+- The registry composition is stronger now, but not all remaining shared helper blocks have been moved behind dedicated services yet.
+- The channel entry module is thinner, but it is not yet only transport/composition glue.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting the remaining shared runtime/helper blocks that do not belong to a channel shell.
+2. Keep shared infrastructure in the shared registry and keep channel-specific behavior in channel registries.
+3. Preserve direct service-level coverage for shared infrastructure boundaries instead of relying only on downstream connector tests.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_event_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_service.py)
+  - [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_event_service`
+  - `server_modules.tests.test_autopilot_shared_service_registry`
+  - `server_modules.tests.test_telegram_transport_service`
+  - `server_modules.tests.test_whatsapp_transport_service`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+
 ### 2026-04-05 - WhatsApp Transport And Connector Matching Moved Behind Service Registry
 
 #### Stage

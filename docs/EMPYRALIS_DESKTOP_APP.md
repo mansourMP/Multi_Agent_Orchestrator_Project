@@ -1,38 +1,48 @@
 # Empyralis Desktop App
 
-This desktop wrapper is frozen.
+The current packaged desktop shell is Tauri.
 
-- Do not expand it as the main product surface.
-- Keep it only for local bridge capabilities.
-- The web app plus installable PWA is the primary distribution path.
+## Current Desktop Surfaces
 
-## Local-only desktop usage
+- Active packaged shell: [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
+- Frozen legacy Electron shell: [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
+
+The desktop app should be treated as a shell over the main web/runtime stack, not as a separate product.
+
+## Local Usage
+
+Install or run from the project root:
 
 ```bash
 bash scripts/install_empyralis_desktop.sh
 bash scripts/run_empyralis_desktop.sh
 ```
 
-## Build macOS package
+Build a desktop package:
 
 ```bash
 bash scripts/build_empyralis_desktop.sh
 ```
 
-## If the desktop app opens but the platform is not working
+## Runtime Expectation
 
-Start the stack first:
+The desktop shell depends on the local stack being healthy.
+
+Start the stack first when needed:
 
 ```bash
-bash scripts/start_empyralis_local_stack.sh
-curl -s -H "X-API-Key: replace-with-strong-key" http://127.0.0.1:8001/health | jq '.ok,.auth_mode,.errors'
-curl -s -H "X-API-Key: replace-with-strong-key" http://127.0.0.1:8001/channels/telegram/autopilot/status | jq '.ok,.autopilot.active,.autopilot.thread_alive,.autopilot.last_error'
+RUNTIME_KEY='replace-with-strong-key' bash scripts/start_empyralis_local_stack.sh
+bash scripts/status_empyralis_local_stack.sh
 ```
 
-Then watch logs:
+If you need logs:
 
 ```bash
 bash scripts/logs_empyralis_local_stack.sh
 tail -f .orion-stack/logs/runtime.log
 tail -f .orion-stack/logs/frontend.log
 ```
+
+## Important Note
+
+The Electron wrapper is frozen and should not be treated as the main desktop implementation anymore. The active desktop build path is Tauri.

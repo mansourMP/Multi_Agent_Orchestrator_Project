@@ -1,287 +1,90 @@
+# Empyralis
 
+Empyralis is the current AI agent workspace in this repository.
 
+This repo contains a live Python runtime/backend, a Next.js web app, an Expo mobile app, and a Tauri desktop shell. It also contains older Orion, Hekor, AgentForge, and NestJS-era material that is still useful for reference but is not the primary product path.
 
+## Read This First
 
+These files are the current documentation entry points:
 
-
-
-
-
-# Empyralis - AI Agent Platform
-
-![Phase 5: Human-Agent Collaboration](https://img.shields.io/badge/Phase-5%20Human--Agent%20Collaboration-brightgreen)
-![Status](https://img.shields.io/badge/Status-70%25%20Complete-blue)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-
-
-
-
-## Empyralis Current Quickstart
-
-For the currently maintained Empyralis Autopilot flow (simple user mode), use:
-
+- [README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/README.md)
+- [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md)
 - [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
+- [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
+- [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
+- [frontend/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend/README.md)
+- [mobile/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile/README.md)
+- [runtime/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/runtime/README.md)
 
-This includes:
-- 3-terminal startup (frontend, backend, runtime)
-- runtime key setup
-- outcome pack run flow
-- troubleshooting
+If another doc conflicts with these files, treat these files as authoritative.
 
-## Primary Distribution Path
+## Current Product Shape
 
-Empyralis now ships web-first, with PWA installability as the primary distribution path.
+- Web app: [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend)
+- Primary backend/runtime: [server.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server.py) and [server_modules](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules)
+- Local stack scripts: [scripts](/Users/mansur/Multi_Agent_Orchestrator_Project/scripts)
+- Mobile app: [mobile](/Users/mansur/Multi_Agent_Orchestrator_Project/mobile)
+- Desktop shell: [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
 
-- Platform frontend: [frontend](/Users/mansur/Multi_Agent_Orchestrator_Project/frontend)
-- Desktop/PWA strategy: [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
-- Frozen desktop wrapper note: [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
-- Hekor v1 architecture: [docs/HEKOR_V1_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/HEKOR_V1_ARCHITECTURE.md)
-- Runtime scaffold: [runtime/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/runtime/README.md)
+Older but still present:
 
-### Empyralis Terminal Commands
+- Frozen Electron wrapper: [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
+- Legacy parallel NestJS backend: [backend](/Users/mansur/Multi_Agent_Orchestrator_Project/backend)
+- Archived plans and legacy docs: [archive/legacy-docs](/Users/mansur/Multi_Agent_Orchestrator_Project/archive/legacy-docs)
+- Reference repos used for research: [reference](/Users/mansur/Multi_Agent_Orchestrator_Project/reference)
 
-After installing CLI (`bash scripts/install_empyralis_cli.sh`), use:
+## Local Quickstart
 
-- `empyralis` -> terminal command center (arrow-key UI when `prompt_toolkit` is installed)
-- `empyralis run "your goal"` -> immediate general-worker run
-- `empyralis setup` -> onboarding alias (security + provider + connectors)
-- `empyralis onboard` -> full onboarding flow (security + provider + connectors + hatch)
-- `empyralis configure` -> section-based reconfiguration flow
-- `empyralis hatch` -> live TUI alias
-- `empyralis tui` -> live terminal run loop
-- `empyralis status` -> runtime + worker quick status
-- `empyralis connectors` -> connector onboarding from terminal
-- `empyralis doctor` -> runtime doctor report
-- `empyralis profiles health` -> provider profile health
-- `empyralis gateway start|stop|status|logs` -> gateway shortcuts
-- `empyralis stack start|stop|status|logs` -> full local stack control
-- `empyralis completion bash|zsh|fish` -> shell completion output
-
-Architecture reference:
-
-- [docs/ORION_TERMINAL_ARCHITECTURE.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/ORION_TERMINAL_ARCHITECTURE.md)
-
-Optional for richer terminal interaction:
+Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Notes:
-
-- Arrow-key selection works via `prompt_toolkit` when installed.
-- If `prompt_toolkit` is missing, Empyralis falls back to built-in terminal selectors (`curses`) when running in an interactive TTY.
-
-**Empyralis** is a production-grade agent workspace for building, deploying, and operating multi-agent systems. Think of it as an AI control plane: agents, automations, approvals, artifacts, local execution, and external channels in one product.
-
----
-
-## 🚀 Key Features
-
-### ✨ **Visual Workflow Builder**
-- **Drag-and-Drop Canvas**: Powered by React Flow, design complex agent workflows visually
-- **5 Node Types**: Trigger, Agent, Tool, Logic (If/Else), Human Approval, Parallel Split
-- **Real-time Validation**: Instant feedback on workflow structure and connections
-
-### 🤖 **Intelligent Agent Execution**
-- **Multi-LLM Support**: OpenAI GPT-4, Claude, or custom models
-- **RAG Memory**: Retrieval-Augmented Generation for context-aware agents
-- **Conditional Branching**: Dynamic workflow paths based on agent outputs
-- **Parallel Execution**: Run multiple agent branches simultaneously
-
-### 🧠 **Human-in-the-Loop**
-- **Approval Nodes**: Pause workflows for manual review and intervention
-- **Real-time Logs**: Live execution stream with Approve/Reject controls
-- **Persistent State**: Resume workflows exactly where they paused
-
-### 🎨 **Premium UI/UX**
-- **Dual Themes**: Vibrant dark mode and sleek light mode
-- **Glassmorphism Design**: Modern, professional interface
-- **Responsive Layout**: Works on desktop, tablet, and mobile
-
-### 🔧 **Production-Ready Infrastructure**
-- **Docker Compose**: One-command deployment with PostgreSQL and Redis
-- **Type-Safe Backend**: NestJS with Prisma ORM
-- **n8n Integration**: Sync workflows to n8n for external automation
-- **JWT Authentication**: Secure multi-tenant access control
-
----
-
-## 📦 Tech Stack
-
-**Frontend:**
-- Next.js 14 (App Router)
-- React Flow (Visual Canvas)
-- TypeScript
-- CSS Modules
-
-**Backend:**
-- NestJS (Node.js Framework)
-- Prisma ORM (SQLite/PostgreSQL)
-- OpenAI API
-- n8n Integration
-
-**Infrastructure:**
-- Docker & Docker Compose
-- PostgreSQL (Production DB)
-- Redis (Caching)
-
----
-
-## 🏃 Quick Start
-
-### Prerequisites
-- Node.js 20+
-- Docker & Docker Compose (optional, for production)
-- OpenAI API Key
-
-### Local Development
-
-1. **Clone the repository**
-```bash
-git clone https://github.com/yourusername/agentforge.git
-cd agentforge
-```
-
-2. **Setup Backend**
-```bash
-cd backend
-npm install
-cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
-npx prisma generate
-npx prisma migrate dev
-npm run seed
-npm run start:dev
-```
-
-3. **Setup Frontend**
-```bash
-cd ../frontend
-npm install
-npm run dev
-```
-
-4. **Access the Platform**
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:4000/api/v1
-
-### Docker Deployment
+Start the local stack from the repo root:
 
 ```bash
-docker-compose up -d
+RUNTIME_KEY='replace-with-strong-key' bash scripts/start_empyralis_local_stack.sh
 ```
 
-This will start:
-- PostgreSQL database
-- Redis cache
-- Backend API (port 4000)
-- Frontend UI (port 3000)
+Useful helpers:
 
----
-
-## 🎯 Usage Guide
-
-### Creating Your First Workflow
-
-1. **Navigate to Workflows** (`/workflows`)
-2. **Click "Create New"** and name your workflow
-3. **Drag nodes** from the left palette onto the canvas:
-   - **Trigger**: Start point (HTTP webhook, schedule, etc.)
-   - **Agent**: AI reasoning node (configure model and system prompt)
-   - **Logic**: If/Else conditional branching
-   - **Tool**: External API calls or actions
-   - **Approval**: Human review checkpoint
-   - **Parallel**: Execute multiple paths simultaneously
-4. **Connect nodes** by dragging from output handles to input handles
-5. **Configure each node** by clicking to open the properties panel
-6. **Save** and **Run** your workflow
-
-### Example: Customer Support Swarm
-
-```
-Trigger (Webhook)
-  ↓
-Agent (Classify Intent)
-  ↓
-Logic (Is Complaint?)
-  ├─ True → Agent (Escalation Handler) → Approval (Manager Review)
-  └─ False → Agent (FAQ Responder) → Tool (Send Email)
+```bash
+bash scripts/status_empyralis_local_stack.sh
+bash scripts/logs_empyralis_local_stack.sh
+bash scripts/stop_empyralis_local_stack.sh
 ```
 
----
+Open the web app:
 
-## 🧪 Advanced Features
-
-### Parallel Execution
-Use the **Parallel Split** node to execute multiple agent branches concurrently:
-```
-Parallel Split
-  ├─ Branch 1: Research Agent → Summarizer
-  └─ Branch 2: Data Agent → Analyzer
-  ↓ (Results merge automatically)
-Final Output
+```bash
+open http://127.0.0.1:3000
 ```
 
-### RAG Memory
-Agents automatically:
-1. **Retrieve** relevant context from past executions before thinking
-2. **Store** their outputs as embeddings for future reference
+The maintained operator quickstart is:
 
-### n8n Sync
-Click **"Publish to n8n"** to export your workflow as an n8n-compatible JSON file for external automation.
+- [docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/QUICKSTART_EMPYRALIS_AUTOPILOT.md)
 
----
+## Distribution
 
-## 📊 Project Status
+Empyralis is web-first.
 
-**Phase 5: Human-Agent Collaboration** - 70% Complete
+- Primary experience: web app
+- Installable option: PWA
+- Packaged desktop shell: Tauri in [src-tauri](/Users/mansur/Multi_Agent_Orchestrator_Project/src-tauri)
+- Frozen legacy shell: Electron in [desktop](/Users/mansur/Multi_Agent_Orchestrator_Project/desktop)
 
-### ✅ Completed
-- Visual workflow canvas with 6 node types
-- Real-time LLM execution with OpenAI
-- Conditional logic and branching
-- Human approval with pause/resume
-- Parallel execution engine
-- RAG memory integration
-- Dual theme support (dark/light)
-- Production error handling
-- Docker deployment setup
+See:
 
-### 🚧 In Progress
-- Advanced parallel merge strategies
-- Custom tool connector UI
-- Multi-user RBAC
+- [docs/DESKTOP_DISTRIBUTION_STRATEGY.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/DESKTOP_DISTRIBUTION_STRATEGY.md)
+- [docs/EMPYRALIS_DESKTOP_APP.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/EMPYRALIS_DESKTOP_APP.md)
 
-### 🔮 Roadmap
-- WebSocket live collaboration
-- Workflow versioning and rollback
-- Built-in observability dashboard
-- Marketplace for pre-built agents
+## Documentation Policy
 
----
+This repo contains many old design docs and handoff notes. They are not all current.
 
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## 🙏 Acknowledgments
-
-Built with:
-- [React Flow](https://reactflow.dev/) - Visual workflow canvas
-- [NestJS](https://nestjs.com/) - Backend framework
-- [Prisma](https://www.prisma.io/) - Database ORM
-- [OpenAI](https://openai.com/) - LLM API
-- [n8n](https://n8n.io/) - Workflow automation
-
----
-
-**Made with ❤️ by the Empyralis Team**
+- Files under [archive/legacy-docs](/Users/mansur/Multi_Agent_Orchestrator_Project/archive/legacy-docs) are historical only.
+- Files under [reference](/Users/mansur/Multi_Agent_Orchestrator_Project/reference) are external reference material, not project documentation.
+- Versioned docs like `*_V1.md`, `*_V2.md`, and similar architecture blueprints in [docs](/Users/mansur/Multi_Agent_Orchestrator_Project/docs) should be treated as research or planning documents unless they are explicitly linked from the authoritative docs above.
+- The root README and [docs/README.md](/Users/mansur/Multi_Agent_Orchestrator_Project/docs/README.md) are the canonical starting points for understanding the current system.

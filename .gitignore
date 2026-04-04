@@ -71,3 +71,4 @@ __pycache__/
 *.bak.migration
 screenshots/
 test_payload.json
+dead_code_report.txt

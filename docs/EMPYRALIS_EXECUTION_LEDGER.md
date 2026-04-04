@@ -1305,6 +1305,58 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer carries the small WhatsApp helper wrapper band for help text, number normalization, TwiML generation, and Twilio send forwarding.
+
+This is another clean subtraction step. Those helpers had no real external callers left and only served local registry or endpoint wiring.
+
+#### Completed Work
+
+- Rewired the WhatsApp service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted profile service directly for WhatsApp help text.
+- Rewired `_whatsapp_session_key()` in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so number normalization now goes directly through the extracted WhatsApp transport service.
+- Rewired `handle_whatsapp_twilio_webhook()` in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so TwiML response generation now goes directly through the extracted WhatsApp transport service.
+- Removed the dead helper wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_telegram_help_text()`
+  - `_whatsapp_help_text()`
+  - `_normalize_whatsapp_number()`
+  - `_whatsapp_twiml()`
+  - `_twilio_send_whatsapp_message()`
+
+#### Current Truth
+
+- The deleted WhatsApp helper wrapper names are fully gone from the monolith source.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) dropped from `1644` lines to `1611` in this cut.
+- The remaining shell is now even more concentrated around true compatibility entrypoints and the still-active run-entry wrappers.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still carries the stable compatibility wrappers for externally exercised run creation and terminal wait behavior.
+- Some helper functions still remain because they encapsulate actual local logic instead of just forwarding into extracted services.
+- The final compatibility audit of the remaining shell is still not complete.
+
+#### Next Required Work
+
+1. Continue auditing the remaining stable wrapper names in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) against real runtime imports and tests.
+2. Delete any additional forwarding-only helpers that do not have a real external dependency.
+3. Keep the remaining compatibility layer explicit and small instead of letting new internal helper aliases accumulate there again.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_transport_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_transport_service.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_transport_service`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+
 ### 2026-04-05 - Runtime-Support Wrapper Band Removed
 
 #### Stage

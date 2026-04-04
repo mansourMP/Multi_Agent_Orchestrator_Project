@@ -521,7 +521,7 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             safe_path_token=lambda value: _telegram_safe_path_token(value),
             resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
             route_message=lambda body, profile: _telegram_route_message(body, profile),
-            help_text=lambda profile: _whatsapp_help_text(profile),
+            help_text=lambda profile: _autopilot_profile_service().whatsapp_help_text(profile),
             runtime_status_text=lambda workspace_id: _runtime_status_service().runtime_status_text(workspace_id),
             approvals_list=lambda limit: _autopilot_approval_service().approvals_list(limit=limit),
             approvals_text=lambda payload, prefix: _autopilot_approval_service().approvals_text(payload, prefix=prefix),
@@ -1134,8 +1134,8 @@ def _telegram_trace_id(chat_id: str, update_id: Any, message_id: Any = "") -> st
 
 
 def _whatsapp_session_key(from_number: str, to_number: str) -> str:
-    sender = _normalize_whatsapp_number(from_number) or "whatsapp:unknown"
-    receiver = _normalize_whatsapp_number(to_number) or "whatsapp:unknown"
+    sender = _whatsapp_service_registry().whatsapp_transport_service().normalize_number(from_number) or "whatsapp:unknown"
+    receiver = _whatsapp_service_registry().whatsapp_transport_service().normalize_number(to_number) or "whatsapp:unknown"
     return f"whatsapp:{sender}->{receiver}"
 
 
@@ -1413,41 +1413,8 @@ def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str,
     return _telegram_helper_registry().routing_service().route_message(raw_text, profile)
 
 
-def _telegram_help_text(profile: Dict[str, Any]) -> str:
-    return _telegram_helper_registry().routing_service().help_text(profile)
-
-
 def _telegram_is_explicit_run_command(raw_text: str) -> bool:
     return _telegram_helper_registry().routing_service().is_explicit_run_command(raw_text)
-
-
-def _whatsapp_help_text(profile: Dict[str, Any]) -> str:
-    return _autopilot_profile_service().whatsapp_help_text(profile)
-
-
-def _normalize_whatsapp_number(raw_value: Any) -> str:
-    return _whatsapp_service_registry().whatsapp_transport_service().normalize_number(raw_value)
-
-
-def _whatsapp_twiml(message: Optional[str] = None) -> Response:
-    return _whatsapp_service_registry().whatsapp_transport_service().twiml_response(message)
-
-
-def _twilio_send_whatsapp_message(
-    account_sid: str,
-    auth_token: str,
-    from_number: str,
-    to_number: str,
-    body: str,
-):
-    return _whatsapp_service_registry().whatsapp_transport_service().send_message(
-        account_sid=account_sid,
-        auth_token=auth_token,
-        from_number=from_number,
-        to_number=to_number,
-        body=body,
-    )
-
 
 def _truncate_one_line(text: str, limit: int) -> str:
     flat = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -1613,7 +1580,7 @@ async def handle_whatsapp_twilio_webhook(request: Request):
     )
     if int(result.get("status_code") or 200) == 403:
         return Response(status_code=403, content=str(result.get("content") or "forbidden"))
-    return _whatsapp_twiml(str(result.get("text") or ""))
+    return _whatsapp_service_registry().whatsapp_transport_service().twiml_response(str(result.get("text") or ""))
 
 
 def _run_telegram_autopilot_forever():

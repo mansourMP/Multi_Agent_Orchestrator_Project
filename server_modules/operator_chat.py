@@ -1054,50 +1054,16 @@ def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
     return prompts
 
 
-def _time_of_day_suggestion() -> str:
-    hour = datetime.now().astimezone().hour
-    if hour < 12:
-        return "Review today's priorities and queue the next durable run."
-    if hour < 18:
-        return "Check what is running now and clear any waiting approvals."
-    return "Wrap up open work and schedule the next task for tomorrow."
-
-
 def _build_proactive_suggestions(workspace_id: str) -> List[str]:
-    suggestions: List[str] = []
-    seen: set[str] = set()
-
-    def push(value: str) -> None:
-        text = re.sub(r"\s+", " ", str(value or "").strip())
-        if not text:
-            return
-        key = text.lower()
-        if key in seen:
-            return
-        seen.add(key)
-        suggestions.append(text)
-
-    for task in _heartbeat_pending_tasks_for_suggestions():
-        push(f"Handle heartbeat task: {task}")
-
-    for prompt in _recent_run_prompts_for_suggestions(workspace_id):
-        push(f"Continue: {prompt[:120].rstrip()}")
-
-    for prompt in memory_service.memory_suggestion_prompts(workspace_id, limit=2):
-        push(prompt)
-
-    push(_time_of_day_suggestion())
-
-    fallback_prompts = [
-        "Summarize what you know about me and keep it concise.",
-        "Review the latest runs and tell me what needs attention.",
-        "Check pending approvals and suggest the next best action.",
-    ]
-    for item in fallback_prompts:
-        push(item)
-        if len(suggestions) >= 3:
-            break
-    return suggestions[:3]
+    return direct_chat_prompt_service.build_proactive_suggestions(
+        workspace_id,
+        heartbeat_tasks=_heartbeat_pending_tasks_for_suggestions,
+        recent_run_prompts=_recent_run_prompts_for_suggestions,
+        memory_suggestion_prompts=lambda target_workspace_id: memory_service.memory_suggestion_prompts(
+            target_workspace_id,
+            limit=2,
+        ),
+    )
 
 
 def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:

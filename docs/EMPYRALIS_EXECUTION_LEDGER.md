@@ -857,6 +857,67 @@ This extraction targets prompt composition rather than tool routing. The chat mo
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Proactive Suggestion Assembly Moved Behind Direct Chat Prompt Service
+
+#### Stage
+
+Stage 1 continues. The proactive suggestion assembly path no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This extends the prompt-service boundary beyond raw system-prompt composition. Prompt-adjacent suggestion logic is now also owned by the dedicated direct-chat prompt service.
+
+#### Completed Work
+
+- Expanded [server_modules/direct_chat_prompt_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_prompt_service.py) with:
+  - `time_of_day_suggestion()`
+  - `build_proactive_suggestions()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so `_build_proactive_suggestions()` now delegates to the prompt service with injected sources for:
+  - heartbeat tasks
+  - recent run prompts
+  - memory-backed suggestion prompts
+- Removed now-dead inline ownership in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) for:
+  - `_time_of_day_suggestion()`
+  - the internal suggestion-deduping and fallback prompt assembly logic
+- Expanded focused service coverage in:
+  - [server_modules/tests/test_direct_chat_prompt_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_prompt_service.py)
+
+#### Current Truth
+
+- [server_modules/direct_chat_prompt_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_prompt_service.py) now owns:
+  - memory-recall section generation
+  - direct-chat system-prompt composition
+  - workspace-context and prompt combination
+  - proactive suggestion assembly
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) continues to lose prompt-adjacent ownership and now mainly supplies runtime data sources into the service.
+- The direct-chat prompt path is becoming more explicit and testable.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns large high-level orchestration paths including provider routing and the main direct-chat execution loop.
+- The prompt service still relies on injected sources from the chat module and does not yet own all prompt-adjacent concerns.
+- The direct-chat engine still is not yet a thin coordination layer.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by targeting another orchestration-heavy block, most likely provider routing or the main loop.
+2. Keep moving repeated prompt and orchestration concerns into explicit services instead of helper clusters.
+3. Preserve current direct-chat behavior while shrinking chat-module ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_prompt_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_prompt_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_prompt_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_prompt_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Tool Approval Response Moved Behind No-Provider Service
 
 #### Stage

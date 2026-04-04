@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+import re
 from typing import Any, Callable
 
 
@@ -53,3 +55,56 @@ def combine_workspace_context(*, system_prompt: str | None, workspace_context_te
     if context:
         return context
     return prompt or None
+
+
+def time_of_day_suggestion(*, now: datetime | None = None) -> str:
+    hour = (now or datetime.now().astimezone()).hour
+    if hour < 12:
+        return "Review today's priorities and queue the next durable run."
+    if hour < 18:
+        return "Check what is running now and clear any waiting approvals."
+    return "Wrap up open work and schedule the next task for tomorrow."
+
+
+def build_proactive_suggestions(
+    workspace_id: str,
+    *,
+    heartbeat_tasks: Callable[[], list[str]],
+    recent_run_prompts: Callable[[str], list[str]],
+    memory_suggestion_prompts: Callable[[str], list[str]],
+    now: datetime | None = None,
+) -> list[str]:
+    suggestions: list[str] = []
+    seen: set[str] = set()
+
+    def push(value: str) -> None:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        suggestions.append(text)
+
+    for task in heartbeat_tasks():
+        push(f"Handle heartbeat task: {task}")
+
+    for prompt in recent_run_prompts(workspace_id):
+        push(f"Continue: {prompt[:120].rstrip()}")
+
+    for prompt in memory_suggestion_prompts(workspace_id):
+        push(prompt)
+
+    push(time_of_day_suggestion(now=now))
+
+    fallback_prompts = [
+        "Summarize what you know about me and keep it concise.",
+        "Review the latest runs and tell me what needs attention.",
+        "Check pending approvals and suggest the next best action.",
+    ]
+    for item in fallback_prompts:
+        push(item)
+        if len(suggestions) >= 3:
+            break
+    return suggestions[:3]

@@ -282,3 +282,48 @@ The live runtime still relies on older internal chat and run implementations, bu
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Shared Executor Extracted Into Canonical Runtime Composition Module
+
+#### Stage
+
+Stage 1 continues. The shared executor is no longer trapped inside the API transport layer.
+
+The API surface is thinner than before, and the canonical turn orchestration now has a dedicated module boundary.
+
+#### Completed Work
+
+- Added [server_modules/turn_runtime.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/turn_runtime.py) as the canonical runtime composition module for current turn execution branching.
+- Moved the shared executor logic out of [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) into [server_modules/turn_runtime.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/turn_runtime.py).
+- Introduced `TurnExecutionServices` so the composition layer depends on explicit callbacks instead of being tied directly to the API transport module.
+- Kept [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) as the HTTP adapter that now delegates orchestration into the canonical runtime composition module.
+- Updated focused tests to target the extracted composition behavior.
+
+#### Current Truth
+
+- Route orchestration now has a dedicated module boundary.
+- `runtime_runs_api.py` still owns transport concerns like request parsing, chat stream session handling, and HTTP response shaping.
+- The actual choice between direct-chat streaming and durable-run execution now lives in the extracted composition layer.
+
+#### Open Gaps
+
+- `turn_runtime.py` is the new composition boundary, but the platform still calls older internal chat and run implementations underneath it.
+- `run_service.py` still does not own the full durable run lifecycle.
+- `operator_chat.py` still owns the direct chat engine.
+- The memory layer, outbox layer, and worker-dispatch layer are still only partially converged.
+- Connector extraction into thin adapters is still incomplete.
+
+#### Next Required Work
+
+1. Start moving durable-run orchestration behavior from legacy modules into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Introduce a dedicated direct-chat service boundary so [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) stops being the only direct-chat engine owner.
+3. Keep shrinking [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) toward transport-only responsibilities.
+4. Continue recording every cutover step here as append-only fact.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the extracted composition module and modified runtime/test files.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

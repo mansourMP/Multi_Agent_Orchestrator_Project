@@ -23,7 +23,7 @@ from server_modules.agent_turn import (
 )
 from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
-from server_modules.run_service import build_run_start_request_from_turn
+from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
     build_browser_execution_binding,
@@ -1104,74 +1104,6 @@ def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
     return True
 
 
-async def _execute_agent_turn_request(
-    *,
-    turn_request: AgentTurnRequest,
-    current_user: Any,
-    chat_body: Optional[dict[str, Any]] = None,
-    run_request: Optional[Any] = None,
-) -> dict[str, Any]:
-    if turn_request.execution_mode == "durable":
-        req = build_run_start_request_from_turn(turn_request, base_request=run_request)
-        req = _stamp_request_owner(req, current_user)
-        prepared = _late_server_export("_prepare_run_start_request")(req)
-        metadata = dict(prepared["metadata"])
-        route = decide_execution_target(metadata)
-        metadata = apply_execution_route_metadata(metadata, route)
-        doctor_preflight = await build_doctor_run_gate_live(
-            execution_target=route["selected"],
-            metadata=metadata,
-            provider=req.provider,
-            credential_id=req.credential_id,
-        )
-        if bool(doctor_preflight.get("blocking")):
-            raise HTTPException(
-                status_code=409,
-                detail=str(
-                    doctor_preflight.get("detail")
-                    or doctor_preflight.get("title")
-                    or "Run blocked by doctor policy."
-                ),
-            )
-        result = _late_server_export("_create_run_from_request")(req)
-        if isinstance(result, dict):
-            result["doctor_preflight"] = doctor_preflight
-        return {
-            "kind": "durable_run",
-            "result": result,
-            "turn_request": turn_request,
-        }
-
-    body = dict(chat_body or {})
-    body.setdefault("workspace_id", turn_request.workspace_id)
-    body.setdefault("thread_id", turn_request.session_id)
-    body.setdefault("message", turn_request.message)
-    workspace_id = str(turn_request.workspace_id or body.get("workspace_id") or "default").strip() or "default"
-    session_key, thread_id, client_request_id = _chat_stream_key(current_user, body)
-
-    def producer():
-        return _build_direct_chat_event_producer(
-            current_user=current_user,
-            body=body,
-            message=turn_request.message,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            thread_id=thread_id,
-            client_request_id=client_request_id,
-            agent_turn_request=turn_request,
-        )
-
-    return {
-        "kind": "direct_chat_stream",
-        "workspace_id": workspace_id,
-        "session_key": session_key,
-        "thread_id": thread_id,
-        "client_request_id": client_request_id,
-        "producer": producer,
-        "turn_request": turn_request,
-    }
-
-
 def register_run_routes(app) -> None:
     import server as _server
     from server_modules.autopilot_connectors import handle_telegram_send_message
@@ -1257,9 +1189,16 @@ def register_run_routes(app) -> None:
         _refresh_server_exports()
         req = _stamp_request_owner(body or RunStartRequest(), current_user)
         run_turn_request = build_run_start_turn_request(req)
-        execution = await _execute_agent_turn_request(
+        execution = await execute_agent_turn_request(
             turn_request=run_turn_request,
             current_user=current_user,
+            services=TurnExecutionServices(
+                stamp_request_owner=_stamp_request_owner,
+                prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+                create_run_from_request=_late_server_export("_create_run_from_request"),
+                chat_stream_key=_chat_stream_key,
+                build_direct_chat_event_producer=_build_direct_chat_event_producer,
+            ),
             run_request=req,
         )
         return execution.get("result")
@@ -1288,9 +1227,16 @@ def register_run_routes(app) -> None:
             client_request_id=str(body.get("client_request_id") or "").strip() or _chat_stream_request_signature(body),
             message=message,
         )
-        execution = await _execute_agent_turn_request(
+        execution = await execute_agent_turn_request(
             turn_request=direct_turn_request,
             current_user=current_user,
+            services=TurnExecutionServices(
+                stamp_request_owner=_stamp_request_owner,
+                prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+                create_run_from_request=_late_server_export("_create_run_from_request"),
+                chat_stream_key=_chat_stream_key,
+                build_direct_chat_event_producer=_build_direct_chat_event_producer,
+            ),
             chat_body=body,
         )
         workspace_id = str(execution.get("workspace_id") or direct_turn_request.workspace_id or "default").strip() or "default"

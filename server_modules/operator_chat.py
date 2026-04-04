@@ -45,7 +45,6 @@ from server_modules.memory_service import (
     get_memory_notebook_excerpt,
     get_memory,
     list_memory_entries,
-    save_memory,
     search_memory_notebook,
 )
 from server_modules.agent_turn import resolve_agent_turn_request
@@ -3270,64 +3269,6 @@ def _extract_no_provider_web_query(message: str) -> str:
     return ""
 
 
-def _normalize_memory_key(value: str) -> str:
-    cleaned = re.sub(r"[^a-z0-9_. -]+", " ", str(value or "").strip().lower())
-    return re.sub(r"\s+", "_", cleaned).strip("_")
-
-
-def _extract_no_provider_memory_write(message: str) -> Optional[Dict[str, str]]:
-    text = str(message or "").strip()
-    if not text:
-        return None
-    match = re.search(r"remember(?:\s+that)?\s+my\s+name\s+is\s+(.+)$", text, flags=re.IGNORECASE)
-    if match:
-        value = str(match.group(1) or "").strip().rstrip(".")
-        if value:
-            return {"key": "name", "value": value, "display_key": "name"}
-    match = re.search(r"remember\s*:\s*([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
-    if match:
-        key = _normalize_memory_key(match.group(1))
-        value = str(match.group(2) or "").strip().rstrip(".")
-        if key and value:
-            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
-    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
-    if match:
-        key = _normalize_memory_key(match.group(1))
-        value = str(match.group(2) or "").strip().rstrip(".")
-        if key and value:
-            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
-    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s+is\s+(.+)$", text, flags=re.IGNORECASE)
-    if match:
-        raw_key = str(match.group(1) or "").strip()
-        key = _normalize_memory_key(raw_key)
-        value = str(match.group(2) or "").strip().rstrip(".")
-        if key and value:
-            return {"key": key, "value": value, "display_key": raw_key}
-    return None
-
-
-def _memory_entry_for_query(workspace_id: str, query: str) -> Optional[Dict[str, Any]]:
-    return memory_service.find_workspace_memory_entry(workspace_id, query)
-
-
-def _extract_no_provider_memory_read(message: str) -> Optional[str]:
-    text = str(message or "").strip()
-    compact = _compact_text(text)
-    if not text:
-        return None
-    if compact == "what is my name" or compact == "recall my name":
-        return "name"
-    for pattern in (
-        r"what\s+is\s+([a-z0-9_. -]+)$",
-        r"recall\s+([a-z0-9_. -]+)$",
-        r"what\s+did\s+i\s+say\s+about\s+([a-z0-9_. -]+)$",
-    ):
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return str(match.group(1) or "").strip()
-    return None
-
-
 def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     compact = _compact_text(message)
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
@@ -3419,29 +3360,10 @@ def _execute_no_provider_request(
             "attempted_providers": "",
             "error": "",
         }
-    memory_write = _extract_no_provider_memory_write(message)
-    if memory_write is not None:
-        save_memory(workspace_id, memory_write["key"], memory_write["value"])
+    memory_reply = memory_service.handle_no_provider_memory_request(workspace_id, message)
+    if memory_reply is not None:
         return {
-            "reply": f"Stored memory: {memory_write['display_key']} = {memory_write['value']}",
-            "actions": [],
-            "mode": "answer",
-            "usage_masked": {},
-            "provider": None,
-            "model": None,
-            "attempted_providers": "",
-            "error": "",
-        }
-    memory_read = _extract_no_provider_memory_read(message)
-    if memory_read is not None:
-        entry = _memory_entry_for_query(workspace_id, memory_read)
-        reply = (
-            f"{str(entry.get('key') or memory_read).strip()} = {str(entry.get('content') or '').strip()}"
-            if isinstance(entry, dict)
-            else f"I don't have {memory_read} saved in memory yet."
-        )
-        return {
-            "reply": reply,
+            "reply": memory_reply,
             "actions": [],
             "mode": "answer",
             "usage_masked": {},
@@ -3578,7 +3500,7 @@ def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, 
         return True
     if _extract_no_provider_shell_command(message):
         return True
-    if _extract_no_provider_memory_write(message) is not None or _extract_no_provider_memory_read(message) is not None:
+    if memory_service.parse_no_provider_memory_write(message) is not None or memory_service.parse_no_provider_memory_read(message) is not None:
         return True
     if _extract_no_provider_web_query(message):
         return True

@@ -21,6 +21,10 @@ def _normalize_memory_lookup_key(value: str) -> str:
     return re.sub(r"\s+", "_", cleaned).strip("_")
 
 
+def _trim_memory_value(value: str) -> str:
+    return str(value or "").strip().rstrip(".")
+
+
 @dataclass(slots=True)
 class MemoryQuery:
     tenant_id: str = ""
@@ -370,6 +374,71 @@ def memory_suggestion_prompts(workspace_id: str, *, limit: int = 2) -> List[str]
             continue
         prompts.append(f"Use my saved context: {fact[:120].rstrip()}")
     return prompts
+
+
+def parse_no_provider_memory_write(message: str) -> Dict[str, str] | None:
+    text = str(message or "").strip()
+    if not text:
+        return None
+    match = re.search(r"remember(?:\s+that)?\s+my\s+name\s+is\s+(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        value = _trim_memory_value(match.group(1))
+        if value:
+            return {"key": "name", "value": value, "display_key": "name"}
+    match = re.search(r"remember\s*:\s*([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        key = _normalize_memory_lookup_key(match.group(1))
+        value = _trim_memory_value(match.group(2))
+        if key and value:
+            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
+    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        key = _normalize_memory_lookup_key(match.group(1))
+        value = _trim_memory_value(match.group(2))
+        if key and value:
+            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
+    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s+is\s+(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        raw_key = str(match.group(1) or "").strip()
+        key = _normalize_memory_lookup_key(raw_key)
+        value = _trim_memory_value(match.group(2))
+        if key and value:
+            return {"key": key, "value": value, "display_key": raw_key}
+    return None
+
+
+def parse_no_provider_memory_read(message: str) -> str | None:
+    text = str(message or "").strip()
+    compact = re.sub(r"\s+", " ", text.lower()).strip()
+    if not text:
+        return None
+    if compact == "what is my name" or compact == "recall my name":
+        return "name"
+    for pattern in (
+        r"what\s+is\s+([a-z0-9_. -]+)$",
+        r"recall\s+([a-z0-9_. -]+)$",
+        r"what\s+did\s+i\s+say\s+about\s+([a-z0-9_. -]+)$",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip()
+    return None
+
+
+def handle_no_provider_memory_request(workspace_id: str, message: str) -> str | None:
+    memory_write = parse_no_provider_memory_write(message)
+    if memory_write is not None:
+        save_memory(workspace_id, memory_write["key"], memory_write["value"])
+        return f"Stored memory: {memory_write['display_key']} = {memory_write['value']}"
+    memory_read = parse_no_provider_memory_read(message)
+    if memory_read is None:
+        return None
+    entry = find_workspace_memory_entry(workspace_id, memory_read)
+    if isinstance(entry, dict):
+        key = str(entry.get("key") or memory_read).strip()
+        content = str(entry.get("content") or "").strip()
+        return f"{key} = {content}"
+    return f"I don't have {memory_read} saved in memory yet."
 
 
 def runtime_memory_search(

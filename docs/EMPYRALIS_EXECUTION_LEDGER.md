@@ -659,6 +659,73 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - No-Provider Memory Parsing Moved Behind Memory Service
+
+#### Stage
+
+Stage 1 continues. The no-provider chat fallback no longer owns memory read/write parsing inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is the beginning of the subtraction phase inside the chat module. The user-facing fallback behavior remains the same, but the canonical memory boundary now owns more of the direct-chat path.
+
+#### Completed Work
+
+- Expanded [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) with:
+  - `parse_no_provider_memory_write()`
+  - `parse_no_provider_memory_read()`
+  - `handle_no_provider_memory_request()`
+- Removed now-dead no-provider helper ownership from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py):
+  - `_normalize_memory_key()`
+  - `_extract_no_provider_memory_write()`
+  - `_memory_entry_for_query()`
+  - `_extract_no_provider_memory_read()`
+- Updated the direct-chat fallback path so [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) now:
+  - delegates no-provider memory handling to the canonical memory service
+  - uses the memory service for direct-tool intent detection for memory read/write messages
+- Expanded focused coverage in:
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+  - [server_modules/tests/test_operator_chat_no_provider.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_operator_chat_no_provider.py)
+
+#### Current Truth
+
+- The direct-chat module still owns higher-level fallback orchestration, but it no longer owns no-provider memory parsing logic.
+- The canonical memory boundary now covers:
+  - workspace/notebook memory CRUD
+  - runtime semantic memory search/upsert
+  - transcript-linked daily-log writes
+  - direct-chat memory extraction/persistence
+  - no-provider direct-chat memory read/write behavior
+- The chat module is shrinking by responsibility, not just by wrappers.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still mixes provider orchestration, prompt assembly, approval behavior, and no-provider fallback execution.
+- The memory service still hides two different underlying implementations:
+  - `agent_memory.py`
+  - `runtime_memory.py`
+- The no-provider fallback still sits inside the chat module as a large branch even though memory handling is now delegated.
+
+#### Next Required Work
+
+1. Continue subtracting from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting more no-provider fallback behavior behind service-owned helpers.
+2. Define the service contract that should ultimately hide the split between notebook memory and runtime semantic memory.
+3. Keep preserving user-visible behavior while reducing chat-module ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+  - [server_modules/tests/test_operator_chat_no_provider.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_operator_chat_no_provider.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Chat Memory Extraction Flow Moved Behind Memory Service
 
 #### Stage

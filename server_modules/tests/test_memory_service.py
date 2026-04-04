@@ -241,6 +241,33 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertTrue(all(prompt.startswith("Use my saved context:") for prompt in prompts))
 
+    def test_parse_no_provider_memory_write_normalizes_common_patterns(self) -> None:
+        self.assertEqual(
+            memory_service.parse_no_provider_memory_write("Remember my name is TestUser."),
+            {"key": "name", "value": "TestUser", "display_key": "name"},
+        )
+        self.assertEqual(
+            memory_service.parse_no_provider_memory_write("remember: Favorite Editor = Neovim."),
+            {"key": "favorite_editor", "value": "Neovim", "display_key": "Favorite Editor"},
+        )
+
+    def test_parse_no_provider_memory_read_normalizes_name_and_lookup_patterns(self) -> None:
+        self.assertEqual(memory_service.parse_no_provider_memory_read("What is my name"), "name")
+        self.assertEqual(memory_service.parse_no_provider_memory_read("Recall favorite editor"), "favorite editor")
+        self.assertEqual(
+            memory_service.parse_no_provider_memory_read("What did I say about timezone"),
+            "timezone",
+        )
+
+    def test_handle_no_provider_memory_request_handles_write_and_read_paths(self) -> None:
+        write_reply = memory_service.handle_no_provider_memory_request("default", "Remember that timezone is Asia/Shanghai.")
+        read_reply = memory_service.handle_no_provider_memory_request("default", "What is timezone")
+        missing_reply = memory_service.handle_no_provider_memory_request("default", "What is favorite color")
+
+        self.assertEqual(write_reply, "Stored memory: timezone = Asia/Shanghai")
+        self.assertEqual(read_reply, "timezone = Asia/Shanghai")
+        self.assertEqual(missing_reply, "I don't have favorite color saved in memory yet.")
+
 
 if __name__ == "__main__":
     unittest.main()

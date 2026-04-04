@@ -239,7 +239,7 @@ class OperatorChatNoProviderTests(unittest.TestCase):
     @patch("operator_chat_no_provider_under_test._preferred_provider", return_value=("openai", {}))
     @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
     @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
-    @patch("operator_chat_no_provider_under_test.save_memory")
+    @patch("operator_chat_no_provider_under_test.memory_service.save_memory")
     def test_memory_write_runs_without_provider_configured(
         self,
         save_memory_mock,
@@ -263,12 +263,12 @@ class OperatorChatNoProviderTests(unittest.TestCase):
     @patch("operator_chat_no_provider_under_test._supports_direct_message_native_chat", return_value=False)
     @patch("operator_chat_no_provider_under_test.resolve_workspace_tool_capabilities", return_value=[])
     @patch(
-        "operator_chat_no_provider_under_test.list_memory_entries",
-        return_value=[{"key": "name", "content": "TestUser"}],
+        "operator_chat_no_provider_under_test.memory_service.find_workspace_memory_entry",
+        return_value={"key": "name", "content": "TestUser"},
     )
     def test_memory_read_runs_without_provider_configured(
         self,
-        _list_memory_entries,
+        _find_workspace_memory_entry,
         _capabilities,
         _supports_direct_message_native_chat,
         _preferred_provider,

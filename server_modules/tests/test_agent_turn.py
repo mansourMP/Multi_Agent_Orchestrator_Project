@@ -7,6 +7,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_request,
     serialize_agent_turn_request,
 )
+from server_modules.run_service import build_run_start_request_from_turn
 from server_modules.runtime_models import RunStartRequest
 
 
@@ -76,6 +77,26 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(round_tripped.workspace_id, "default")
         self.assertEqual(round_tripped.session_id, "thread-1")
         self.assertEqual(round_tripped.message, "hello")
+
+    def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
+        base_request = RunStartRequest(
+            engine="orion",
+            workspace_id="workspace-1",
+            user_goal="Original goal",
+            provider="openai",
+            model="gpt-test",
+            metadata={"owner_user_id": "user-1", "trust_mode": "guarded"},
+        )
+        turn_request = build_run_start_turn_request(base_request)
+
+        converted = build_run_start_request_from_turn(turn_request, base_request=base_request)
+
+        self.assertEqual(converted.workspace_id, "workspace-1")
+        self.assertEqual(converted.user_goal, "Original goal")
+        self.assertEqual(converted.provider, "openai")
+        self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
+        self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
+        self.assertEqual(converted.metadata["channel"], "web")
 
 
 if __name__ == "__main__":

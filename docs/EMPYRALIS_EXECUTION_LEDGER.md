@@ -229,3 +229,56 @@ The platform still uses the older execution internals, but both direct chat and 
   - `server_modules.tests.test_agent_turn`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Runtime Composition Function Introduced
+
+#### Stage
+
+Stage 1 advanced from boundary normalization into shared execution composition.
+
+The live runtime still relies on older internal chat and run implementations, but route-level orchestration is now converging into one helper that accepts a canonical `AgentTurnRequest`.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `build_run_start_request_from_turn()`
+  - canonical metadata preservation for durable-run requests
+  - conversion from `AgentTurnRequest` into `RunStartRequest`
+- Added a shared executor helper in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py):
+  - `_execute_agent_turn_request()`
+- Rewired both live entrypoints to use that helper:
+  - `POST /runs/start`
+  - `POST /chat/respond`
+- Added focused tests for the new composition layer:
+  - direct-chat stream plan branch
+  - durable-run result branch
+  - canonical run-start conversion path
+
+#### Current Truth
+
+- Route-level decision-making is now more centralized.
+- The API boundary no longer assembles chat and run execution in two entirely separate ways.
+- The runtime still dispatches into the existing legacy internals after the shared executor helper chooses the branch.
+
+#### Open Gaps
+
+- `agent_turn()` is still not the sole implementation entrypoint for all work.
+- The shared executor helper still lives in `runtime_runs_api.py`, not yet in a dedicated canonical runtime composition module.
+- `run_service.py` is still a conversion and state helper, not yet the full durable run lifecycle owner.
+- `operator_chat.py` still contains the old direct-chat execution engine.
+- `runs_core.py` and `runs_delegation.py` still remain duplicated orchestration territory.
+
+#### Next Required Work
+
+1. Extract the shared executor helper out of the API module into a dedicated canonical runtime composition layer.
+2. Shift durable run orchestration responsibilities progressively from legacy modules into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+3. Start isolating the direct-chat execution engine behind the same canonical runtime composition boundary.
+4. Continue converting duplicated infrastructure into service-owned modules without breaking current behavior.
+
+#### Verification
+
+- `python3 -m py_compile` passed for the modified service, runtime, and test files.
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

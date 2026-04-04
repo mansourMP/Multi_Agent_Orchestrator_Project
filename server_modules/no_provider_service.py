@@ -235,7 +235,10 @@ class NoProviderExecutionServices:
     parse_memory_write: Callable[[str], dict[str, str] | None]
     parse_memory_read: Callable[[str], str | None]
     handle_memory_request: Callable[[str, str], str | None]
-    build_approval_response: Callable[..., dict[str, Any] | None]
+    parse_tool_name: Callable[[str], tuple[str, str]]
+    tool_arguments_payload: Callable[[Any], Dict[str, Any]]
+    approval_required_for_tool: Callable[[str, str, Dict[str, Any], list[dict[str, Any]]], bool]
+    agent_machine_full_trust_for_session: Callable[[dict[str, Any] | None], bool]
     execute_single_tool_call: Callable[..., str]
 
 
@@ -249,6 +252,45 @@ def _answer_payload(reply: str) -> Dict[str, Any]:
         "model": None,
         "attempted_providers": "",
         "error": "",
+    }
+
+
+def build_direct_tool_approval_response(
+    *,
+    tool_calls: list[dict[str, Any]],
+    tool_capabilities: list[dict[str, Any]],
+    services: NoProviderExecutionServices,
+    session_ctx: dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    if services.agent_machine_full_trust_for_session(session_ctx):
+        return None
+    approval_actions: list[dict[str, Any]] = []
+    for index, call in enumerate(tool_calls, start=1):
+        connector_id, action_id = services.parse_tool_name(str(call.get("name") or ""))
+        argument_payload = services.tool_arguments_payload(call.get("arguments"))
+        if not services.approval_required_for_tool(connector_id, action_id, argument_payload, tool_capabilities):
+            continue
+        tool_input = str(argument_payload.get("input") or "").strip()
+        if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer"}:
+            tool_input = json.dumps(argument_payload, ensure_ascii=False)
+        approval_actions.append(
+            {
+                "type": "approval_required",
+                "connector": connector_id,
+                "action": action_id,
+                "input": tool_input,
+                "id": f"approval_required:{connector_id}:{action_id}:{index}",
+                "kind": "approval_required",
+                "label": "Confirm",
+                "variant": "primary",
+            }
+        )
+    if not approval_actions:
+        return None
+    return {
+        "reply": "This action requires your approval before I send it. Confirm?",
+        "actions": approval_actions,
+        "mode": "answer_with_action",
     }
 
 
@@ -386,9 +428,10 @@ def execute_no_provider_request(
         return None
 
     if tool_calls:
-        approval_response = services.build_approval_response(
+        approval_response = build_direct_tool_approval_response(
             tool_calls=tool_calls,
             tool_capabilities=tool_capabilities,
+            services=services,
             session_ctx=session_ctx,
         )
         if approval_response is not None:

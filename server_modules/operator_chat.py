@@ -3119,8 +3119,25 @@ def _no_provider_execution_services() -> no_provider_service.NoProviderExecution
         parse_memory_write=memory_service.parse_no_provider_memory_write,
         parse_memory_read=memory_service.parse_no_provider_memory_read,
         handle_memory_request=memory_service.handle_no_provider_memory_request,
-        build_approval_response=_build_direct_tool_approval_response,
+        parse_tool_name=_parse_tool_name,
+        tool_arguments_payload=_tool_arguments_payload,
+        approval_required_for_tool=_approval_required_for_direct_tool,
+        agent_machine_full_trust_for_session=_agent_machine_full_trust_for_session,
         execute_single_tool_call=_execute_single_direct_tool_call,
+    )
+
+
+def _build_direct_tool_approval_response(
+    *,
+    tool_calls: List[Dict[str, Any]],
+    tool_capabilities: List[Dict[str, Any]],
+    session_ctx: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    return no_provider_service.build_direct_tool_approval_response(
+        tool_calls=tool_calls,
+        tool_capabilities=tool_capabilities,
+        services=_no_provider_execution_services(),
+        session_ctx=session_ctx,
     )
 
 
@@ -3417,44 +3434,6 @@ def _approval_required_for_direct_tool(
         required_actions = item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else []
         return normalized_action_id in {str(entry or "").strip() for entry in required_actions}
     return False
-
-
-def _build_direct_tool_approval_response(
-    *,
-    tool_calls: List[Dict[str, Any]],
-    tool_capabilities: List[Dict[str, Any]],
-    session_ctx: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    if _agent_machine_full_trust_for_session(session_ctx):
-        return None
-    approval_actions: List[Dict[str, Any]] = []
-    for index, call in enumerate(tool_calls, start=1):
-        connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
-        argument_payload = _tool_arguments_payload(call.get("arguments"))
-        if not _approval_required_for_direct_tool(connector_id, action_id, argument_payload, tool_capabilities):
-            continue
-        tool_input = str(argument_payload.get("input") or "").strip()
-        if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer"}:
-            tool_input = json.dumps(argument_payload, ensure_ascii=False)
-        approval_actions.append(
-            {
-                "type": "approval_required",
-                "connector": connector_id,
-                "action": action_id,
-                "input": tool_input,
-                "id": f"approval_required:{connector_id}:{action_id}:{index}",
-                "kind": "approval_required",
-                "label": "Confirm",
-                "variant": "primary",
-            }
-        )
-    if not approval_actions:
-        return None
-    return {
-        "reply": "This action requires your approval before I send it. Confirm?",
-        "actions": approval_actions,
-        "mode": "answer_with_action",
-    }
 
 
 def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:

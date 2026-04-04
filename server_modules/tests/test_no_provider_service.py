@@ -128,7 +128,10 @@ class NoProviderServiceTests(unittest.TestCase):
             parse_memory_write=lambda message: None,
             parse_memory_read=lambda message: "name",
             handle_memory_request=lambda workspace_id, message: "name = TestUser",
-            build_approval_response=lambda **kwargs: None,
+            parse_tool_name=lambda tool_name: ("telegram_bot", "send_message"),
+            tool_arguments_payload=lambda arguments: {},
+            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
+            agent_machine_full_trust_for_session=lambda session_ctx: False,
             execute_single_tool_call=lambda **kwargs: "unused",
         )
 
@@ -146,7 +149,6 @@ class NoProviderServiceTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "answer")
 
     def test_execute_no_provider_request_handles_tool_execution_and_origin_ip_format(self) -> None:
-        build_approval_response = Mock(return_value=None)
         execute_single_tool_call = Mock(return_value='HTTP 200\n\n{"origin":"203.0.113.9"}')
         services = no_provider_service.NoProviderExecutionServices(
             compact_text=_compact_text,
@@ -158,7 +160,10 @@ class NoProviderServiceTests(unittest.TestCase):
             parse_memory_write=lambda message: None,
             parse_memory_read=lambda message: None,
             handle_memory_request=lambda workspace_id, message: None,
-            build_approval_response=build_approval_response,
+            parse_tool_name=lambda tool_name: ("http", "request"),
+            tool_arguments_payload=lambda arguments: {"url": "https://httpbin.org/get"},
+            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
+            agent_machine_full_trust_for_session=lambda session_ctx: False,
             execute_single_tool_call=execute_single_tool_call,
         )
 
@@ -173,7 +178,6 @@ class NoProviderServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["reply"], "Origin IP: 203.0.113.9")
-        build_approval_response.assert_called_once()
         execute_single_tool_call.assert_called_once()
 
     def test_plan_tool_calls_builds_browser_and_shell_actions(self) -> None:
@@ -233,6 +237,36 @@ class NoProviderServiceTests(unittest.TestCase):
                 parse_memory_read=lambda message: None,
             )
         )
+
+    def test_build_direct_tool_approval_response_returns_approval_action(self) -> None:
+        services = no_provider_service.NoProviderExecutionServices(
+            compact_text=_compact_text,
+            safe_positive_int=_safe_positive_int,
+            resolve_local_path=Path,
+            extract_first_path_reference=_extract_first_path_reference,
+            extract_first_url=_extract_first_url,
+            parse_page_state=lambda value: value,
+            parse_memory_write=lambda message: None,
+            parse_memory_read=lambda message: None,
+            handle_memory_request=lambda workspace_id, message: None,
+            parse_tool_name=lambda tool_name: ("telegram_bot", "send_message"),
+            tool_arguments_payload=lambda arguments: {"input": "hello from direct chat"},
+            approval_required_for_tool=lambda connector_id, action_id, arguments, tool_capabilities: True,
+            agent_machine_full_trust_for_session=lambda session_ctx: False,
+            execute_single_tool_call=lambda **kwargs: "unused",
+        )
+
+        payload = no_provider_service.build_direct_tool_approval_response(
+            tool_calls=[{"name": "telegram_bot__send_message", "arguments": "{\"input\":\"hello from direct chat\"}"}],
+            tool_capabilities=[],
+            services=services,
+        )
+
+        self.assertEqual(payload["mode"], "answer_with_action")
+        self.assertEqual(payload["reply"], "This action requires your approval before I send it. Confirm?")
+        self.assertEqual(payload["actions"][0]["connector"], "telegram_bot")
+        self.assertEqual(payload["actions"][0]["action"], "send_message")
+        self.assertEqual(payload["actions"][0]["input"], "hello from direct chat")
 
 
 if __name__ == "__main__":

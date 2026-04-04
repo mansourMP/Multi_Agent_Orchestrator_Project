@@ -796,6 +796,66 @@ This is a real subtraction step. The chat module still orchestrates the no-provi
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Direct Tool Approval Response Moved Behind No-Provider Service
+
+#### Stage
+
+Stage 1 continues. The direct-tool approval response construction no longer lives primarily inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut keeps a thin compatibility wrapper in the chat module so existing call sites and tests still work, but the real approval-response logic now belongs to [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py).
+
+#### Completed Work
+
+- Expanded [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) with:
+  - `build_direct_tool_approval_response()`
+  - additional injected approval-related dependencies on `NoProviderExecutionServices`
+- Updated `NoProviderExecutionServices` so the fallback service can receive:
+  - tool-name parsing
+  - tool-argument parsing
+  - approval-policy evaluation
+  - full-trust session checking
+- Removed the old approval-response implementation body from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Replaced it with a thin compatibility wrapper in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) that delegates to the service-owned implementation
+- Expanded focused service coverage in:
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+
+#### Current Truth
+
+- [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py) now owns:
+  - helper parsing for lightweight no-provider flows
+  - direct-tool routing heuristics
+  - no-provider fallback execution
+  - direct-tool approval response construction
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still exposes `_build_direct_tool_approval_response()` only as a compatibility shim.
+- The chat module continues to shrink toward a coordination-only role.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns large high-level direct-chat orchestration paths including provider routing and prompt assembly.
+- The fallback service still relies on injected callbacks for approval-policy evaluation and tool execution rather than owning those subsystems outright.
+- The direct-chat stack is still not yet a thin, fully layered orchestration path.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting more high-level direct-chat orchestration concerns.
+2. Decide whether the next service boundary should target approval policy evaluation, provider routing, or prompt/system-message assembly.
+3. Keep preserving current behavior while deleting chat-module-owned control flow.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/no_provider_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_no_provider_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_no_provider_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Tool Planning And Obvious-Intent Detection Moved Behind No-Provider Service
 
 #### Stage

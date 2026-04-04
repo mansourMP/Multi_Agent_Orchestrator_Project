@@ -2741,6 +2741,63 @@ This cut also repaired a real baseline regression in the terminal dedupe path. T
   - `server_modules.tests.test_whatsapp_run_dispatch_service`
   - `server_modules.tests.test_telegram_terminal_service`
 
+### 2026-04-05 - Terminal And Status Wrapper Band Moved Behind Dedicated Terminal Bridge Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram terminal entrypoint shell and the shared status/profile wrapper band no longer own their runtime-init and delegation body inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is still a real ownership cut even though the monolith did not shrink. The public wrapper names remain exported for compatibility, but their implementation body now crosses a dedicated terminal bridge service first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_terminal_bridge_service.py) to own:
+  - runtime-init bridging for Telegram terminal send/test entrypoints
+  - runtime-init bridging for Telegram supervisor start
+  - runtime-init bridging for Telegram and WhatsApp autopilot status payloads
+  - runtime-init bridging for autopilot profile-list payloads
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `handle_telegram_send_message()` now delegates through the terminal bridge
+  - `handle_telegram_autopilot_test_message()` now delegates through the terminal bridge
+  - `_run_telegram_autopilot_forever()` now delegates through the terminal bridge
+  - `handle_telegram_autopilot_status()` now delegates through the terminal bridge
+  - `handle_whatsapp_autopilot_status()` now delegates through the terminal bridge
+  - `handle_list_autopilot_profiles()` now delegates through the terminal bridge
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_terminal_bridge_service.py)
+
+#### Current Truth
+
+- Terminal/status wrapper ownership is now explicit in [server_modules/connectors/autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_terminal_bridge_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the public compatibility entrypoints, but it no longer owns their runtime-init/delegation body inline.
+- The outer execution graph still passes through the public Telegram send entrypoint after this cut:
+  - [server_modules/tests/test_runs_execution_graph.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_runs_execution_graph.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now `1126` lines versus `1118` after the previous cut.
+  This increase is expected because the compatibility wrappers remain exported while the new bridge factory and service wiring were added.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns substantial top-level composition and compatibility glue.
+- The WhatsApp webhook wrapper band is still inline and could become the next bounded runtime-init bridge extraction.
+- More service-composition cuts are still needed before the file is only thin adapter/export glue.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting another runtime-init wrapper or composition cluster with a real ownership boundary.
+2. Keep verifying outer call sites, not only service tests, whenever public wrapper entrypoints move behind bridge services.
+3. Preserve exported compatibility function names until the rest of the codebase stops importing them directly.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_terminal_bridge_service.py)
+  - [server_modules/tests/test_autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_terminal_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_terminal_bridge_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_runs_execution_graph -k launch_gate_connector_triage_workflow`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

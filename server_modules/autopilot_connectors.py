@@ -10,6 +10,7 @@ from server_modules.connectors.autopilot_approval_service import AutopilotApprov
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
 from server_modules.connectors.autopilot_event_bridge_service import AutopilotEventBridgeService
+from server_modules.connectors.autopilot_terminal_bridge_service import AutopilotTerminalBridgeService
 from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
 from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEntryService
@@ -220,6 +221,7 @@ _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
 _AUTOPILOT_WORKFLOW_SETUP_SERVICE: Optional[AutopilotWorkflowSetupService] = None
 _AUTOPILOT_EVENT_BRIDGE_SERVICE: Optional[AutopilotEventBridgeService] = None
+_AUTOPILOT_TERMINAL_BRIDGE_SERVICE: Optional[AutopilotTerminalBridgeService] = None
 _TELEGRAM_CONNECTOR_CONTEXT_SERVICE: Optional[TelegramConnectorContextService] = None
 _AUTOPILOT_APPROVAL_SERVICE: Optional[AutopilotApprovalService] = None
 _TELEGRAM_TRANSPORT_SERVICE: Optional[TelegramTransportService] = None
@@ -836,6 +838,26 @@ def _autopilot_event_bridge_service() -> AutopilotEventBridgeService:
     return _AUTOPILOT_EVENT_BRIDGE_SERVICE
 
 
+def _autopilot_terminal_bridge_service() -> AutopilotTerminalBridgeService:
+    global _AUTOPILOT_TERMINAL_BRIDGE_SERVICE
+    if _AUTOPILOT_TERMINAL_BRIDGE_SERVICE is None:
+        _AUTOPILOT_TERMINAL_BRIDGE_SERVICE = AutopilotTerminalBridgeService(
+            init_runtime=lambda: _init(),
+            telegram_terminal_service=lambda: _telegram_terminal_service(),
+            telegram_supervisor_service=lambda: _telegram_service_registry().telegram_autopilot_supervisor_service(),
+            autopilot_status_service=lambda: _autopilot_status_service(),
+            autopilot_endpoint_service=lambda: _autopilot_endpoint_service(),
+            telegram_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+            telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
+            telegram_catalog=TELEGRAM_AUTOPILOT_PROFILE_CATALOG,
+            whatsapp_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+            whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
+            whatsapp_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
+            whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+        )
+    return _AUTOPILOT_TERMINAL_BRIDGE_SERVICE
+
+
 def _normalize_workspace_id_fallback(value: Any) -> str:
     normalize_workspace_id = globals().get("_normalize_workspace_id")
     if callable(normalize_workspace_id):
@@ -1039,8 +1061,7 @@ async def handle_telegram_send_message(
     session_key: Optional[str] = None,
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    _init()
-    return await _telegram_terminal_service().handle_send_message(
+    return await _autopilot_terminal_bridge_service().handle_telegram_send_message(
         text=text,
         workspace_id=workspace_id,
         session_key=session_key,
@@ -1057,8 +1078,7 @@ async def handle_telegram_autopilot_test_message(
     sender_id: Optional[str] = None,
     timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
-    _init()
-    return await _telegram_terminal_service().handle_autopilot_test_message(
+    return await _autopilot_terminal_bridge_service().handle_telegram_autopilot_test_message(
         text=text,
         workspace_id=workspace_id,
         session_key=session_key,
@@ -1091,28 +1111,16 @@ async def handle_whatsapp_twilio_webhook(request: Request):
 
 
 def _run_telegram_autopilot_forever():
-    _init()
-    _telegram_service_registry().telegram_autopilot_supervisor_service().run_forever()
+    _autopilot_terminal_bridge_service().run_telegram_autopilot_forever()
 
 
 async def handle_telegram_autopilot_status():
-    _init()
-    return _autopilot_status_service().telegram_status_payload()
+    return await _autopilot_terminal_bridge_service().telegram_status_payload()
 
 
 async def handle_whatsapp_autopilot_status():
-    _init()
-    return _autopilot_status_service().whatsapp_status_payload()
+    return await _autopilot_terminal_bridge_service().whatsapp_status_payload()
 
 
 async def handle_list_autopilot_profiles():
-    _init()
-    return _autopilot_endpoint_service().autopilot_profiles_payload(
-        telegram_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
-        telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
-        telegram_catalog=TELEGRAM_AUTOPILOT_PROFILE_CATALOG,
-        whatsapp_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
-        whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
-        whatsapp_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
-        whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
-    )
+    return await _autopilot_terminal_bridge_service().autopilot_profiles_payload()

@@ -1486,6 +1486,63 @@ This cut did two things at once:
   - `server_modules.tests.test_telegram_camera_setup_service`
   - `server_modules.tests.test_autopilot_workflow_setup_service`
 
+### 2026-04-05 - Dead Connector-Support Helper Strip Removed From Autopilot Connectors
+
+#### Stage
+
+Stage 2 connector convergence continues. Another dead helper strip is gone from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut did not move behavior into a new service. It removed definition-only helper names that no longer had live callers anywhere in the repo and were only inflating the connector shell.
+
+#### Completed Work
+
+- Removed the dead connector-support helper strip from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_data_url_from_local_file()`
+  - `_connector_capability_summary()`
+  - `_telegram_requested_recent_email_limit()`
+  - `_telegram_prefixed_command()`
+  - `_telegram_menu_keyboard()`
+  - `_telegram_parse_allow_from()`
+  - `_telegram_extension_from_attachment()`
+  - `_telegram_download_file()`
+  - `_bool_from_any()`
+  - `_connector_metadata()`
+  - `_telegram_strip_prefix()`
+  - `_whatsapp_connector_match()`
+- Removed now-unused imports from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) tied only to those deleted helpers.
+- Confirmed that none of those names remain referenced anywhere under `server_modules` or `scripts`.
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1214` lines.
+- The connector shell is increasingly concentrated around:
+  - true runtime-facing entrypoints
+  - service construction and wiring
+  - a smaller set of still-live helper functions that are actually used by the service graph
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns some shared helper logic around eventing, session/trace helpers, transport bridging, and context support.
+- The remaining runtime-facing shell still needs to be audited carefully against [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py) and [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py) so only real public entrypoints survive.
+- Connector convergence is far ahead now, but the broader architecture still has major remaining work on durable runs and direct-chat convergence.
+
+#### Next Required Work
+
+1. Keep removing definition-only and forwarding-only helper bands from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) while preserving the true runtime contract.
+2. Continue favoring direct service ownership over shell-owned helper logic whenever a behavior boundary is already available.
+3. After a few more connector-shell reductions, redirect more effort toward the larger remaining convergence tracks outside connectors.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_menu_service`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+
 ### 2026-04-05 - WhatsApp Helper Wrapper Band Removed
 
 #### Stage

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, os, json, time, threading, base64, certifi, html, ssl, re, uuid, mimetypes, hashlib
+import asyncio, os, json, time, threading, certifi, html, ssl, re, uuid, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -974,27 +974,8 @@ def _runtime_api_headers() -> Dict[str, str]:
     return headers
 
 
-def _data_url_from_local_file(path_value: str, mime_type: str = "") -> str:
-    path = Path(str(path_value or "").strip()).expanduser().resolve()
-    if not path.exists() or not path.is_file():
-        raise RuntimeError("Attached image file is not available.")
-    raw = path.read_bytes()
-    guessed_mime = str(mime_type or "").strip().lower() or mimetypes.guess_type(str(path.name))[0] or "image/jpeg"
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:{guessed_mime};base64,{encoded}"
-
-
 def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
     return _telegram_helper_registry().profile_service().build_goal_with_profile(goal, profile_data)
-
-
-def _connector_capability_summary(connector_id: str) -> str:
-    return _telegram_connector_context_service().connector_capability_summary(connector_id)
-
-
-def _telegram_requested_recent_email_limit(goal: str) -> int:
-    return _telegram_connector_context_service().requested_recent_email_limit(goal)
-
 
 def _telegram_workspace_connector_context(
     goal: str,
@@ -1026,15 +1007,6 @@ def _telegram_installed_skill_query(
         chat_id=chat_id,
         session_key=session_key,
     )
-
-
-def _telegram_prefixed_command(profile: Dict[str, Any], command_text: str) -> str:
-    return _telegram_menu_service().prefixed_command(profile, command_text)
-
-
-def _telegram_menu_keyboard(profile: Dict[str, Any], menu_id: str = "main") -> Dict[str, Any]:
-    return _telegram_menu_service().menu_keyboard(profile, menu_id)
-
 
 def _telegram_reply_keyboard(profile: Dict[str, Any]) -> Dict[str, Any]:
     return _telegram_menu_service().reply_keyboard(profile)
@@ -1072,11 +1044,6 @@ def _telegram_api_request(
 def _telegram_chat_matches(configured_chat_id: str, chat: Dict[str, Any]) -> bool:
     return _telegram_connector_support_service().chat_matches(configured_chat_id, chat)
 
-
-def _telegram_parse_allow_from(value: Any) -> List[str]:
-    return _telegram_connector_support_service().parse_allow_from(value)
-
-
 def _telegram_resolve_allow_from(entry: Dict[str, Any]) -> List[str]:
     return _telegram_connector_support_service().resolve_allow_from(
         entry,
@@ -1094,14 +1061,6 @@ def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]
 
 def _telegram_safe_path_token(value: Any) -> str:
     return telegram_safe_path_token(value)
-
-
-def _telegram_extension_from_attachment(attachment: Dict[str, Any], remote_file_path: str) -> str:
-    return _telegram_helper_registry().media_service().extension_from_attachment(attachment, remote_file_path)
-
-
-def _telegram_download_file(bot_token: str, remote_file_path: str, dest_path: Path, max_bytes: int) -> int:
-    return _telegram_helper_registry().media_service().download_file(bot_token, remote_file_path, dest_path, max_bytes)
 
 
 def _telegram_store_attachments(
@@ -1126,15 +1085,6 @@ def _telegram_store_attachments(
 def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str, Any]]) -> str:
     return _telegram_helper_registry().media_service().build_goal_with_attachments(goal, attachments)
 
-
-def _bool_from_any(value: Any, default: bool = False) -> bool:
-    return _telegram_connector_support_service().bool_from_any(value, default)
-
-
-def _connector_metadata(entry: Dict[str, Any]) -> Dict[str, Any]:
-    return _telegram_connector_support_service().connector_metadata(entry)
-
-
 def _connector_assigned_agent_role(entry: Dict[str, Any]) -> str:
     _init()
     return _telegram_connector_support_service().connector_assigned_agent_role(entry)
@@ -1142,11 +1092,6 @@ def _connector_assigned_agent_role(entry: Dict[str, Any]) -> str:
 
 def _connector_paused(entry: Dict[str, Any]) -> bool:
     return _telegram_connector_support_service().connector_paused(entry)
-
-
-def _telegram_strip_prefix(text: str, prefix: str) -> Dict[str, Any]:
-    return _telegram_helper_registry().routing_service().strip_prefix(text, prefix)
-
 
 def _resolve_telegram_autopilot_profile(entry: Dict[str, Any]) -> Dict[str, Any]:
     return _autopilot_profile_service().resolve_telegram_profile(entry)
@@ -1217,19 +1162,6 @@ async def handle_telegram_autopilot_test_message(
         connector_id=connector_id,
         sender_id=sender_id,
         timeout_seconds=timeout_seconds,
-    )
-
-
-def _whatsapp_connector_match(
-    account_sid: str,
-    from_number: str,
-    to_number: str,
-) -> Optional[Dict[str, Any]]:
-    return _whatsapp_service_registry().whatsapp_autopilot_state_service().connector_match(
-        account_sid,
-        from_number,
-        to_number,
-        ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID or None,
     )
 
 

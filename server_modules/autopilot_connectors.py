@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode, quote_plus, parse_qs
+from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.telegram_camera_setup_service import TelegramCameraSetupService
@@ -17,6 +17,7 @@ from server_modules.connectors.telegram_run_dispatch_service import TelegramRunD
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
 from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
+from server_modules.connectors.whatsapp_webhook_service import WhatsAppWebhookService
 from server_modules.installed_skills import query_active_installed_skills
 try:
     from fastapi import Request, Response
@@ -234,6 +235,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 )
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
+_WHATSAPP_WEBHOOK_SERVICE: Optional[WhatsAppWebhookService] = None
 
 
 def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
@@ -286,6 +288,45 @@ def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
             safe_path_token=lambda value: _telegram_safe_path_token(value),
         )
     return _WHATSAPP_RUN_DISPATCH_SERVICE
+
+
+def _whatsapp_webhook_service() -> WhatsAppWebhookService:
+    global _WHATSAPP_WEBHOOK_SERVICE
+    if _WHATSAPP_WEBHOOK_SERVICE is None:
+        _WHATSAPP_WEBHOOK_SERVICE = WhatsAppWebhookService(
+            normalize_number=lambda value: _normalize_whatsapp_number(value),
+            session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            connector_match=lambda account_sid, inbound_from, inbound_to: _whatsapp_connector_match(
+                account_sid,
+                inbound_from,
+                inbound_to,
+            ),
+            resolve_profile=lambda entry: _resolve_whatsapp_autopilot_profile(entry),
+            route_message=lambda body, profile: _telegram_route_message(body, profile),
+            help_text=lambda profile: _whatsapp_help_text(profile),
+            runtime_status_text=lambda workspace_id: _runtime_status_text(workspace_id),
+            approvals_list=lambda limit: _autopilot_approvals_list(limit=limit),
+            approvals_text=lambda payload, prefix: _autopilot_approvals_text(payload, prefix=prefix),
+            approval_resolve=lambda event_id, approved, note: _autopilot_approval_resolve(
+                event_id=event_id,
+                approved=approved,
+                note=note,
+            ),
+            approval_result_text=lambda payload, approved: _autopilot_approval_result_text(payload, approved=approved),
+            create_run=lambda **kwargs: _create_whatsapp_run(**kwargs),
+            run_dispatch_service=lambda: _whatsapp_run_dispatch_service(),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            set_connector_state=lambda connector_id, payload: _set_whatsapp_connector_state(connector_id, payload),
+            persist_state=lambda: _persist_whatsapp_autopilot_state(),
+            increment_processed=lambda: _whatsapp_autopilot_increment_processed(),
+            autopilot_activate=lambda: _whatsapp_autopilot_activate(),
+            mark_inbound=lambda **kwargs: _whatsapp_autopilot_mark_inbound(**kwargs),
+            mark_error=lambda detail: _whatsapp_autopilot_mark_error(detail, source="match_connector"),
+            utc_now_iso=lambda: _utc_now_iso(),
+            default_chat_prefix=DEFAULT_CHAT_PREFIX,
+        )
+    return _WHATSAPP_WEBHOOK_SERVICE
 
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
@@ -1623,6 +1664,12 @@ def _whatsapp_autopilot_mark_inbound(clear_error: bool = True):
             WHATSAPP_AUTOPILOT_STATE["last_error_source"] = None
             WHATSAPP_AUTOPILOT_STATE["consecutive_errors"] = 0
     _persist_whatsapp_autopilot_state()
+
+
+def _whatsapp_autopilot_increment_processed():
+    _init()
+    with WHATSAPP_AUTOPILOT_LOCK:
+        WHATSAPP_AUTOPILOT_STATE["processed_messages"] = int(WHATSAPP_AUTOPILOT_STATE.get("processed_messages") or 0) + 1
 
 
 def _whatsapp_connector_state(credential_id: str) -> Dict[str, Any]:
@@ -3340,15 +3387,7 @@ def _whatsapp_finalize_run_async(
 
 async def _parse_form_urlencoded(request: Request) -> Dict[str, str]:
     raw = await request.body()
-    decoded = raw.decode("utf-8", errors="ignore") if raw else ""
-    parsed = parse_qs(decoded, keep_blank_values=True)
-    out: Dict[str, str] = {}
-    for key, values in parsed.items():
-        if isinstance(values, list) and values:
-            out[str(key)] = str(values[-1])
-        else:
-            out[str(key)] = ""
-    return out
+    return _whatsapp_webhook_service().parse_form_urlencoded(raw)
 
 
 def _telegram_poll_connector(entry: Dict[str, Any]):
@@ -4107,172 +4146,8 @@ async def handle_whatsapp_twilio_webhook(request: Request):
         if provided_secret != ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET:
             return Response(status_code=403, content="forbidden")
 
-    _whatsapp_autopilot_activate()
     form = await _parse_form_urlencoded(request)
-    account_sid = str(form.get("AccountSid") or "").strip()
-    message_sid = str(form.get("MessageSid") or "").strip()
-    inbound_from = _normalize_whatsapp_number(form.get("From"))
-    inbound_to = _normalize_whatsapp_number(form.get("To"))
-    body = str(form.get("Body") or "").strip()
-    session_key = _whatsapp_session_key(inbound_from, inbound_to)
-    trace_id = f"wa:{_telegram_safe_path_token(inbound_to or 'to')}:{_telegram_safe_path_token(message_sid or str(uuid.uuid4())[:10])}"
-
-    _whatsapp_autopilot_mark_inbound(clear_error=True)
-    matched = _whatsapp_connector_match(account_sid, inbound_from, inbound_to)
-    if not matched:
-        detail = (
-            f"No matching WhatsApp connector for inbound message "
-            f"(account_sid={account_sid or 'unknown'}, to={inbound_to or 'unknown'})."
-        )
-        _record_channel_event(
-            channel="whatsapp",
-            direction="inbound",
-            event_type="message",
-            text=body,
-            session_key=session_key,
-            session_id=session_key,
-            message_id=str(message_sid or "").strip() or None,
-            action="unmatched",
-            metadata={"account_sid": account_sid, "message_sid": message_sid, "to_number": inbound_to, "trace_id": trace_id, "delivery_status": "received"},
-        )
-        _record_channel_event(
-            channel="whatsapp",
-            direction="system",
-            event_type="error",
-            text=detail,
-            session_key=session_key,
-            session_id=session_key,
-            parent_id=str(message_sid or "").strip() or None,
-            action="match_connector",
-            metadata={"account_sid": account_sid, "message_sid": message_sid, "to_number": inbound_to, "trace_id": trace_id},
-        )
-        _whatsapp_autopilot_mark_error(detail, source="match_connector")
-        return _whatsapp_twiml("Empyralis is not configured for this WhatsApp number.")
-
-    entry = matched.get("entry") if isinstance(matched.get("entry"), dict) else {}
-    secret = matched.get("secret") if isinstance(matched.get("secret"), dict) else {}
-    connector_id = str(matched.get("connector_id") or "").strip()
-    workspace_id = str(matched.get("workspace_id") or "default")
-    profile = _resolve_whatsapp_autopilot_profile(entry)
-    routed = _telegram_route_message(body, profile)
-    action = str(routed.get("action") or "ignore").strip().lower()
-    _record_channel_event(
-        channel="whatsapp",
-        direction="inbound",
-        event_type="message",
-        text=body,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        session_id=session_key,
-        message_id=str(message_sid or "").strip() or None,
-        action=action,
-        metadata={
-            "connector_id": connector_id,
-            "profile_id": profile.get("id"),
-            "account_sid": account_sid,
-            "message_sid": message_sid,
-            "to_number": inbound_to,
-            "trace_id": trace_id,
-            "delivery_status": "received",
-        },
-    )
-
-    if action == "ignore":
-        return _whatsapp_twiml()
-
-    run_id = ""
-    response_text = ""
-    if action == "help":
-        response_text = _whatsapp_help_text(profile)
-    elif action == "status":
-        response_text = _runtime_status_text(workspace_id)
-    elif action == "approvals":
-        limit = int(routed.get("limit") or 5)
-        payload = _autopilot_approvals_list(limit=limit)
-        response_text = _autopilot_approvals_text(payload, prefix=str(profile.get("prefix") or DEFAULT_CHAT_PREFIX))
-    elif action == "approve":
-        event_id = str(routed.get("event_id") or "").strip()
-        note = str(routed.get("note") or "").strip()
-        payload = _autopilot_approval_resolve(event_id=event_id, approved=True, note=note)
-        response_text = _autopilot_approval_result_text(payload, approved=True)
-    elif action == "reject":
-        event_id = str(routed.get("event_id") or "").strip()
-        note = str(routed.get("note") or "").strip()
-        payload = _autopilot_approval_resolve(event_id=event_id, approved=False, note=note)
-        response_text = _autopilot_approval_result_text(payload, approved=False)
-    elif action == "run":
-        goal = str(routed.get("goal") or "").strip()
-        if not goal:
-            response_text = _whatsapp_help_text(profile)
-            action = "help"
-        else:
-            run_info = _create_whatsapp_run(
-                goal=goal,
-                workspace_id=workspace_id,
-                connector_id=connector_id,
-                from_number=inbound_from,
-                to_number=inbound_to,
-                message_sid=message_sid,
-                account_sid=account_sid,
-                connector_entry=entry,
-            )
-            run_id = str(run_info.get("run_id") or "")
-            if ORION_WHATSAPP_AUTOPILOT_SEND_ACK and run_id:
-                response_text = _whatsapp_run_dispatch_service().ack_text(run_id)
-            elif ORION_WHATSAPP_AUTOPILOT_SEND_ACK:
-                response_text = _whatsapp_run_dispatch_service().ack_text("")
-            else:
-                response_text = ""
-            if run_id:
-                _whatsapp_run_dispatch_service().start_finalize_thread(
-                    run_id,
-                    connector_id,
-                    workspace_id,
-                    profile,
-                    secret,
-                    inbound_from,
-                )
-    else:
-        action = "help"
-        response_text = _whatsapp_help_text(profile)
-
-    state_patch: Dict[str, Any] = {
-        "label": entry.get("label"),
-        "workspace_id": workspace_id,
-        "profile_id": profile.get("id"),
-        "last_action": action,
-        "last_error": None,
-        "last_error_category": None,
-        "last_error_at": None,
-        "last_message_sid": message_sid,
-        "last_from_number": inbound_from,
-        "last_to_number": inbound_to,
-        "last_processed_at": _utc_now_iso(),
-    }
-    if run_id:
-        state_patch["last_run_id"] = run_id
-    _set_whatsapp_connector_state(connector_id, state_patch)
-    with WHATSAPP_AUTOPILOT_LOCK:
-        WHATSAPP_AUTOPILOT_STATE["processed_messages"] = int(WHATSAPP_AUTOPILOT_STATE.get("processed_messages") or 0) + 1
-    _persist_whatsapp_autopilot_state()
-    if response_text:
-        _record_channel_event(
-            channel="whatsapp",
-            direction="outbound",
-            event_type="message",
-            text=response_text,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            run_id=run_id,
-            action=action,
-            metadata={
-                "connector_id": connector_id,
-                "profile_id": profile.get("id"),
-                "message_sid": message_sid,
-                "trace_id": trace_id,
-                "delivery_status": "sent",
-            },
-        )
+    response_text = _whatsapp_webhook_service().handle_inbound(form)
     return _whatsapp_twiml(response_text)
 
 

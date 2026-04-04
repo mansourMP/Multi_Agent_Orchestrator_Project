@@ -774,6 +774,61 @@ This keeps the webhook transport surface smaller while preserving the existing a
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - WhatsApp Webhook Routing Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The WhatsApp webhook routing flow no longer lives inline in the connector monolith.
+
+#### Completed Work
+
+- Added `server_modules/connectors/whatsapp_webhook_service.py` with service-owned:
+  - inbound form parsing
+  - connector matching and profile routing
+  - action execution and response shaping
+  - connector state patching and processed-message tracking
+  - outbound event recording and response text return
+- Updated `server_modules/autopilot_connectors.py` so:
+  - `_parse_form_urlencoded()` delegates to the service
+  - `handle_whatsapp_twilio_webhook()` delegates to the service for the full routing flow
+  - processed-message increment now uses a dedicated `_whatsapp_autopilot_increment_processed()` helper
+- Added focused coverage in:
+  - `server_modules/tests/test_whatsapp_webhook_service.py`
+
+#### Current Truth
+
+- WhatsApp inbound handling, run finalization, and ack shaping now live behind two dedicated connector services.
+- The monolith still owns the top-level webhook entrypoint, but no longer owns the routing logic itself.
+
+#### Open Gaps
+
+- The WhatsApp webhook still shares the Telegram routing command parser.
+- The broader channel monolith still mixes channel transport and shared helpers.
+
+#### Next Required Work
+
+1. Decide whether WhatsApp should have its own routing parser or continue using the Telegram command logic.
+2. Continue extracting the remaining top-level Telegram polling/state patching loop.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - `server_modules/connectors/whatsapp_webhook_service.py`
+  - `server_modules/connectors/whatsapp_run_dispatch_service.py`
+  - `server_modules/autopilot_connectors.py`
+  - `server_modules/tests/test_whatsapp_webhook_service.py`
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Telegram Space-Status MCP Slice Moved Behind Connector Service
 
 #### Stage

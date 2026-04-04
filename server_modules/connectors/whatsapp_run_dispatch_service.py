@@ -45,8 +45,10 @@ class WhatsAppRunDispatchService:
         self.safe_path_token = safe_path_token
 
     def ack_text(self, run_id: str) -> str:
+        if not self.send_ack:
+            return ""
         message = "⏣ Empyralis started your request."
-        if self.send_ack and run_id and self.include_run_meta():
+        if run_id and self.include_run_meta():
             message += f"\nrun_id: {run_id}"
         return message
 

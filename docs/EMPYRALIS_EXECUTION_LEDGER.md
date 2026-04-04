@@ -531,3 +531,60 @@ This still does not unify the separate `runtime_memory.py` subsystem. The health
   - `server_modules.tests.test_direct_chat_service`
   - `server_modules.tests.test_runtime_runs_api_session_manager`
   - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-04 - Health Memory Endpoints Routed Through Memory Service
+
+#### Stage
+
+Stage 1 continues. The health memory API surface now delegates through the canonical memory service instead of owning runtime-memory orchestration inline.
+
+This is still a service-boundary convergence step, not a storage migration. The `/memory/search` and `/memory/upsert` routes still use the `runtime_memory.py` subsystem as their backend.
+
+#### Completed Work
+
+- Expanded [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) with runtime-memory wrappers for:
+  - scoped runtime memory search
+  - runtime memory upsert
+- Updated [server_modules/health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/health_core.py) so:
+  - `memory_search()` delegates to the canonical memory service
+  - `memory_upsert()` delegates to the canonical memory service
+- Added focused runtime-memory wrapper coverage in:
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+- Added focused health-core delegation coverage in:
+  - [server_modules/tests/test_health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_health_core.py)
+
+#### Current Truth
+
+- The workspace/notebook memory path and the health runtime-memory API path now both cross [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py) as the service boundary.
+- [server_modules/health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/health_core.py) no longer owns the search/upsert orchestration logic for runtime memory inline.
+- The runtime-memory backend itself is still [server_modules/runtime_memory.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_memory.py).
+- The memory layer is therefore converged at the service boundary, but still split at the storage/implementation layer.
+
+#### Open Gaps
+
+- `agent_memory.py` and `runtime_memory.py` are still separate implementations behind the same service boundary.
+- The canonical memory service is still partly an adapter layer rather than a unified implementation.
+- The long-term merge strategy between notebook/workspace memory and runtime semantic memory is still undecided.
+
+#### Next Required Work
+
+1. Define the target contract for a single canonical memory layer that can represent both workspace/notebook memory and runtime semantic memory without leaking backend details.
+2. Move additional direct-chat memory composition in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) toward service-level helpers instead of local inline assembly.
+3. Keep reducing hidden runtime-global dependencies as service boundaries become explicit.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/memory_service.py)
+  - [server_modules/health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/health_core.py)
+  - [server_modules/tests/test_memory_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_memory_service.py)
+  - [server_modules/tests/test_health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_health_core.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_health_core`
+  - `server_modules.tests.test_memory_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_memory_notebook`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_agent_machine_mode`

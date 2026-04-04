@@ -3,6 +3,7 @@ from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules import runs_core as runs_core
 from server_modules.health_diagnostics import _build_cognitive_operator_policy, _runtime_skills_snapshot
+from server_modules.memory_service import runtime_memory_search, runtime_memory_upsert
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -41,58 +42,30 @@ async def memory_health():
 
 async def memory_search(body: MemorySearchRequest):
     body.validate_fields()
-    _memory_manager_or_503()
-    bucket = _normalize_memory_bucket(body.bucket, required=False)
-    workspace_id = _normalize_workspace_id(body.workspace_id) or "default"
-    items = _memory_search_scoped(
+    return runtime_memory_search(
         query=body.query.strip(),
-        bucket=bucket,
-        workspace_id=workspace_id,
-        profile_id=str(body.profile_id or "").strip() or None,
-        project_id=str(body.project_id or "").strip() or None,
-        session_key=str(body.session_key or "").strip() or None,
+        bucket=body.bucket,
+        workspace_id=body.workspace_id,
+        profile_id=body.profile_id,
+        project_id=body.project_id,
+        session_key=body.session_key,
         k=int(body.k),
     )
-    return {
-        "ok": True,
-        "query": body.query.strip(),
-        "bucket": bucket,
-        "workspace_id": workspace_id,
-        "count": len(items),
-        "items": items,
-    }
 
 async def memory_upsert(body: MemoryUpsertRequest):
     body.validate_fields()
-    manager = _memory_manager_or_503()
-    bucket = _normalize_memory_bucket(body.bucket, required=True) or "session"
-    workspace_id = _normalize_workspace_id(body.workspace_id) or "default"
-    retention_days = int(body.retention_days or ORION_MEMORY_RETENTION_DAYS_DEFAULT)
-    expires_at = (_utc_now() + timedelta(days=retention_days)).isoformat().replace("+00:00", "Z")
-    metadata = dict(body.metadata) if isinstance(body.metadata, dict) else {}
-    metadata.update(
-        {
-            "bucket": bucket,
-            "workspace_id": workspace_id,
-            "profile_id": str(body.profile_id or "").strip(),
-            "project_id": str(body.project_id or "").strip(),
-            "session_key": str(body.session_key or "").strip(),
-            "source": str(body.source or "api").strip().lower() or "api",
-            "retention_days": retention_days,
-            "expires_at": expires_at,
-        }
+    return runtime_memory_upsert(
+        text=body.text.strip(),
+        bucket=body.bucket,
+        workspace_id=body.workspace_id,
+        profile_id=body.profile_id,
+        project_id=body.project_id,
+        session_key=body.session_key,
+        source=body.source,
+        retention_days=body.retention_days,
+        metadata=body.metadata,
+        memory_id=body.id,
     )
-    if isinstance(body.id, str) and body.id.strip():
-        metadata["id"] = body.id.strip()
-    memory_id = manager.upsert_memory(body.text.strip(), metadata)
-    return {
-        "ok": True,
-        "id": memory_id,
-        "bucket": bucket,
-        "workspace_id": workspace_id,
-        "retention_days": retention_days,
-        "expires_at": expires_at,
-    }
 
 
 def _direct_chat_session_manager_snapshot() -> Dict[str, Any]:

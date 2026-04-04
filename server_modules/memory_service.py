@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Dict, List
 
 from server_modules import agent_memory
+from server_modules import runtime_memory
 
 
 def _normalize_workspace_id(workspace_id: str) -> str:
@@ -152,3 +154,79 @@ def query_memory(query: MemoryQuery) -> MemoryResult:
             context_blocks.append(f"Recent Daily Logs\n{recent_logs[:6000].rstrip()}")
 
     return MemoryResult(items=items, context_blocks=context_blocks)
+
+
+def runtime_memory_search(
+    *,
+    query: str,
+    bucket: str | None = None,
+    workspace_id: str | None = None,
+    profile_id: str | None = None,
+    project_id: str | None = None,
+    session_key: str | None = None,
+    k: int = 5,
+) -> Dict[str, Any]:
+    runtime_memory._memory_manager_or_503()
+    normalized_bucket = runtime_memory._normalize_memory_bucket(bucket, required=False)
+    normalized_workspace_id = runtime_memory._normalize_workspace_id(workspace_id) or "default"
+    items = runtime_memory._memory_search_scoped(
+        query=str(query or "").strip(),
+        bucket=normalized_bucket,
+        workspace_id=normalized_workspace_id,
+        profile_id=str(profile_id or "").strip() or None,
+        project_id=str(project_id or "").strip() or None,
+        session_key=str(session_key or "").strip() or None,
+        k=int(k),
+    )
+    return {
+        "ok": True,
+        "query": str(query or "").strip(),
+        "bucket": normalized_bucket,
+        "workspace_id": normalized_workspace_id,
+        "count": len(items),
+        "items": items,
+    }
+
+
+def runtime_memory_upsert(
+    *,
+    text: str,
+    bucket: str,
+    workspace_id: str | None = None,
+    profile_id: str | None = None,
+    project_id: str | None = None,
+    session_key: str | None = None,
+    source: str | None = None,
+    retention_days: int | None = None,
+    metadata: Dict[str, Any] | None = None,
+    memory_id: str | None = None,
+) -> Dict[str, Any]:
+    manager = runtime_memory._memory_manager_or_503()
+    normalized_bucket = runtime_memory._normalize_memory_bucket(bucket, required=True) or "session"
+    normalized_workspace_id = runtime_memory._normalize_workspace_id(workspace_id) or "default"
+    normalized_retention_days = int(retention_days or runtime_memory.ORION_MEMORY_RETENTION_DAYS_DEFAULT)
+    expires_at = (runtime_memory._utc_now() + timedelta(days=normalized_retention_days)).isoformat().replace("+00:00", "Z")
+    record_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    record_metadata.update(
+        {
+            "bucket": normalized_bucket,
+            "workspace_id": normalized_workspace_id,
+            "profile_id": str(profile_id or "").strip(),
+            "project_id": str(project_id or "").strip(),
+            "session_key": str(session_key or "").strip(),
+            "source": str(source or "api").strip().lower() or "api",
+            "retention_days": normalized_retention_days,
+            "expires_at": expires_at,
+        }
+    )
+    if isinstance(memory_id, str) and memory_id.strip():
+        record_metadata["id"] = memory_id.strip()
+    stored_id = manager.upsert_memory(str(text or "").strip(), record_metadata)
+    return {
+        "ok": True,
+        "id": stored_id,
+        "bucket": normalized_bucket,
+        "workspace_id": normalized_workspace_id,
+        "retention_days": normalized_retention_days,
+        "expires_at": expires_at,
+    }

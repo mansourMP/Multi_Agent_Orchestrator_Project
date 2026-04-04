@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -51,6 +52,86 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertTrue(any(item.metadata.get("key") == "timezone" for item in result.items))
         self.assertTrue(any(block.startswith("Runtime Memory Facts") for block in result.context_blocks))
         self.assertTrue(any(block.startswith("Recent Daily Logs") for block in result.context_blocks))
+
+    def test_runtime_memory_search_wraps_runtime_subsystem_results(self) -> None:
+        with patch.object(memory_service.runtime_memory, "_memory_manager_or_503", return_value=object()) as manager_mock, patch.object(
+            memory_service.runtime_memory,
+            "_normalize_memory_bucket",
+            return_value="session",
+        ) as bucket_mock, patch.object(
+            memory_service.runtime_memory,
+            "_normalize_workspace_id",
+            return_value="default",
+        ) as workspace_mock, patch.object(
+            memory_service.runtime_memory,
+            "_memory_search_scoped",
+            return_value=[{"id": "mem-1", "text": "remember this", "metadata": {"bucket": "session"}}],
+        ) as scoped_mock:
+            result = memory_service.runtime_memory_search(
+                query="remember",
+                bucket="session",
+                workspace_id="default",
+                profile_id="profile-1",
+                project_id="project-1",
+                session_key="session-1",
+                k=4,
+            )
+
+        manager_mock.assert_called_once_with()
+        bucket_mock.assert_called_once_with("session", required=False)
+        workspace_mock.assert_called_once_with("default")
+        scoped_mock.assert_called_once_with(
+            query="remember",
+            bucket="session",
+            workspace_id="default",
+            profile_id="profile-1",
+            project_id="project-1",
+            session_key="session-1",
+            k=4,
+        )
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["id"], "mem-1")
+
+    def test_runtime_memory_upsert_wraps_runtime_subsystem_manager(self) -> None:
+        manager = type("Manager", (), {"upsert_memory": lambda self, text, metadata: metadata.get("id") or "mem-2"})()
+        with patch.object(memory_service.runtime_memory, "_memory_manager_or_503", return_value=manager) as manager_mock, patch.object(
+            memory_service.runtime_memory,
+            "_normalize_memory_bucket",
+            return_value="session",
+        ) as bucket_mock, patch.object(
+            memory_service.runtime_memory,
+            "_normalize_workspace_id",
+            return_value="default",
+        ) as workspace_mock, patch.object(
+            memory_service.runtime_memory,
+            "_utc_now",
+            return_value=datetime(2026, 4, 4, tzinfo=timezone.utc),
+        ), patch.object(
+            memory_service.runtime_memory,
+            "ORION_MEMORY_RETENTION_DAYS_DEFAULT",
+            30,
+        ):
+            result = memory_service.runtime_memory_upsert(
+                text="Remember the current customer migration plan.",
+                bucket="session",
+                workspace_id="default",
+                profile_id="profile-1",
+                project_id="project-1",
+                session_key="session-1",
+                source="api",
+                retention_days=14,
+                metadata={"source_kind": "test"},
+                memory_id="mem-2",
+            )
+
+        manager_mock.assert_called_once_with()
+        bucket_mock.assert_called_once_with("session", required=True)
+        workspace_mock.assert_called_once_with("default")
+        self.assertEqual(result["id"], "mem-2")
+        self.assertEqual(result["bucket"], "session")
+        self.assertEqual(result["workspace_id"], "default")
+        self.assertEqual(result["retention_days"], 14)
+        self.assertTrue(str(result["expires_at"]).endswith("Z"))
 
 
 if __name__ == "__main__":

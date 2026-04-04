@@ -2610,6 +2610,72 @@ This is a shared-runtime cut rather than a channel-specific parser cut. The Tele
   - `server_modules.tests.test_telegram_run_action_service`
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
 
+### 2026-04-05 - Channel Support Helpers Moved Behind Dedicated Support Service
+
+#### Stage
+
+Stage 2 connector convergence continues. Shared channel-formatting and session-key helpers no longer live as duplicated inline helper bodies inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a real ownership cut, not a rename pass. Telegram and WhatsApp registry wiring now consume one support service for error classification, timestamp formatting, session/trace keys, run-meta toggles, log formatting, and one-line text truncation.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_channel_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_support_service.py) to own:
+  - autopilot error categorization
+  - ISO timestamp rendering from epoch values
+  - Telegram autopilot log formatting
+  - Telegram session-key and trace-id construction
+  - WhatsApp session-key construction
+  - single-line text truncation
+  - run-metadata include flag parsing
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - Telegram autopilot service-registry wiring now calls the channel-support service for shared channel helpers
+  - WhatsApp autopilot service-registry wiring now calls the channel-support service for shared channel helpers
+  - helper, approval, runtime-support, transport, terminal, and run-entry service construction now use the channel-support service for shared text/session behavior
+  - dead duplicate helper bodies were removed from the monolith after all internal references were rewired
+
+#### Current Truth
+
+- Shared channel helper ownership is now explicit in [server_modules/connectors/autopilot_channel_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_support_service.py).
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exposes the live compatibility surface, but it no longer owns the duplicated channel helper block for classify/format/session/truncate/meta behavior.
+- Event recording wrappers remain inline in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) because the current test surface still exercises them there.
+- Terminal-compatibility wrappers also remain in place where external tests import them directly.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `1095` lines from `1131` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns event/dead-letter wrapper glue and some remaining top-level adapter composition.
+- The shared event helper surface is still monolith-local even though the formatting/session layer is now separated.
+- More reduction is still needed before the file is only thin adapter and compatibility glue.
+
+#### Next Required Work
+
+1. Decide whether the next bounded cut is channel event/dead-letter ownership or another remaining adapter-composition cluster in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+2. Keep preserving externally imported compatibility wrappers until their test and call surface is moved behind stable services.
+3. Continue using the focused Telegram, WhatsApp, and terminal suites as the regression gate for each extraction.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_channel_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_support_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_autopilot_helper_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_autopilot_workflow_setup_service`
+
 ### 2026-04-05 - Ledger Ordering Correction For Connector Context And Guided Workflow Setup Cut
 
 #### Stage

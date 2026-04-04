@@ -1,13 +1,13 @@
 from __future__ import annotations
 import asyncio, os, json, time, threading, certifi, html, ssl, re, uuid, hashlib
 from pathlib import Path
-from datetime import datetime, timezone
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode, quote_plus
 from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
+from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
 from server_modules.connectors.autopilot_skill_service import AutopilotSkillService
 from server_modules.connectors.autopilot_workflow_setup_service import AutopilotWorkflowSetupService
@@ -225,6 +225,7 @@ _TELEGRAM_TERMINAL_SERVICE: Optional[TelegramTerminalService] = None
 _AUTOPILOT_RUN_ENTRY_SERVICE: Optional[AutopilotRunEntryService] = None
 _AUTOPILOT_RUNTIME_SUPPORT_SERVICE: Optional[AutopilotRuntimeSupportService] = None
 _AUTOPILOT_SKILL_SERVICE: Optional[AutopilotSkillService] = None
+_AUTOPILOT_CHANNEL_SUPPORT_SERVICE: Optional[AutopilotChannelSupportService] = None
 _TELEGRAM_CONNECTOR_SUPPORT_SERVICE: Optional[TelegramConnectorSupportService] = None
 _AUTOPILOT_COMMON_SUPPORT_SERVICE: Optional[AutopilotCommonSupportService] = None
 _TELEGRAM_MENU_SERVICE: Optional[TelegramMenuService] = None
@@ -254,8 +255,8 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             write_json=lambda path, payload: _safe_write_json(path, payload),
             persist_state=lambda: _telegram_service_registry().telegram_autopilot_state_service().persist_state(),
             utc_now_iso=lambda: _utc_now_iso(),
-            classify_error=lambda detail: _classify_autopilot_error(detail),
-            iso_from_epoch=lambda ts: _iso_from_epoch(ts),
+            classify_error=lambda detail: _autopilot_channel_support_service().classify_error(detail),
+            iso_from_epoch=lambda ts: _autopilot_channel_support_service().iso_from_epoch(ts),
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
             thread_alive=lambda: bool(
                 (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else TELEGRAM_AUTOPILOT_THREAD)
@@ -292,7 +293,7 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             send_message=lambda *args, **kwargs: _telegram_transport_service().send_message(*args, **kwargs),
             send_chat_action=lambda *args, **kwargs: _telegram_transport_service().send_chat_action(*args, **kwargs),
             edit_message=lambda *args, **kwargs: _telegram_transport_service().edit_message(*args, **kwargs),
-            autopilot_log=lambda message: _telegram_autopilot_log(message),
+            autopilot_log=lambda message: _autopilot_channel_support_service().telegram_autopilot_log(message),
             autopilot_mark_error=lambda detail, source: _telegram_service_registry().telegram_autopilot_runtime_service().mark_error(
                 detail,
                 source=source,
@@ -353,8 +354,8 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 message_text,
                 profile,
             ),
-            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
-            trace_id_builder=lambda chat_id, update_id, message_id: _telegram_trace_id(chat_id, update_id, message_id),
+            session_key_builder=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
+            trace_id_builder=lambda chat_id, update_id, message_id: _autopilot_channel_support_service().telegram_trace_id(chat_id, update_id, message_id),
             guided_setup_handler=lambda **kwargs: _autopilot_workflow_setup_service().handle_telegram_guided_automation_setup(
                 **kwargs,
                 enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
@@ -405,14 +406,14 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
                 project_root=project_root,
             ),
             installed_skill_query=lambda **kwargs: _telegram_connector_context_service().installed_skill_query(**kwargs),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             create_run=lambda **kwargs: _autopilot_run_entry_service().create_telegram_run(
                 **kwargs,
                 media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
                 trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
                 execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
             ),
-            include_run_meta=lambda: _autopilot_include_run_meta(),
+            include_run_meta=lambda: _autopilot_channel_support_service().include_run_meta(),
             humanize_run_summary=lambda text: _autopilot_runtime_support_service().humanize_telegram_run_summary(text),
             runs_get=lambda run_id: runs.get(run_id),
             latest_run_error_message=lambda run: _autopilot_runtime_support_service().latest_run_error_message(run),
@@ -445,7 +446,7 @@ def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
             read_json=lambda path, default: _safe_read_json(path, default),
             write_json=lambda path, payload: _safe_write_json(path, payload),
             now_iso=lambda: _utc_now_iso(),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             session_key_builder=lambda workspace_id, chat_id: _telegram_helper_registry().profile_service().telegram_profile_key(
                 workspace_id,
                 chat_id,
@@ -473,7 +474,7 @@ def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
             append_channel_event=lambda **kwargs: globals().get("_append_channel_event")(**kwargs),
             utc_now_iso=lambda: _utc_now_iso(),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             json_safe=lambda value: (globals().get("_json_safe") or (lambda item: item))(value),
             dead_letter_lock=_CHANNEL_DEAD_LETTER_LOCK,
             read_dead_letter_json=lambda path, default: _safe_read_json(path, default),
@@ -517,7 +518,7 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             write_json=lambda path, payload: _safe_write_json(path, payload),
             state_file=ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
             utc_now_iso=lambda: _utc_now_iso(),
-            classify_error=lambda detail: _classify_autopilot_error(detail),
+            classify_error=lambda detail: _autopilot_channel_support_service().classify_error(detail),
             normalize_workspace_id=lambda value: _normalize_workspace_id(value),
             load_vault=lambda: load_vault(),
             workspace_visible=lambda workspace_id, requested_ws: _workspace_visible(workspace_id, requested_ws),
@@ -530,8 +531,8 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
             run_timeout_seconds=int(globals().get("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
             max_reply_chars=int(globals().get("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
             send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
-            include_run_meta=lambda: _autopilot_include_run_meta(),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            include_run_meta=lambda: _autopilot_channel_support_service().include_run_meta(),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _telegram_run_dispatch_service().wait_for_terminal_status(
                 run_id,
                 timeout_seconds=timeout_seconds,
@@ -566,7 +567,10 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
                 trust_mode_value=ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
                 execution_target_value=ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
             ),
-            session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
+            session_key_builder=lambda inbound_from, inbound_to: _autopilot_channel_support_service().whatsapp_session_key(
+                inbound_from,
+                inbound_to,
+            ),
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
         )
     return _WHATSAPP_AUTOPILOT_SERVICE_REGISTRY
@@ -657,7 +661,7 @@ def _autopilot_approval_service() -> AutopilotApprovalService:
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
             cognitive_module=lambda: _autopilot_common_support_service().cognitive_module(),
             cognitive_defaults=lambda: _autopilot_common_support_service().cognitive_defaults(),
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             normalize_string_list=lambda value: _autopilot_common_support_service().normalize_string_list(value),
             utc_now_iso=lambda: _utc_now_iso(),
             send_message=lambda **kwargs: _telegram_transport_service().send_message(**kwargs),
@@ -671,7 +675,7 @@ def _telegram_transport_service() -> TelegramTransportService:
         _TELEGRAM_TRANSPORT_SERVICE = TelegramTransportService(
             poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
             http_json_request=lambda *args, **kwargs: http_json_request(*args, **kwargs),
-            session_key=lambda chat_id: _telegram_session_key(chat_id),
+            session_key=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
             reply_keyboard=lambda profile: _telegram_menu_service().reply_keyboard(profile),
             append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
@@ -713,7 +717,7 @@ def _telegram_terminal_service() -> TelegramTerminalService:
                 max_reply_chars=max_reply_chars,
             ),
             runs_get=lambda run_id: runs.get(run_id) if isinstance(runs, dict) else None,
-            session_key=lambda chat_id: _telegram_session_key(chat_id),
+            session_key=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
             safe_path_token=lambda value: _telegram_safe_path_token(value),
             send_message=lambda **kwargs: _telegram_transport_service().send_message(**kwargs),
             set_connector_state=lambda connector_id, patch: _telegram_service_registry().telegram_autopilot_state_service().set_connector_state(
@@ -757,8 +761,8 @@ def _autopilot_run_entry_service() -> AutopilotRunEntryService:
             apply_execution_route_metadata=lambda metadata, route: apply_execution_route_metadata(metadata, route),
             create_run=lambda **kwargs: create_run(**kwargs),
             record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
-            telegram_session_key=lambda chat_id: _telegram_session_key(chat_id),
-            whatsapp_session_key=lambda from_number, to_number: _whatsapp_session_key(from_number, to_number),
+            telegram_session_key=lambda chat_id: _autopilot_channel_support_service().telegram_session_key(chat_id),
+            whatsapp_session_key=lambda from_number, to_number: _autopilot_channel_support_service().whatsapp_session_key(from_number, to_number),
             inherit_owner_user_id=lambda owner_user_id=None: runtime_config.agent_machine_inherited_owner_user_id(owner_user_id),
             agent_machine_full_trust_enabled=lambda owner_user_id: runtime_config.agent_machine_full_trust_enabled(owner_user_id),
             telegram_runs_started=lambda: (
@@ -789,7 +793,7 @@ def _autopilot_runtime_support_service() -> AutopilotRuntimeSupportService:
             local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
             local_claimed_runs=LOCAL_CLAIMED_RUNS,
             local_worker_registry=LOCAL_WORKER_REGISTRY,
-            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
             non_retryable_run_error_hints=list(_AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS),
         )
     return _AUTOPILOT_RUNTIME_SUPPORT_SERVICE
@@ -805,6 +809,19 @@ def _autopilot_skill_service() -> AutopilotSkillService:
             runtime_skills_snapshot_getter=lambda: globals().get("_runtime_skills_snapshot"),
         )
     return _AUTOPILOT_SKILL_SERVICE
+
+
+def _autopilot_channel_support_service() -> AutopilotChannelSupportService:
+    global _AUTOPILOT_CHANNEL_SUPPORT_SERVICE
+    if _AUTOPILOT_CHANNEL_SUPPORT_SERVICE is None:
+        _AUTOPILOT_CHANNEL_SUPPORT_SERVICE = AutopilotChannelSupportService(
+            error_category_hints=_AUTOPILOT_ERROR_CATEGORY_HINTS,
+            utc_now_iso=lambda: _utc_now_iso(),
+            normalize_whatsapp_number=lambda value: _whatsapp_service_registry().whatsapp_transport_service().normalize_number(value),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+            env_get=lambda key, default="": os.getenv(key, default),
+        )
+    return _AUTOPILOT_CHANNEL_SUPPORT_SERVICE
 
 def _load_telegram_autopilot_state() -> None:
     _telegram_service_registry().telegram_autopilot_state_service().load_state()
@@ -850,27 +867,6 @@ def _init():
     for k in _SYNC_SERVER_GLOBALS:
         if hasattr(_server, k):
             globals()[k] = getattr(_server, k)
-
-
-def _classify_autopilot_error(detail: Any) -> str:
-    text = str(detail or "").strip().lower()
-    if not text:
-        return "unknown"
-    for hint, category in _AUTOPILOT_ERROR_CATEGORY_HINTS:
-        if hint in text:
-            return category
-    return "unknown"
-
-
-def _iso_from_epoch(ts: float) -> str:
-    value = float(ts)
-    return datetime.fromtimestamp(value, timezone.utc).isoformat().replace("+00:00", "Z")
-
-# --- COPIED LOGIC ---
-def _telegram_autopilot_log(message: str):
-    ts = _utc_now_iso()
-    print(f"[telegram-autopilot {ts}] {message}", flush=True)
-
 
 def _record_channel_event(
     channel: str,
@@ -971,26 +967,6 @@ def _record_channel_event_throttled(
     )
 
 
-def _telegram_session_key(chat_id: str) -> str:
-    cid = str(chat_id or "").strip()
-    return f"telegram:{cid}" if cid else "telegram:unknown"
-
-
-def _telegram_trace_id(chat_id: str, update_id: Any, message_id: Any = "") -> str:
-    cid = _telegram_safe_path_token(chat_id or "unknown")
-    upid = _telegram_safe_path_token(update_id or "0")
-    mid = _telegram_safe_path_token(message_id or "")
-    if mid:
-        return f"tg:{cid}:{upid}:{mid}"
-    return f"tg:{cid}:{upid}"
-
-
-def _whatsapp_session_key(from_number: str, to_number: str) -> str:
-    sender = _whatsapp_service_registry().whatsapp_transport_service().normalize_number(from_number) or "whatsapp:unknown"
-    receiver = _whatsapp_service_registry().whatsapp_transport_service().normalize_number(to_number) or "whatsapp:unknown"
-    return f"whatsapp:{sender}->{receiver}"
-
-
 def _telegram_menu_service() -> TelegramMenuService:
     global _TELEGRAM_MENU_SERVICE
     if _TELEGRAM_MENU_SERVICE is None:
@@ -1032,18 +1008,6 @@ def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str,
 
 def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
     return _telegram_helper_registry().routing_service().route_message(raw_text, profile)
-
-def _truncate_one_line(text: str, limit: int) -> str:
-    flat = re.sub(r"\s+", " ", str(text or "")).strip()
-    cap = max(120, limit)
-    if len(flat) <= cap:
-        return flat
-    return flat[: cap - 1].rstrip() + "…"
-
-
-def _autopilot_include_run_meta() -> bool:
-    raw = str(os.getenv("ORION_AUTOPILOT_INCLUDE_RUN_META", "0") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 async def handle_telegram_send_message(

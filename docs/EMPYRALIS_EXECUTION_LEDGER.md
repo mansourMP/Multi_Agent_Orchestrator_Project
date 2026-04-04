@@ -1305,6 +1305,79 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Endpoint And Run-Bridge Wrapper Band Reduced
+
+#### Stage
+
+Stage 3 continues. The connector monolith no longer owns the internal-only wrapper band around WhatsApp form parsing, WhatsApp finalize handoff, Telegram poll dispatch entry, and machine-mode helper forwarding.
+
+This cut also reduced dependence on the remaining stable run-entry wrappers by wiring internal registries directly to the extracted run-entry and run-dispatch services wherever compatibility was not required.
+
+#### Completed Work
+
+- Rewired the Telegram service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted run-entry service directly for:
+  - Telegram run creation
+  - wait auto-approval checks
+  - pending-confirmation payload resolution
+- Rewired the WhatsApp service registry in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted run-entry service directly for WhatsApp run creation.
+- Rewired the Telegram terminal service in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so it now calls the extracted run-entry service directly for Telegram run creation and the extracted run-dispatch service directly for terminal wait behavior.
+- Inlined the WhatsApp webhook form parse path inside `handle_whatsapp_twilio_webhook()` instead of routing through a local `_parse_form_urlencoded()` wrapper.
+- Removed the obsolete internal-only wrapper band from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), including:
+  - `_whatsapp_finalize_run_async()`
+  - `_parse_form_urlencoded()`
+  - `_telegram_poll_connector()`
+  - `_agent_machine_owned_entrypoint_owner_user_id()`
+  - `_agent_machine_full_trust_for_run()`
+  - `_pending_confirmation_payload()`
+  - `_autopilot_can_auto_approve_wait()`
+- Restored only the actually externalized runtime entrypoints that still remain part of the runtime surface:
+  - `_run_telegram_autopilot_forever()`
+  - `_load_telegram_autopilot_state()`
+  - `_load_whatsapp_autopilot_state()`
+  - `_telegram_autopilot_snapshot()`
+  - `_whatsapp_autopilot_snapshot()`
+  - `_whatsapp_autopilot_activate()`
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now uses the extracted run-entry and run-dispatch services directly for more of its internal wiring.
+- The deleted internal wrapper names are fully gone from the monolith source.
+- The monolith line count dropped from `1737` to `1723` after restoring the true runtime-facing compatibility entrypoints.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still carries the remaining stable wrapper shell for externally exercised run-entry helpers such as `_create_telegram_run()`, `_create_whatsapp_run()`, and `_wait_for_run_terminal_status()`.
+- Some runtime-facing compatibility functions remain intentionally because other modules still import them directly.
+- The file is close to a real composition shell, but still not fully reduced to endpoint-plus-registry wiring.
+
+#### Next Required Work
+
+1. Re-check the remaining stable wrapper names in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) against actual cross-module callers and delete any that no longer have a real external dependency.
+2. Keep the remaining compatibility shell narrow: only preserve names that are still imported by runtime modules or exercised by compatibility tests.
+3. Continue reducing mixed-channel glue while avoiding breakage in `runtime_config.py`, `runs_core.py`, and the machine-mode test surface.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_run_entry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_run_entry_service.py)
+  - [server_modules/connectors/telegram_terminal_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_terminal_service.py)
+  - [server_modules/connectors/telegram_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_autopilot_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_autopilot_service_registry.py)
+  - [server_modules/connectors/whatsapp_webhook_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_service.py)
+  - [server_modules/__init__.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/__init__.py)
+  - [server_modules/runtime_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_config.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/health_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/health_core.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_run_entry_service`
+  - `server_modules.tests.test_telegram_terminal_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_webhook_service`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Approval And Telegram Transport Wrapper Band Removed
 
 #### Stage

@@ -383,7 +383,12 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             ),
             installed_skill_query=lambda **kwargs: _telegram_installed_skill_query(**kwargs),
             truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
-            create_run=lambda **kwargs: _create_telegram_run(**kwargs),
+            create_run=lambda **kwargs: _autopilot_run_entry_service().create_telegram_run(
+                **kwargs,
+                media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+                trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+                execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
+            ),
             include_run_meta=lambda: _autopilot_include_run_meta(),
             humanize_run_summary=lambda text: _humanize_telegram_run_summary(text),
             runs_get=lambda run_id: runs.get(run_id),
@@ -392,8 +397,8 @@ def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
             friendly_run_error=lambda error: _friendly_autopilot_run_error(error),
             summarize_run_terminal_result=lambda run, limit: _summarize_run_terminal_result(run, limit),
             local_companion_snapshot=lambda: _local_companion_snapshot(),
-            can_auto_approve_wait=lambda run: _autopilot_can_auto_approve_wait(run),
-            pending_confirmation_payload=lambda run: _pending_confirmation_payload(run),
+            can_auto_approve_wait=lambda run: _autopilot_run_entry_service().can_auto_approve_wait(run),
+            pending_confirmation_payload=lambda run: _autopilot_run_entry_service().pending_confirmation_payload(run),
             sleep=lambda seconds: time.sleep(seconds),
         )
     return _TELEGRAM_AUTOPILOT_SERVICE_REGISTRY
@@ -525,7 +530,11 @@ def _whatsapp_service_registry() -> WhatsAppAutopilotServiceRegistry:
                 payload,
                 approved=approved,
             ),
-            create_run=lambda **kwargs: _create_whatsapp_run(**kwargs),
+            create_run=lambda **kwargs: _autopilot_run_entry_service().create_whatsapp_run(
+                **kwargs,
+                trust_mode_value=ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
+                execution_target_value=ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
+            ),
             session_key_builder=lambda inbound_from, inbound_to: _whatsapp_session_key(inbound_from, inbound_to),
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
         )
@@ -669,8 +678,13 @@ def _telegram_terminal_service() -> TelegramTerminalService:
             workspace_connector_context=lambda **kwargs: _telegram_workspace_connector_context(**kwargs),
             build_goal_with_connector_context=lambda goal, prompt: _telegram_build_goal_with_connector_context(goal, prompt),
             installed_skill_query=lambda **kwargs: _telegram_installed_skill_query(**kwargs),
-            create_run=lambda **kwargs: _create_telegram_run(**kwargs),
-            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
+            create_run=lambda **kwargs: _autopilot_run_entry_service().create_telegram_run(
+                **kwargs,
+                media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+                trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
+                execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
+            ),
+            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _telegram_run_dispatch_service().wait_for_terminal_status(
                 run_id,
                 timeout_seconds=timeout_seconds,
                 max_reply_chars=max_reply_chars,
@@ -764,6 +778,26 @@ def _whatsapp_autopilot_state_service():
 
 def _telegram_autopilot_state_service():
     return _telegram_service_registry().telegram_autopilot_state_service()
+
+
+def _load_telegram_autopilot_state() -> None:
+    _telegram_service_registry().telegram_autopilot_state_service().load_state()
+
+
+def _load_whatsapp_autopilot_state() -> None:
+    _whatsapp_service_registry().whatsapp_autopilot_state_service().load_state()
+
+
+def _telegram_autopilot_snapshot() -> Dict[str, Any]:
+    return _telegram_service_registry().telegram_autopilot_state_service().snapshot(include_connectors=True)
+
+
+def _whatsapp_autopilot_snapshot() -> Dict[str, Any]:
+    return _whatsapp_service_registry().whatsapp_autopilot_state_service().snapshot(include_connectors=True)
+
+
+def _whatsapp_autopilot_activate() -> None:
+    _whatsapp_service_registry().whatsapp_autopilot_state_service().activate()
 
 
 def _telegram_autopilot_runtime_service():
@@ -1589,26 +1623,6 @@ def _create_telegram_run(
     )
 
 
-def _agent_machine_owned_entrypoint_owner_user_id(owner_user_id: Optional[str] = None) -> str:
-    _init()
-    return _autopilot_run_entry_service().inherit_owner_user_id(owner_user_id)
-
-
-def _agent_machine_full_trust_for_run(run: Dict[str, Any]) -> bool:
-    _init()
-    return _autopilot_run_entry_service().full_trust_for_run(run)
-
-
-def _pending_confirmation_payload(run: Dict[str, Any]) -> Dict[str, Any]:
-    _init()
-    return _autopilot_run_entry_service().pending_confirmation_payload(run)
-
-
-def _autopilot_can_auto_approve_wait(run: Dict[str, Any]) -> bool:
-    _init()
-    return _autopilot_run_entry_service().can_auto_approve_wait(run)
-
-
 def _wait_for_run_terminal_status(
     run_id: str,
     timeout_seconds: Optional[int] = None,
@@ -1660,43 +1674,10 @@ def _whatsapp_connector_match(
     )
 
 
-def _whatsapp_finalize_run_async(
-    run_id: str,
-    connector_id: str,
-    workspace_id: str,
-    profile: Dict[str, Any],
-    secret: Dict[str, Any],
-    reply_to_number: str,
-):
-    _whatsapp_run_dispatch_service().finalize_run_async(
-        run_id,
-        connector_id,
-        workspace_id,
-        profile,
-        secret,
-        reply_to_number,
-    )
-
-
-async def _parse_form_urlencoded(request: Request) -> Dict[str, str]:
-    raw = await request.body()
-    return _whatsapp_webhook_service().parse_form_urlencoded(raw)
-
-
-def _telegram_poll_connector(entry: Dict[str, Any]):
-    _telegram_connector_poll_service().poll_connector(entry)
-
-
-def _run_telegram_autopilot_forever():
-    _init()
-    _telegram_autopilot_supervisor_service().run_forever()
-
-
-
 # --- COPIED ENDPOINTS ---
 async def handle_whatsapp_twilio_webhook(request: Request):
     _init()
-    form = await _parse_form_urlencoded(request)
+    form = _whatsapp_webhook_service().parse_form_urlencoded(await request.body())
     provided_secret = str(
         request.query_params.get("secret")
         or request.headers.get("x-orion-webhook-secret")
@@ -1712,6 +1693,11 @@ async def handle_whatsapp_twilio_webhook(request: Request):
     if int(result.get("status_code") or 200) == 403:
         return Response(status_code=403, content=str(result.get("content") or "forbidden"))
     return _whatsapp_twiml(str(result.get("text") or ""))
+
+
+def _run_telegram_autopilot_forever():
+    _init()
+    _telegram_autopilot_supervisor_service().run_forever()
 
 
 async def handle_telegram_autopilot_status():

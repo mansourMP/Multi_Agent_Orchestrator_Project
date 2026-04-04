@@ -159,6 +159,75 @@ def selected_execution_target_from_context(context: Optional[Dict[str, Any]]) ->
     return EXECUTION_TARGET_LOCAL_COMPANION if ORION_LOCAL_COMPANION_ENABLED else EXECUTION_TARGET_CLOUD
 
 
+def _agent_machine_owner_user_id_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
+    payload = metadata if isinstance(metadata, dict) else {}
+    return str(payload.get("owner_user_id") or "").strip()
+
+
+def _agent_machine_full_trust_for_context(context: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(context, dict):
+        return False
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return agent_machine_full_trust_enabled(_agent_machine_owner_user_id_from_metadata(metadata))
+
+
+def _apply_agent_machine_bypass_to_tool_policy_evaluation(
+    evaluation: Dict[str, Any],
+    *,
+    context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(evaluation, dict) or not _agent_machine_full_trust_for_context(context):
+        return evaluation
+    execution_decision = str(evaluation.get("execution_decision") or "").strip().lower()
+    if execution_decision not in {"require_confirmation", "approval_required"}:
+        return evaluation
+    patched = dict(evaluation)
+    patched["execution_decision"] = "allow"
+    patched["decision"] = "allow"
+    reason = str(patched.get("reason") or "").strip()
+    bypass_reason = "Agent machine mode bypassed confirmation."
+    patched["reason"] = f"{reason} {bypass_reason}".strip() if reason else bypass_reason
+    patched["approval_bypassed"] = True
+    return patched
+
+
+def _apply_agent_machine_bypass_to_action_policy(
+    action_policy: Dict[str, Any],
+    *,
+    context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(action_policy, dict) or not _agent_machine_full_trust_for_context(context):
+        return action_policy
+    if not bool(action_policy.get("requires_confirmation")):
+        return action_policy
+    patched = dict(action_policy)
+    evaluated: List[Dict[str, Any]] = []
+    for item in action_policy.get("evaluated") if isinstance(action_policy.get("evaluated"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        execution_decision = str(item.get("execution_decision") or "").strip().lower()
+        if execution_decision in {"require_confirmation", "approval_required"}:
+            next_item = dict(item)
+            next_item["execution_decision"] = "allow"
+            next_item["decision"] = "allow"
+            reason = str(next_item.get("reason") or "").strip()
+            bypass_reason = "Agent machine mode bypassed confirmation."
+            next_item["reason"] = f"{reason} {bypass_reason}".strip() if reason else bypass_reason
+            next_item["approval_bypassed"] = True
+            evaluated.append(next_item)
+        else:
+            evaluated.append(item)
+    patched["evaluated"] = evaluated
+    patched["confirmation_required_actions"] = []
+    patched["approval_actions"] = []
+    patched["requires_confirmation"] = False
+    patched["confirmation_reason"] = ""
+    patched["requires_approval"] = False
+    patched["approval_reason"] = ""
+    patched["approval_bypassed"] = True
+    return patched
+
+
 def _workflow_definition_from_context(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     raw = context.get("workflow_definition")
     if isinstance(raw, dict) and isinstance(raw.get("nodes"), list):
@@ -751,6 +820,7 @@ def _compute_tool_policy_precheck(context: Dict[str, Any]) -> Dict[str, Any]:
         elif skill_contract.get("declared_runtime_tools"):
             item = dict(item)
             item["skill_declared"] = tool_id in set(skill_contract.get("declared_runtime_tools") or [])
+        item = _apply_agent_machine_bypass_to_tool_policy_evaluation(item, context=context)
         items.append(item)
         execution_decision = str(item.get("execution_decision") or "").strip().lower()
         clean_tool = str(item.get("tool_id") or tool_id).strip().lower()
@@ -1013,6 +1083,104 @@ def _build_workflow_agent_system_prompt(config: Dict[str, Any]) -> str:
     dynamic_allowed = tools.get("dynamic_allowed") if isinstance(tools.get("dynamic_allowed"), list) else []
     tool_lines = [str(item).strip() for item in dynamic_allowed if str(item).strip()]
     return build_operator_system_prompt(availability_lines, tool_lines)
+
+
+def _workflow_agent_identity(config: Dict[str, Any]) -> Dict[str, Any]:
+    identity = config.get("identity") if isinstance(config.get("identity"), dict) else {}
+    return identity if isinstance(identity, dict) else {}
+
+
+def _workflow_json_path_from_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    patterns = (
+        r"\bfield\s+path\s*[:=]\s*['\"]?([a-zA-Z0-9_.]+)['\"]?",
+        r"\bextract(?:\s+the)?\s+['\"]?([a-zA-Z0-9_.]+)['\"]?\s+field\b",
+        r"\bextract(?:\s+the)?\s+field\s+['\"]?([a-zA-Z0-9_.]+)['\"]?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip()
+    if re.fullmatch(r"[a-zA-Z0-9_.]+", text):
+        return text
+    return ""
+
+
+def _workflow_agent_requested_json_path(label: str, config: Dict[str, Any]) -> str:
+    identity = _workflow_agent_identity(config)
+    for candidate in (
+        identity.get("output_contract"),
+        identity.get("goal"),
+        identity.get("success_condition"),
+        label,
+    ):
+        path = _workflow_json_path_from_text(candidate)
+        if path:
+            return path
+    return ""
+
+
+def _workflow_parse_structured_payload(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _workflow_json_lookup(payload: Any, path: str) -> Any:
+    current = payload
+    for part in [item for item in str(path or "").split(".") if item]:
+        if isinstance(current, dict):
+            if part not in current:
+                raise KeyError(part)
+            current = current[part]
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index]
+            continue
+        raise KeyError(part)
+    return current
+
+
+def _workflow_agent_fast_extract(
+    *,
+    label: str,
+    config: Dict[str, Any],
+    current_text: str,
+    state: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    field_path = _workflow_agent_requested_json_path(label, config)
+    if not field_path:
+        return None
+    last_data = state.get("last_data") if isinstance(state.get("last_data"), dict) else {}
+    candidates = [
+        last_data.get("output"),
+        last_data.get("http", {}).get("json") if isinstance(last_data.get("http"), dict) else None,
+        current_text,
+    ]
+    for candidate in candidates:
+        parsed = _workflow_parse_structured_payload(candidate)
+        if parsed is None:
+            continue
+        try:
+            value = _workflow_json_lookup(parsed, field_path)
+        except Exception:
+            continue
+        text = _workflow_text_payload(value)
+        return {
+            "field_path": field_path,
+            "value": _json_safe(value),
+            "text": text,
+        }
+    return None
 
 
 def _resolve_agent_generation_state(base_context: Dict[str, Any], config: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -3692,7 +3860,7 @@ def _workflow_execute_local_tool(
         if isinstance(permissions.get("file_mount_grants"), list)
         else context.get("metadata", {}).get("file_mount_grants")
     )
-    if variant in {"shell", "browser", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
+    if variant in {"shell", "browser", "computer", "code"} and execution_target == EXECUTION_TARGET_CLOUD:
         raise RuntimeError(f"{variant.title()} tool nodes cannot target cloud directly; use local_companion or auto.")
     if variant in {"shell", "code"}:
         has_command = bool(str(config.get("command") or "").strip())
@@ -3791,6 +3959,21 @@ def _workflow_execute_local_tool(
         }
         if not operation["url"]:
             raise RuntimeError("Browser tool node requires a URL.")
+    elif variant == "computer":
+        operation = {
+            "tool": "computer_control",
+            "action": str(config.get("action") or "").strip(),
+            "region": config.get("region"),
+            "x": config.get("x"),
+            "y": config.get("y"),
+            "text": config.get("text"),
+            "script": config.get("script"),
+            "title": config.get("title"),
+            "message": config.get("message"),
+            "name_or_path": config.get("name_or_path"),
+        }
+        if not operation["action"]:
+            raise RuntimeError("Computer tool node requires an action.")
     else:
         raise RuntimeError(f"Local tool variant '{variant}' is not supported.")
 
@@ -3846,6 +4029,7 @@ def _workflow_final_result_data(
             "edge_count": len(workflow_definition.get("edges") or []),
             "final_node_id": final_node_id,
             "run_id": run_id,
+            "final_data": _json_safe(final_data) if isinstance(final_data, dict) and final_data else None,
         },
     }
     if isinstance(final_data, dict) and final_data:
@@ -3945,37 +4129,73 @@ def _execute_workflow_graph(
                 )
 
             elif node_type == "agent":
-                execution_context, agent_state = _resolve_agent_generation_state(context, config)
-                system_prompt = _build_workflow_agent_system_prompt(config)
-                user_input = (
-                    f"Workflow context:\n{current_text or 'No previous node output.'}\n\n"
-                    f"Current workflow node: {label}\n"
-                    "Produce the result for this node only."
+                fast_extract = _workflow_agent_fast_extract(
+                    label=label,
+                    config=config,
+                    current_text=current_text,
+                    state=state,
                 )
-                text = generate_with_candidate_failover(agent_state, execution_context, log_queue, system_prompt, user_input)
-                current_text = text
-                state["last_text"] = text
-                state["last_data"] = {
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "variant": variant,
-                    "text": text,
-                }
-                state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
-                state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
-                emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
-                update_node_state(
-                    run_id,
-                    node_id,
-                    status="succeeded",
-                    finalize=True,
-                    output_preview=_node_preview_text(text),
-                    summary=f"Agent completed: {label}",
-                    detail={
-                        "provider": state.get("active_provider"),
-                        "model": state.get("active_model"),
-                    },
-                )
+                if fast_extract is not None:
+                    text = str(fast_extract.get("text") or "").strip()
+                    current_text = text
+                    state["last_text"] = text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "text": text,
+                        "output": fast_extract.get("value"),
+                        "field_path": fast_extract.get("field_path"),
+                        "extracted_without_llm": True,
+                    }
+                    emit_log(
+                        log_queue,
+                        "info",
+                        text,
+                        event="workflow_agent_output",
+                        data={"node_id": node_id, "field_path": fast_extract.get("field_path"), "extracted_without_llm": True},
+                    )
+                    update_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(text),
+                        summary=f"Agent completed: {label}",
+                        detail={"field_path": fast_extract.get("field_path"), "extracted_without_llm": True},
+                    )
+                else:
+                    execution_context, agent_state = _resolve_agent_generation_state(context, config)
+                    system_prompt = _build_workflow_agent_system_prompt(config)
+                    user_input = (
+                        f"Workflow context:\n{current_text or 'No previous node output.'}\n\n"
+                        f"Current workflow node: {label}\n"
+                        "Produce the result for this node only."
+                    )
+                    text = generate_with_candidate_failover(agent_state, execution_context, log_queue, system_prompt, user_input)
+                    current_text = text
+                    state["last_text"] = text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "text": text,
+                    }
+                    state["active_provider"] = str(agent_state.get("active_provider") or agent_state.get("provider") or state.get("active_provider") or "openai")
+                    state["active_model"] = str(agent_state.get("active_model") or agent_state.get("selected_model") or state.get("active_model") or CODEX_MODEL)
+                    emit_log(log_queue, "info", text, event="workflow_agent_output", data={"node_id": node_id})
+                    update_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=_node_preview_text(text),
+                        summary=f"Agent completed: {label}",
+                        detail={
+                            "provider": state.get("active_provider"),
+                            "model": state.get("active_model"),
+                        },
+                    )
 
             elif node_type == "decision":
                 expression = str(config.get("expression") or "").strip() or "False"
@@ -4027,6 +4247,48 @@ def _execute_workflow_graph(
                         f"Current workflow context: {current_text or 'No current output.'} "
                         f"Reply with one of: {option_text}."
                     ).strip()
+                if variant == "approval" and _agent_machine_full_trust_for_context(context):
+                    current_text = f"{title}: approved"
+                    summary_text = f"{title}: approved"
+                    output_preview = _node_preview_text(current_text)
+                    state["last_text"] = current_text
+                    state["last_data"] = {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "variant": variant,
+                        "decision": "proceed",
+                        "raw_decision": "Proceed",
+                        "note": "Agent machine mode bypassed confirmation.",
+                        "human_response": {
+                            "approved": True,
+                            "decision": "proceed",
+                            "raw_decision": "Proceed",
+                            "note": "Agent machine mode bypassed confirmation.",
+                        },
+                    }
+                    emit_log(
+                        log_queue,
+                        "info",
+                        current_text,
+                        event="workflow_human_bypassed",
+                        data={"node_id": node_id, "variant": variant or "approval"},
+                    )
+                    update_node_state(
+                        run_id,
+                        node_id,
+                        status="succeeded",
+                        finalize=True,
+                        output_preview=output_preview,
+                        summary=summary_text,
+                        detail={
+                            "decision": "proceed",
+                            "note": "Agent machine mode bypassed confirmation.",
+                            "variant": variant or "approval",
+                            "decision_options": decision_options,
+                        },
+                        waiting_for_approval=False,
+                    )
+                    continue
                 update_node_state(
                     run_id,
                     node_id,
@@ -4278,6 +4540,13 @@ def _execute_workflow_graph(
                 if str(config.get("capability") or "").strip():
                     capability_ids = [str(config.get("capability") or "").strip()]
                 tool_id = _workflow_tool_policy_tool_id(variant, config)
+                if tool_id == "execute_shell_command":
+                    raw_command = str(config.get("command") or "").strip()
+                    raw_argv = list(config.get("argv") or []) if isinstance(config.get("argv"), list) else None
+                    if raw_command:
+                        policy_metadata["raw_shell_command"] = raw_command
+                    if raw_argv:
+                        policy_metadata["raw_shell_argv"] = raw_argv
                 if tool_id:
                     evaluation = evaluate_tool_policy_decision(
                         tool_id=tool_id,
@@ -4286,6 +4555,7 @@ def _execute_workflow_graph(
                         metadata=policy_metadata,
                         capability_ids=capability_ids,
                     )
+                    evaluation = _apply_agent_machine_bypass_to_tool_policy_evaluation(evaluation, context=context)
                     _append_run_tool_policy_audit(
                         run_id,
                         evaluation,
@@ -4366,6 +4636,14 @@ def _execute_workflow_graph(
                         "node_type": node_type,
                         "variant": variant,
                         "tool_id": tool_id or "http",
+                        "http": {
+                            "status": int(response.get("status") or 0),
+                            "headers": _json_safe(response.get("headers") or {}),
+                            "text": str(response.get("text") or ""),
+                            "json": _json_safe(response.get("json")) if response.get("json") is not None else None,
+                            "url": url,
+                            "method": method,
+                        },
                         "output": _json_safe(tool_output),
                     }
                     emit_log(log_queue, "info", f"HTTP tool completed: {label}", event="workflow_tool_http", data={"node_id": node_id, "url": url, "method": method})
@@ -4718,6 +4996,7 @@ def _execute_orion_dag_node(
             metadata,
             metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
+        action_policy = _apply_agent_machine_bypass_to_action_policy(action_policy, context=context)
         state["action_policy"] = action_policy
         emit_log(
             log_queue,
@@ -4865,6 +5144,7 @@ def _execute_orion_dag_node(
             metadata,
             metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
+        action_policy = _apply_agent_machine_bypass_to_action_policy(action_policy, context=context)
         state["action_policy"] = action_policy
         emit_log(
             log_queue,

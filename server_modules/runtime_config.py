@@ -498,6 +498,10 @@ ORION_AUTH_MODE = (config_str("ORION_AUTH_MODE", "codex").strip().lower() or "co
 ORION_DISABLE_OPENAI_API_KEY = config_bool("ORION_DISABLE_OPENAI_API_KEY", True)
 ORION_SINGLE_AGENT_MODE = _compat_env("EMPYRALIS_SINGLE_AGENT_MODE", "ORION_SINGLE_AGENT_MODE", "0") == "1"
 ORION_SINGLE_AGENT_ROLE = "orchestrator"
+AGENT_MACHINE_MODE = config_str("AGENT_MACHINE_MODE", "personal").strip().lower() or "personal"
+if AGENT_MACHINE_MODE not in {"personal", "agent"}:
+    AGENT_MACHINE_MODE = "personal"
+AGENT_MACHINE_OWNER = config_str("AGENT_MACHINE_OWNER", "").strip()
 CODEX_AUTH_FILE = Path(
     config_str("CODEX_AUTH_FILE", str(Path.home() / ".codex" / "auth.json"))
 ).expanduser()
@@ -520,6 +524,17 @@ VAULT_FILE = _resolve_state_file(
     "vault/credentials.json",
     ".orion_credentials_vault.json",
 )
+
+
+def agent_machine_full_trust_enabled(owner_user_id: Optional[str] = None) -> bool:
+    configured_owner = str(AGENT_MACHINE_OWNER or "").strip()
+    effective_owner = str(owner_user_id or "").strip()
+    return (
+        AGENT_MACHINE_MODE == "agent"
+        and bool(configured_owner)
+        and bool(effective_owner)
+        and secrets.compare_digest(effective_owner, configured_owner)
+    )
 VAULT_KEY_FILE = _resolve_state_file(
     "CREDENTIAL_VAULT_KEY_FILE",
     "vault/key",

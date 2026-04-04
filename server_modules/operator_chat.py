@@ -4,8 +4,10 @@ import asyncio
 import ast
 import hashlib
 import json
+import logging
 import os
 import re
+import sentry_sdk
 import sys
 import time
 import importlib.util
@@ -23,6 +25,7 @@ from scripts.orion_local_worker_llm import (
     provider_has_key,
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
+from server_modules import runtime_config as runtime_config
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
 from server_modules.local_queue import _is_worker_online
 from server_modules.shared import LOCAL_WORKER_REGISTRY
@@ -130,6 +133,29 @@ LOCAL_SCREENSHOT_KEYWORDS = (
     "capture the screen",
     "take a screenshot",
 )
+LOCAL_COMPUTER_CONTROL_KEYWORDS = (
+    "ocr",
+    "screen text",
+    "read the screen",
+    "click at",
+    "click the screen",
+    "type text",
+    "paste this",
+    "copy to clipboard",
+    "read clipboard",
+    "write clipboard",
+    "launch app",
+    "open finder",
+    "open mail",
+    "applescript",
+    "notification",
+    "notify me",
+    "list running apps",
+    "speak this",
+    "read this aloud",
+    "say this",
+)
+LOGGER = logging.getLogger(__name__)
 
 
 def _safe_positive_int(value: Any, default: int) -> int:
@@ -379,6 +405,20 @@ def _local_worker_available(availability: Dict[str, Any]) -> bool:
     return True
 
 
+def _agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
+    context = session_ctx if isinstance(session_ctx, dict) else {}
+    meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
+    return (
+        str(context.get("user_id") or "").strip()
+        or str(meta.get("owner_user_id") or "").strip()
+        or str(meta.get("user_id") or "").strip()
+    )
+
+
+def _agent_machine_full_trust_for_session(session_ctx: Optional[Dict[str, Any]]) -> bool:
+    return runtime_config.agent_machine_full_trust_enabled(_agent_machine_owner_user_id(session_ctx))
+
+
 def _direct_chat_runtime_available() -> bool:
     try:
         now = datetime.now(timezone.utc)
@@ -572,7 +612,8 @@ def _slash_command_help_text() -> str:
         "web fetch\n"
         "http_request\n"
         "generate_image\n"
-        "browser navigate / screenshot / click / fill / get_page_state"
+        "browser navigate / screenshot / click / fill / get_page_state\n"
+        "computer ocr / click / type / applescript / clipboard / notify / list_apps / launch_app / speak"
     )
 
 
@@ -581,7 +622,7 @@ def _tool_call_signature(tool_call: Dict[str, Any]) -> str:
     argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
     if "__" in name:
         connector_id, _action_id = _parse_tool_name(name)
-        if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+        if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
             nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
             if isinstance(nested_input, dict):
                 argument_payload = nested_input
@@ -1885,6 +1926,114 @@ def _build_local_direct_chat_tools(availability: Dict[str, Any]) -> List[Dict[st
                 "properties": {},
             },
         },
+        {
+            "name": "computer__ocr",
+            "description": "Read visible text from the screen using OCR",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "integer"},
+                            "y": {"type": "integer"},
+                            "width": {"type": "integer"},
+                            "height": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "name": "computer__click",
+            "description": "Click on the screen by coordinates or visible text",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "text": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "computer__type",
+            "description": "Type text into the active application",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                },
+                "required": ["text"],
+            },
+        },
+        {
+            "name": "computer__applescript",
+            "description": "Run AppleScript on macOS",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string"},
+                },
+                "required": ["script"],
+            },
+        },
+        {
+            "name": "computer__clipboard_read",
+            "description": "Read the current system clipboard",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "computer__clipboard_write",
+            "description": "Write text to the system clipboard",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                },
+                "required": ["text"],
+            },
+        },
+        {
+            "name": "computer__notify",
+            "description": "Send a system notification",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["title", "message"],
+            },
+        },
+        {
+            "name": "computer__list_apps",
+            "description": "List running applications and processes",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "computer__launch_app",
+            "description": "Launch an application by name or path",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_or_path": {"type": "string"},
+                },
+                "required": ["name_or_path"],
+            },
+        },
+        {
+            "name": "computer__speak",
+            "description": "Speak text aloud using the local system voice",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "voice": {"type": "string"},
+                },
+                "required": ["text"],
+            },
+        },
     ]
 
 
@@ -2164,6 +2313,18 @@ def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
     ]
 
 
+def registered_direct_chat_tool_names_for_logging() -> List[str]:
+    tool_names = {
+        str(item.get("name") or "").strip()
+        for item in (
+            _build_builtin_direct_chat_tools()
+            + _build_local_direct_chat_tools({"runtime_ok": True})
+        )
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    return sorted(tool_names)
+
+
 def _message_requests_http_request_tool(message: str) -> bool:
     compact = _compact_text(message)
     if not compact or _question_like(compact):
@@ -2183,6 +2344,10 @@ def _message_requests_image_generation_tool(message: str) -> bool:
 def _message_requests_browser_tool(message: str) -> bool:
     compact = _compact_text(message)
     if not compact or _question_like(compact):
+        return False
+    if _extract_first_path_reference(message) and any(
+        token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")
+    ):
         return False
     if _extract_first_url(message) and (
         _mentions_any(compact, BROWSER_KEYWORDS)
@@ -2263,6 +2428,13 @@ def _message_requests_local_screenshot_tool(message: str) -> bool:
     return _mentions_any(compact, LOCAL_SCREENSHOT_KEYWORDS)
 
 
+def _message_requests_local_computer_tool(message: str) -> bool:
+    compact = _compact_text(message)
+    if not compact or _question_like(compact):
+        return False
+    return _mentions_any(compact, LOCAL_COMPUTER_CONTROL_KEYWORDS)
+
+
 def _message_can_use_direct_local_tools(
     message: str,
     *,
@@ -2277,6 +2449,8 @@ def _message_can_use_direct_local_tools(
     if _message_requests_local_shell_tool(message) and "shell__exec" in tool_names:
         return True
     if _message_requests_local_screenshot_tool(message) and "screenshot__capture" in tool_names:
+        return True
+    if _message_requests_local_computer_tool(message) and any(name.startswith("computer__") for name in tool_names):
         return True
     return False
 
@@ -2565,6 +2739,93 @@ def _build_direct_local_tool_config(
         return "screenshot", {
             "summary": "Capture screenshot of the current screen.",
         }
+    if connector_id == "computer":
+        if action_id == "ocr":
+            return "computer", {
+                "action": "ocr",
+                "region": arguments.get("region"),
+                "summary": "Read screen text with OCR.",
+            }
+        if action_id == "click":
+            has_text = bool(str(arguments.get("text") or "").strip())
+            has_coords = arguments.get("x") is not None and arguments.get("y") is not None
+            if not has_text and not has_coords:
+                raise RuntimeError("Tool 'computer__click' requires x/y or text.")
+            return "computer", {
+                "action": "click",
+                "x": arguments.get("x"),
+                "y": arguments.get("y"),
+                "text": str(arguments.get("text") or "").strip() or None,
+                "summary": "Click on the screen.",
+            }
+        if action_id == "type":
+            text = str(arguments.get("text") or arguments.get("input") or "")
+            if not text:
+                raise RuntimeError("Tool 'computer__type' requires text.")
+            return "computer", {
+                "action": "type",
+                "text": text,
+                "summary": "Type into the active application.",
+            }
+        if action_id == "applescript":
+            script = str(arguments.get("script") or arguments.get("input") or "").strip()
+            if not script:
+                raise RuntimeError("Tool 'computer__applescript' requires a script.")
+            return "computer", {
+                "action": "applescript",
+                "script": script,
+                "summary": "Run AppleScript.",
+            }
+        if action_id == "clipboard_read":
+            return "computer", {
+                "action": "clipboard_read",
+                "summary": "Read the system clipboard.",
+            }
+        if action_id == "clipboard_write":
+            text = str(arguments.get("text") or arguments.get("input") or "")
+            if not text:
+                raise RuntimeError("Tool 'computer__clipboard_write' requires text.")
+            return "computer", {
+                "action": "clipboard_write",
+                "text": text,
+                "summary": "Write to the system clipboard.",
+            }
+        if action_id == "notify":
+            title = str(arguments.get("title") or "").strip()
+            message = str(arguments.get("message") or arguments.get("text") or "").strip()
+            if not title or not message:
+                raise RuntimeError("Tool 'computer__notify' requires title and message.")
+            return "computer", {
+                "action": "notify",
+                "title": title,
+                "message": message,
+                "summary": "Send a system notification.",
+            }
+        if action_id == "list_apps":
+            return "computer", {
+                "action": "list_apps",
+                "summary": "List running applications.",
+            }
+        if action_id == "launch_app":
+            name_or_path = str(arguments.get("name_or_path") or arguments.get("input") or "").strip()
+            if not name_or_path:
+                raise RuntimeError("Tool 'computer__launch_app' requires name_or_path.")
+            return "computer", {
+                "action": "launch_app",
+                "name_or_path": name_or_path,
+                "summary": f"Launch application: {name_or_path}",
+            }
+        if action_id == "speak":
+            text = str(arguments.get("text") or arguments.get("input") or "").strip()
+            if not text:
+                raise RuntimeError("Tool 'computer__speak' requires text.")
+            voice = str(arguments.get("voice") or "").strip()
+            return "computer", {
+                "action": "speak",
+                "text": text,
+                "voice": voice or None,
+                "summary": "Speak text aloud.",
+            }
     raise RuntimeError(f"Unsupported direct local tool '{connector_id}__{action_id}'.")
 
 
@@ -2577,6 +2838,19 @@ def _tool_write_action_available(
     normalized_action_id = str(action_id or "").strip()
     if normalized_connector_id in {"file", "shell", "screenshot"}:
         return normalized_action_id in {"read", "write", "exec", "capture"}
+    if normalized_connector_id == "computer":
+        return normalized_action_id in {
+            "ocr",
+            "click",
+            "type",
+            "applescript",
+            "clipboard_read",
+            "clipboard_write",
+            "notify",
+            "list_apps",
+            "launch_app",
+            "speak",
+        }
     if normalized_connector_id == "http":
         return normalized_action_id == "request"
     for item in tool_capabilities:
@@ -2609,7 +2883,7 @@ def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
 def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
     connector_id = str(approved_action.get("connector") or "").strip().lower()
     raw_input = str(approved_action.get("input") or "").strip()
-    if connector_id in {"file", "shell", "screenshot", "http"}:
+    if connector_id in {"file", "shell", "screenshot", "http", "computer"}:
         parsed_input = parse_json_object_loose(raw_input)
         arguments = parsed_input if isinstance(parsed_input, dict) else ({} if connector_id == "screenshot" else {"input": raw_input})
     else:
@@ -2726,6 +3000,33 @@ def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
         path = str(first_action.get("path") or first_action.get("file_path") or first_artifact.get("file_path") or "").strip()
         return f"Captured screenshot: {path}" if path else (summary or "Screenshot captured.")
 
+    if tool_name == "computer_control":
+        computer_action = str(first_action.get("computer_action") or "").strip().lower()
+        if computer_action == "ocr":
+            preview = str(first_action.get("text_preview") or "").strip()
+            return "\n".join(part for part in ["Screen OCR completed.", preview] if part).strip()
+        if computer_action == "click":
+            return summary or "Screen click completed."
+        if computer_action == "type":
+            return summary or "Typing completed."
+        if computer_action == "applescript":
+            output = str(first_action.get("output_preview") or "").strip()
+            return "\n".join(part for part in ["AppleScript completed.", output] if part).strip()
+        if computer_action == "clipboard_read":
+            preview = str(first_action.get("text_preview") or "").strip()
+            return "\n".join(part for part in ["Clipboard read completed.", preview] if part).strip()
+        if computer_action == "clipboard_write":
+            return summary or "Clipboard updated."
+        if computer_action == "notify":
+            return summary or "Notification sent."
+        if computer_action == "list_apps":
+            apps_preview = str(first_action.get("apps_preview") or "").strip()
+            return "\n".join(part for part in ["Listed running apps.", apps_preview] if part).strip()
+        if computer_action == "launch_app":
+            return summary or "Application launched."
+        if computer_action == "speak":
+            return summary or "Speech completed."
+
     return summary or json.dumps(result, ensure_ascii=True, indent=2)
 
 
@@ -2775,6 +3076,8 @@ def _local_direct_tool_requires_approval(connector_id: str, action_id: str, argu
         return _shell_command_requires_approval(str(arguments.get("command") or ""))
     if normalized_connector == "file" and normalized_action == "write":
         return _file_write_requires_approval(arguments)
+    if normalized_connector == "computer":
+        return True
     return False
 
 
@@ -2830,6 +3133,36 @@ def _direct_tool_step_payload(
         label = "Capturing screenshot"
         kind = "screenshot"
         detail = detail or _compact_step_detail(arguments.get("path") or arguments.get("file_path") or "Current screen")
+    elif normalized_connector == "computer":
+        kind = "computer"
+        if normalized_action == "ocr":
+            label = "Reading screen"
+        elif normalized_action == "click":
+            label = "Clicking screen"
+            detail = detail or _compact_step_detail(arguments.get("text") or f"{arguments.get('x')}, {arguments.get('y')}")
+        elif normalized_action == "type":
+            label = "Typing text"
+            detail = detail or _compact_step_detail(arguments.get("text"))
+        elif normalized_action == "applescript":
+            label = "Running AppleScript"
+        elif normalized_action == "clipboard_read":
+            label = "Reading clipboard"
+        elif normalized_action == "clipboard_write":
+            label = "Writing clipboard"
+            detail = detail or _compact_step_detail(arguments.get("text"))
+        elif normalized_action == "notify":
+            label = "Sending notification"
+            detail = detail or _compact_step_detail(arguments.get("title"))
+        elif normalized_action == "list_apps":
+            label = "Listing apps"
+        elif normalized_action == "launch_app":
+            label = "Launching app"
+            detail = detail or _compact_step_detail(arguments.get("name_or_path"))
+        elif normalized_action == "speak":
+            label = "Speaking text"
+            detail = detail or _compact_step_detail(arguments.get("text"))
+        else:
+            label = "Computer control"
     else:
         action_label = _titleize_direct_step_token(normalized_action) or "Connector action"
         connector_label = _titleize_direct_step_token(normalized_connector) or normalized_connector
@@ -2882,7 +3215,17 @@ def _extract_first_path_reference(value: str) -> str:
         flags=re.IGNORECASE,
     )
     if not matches:
-        return ""
+        bare_match = re.search(
+            r"\b((?:[a-z0-9_.-]+/)+[a-z0-9_.-]+(?:\.[a-z0-9_.-]+)?)\b",
+            str(value or ""),
+            flags=re.IGNORECASE,
+        )
+        if not bare_match:
+            return ""
+        candidate = str(bare_match.group(1) or "").rstrip(".,!?;:")
+        if "://" in candidate:
+            return ""
+        return candidate
     _prefix, root, remainder = matches[0]
     return f"{root}{remainder}".strip()
 
@@ -2894,6 +3237,43 @@ def _resolve_chat_local_path(raw_path: str) -> Path:
     else:
         candidate = candidate.resolve()
     return candidate
+
+
+def _count_python_definition_lines(source_text: str, kind: str) -> int:
+    if kind == "class":
+        pattern = r"^\s*class\s+"
+    else:
+        pattern = r"^\s*(?:async\s+def|def)\s+"
+    return sum(1 for line in str(source_text or "").splitlines() if re.search(pattern, line))
+
+
+def _chat_count_definitions_in_file(message: str) -> Optional[str]:
+    compact = _compact_text(message)
+    if "count" not in compact and "how many" not in compact:
+        return None
+    path = _extract_first_path_reference(message)
+    if not path:
+        return None
+    wants_functions = "function" in compact
+    wants_classes = "class" in compact
+    if not wants_functions and not wants_classes:
+        return None
+    target = _resolve_chat_local_path(path)
+    if not target.exists() or not target.is_file():
+        raise RuntimeError(f"File not found: {target}")
+    source_text = target.read_text(encoding="utf-8")
+    counts: List[str] = []
+    if wants_functions:
+        function_count = _count_python_definition_lines(source_text, "function")
+        counts.append(f"{function_count} functions")
+    if wants_classes:
+        class_count = _count_python_definition_lines(source_text, "class")
+        counts.append(f"{class_count} classes")
+    if not counts:
+        return None
+    if len(counts) == 1:
+        return f"{target} defines {counts[0]}."
+    return f"{target} defines {counts[0]} and {counts[1]}."
 
 
 def _chat_count_functions_and_write_summary(message: str) -> Optional[str]:
@@ -2974,18 +3354,138 @@ def _chat_list_directory(message: str) -> Optional[Dict[str, str]]:
     }
 
 
+def _extract_no_provider_shell_command(message: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    patterns = (
+        r"run\s+this\s+shell\s+command:\s*(.+)$",
+        r"run\s+this\s+command:\s*(.+)$",
+        r"execute\s+this\s+shell\s+command:\s*(.+)$",
+        r"execute\s+this\s+command:\s*(.+)$",
+        r"shell:\s*(.+)$",
+        r"run:\s*(.+)$",
+        r"execute:\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip().strip("`")
+    backtick_match = re.search(r"`([^`]+)`", text)
+    compact = _compact_text(text)
+    if backtick_match and any(token in compact for token in ("run", "execute", "shell", "command")):
+        return str(backtick_match.group(1) or "").strip()
+    for opener in ("run ", "execute "):
+        if compact.startswith(opener):
+            candidate = text[len(opener):].strip()
+            if candidate and not _extract_first_url(candidate):
+                return candidate.strip("`")
+    return ""
+
+
+def _extract_no_provider_web_query(message: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    patterns = (
+        r"search\s+for\s+(.+)$",
+        r"look\s+up\s+(.+)$",
+        r"find\s+(.+?)\s+on\s+the\s+web$",
+        r"what\s+is\s+(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip().rstrip("?.!")
+    return ""
+
+
+def _normalize_memory_key(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_. -]+", " ", str(value or "").strip().lower())
+    return re.sub(r"\s+", "_", cleaned).strip("_")
+
+
+def _extract_no_provider_memory_write(message: str) -> Optional[Dict[str, str]]:
+    text = str(message or "").strip()
+    if not text:
+        return None
+    match = re.search(r"remember(?:\s+that)?\s+my\s+name\s+is\s+(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        value = str(match.group(1) or "").strip().rstrip(".")
+        if value:
+            return {"key": "name", "value": value, "display_key": "name"}
+    match = re.search(r"remember\s*:\s*([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        key = _normalize_memory_key(match.group(1))
+        value = str(match.group(2) or "").strip().rstrip(".")
+        if key and value:
+            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
+    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s*=\s*(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        key = _normalize_memory_key(match.group(1))
+        value = str(match.group(2) or "").strip().rstrip(".")
+        if key and value:
+            return {"key": key, "value": value, "display_key": str(match.group(1) or "").strip()}
+    match = re.search(r"remember\s+that\s+([a-z0-9_. -]+?)\s+is\s+(.+)$", text, flags=re.IGNORECASE)
+    if match:
+        raw_key = str(match.group(1) or "").strip()
+        key = _normalize_memory_key(raw_key)
+        value = str(match.group(2) or "").strip().rstrip(".")
+        if key and value:
+            return {"key": key, "value": value, "display_key": raw_key}
+    return None
+
+
+def _memory_entry_for_query(workspace_id: str, query: str) -> Optional[Dict[str, Any]]:
+    normalized_query = _normalize_memory_key(query)
+    if not normalized_query:
+        return None
+    entries = list_memory_entries(workspace_id)
+    for entry in entries:
+        entry_key = _normalize_memory_key(str(entry.get("key") or ""))
+        if entry_key == normalized_query:
+            return entry
+    for entry in entries:
+        entry_key = _normalize_memory_key(str(entry.get("key") or ""))
+        entry_content = str(entry.get("content") or "").strip().lower()
+        if normalized_query in entry_key or normalized_query.replace("_", " ") in entry_content:
+            return entry
+    return None
+
+
+def _extract_no_provider_memory_read(message: str) -> Optional[str]:
+    text = str(message or "").strip()
+    compact = _compact_text(text)
+    if not text:
+        return None
+    if compact == "what is my name" or compact == "recall my name":
+        return "name"
+    for pattern in (
+        r"what\s+is\s+([a-z0-9_. -]+)$",
+        r"recall\s+([a-z0-9_. -]+)$",
+        r"what\s+did\s+i\s+say\s+about\s+([a-z0-9_. -]+)$",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1) or "").strip()
+    return None
+
+
 def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     compact = _compact_text(message)
     tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
     planned: List[Dict[str, Any]] = []
+    path = _extract_first_path_reference(message)
+    file_requested = bool(
+        path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many"))
+    )
+    if file_requested and "file__read" in tool_names:
+        planned.append({"name": "file__read", "arguments": {"path": path}})
 
-    if _message_requests_local_file_tool(message) and "file__read" in tool_names:
-        path = _extract_first_path_reference(message)
-        if path and any(token in compact for token in ("read", "open")):
-            planned.append({"name": "file__read", "arguments": {"path": path}})
-
-    url = _extract_first_url(message)
-    browser_requested = _message_requests_browser_tool(message)
+    url = "" if file_requested else _extract_first_url(message)
+    browser_requested = bool(
+        url and any(token in compact for token in ("go to", "open", "visit", "what's on", "whats on", "page title", "main heading", "browser"))
+    )
     if url and "http_request" in tool_names and not browser_requested:
         planned.append({"name": "http_request", "arguments": {"method": "GET", "url": url}})
     if url and "browser__navigate" in tool_names and browser_requested:
@@ -2996,6 +3496,12 @@ def _plan_no_provider_tool_calls(message: str, tools: List[Dict[str, Any]]) -> L
             planned.append({"name": "browser__get_page_state", "arguments": {}})
         if "heading" in compact and "browser__extract_text" in tool_names:
             planned.append({"name": "browser__extract_text", "arguments": {"selector": "h1"}})
+    shell_command = _extract_no_provider_shell_command(message)
+    if shell_command and "shell__exec" in tool_names:
+        planned.append({"name": "shell__exec", "arguments": {"command": shell_command}})
+    web_query = _extract_no_provider_web_query(message)
+    if web_query and "web__search" in tool_names and not url:
+        planned.append({"name": "web__search", "arguments": {"query": web_query}})
 
     return planned
 
@@ -3044,6 +3550,49 @@ def _execute_no_provider_request(
             "attempted_providers": "",
             "error": "",
         }
+    single_file_count_reply = _chat_count_definitions_in_file(message)
+    if single_file_count_reply:
+        return {
+            "reply": single_file_count_reply,
+            "actions": [],
+            "mode": "answer",
+            "usage_masked": {},
+            "provider": None,
+            "model": None,
+            "attempted_providers": "",
+            "error": "",
+        }
+    memory_write = _extract_no_provider_memory_write(message)
+    if memory_write is not None:
+        save_memory(workspace_id, memory_write["key"], memory_write["value"])
+        return {
+            "reply": f"Stored memory: {memory_write['display_key']} = {memory_write['value']}",
+            "actions": [],
+            "mode": "answer",
+            "usage_masked": {},
+            "provider": None,
+            "model": None,
+            "attempted_providers": "",
+            "error": "",
+        }
+    memory_read = _extract_no_provider_memory_read(message)
+    if memory_read is not None:
+        entry = _memory_entry_for_query(workspace_id, memory_read)
+        reply = (
+            f"{str(entry.get('key') or memory_read).strip()} = {str(entry.get('content') or '').strip()}"
+            if isinstance(entry, dict)
+            else f"I don't have {memory_read} saved in memory yet."
+        )
+        return {
+            "reply": reply,
+            "actions": [],
+            "mode": "answer",
+            "usage_masked": {},
+            "provider": None,
+            "model": None,
+            "attempted_providers": "",
+            "error": "",
+        }
     directory_listing = _chat_list_directory(message)
 
     tool_calls = _plan_no_provider_tool_calls(message, tools)
@@ -3054,6 +3603,7 @@ def _execute_no_provider_request(
         approval_response = _build_direct_tool_approval_response(
             tool_calls=tool_calls,
             tool_capabilities=tool_capabilities,
+            session_ctx=session_ctx,
         )
         if approval_response is not None:
             return {
@@ -3153,6 +3703,35 @@ def _execute_no_provider_request(
         "attempted_providers": "",
         "error": "",
     }
+
+
+def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, Any]]) -> bool:
+    compact = _compact_text(message)
+    if not compact:
+        return False
+    if (
+        any(marker in compact for marker in (" then ", " after that ", " next step", " next steps"))
+        and any(token in compact for token in ("inspect", "prepare", "review", "analy", "summarize", "plan"))
+    ):
+        return False
+    path = _extract_first_path_reference(message)
+    if path and any(token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")):
+        return True
+    if _chat_list_directory(message) is not None:
+        return True
+    if _extract_no_provider_shell_command(message):
+        return True
+    if _extract_no_provider_memory_write(message) is not None or _extract_no_provider_memory_read(message) is not None:
+        return True
+    if _extract_no_provider_web_query(message):
+        return True
+    url = _extract_first_url(message)
+    if not url:
+        return False
+    if any(token in compact for token in ("go to", "open", "visit", "what's on", "whats on", "page title", "main heading", "browser")):
+        return True
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    return "http_request" in tool_names
 
 
 def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:
@@ -3337,7 +3916,7 @@ def _execute_single_direct_tool_call(
             line_count=argument_payload.get("lines"),
         )
         return json.dumps(excerpt, ensure_ascii=False)
-    if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+    if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
         nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
         if isinstance(nested_input, dict):
             argument_payload = nested_input
@@ -3355,7 +3934,7 @@ def _execute_single_direct_tool_call(
         },
     }
 
-    if connector_id in {"file", "shell", "screenshot"}:
+    if connector_id in {"file", "shell", "screenshot", "computer"}:
         variant, config = _build_direct_local_tool_config(connector_id, action_id, argument_payload)
         result = _workflow_execute_local_tool(
             run_id,
@@ -3426,7 +4005,7 @@ def _approval_required_for_direct_tool(
         return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
     if normalized_connector_id == "browser":
         return _browser_direct_tool_requires_approval(normalized_action_id, arguments)
-    if normalized_connector_id in {"file", "shell", "screenshot"}:
+    if normalized_connector_id in {"file", "shell", "screenshot", "computer"}:
         return _local_direct_tool_requires_approval(normalized_connector_id, normalized_action_id, arguments)
     for item in tool_capabilities:
         if not isinstance(item, dict):
@@ -3442,7 +4021,10 @@ def _build_direct_tool_approval_response(
     *,
     tool_calls: List[Dict[str, Any]],
     tool_capabilities: List[Dict[str, Any]],
+    session_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    if _agent_machine_full_trust_for_session(session_ctx):
+        return None
     approval_actions: List[Dict[str, Any]] = []
     for index, call in enumerate(tool_calls, start=1):
         connector_id, action_id = _parse_tool_name(str(call.get("name") or ""))
@@ -3450,7 +4032,7 @@ def _build_direct_tool_approval_response(
         if not _approval_required_for_direct_tool(connector_id, action_id, argument_payload, tool_capabilities):
             continue
         tool_input = str(argument_payload.get("input") or "").strip()
-        if connector_id in {"file", "shell", "screenshot", "http", "browser"}:
+        if connector_id in {"file", "shell", "screenshot", "http", "browser", "computer"}:
             tool_input = json.dumps(argument_payload, ensure_ascii=False)
         approval_actions.append(
             {
@@ -3482,6 +4064,7 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
     payload = credentials if isinstance(credentials, dict) else {}
     auth_mode = _credential_auth_mode(provider, payload)
     normalized_provider = str(provider or "").strip().lower()
+    credential_type = str(payload.get("credential_type") or "").strip().lower()
     bearer_token = str(
         payload.get("access_token")
         or payload.get("oauth_token")
@@ -3492,10 +4075,11 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
             return bool(get_claude_code_session_token())
         return bool(str(payload.get("api_key") or "").strip()) or provider_has_key("anthropic")
     if normalized_provider == "openai":
+        if credential_type == "codex_token":
+            return False
         return (
             bool(str(payload.get("api_key") or "").strip())
             or (auth_mode in {"oauth_token", "access_token"} and bool(bearer_token))
-            or bool(str(payload.get("credential_type") or "").strip().lower() == "codex_token" and bearer_token)
             or provider_has_key("openai")
         )
     if normalized_provider == "gemini":
@@ -3512,7 +4096,8 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
     if normalized_requested in SUPPORTED_PROVIDERS:
         requested_credentials = _direct_chat_credentials(normalized_workspace_id, normalized_requested)
         if normalized_requested == "openai":
-            if _credential_auth_mode("openai", requested_credentials) == "oauth_token":
+            requested_credential_type = str(requested_credentials.get("credential_type") or "").strip().lower()
+            if requested_credential_type == "codex_token" or _credential_auth_mode("openai", requested_credentials) == "oauth_token":
                 codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
                 if _supports_direct_message_native_chat("codex_cli", codex_credentials):
                     return "codex_cli", codex_credentials
@@ -3525,6 +4110,13 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
     prioritized_message_native = ("anthropic", "openai", "gemini")
     for provider in prioritized_message_native:
         credentials = _direct_chat_credentials(normalized_workspace_id, provider)
+        if provider == "openai":
+            credential_type = str(credentials.get("credential_type") or "").strip().lower()
+            if credential_type == "codex_token" or _credential_auth_mode("openai", credentials) == "oauth_token":
+                codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
+                if _supports_direct_message_native_chat("codex_cli", codex_credentials):
+                    return "codex_cli", codex_credentials
+                continue
         if _supports_direct_message_native_chat(provider, credentials):
             return provider, credentials
     codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
@@ -3839,6 +4431,7 @@ def build_direct_operator_reply(
             return
         except Exception as exc:
             error_text = str(exc).strip() or "connector_action_failed"
+            sentry_sdk.capture_exception(exc)
             yield {
                 "type": "final",
                 "payload": {
@@ -3878,6 +4471,56 @@ def build_direct_operator_reply(
         }
         return
 
+    if _message_has_obvious_direct_tool_intent(normalized_message, tools):
+        yield {
+            "type": "step",
+            "label": "Using direct tools",
+            "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
+            "status": "active",
+            "kind": "thinking",
+            "id": "direct-tools:auto",
+        }
+        direct_payload = _execute_no_provider_request(
+            message=normalized_message,
+            workspace_id=normalized_workspace_id,
+            thread_id=normalized_thread_id,
+            tools=tools,
+            tool_capabilities=tool_capabilities,
+            reasoning_effort=normalized_reasoning_effort,
+            session_ctx=session_ctx,
+        )
+        if direct_payload is not None:
+            yield {
+                "type": "step",
+                "label": "Using direct tools",
+                "detail": "Completed",
+                "status": "done",
+                "kind": "thinking",
+                "id": "direct-tools:auto",
+            }
+            yield {
+                "type": "final",
+                "payload": _with_context_used(
+                    {**direct_payload, "suggestions": proactive_suggestions},
+                    _build_context_used(
+                        workspace_id=normalized_workspace_id,
+                        requested_provider=normalized_requested_provider,
+                        effective_provider=None,
+                        requested_model=normalized_requested_model,
+                        effective_model=None,
+                        reasoning_effort=normalized_reasoning_effort,
+                        connected_systems=connected_systems,
+                        tool_capabilities=tool_capabilities,
+                        prior_messages_used=False,
+                        history_mode="none",
+                        run_created=False,
+                        fallback_used=False,
+                        fallback_reason="obvious_direct_tool_execution",
+                    ),
+                ),
+            }
+            return
+
     provider, direct_chat_credentials = _preferred_provider(normalized_workspace_id, normalized_requested_provider)
     if tools and (
         _mentions_any(_compact_text(normalized_message), GOOGLE_WORKSPACE_KEYWORDS)
@@ -3890,7 +4533,12 @@ def build_direct_operator_reply(
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
             provider = "codex_cli"
             direct_chat_credentials = codex_credentials
-    if _message_requests_local_file_tool(normalized_message) or _message_requests_local_shell_tool(normalized_message) or _message_requests_local_screenshot_tool(normalized_message):
+    if (
+        _message_requests_local_file_tool(normalized_message)
+        or _message_requests_local_shell_tool(normalized_message)
+        or _message_requests_local_screenshot_tool(normalized_message)
+        or _message_requests_local_computer_tool(normalized_message)
+    ):
         codex_credentials = _direct_chat_credentials(normalized_workspace_id, "codex_cli")
         if _supports_direct_message_native_chat("codex_cli", codex_credentials):
             provider = "codex_cli"
@@ -3978,6 +4626,7 @@ def build_direct_operator_reply(
                     return
                 except Exception as exc:
                     detail = str(getattr(exc, "detail", "") or str(exc)).strip() or "run_start_failed"
+                    sentry_sdk.capture_exception(exc)
                     yield {
                         "type": "step",
                         "label": "Durable run failed to start",
@@ -3993,6 +4642,14 @@ def build_direct_operator_reply(
             }
             return
     if not bool(availability_payload.get("ai_ready")):
+        yield {
+            "type": "step",
+            "label": "Using fallback tools",
+            "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
+            "status": "active",
+            "kind": "thinking",
+            "id": "direct-tools:fallback",
+        }
         fallback_payload = _execute_no_provider_request(
             message=normalized_message,
             workspace_id=normalized_workspace_id,
@@ -4003,6 +4660,14 @@ def build_direct_operator_reply(
             session_ctx=session_ctx,
         )
         if fallback_payload is not None:
+            yield {
+                "type": "step",
+                "label": "Using fallback tools",
+                "detail": "Completed",
+                "status": "done",
+                "kind": "thinking",
+                "id": "direct-tools:fallback",
+            }
             yield {
                 "type": "final",
                 "payload": _with_context_used(
@@ -4048,6 +4713,14 @@ def build_direct_operator_reply(
         }
         return
     if provider not in SUPPORTED_PROVIDERS or not _supports_direct_message_native_chat(provider, direct_chat_credentials):
+        yield {
+            "type": "step",
+            "label": "Using fallback tools",
+            "detail": normalized_message[:120] if normalized_message else "Preparing tool execution",
+            "status": "active",
+            "kind": "thinking",
+            "id": "direct-tools:fallback",
+        }
         fallback_payload = _execute_no_provider_request(
             message=normalized_message,
             workspace_id=normalized_workspace_id,
@@ -4058,6 +4731,14 @@ def build_direct_operator_reply(
             session_ctx=session_ctx,
         )
         if fallback_payload is not None:
+            yield {
+                "type": "step",
+                "label": "Using fallback tools",
+                "detail": "Completed",
+                "status": "done",
+                "kind": "thinking",
+                "id": "direct-tools:fallback",
+            }
             yield {
                 "type": "final",
                 "payload": _with_context_used(
@@ -4234,6 +4915,7 @@ def build_direct_operator_reply(
                     approval_payload = _build_direct_tool_approval_response(
                         tool_calls=iteration_tool_calls,
                         tool_capabilities=tool_capabilities,
+                        session_ctx=session_ctx,
                     )
                     if approval_payload is not None:
                         yield {
@@ -4273,7 +4955,7 @@ def build_direct_operator_reply(
                         for tool_index, tool_call in enumerate(iteration_tool_calls, start=1):
                             connector_id, action_id = _parse_tool_name(str(tool_call.get("name") or ""))
                             argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
-                            if connector_id in {"file", "shell", "screenshot"} and isinstance(argument_payload.get("input"), str):
+                            if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
                                 nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
                                 if isinstance(nested_input, dict):
                                     argument_payload = nested_input
@@ -4326,6 +5008,7 @@ def build_direct_operator_reply(
                         break
                     except Exception as exc:
                         llm_error = str(exc).strip() or "connector_action_failed"
+                        sentry_sdk.capture_exception(exc)
                         yield _direct_tool_step_payload(
                             connector_id,
                             action_id,

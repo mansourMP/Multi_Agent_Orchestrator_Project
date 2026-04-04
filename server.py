@@ -1,5 +1,17 @@
 import os
+import logging
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from contextlib import asynccontextmanager
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN", ""),
+    integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+    traces_sample_rate=0.1,
+    environment=os.environ.get("ORION_ENV", "development"),
+    before_send=lambda event, hint: event if os.environ.get("SENTRY_DSN") else None,
+)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +29,10 @@ from server_modules import health_core as health_core
 from server_modules import health_diagnostics as health_diagnostics
 from server_modules import connectors_core as connectors_core
 from server_modules import connectors_actions as connectors_actions
+from server_modules.operator_chat import registered_direct_chat_tool_names_for_logging
+
+
+LOGGER = logging.getLogger(__name__)
 
 for module in (
     runtime_config,
@@ -34,6 +50,19 @@ for module in (
     connectors_actions,
 ):
     globals().update({key: value for key, value in vars(module).items() if not key.startswith("__")})
+
+
+def _log_machine_mode_startup() -> None:
+    LOGGER.info("Registered tools: %s", registered_direct_chat_tool_names_for_logging())
+    if runtime_config.AGENT_MACHINE_MODE == "agent":
+        LOGGER.warning("AGENT MACHINE MODE ACTIVE — all tool executions bypass approval for the configured machine owner.")
+        if not str(runtime_config.AGENT_MACHINE_OWNER or "").strip():
+            LOGGER.warning("AGENT MACHINE MODE is enabled but AGENT_MACHINE_OWNER is empty; falling back to personal-mode approvals.")
+    else:
+        LOGGER.info("Personal machine mode — approvals required for destructive tools")
+
+
+_log_machine_mode_startup()
 
 configure_runtime_memory(
     memory_enabled=ORION_MEMORY_ENABLED,
@@ -124,3 +153,4 @@ app.include_router(connectors_router)
 app.include_router(builder_router)
 app.include_router(runs_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+app.include_router(auth_router, prefix="/api/v1")

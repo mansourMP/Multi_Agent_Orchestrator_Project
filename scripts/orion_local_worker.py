@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import queue
 import re
 import socket
 import sys
@@ -18,7 +19,11 @@ if str(ROOT_DIR) not in sys.path:
 from server_modules.usage_reporting import build_usage_record, enrich_usage_record
 
 from orion_local_worker_content import normalize_content_plan_items
-from orion_local_worker_execution import LocalExecutionPauseRequired, build_local_execution_pack_result
+from orion_local_worker_execution import (
+    LocalExecutionPauseRequired,
+    build_local_execution_pack_result,
+    registered_local_worker_tool_names,
+)
 from orion_local_worker_llm import (
     generate_chat_reply_with_provider_fallback,
     generate_pack_with_provider_fallback,
@@ -75,6 +80,25 @@ def _deterministic_chat_fallback(goal: str, llm_error: str) -> str:
 def build_pack_result(run: Dict[str, Any], worker_id: str) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    workflow_definition = (
+        context.get("workflow_definition")
+        if isinstance(context.get("workflow_definition"), dict)
+        else metadata.get("workflow_definition")
+    )
+    if isinstance(workflow_definition, dict) and isinstance(workflow_definition.get("nodes"), list) and workflow_definition.get("nodes"):
+        from server_modules.runs_execution import _execute_workflow_graph
+
+        result = _execute_workflow_graph(
+            str(run.get("run_id") or "").strip(),
+            context,
+            queue.Queue(),
+            workflow_definition,
+        )
+        return (
+            str(result.get("result_text") or "").strip(),
+            result.get("result_data") if isinstance(result.get("result_data"), dict) else None,
+            result.get("usage_masked") if isinstance(result.get("usage_masked"), dict) else None,
+        )
     pack_id = str(metadata.get("outcome_pack") or "").strip()
     goal = str(context.get("user_goal") or "Complete requested task").strip()
     pack_inputs = metadata.get("pack_inputs") if isinstance(metadata.get("pack_inputs"), dict) else {}
@@ -455,6 +479,7 @@ def main() -> int:
         print(f"Empyralis Local Worker v0")
         print(f"Runtime: {ensure_trailing_slashless(args.runtime_url)}")
         print(f"Worker:  {worker_id}")
+        print(f"Registered tools: {registered_local_worker_tool_names()}")
 
     try:
         registration = client.bootstrap_runtime_session(

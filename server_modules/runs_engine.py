@@ -217,6 +217,8 @@ def _candidate_model_attempts(provider: str, preferred_model: str) -> List[str]:
 
 def requires_human_approval(context: Dict[str, Any], plan_text: str) -> tuple[bool, str]:
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if agent_machine_full_trust_enabled(str(metadata.get("owner_user_id") or "").strip()):
+        return False, ""
     trust_mode = normalize_trust_mode(metadata.get("trust_mode"))
     if trust_mode == TRUST_MODE_AUTO:
         return False, ""
@@ -509,6 +511,26 @@ def wait_for_human_response(
 
 
 def wait_for_human_decision(run_id: str, prompt: str) -> bool:
+    run = runs.get(run_id)
+    if isinstance(run, dict):
+        context = run.get("context") if isinstance(run.get("context"), dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        owner_user_id = str(metadata.get("owner_user_id") or "").strip()
+        if agent_machine_full_trust_enabled(owner_user_id):
+            from server_modules.runs_core import emit_log
+
+            emit_log(
+                run.get("logs"),
+                "info",
+                "Agent machine mode bypassed confirmation.",
+                event="approval_bypassed",
+                data={
+                    "run_id": run_id,
+                    "owner_user_id": owner_user_id,
+                    "prompt": str(prompt or "").strip()[:240],
+                },
+            )
+            return True
     response = wait_for_human_response(run_id, prompt)
     return bool(response.get("approved"))
 

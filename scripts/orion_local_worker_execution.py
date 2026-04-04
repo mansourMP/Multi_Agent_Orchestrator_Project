@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sentry_sdk
 import sys
 import uuid
 from html import unescape
@@ -39,6 +40,35 @@ except ImportError:
         build_local_operator_execution_binding,
         local_operator_approval_env_snapshot,
         local_operator_execution_binding_matches,
+    )
+
+try:
+    from computer_control import (
+        click_element_by_text,
+        keyboard_type,
+        launch_app,
+        list_running_apps,
+        mouse_click,
+        read_clipboard,
+        run_applescript,
+        speak_text,
+        screen_ocr,
+        send_notification,
+        write_clipboard,
+    )
+except ImportError:
+    from server_modules.computer_control import (  # type: ignore[no-redef]
+        click_element_by_text,
+        keyboard_type,
+        launch_app,
+        list_running_apps,
+        mouse_click,
+        read_clipboard,
+        run_applescript,
+        speak_text,
+        screen_ocr,
+        send_notification,
+        write_clipboard,
     )
 
 try:
@@ -88,6 +118,22 @@ LOCAL_EXECUTION_TEXT_EXTENSIONS = {
     ".toml",
 }
 BROWSER_CAPTURE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+LOCAL_WORKER_REGISTERED_TOOLS = [
+    "read_write_files",
+    "execute_shell_command",
+    "capture_screenshot",
+    "browser_automation",
+    "computer_control.ocr",
+    "computer_control.click",
+    "computer_control.type",
+    "computer_control.applescript",
+    "computer_control.clipboard_read",
+    "computer_control.clipboard_write",
+    "computer_control.notify",
+    "computer_control.list_apps",
+    "computer_control.launch_app",
+    "computer_control.speak",
+]
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -95,6 +141,10 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def registered_local_worker_tool_names() -> List[str]:
+    return list(LOCAL_WORKER_REGISTERED_TOOLS)
 
 
 def _resolved_local_operation_limit(metadata: Optional[Dict[str, Any]] = None) -> int:
@@ -1309,6 +1359,76 @@ def _run_screenshot_operation(run_id: str, op_index: int, operation: Dict[str, A
     return action, artifact
 
 
+def _run_computer_control_operation(op_index: int, operation: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    action_name = _normalize_action_id(operation.get("action"))
+    if not action_name:
+        raise RuntimeError("Computer control action is required.")
+
+    summary = _operation_summary(operation, op_index)
+    action: Dict[str, Any] = {
+        "step_index": op_index,
+        "step_number": op_index + 1,
+        "tool": "computer_control",
+        "status": "completed",
+        "summary": summary,
+        "action": "computer_control",
+        "computer_action": action_name,
+    }
+
+    if action_name == "ocr":
+        text = screen_ocr(region=operation.get("region"))
+        action["text_preview"] = _bounded_text(text, 1200)
+        return action, None
+    if action_name == "click":
+        text_target = str(operation.get("text") or "").strip()
+        if text_target:
+            message = click_element_by_text(text_target)
+        else:
+            if operation.get("x") is None or operation.get("y") is None:
+                raise RuntimeError("Computer click requires x/y or text.")
+            message = mouse_click(operation.get("x"), operation.get("y"))
+        action["summary"] = message
+        return action, None
+    if action_name == "type":
+        text = str(operation.get("text") or "")
+        action["summary"] = keyboard_type(text)
+        return action, None
+    if action_name == "applescript":
+        script = str(operation.get("script") or "").strip()
+        output = run_applescript(script)
+        action["output_preview"] = _bounded_text(output, 1200)
+        return action, None
+    if action_name == "clipboard_read":
+        text = read_clipboard()
+        action["text_preview"] = _bounded_text(text, 1200)
+        return action, None
+    if action_name == "clipboard_write":
+        text = str(operation.get("text") or "")
+        action["summary"] = write_clipboard(text)
+        return action, None
+    if action_name == "notify":
+        title = str(operation.get("title") or "").strip()
+        message = str(operation.get("message") or "").strip()
+        action["summary"] = send_notification(title, message)
+        return action, None
+    if action_name == "list_apps":
+        apps = list_running_apps()
+        preview_items = [str(item.get("name") or item.get("exe") or item.get("pid") or "").strip() for item in apps[:20] if isinstance(item, dict)]
+        action["apps_preview"] = "\n".join(item for item in preview_items if item)
+        action["app_count"] = len(apps)
+        return action, None
+    if action_name == "launch_app":
+        name_or_path = str(operation.get("name_or_path") or "").strip()
+        action["summary"] = launch_app(name_or_path)
+        return action, None
+    if action_name == "speak":
+        text = str(operation.get("text") or "").strip()
+        voice = str(operation.get("voice") or "").strip() or None
+        action["summary"] = speak_text(text, voice=voice)
+        return action, None
+    raise RuntimeError(f"Unsupported computer control action '{action_name}'.")
+
+
 def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, Any], pack_inputs: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     run_id = str(run.get("run_id") or uuid.uuid4()).strip()
     root = _local_execution_root()
@@ -1338,6 +1458,8 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         tool_id = _normalize_action_id(operation_row.get("tool") or operation_row.get("action"))
         summary_label = _operation_summary(operation_row, index)
         try:
+            artifacts: List[Dict[str, Any]] = []
+            artifact: Optional[Dict[str, Any]] = None
             if tool_id == "execute_shell_command":
                 action, artifact = _run_shell_operation(run_id, index, operation_row, root, artifacts_root)
             elif tool_id == "read_write_files":
@@ -1347,10 +1469,15 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                 artifacts = [artifact]
             elif tool_id == "browser_automation":
                 action, artifacts = _run_browser_operation(run_id, index, operation_row, root, artifacts_root)
+            elif tool_id == "computer_control":
+                action, artifact = _run_computer_control_operation(index, operation_row)
             else:
                 raise RuntimeError(f"Unsupported local execution tool '{tool_id or 'unknown'}'.")
             outputs_actions.append(action)
-            outputs_artifacts.extend(artifacts if tool_id == "browser_automation" else [artifact])
+            if tool_id == "browser_automation":
+                outputs_artifacts.extend(artifacts)
+            elif isinstance(artifact, dict):
+                outputs_artifacts.append(artifact)
             steps.append(
                 {
                     "step_index": index,
@@ -1358,7 +1485,13 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
                     "tool": tool_id or "unknown",
                     "summary": summary_label,
                     "status": "completed",
-                    "artifact_file_path": (artifacts[0].get("file_path") if tool_id == "browser_automation" else artifact.get("file_path")),
+                    "artifact_file_path": (
+                        artifacts[0].get("file_path")
+                        if tool_id == "browser_automation" and artifacts
+                        else artifact.get("file_path")
+                        if isinstance(artifact, dict)
+                        else None
+                    ),
                     "session_profile": action.get("session_profile"),
                     "browser_security_profile": action.get("browser_security_profile"),
                 }
@@ -1399,6 +1532,7 @@ def build_local_execution_pack_result(run: Dict[str, Any], metadata: Dict[str, A
         except Exception as exc:
             if isinstance(exc, LocalExecutionPauseRequired):
                 raise
+            sentry_sdk.capture_exception(exc)
             error_row = {
                 "tool": tool_id or "unknown",
                 "message": str(exc),

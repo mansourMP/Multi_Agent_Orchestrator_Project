@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import sentry_sdk
 import threading
 import time
 import uuid
@@ -489,6 +490,16 @@ def _build_direct_chat_event_producer(
 ):
     from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
     actor_key = _direct_chat_actor_key(current_user, workspace_id, thread_id)
+    user_id = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+    )
+    direct_session_ctx = {
+        "workspace_id": workspace_id,
+        "thread_id": thread_id,
+        "user_id": user_id,
+    }
 
     if not _direct_chat_session_manager_enabled():
         return build_direct_operator_reply(
@@ -501,6 +512,7 @@ def _build_direct_chat_event_producer(
             reasoning_effort=str(body.get("reasoning_effort") or "").strip(),
             approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
             max_iterations=body.get("max_iterations"),
+            session_ctx=direct_session_ctx,
         )
 
     manager = _direct_chat_session_manager()
@@ -513,11 +525,6 @@ def _build_direct_chat_event_producer(
         workspace_id=workspace_id,
         thread_id=thread_id,
         client_request_id=client_request_id,
-    )
-    user_id = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
     )
     return manager.iter_turn_events(
         session_id=actor_key,
@@ -684,6 +691,7 @@ def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:
                     final_emitted = True
                 _append_chat_stream_event(session, event_name, payload)
         except Exception as exc:
+            sentry_sdk.capture_exception(exc)
             if not final_emitted:
                 _append_chat_stream_event(session, "final", _chat_stream_error_payload(str(exc)))
         finally:

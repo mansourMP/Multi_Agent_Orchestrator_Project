@@ -1,0 +1,160 @@
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+from server_modules import direct_chat_generation_service
+from server_modules import direct_chat_response_service
+from server_modules import direct_chat_runtime_service
+from server_modules import no_provider_service
+
+
+class DirectChatRuntimeServiceTests(unittest.TestCase):
+    def _response_services(self) -> direct_chat_response_service.DirectChatResponseServices:
+        return direct_chat_response_service.DirectChatResponseServices(
+            with_context_used=lambda payload, context: {**payload, "context_used": context},
+            build_context_used=lambda **kwargs: kwargs,
+            connected_provider_tokens=lambda _workspace_id: ["openai"],
+            list_memory_entries=lambda _workspace_id: [],
+            active_run_count=lambda _workspace_id: 0,
+            get_memory=lambda _workspace_id: "",
+            delete_memory=lambda _workspace_id, _key: False,
+            slash_command_help_text=lambda: "help text",
+            execute_direct_tool_calls=lambda **kwargs: "tool reply",
+            direct_chat_credentials=lambda _workspace_id, _provider: {"api_key": "sk-test"},
+            capture_exception=lambda exc: None,
+        )
+
+    def _runtime_services(self, prepared: SimpleNamespace) -> direct_chat_runtime_service.DirectChatRuntimeServices:
+        return direct_chat_runtime_service.DirectChatRuntimeServices(
+            prepare_direct_chat_request=lambda **kwargs: prepared,
+            direct_chat_response_services=self._response_services(),
+            tool_gate_response=lambda message, availability: None,
+            with_context_used=lambda payload, context: {**payload, "context_used": context},
+            tool_write_action_available=lambda connector, action, capabilities: True,
+            approved_action_to_tool_call=lambda approved_action: {},
+            message_has_obvious_direct_tool_intent=lambda message, tools: False,
+            no_provider_execution_services=no_provider_service.NoProviderExecutionServices(
+                compact_text=lambda value: str(value or "").strip().lower(),
+                safe_positive_int=lambda value, default=0: default,
+                resolve_local_path=lambda path: mock.MagicMock(),
+                extract_first_path_reference=lambda message: "",
+                extract_first_url=lambda message: "",
+                parse_page_state=lambda payload: payload,
+                parse_memory_write=lambda message: None,
+                parse_memory_read=lambda message: None,
+                handle_memory_request=lambda workspace_id, message: None,
+                parse_tool_name=lambda name: ("", ""),
+                tool_arguments_payload=lambda arguments: {},
+                approval_required_for_tool=lambda connector, action, payload, capabilities: False,
+                agent_machine_full_trust_for_session=lambda session_ctx: False,
+                execute_single_tool_call=lambda **kwargs: "tool reply",
+            ),
+            build_context_used=lambda **kwargs: kwargs,
+            resolve_provider_for_direct_chat_message=lambda workspace_id, requested_provider, message: ("openai", {}),
+            plan_direct_chat_route=lambda **kwargs: SimpleNamespace(
+                allow_direct_tool_calls=True,
+                preview=None,
+                should_auto_start_run=False,
+            ),
+            start_direct_chat_run_handoff=lambda **kwargs: {"run_id": "run-1"},
+            direct_chat_run_handoff_reply=lambda started: {"detail": "Run started"},
+            stream_direct_chat_run_handoff=lambda **kwargs: iter(()),
+            direct_chat_run_handoff_failure_payload=lambda message, detail: {"reply": detail},
+            supports_direct_message_native_chat=lambda provider, credentials: True,
+            supported_providers=["openai"],
+            build_direct_chat_system_prompt=lambda **kwargs: "system prompt",
+            direct_chat_workspace_context_text=lambda workspace_id, memory_query="": "",
+            direct_chat_generation_services=direct_chat_generation_service.DirectChatGenerationServices(
+                thinking_step_payload=lambda iteration, status, detail=None: {"type": "step", "label": "Thinking"},
+                build_context_used=lambda **kwargs: kwargs,
+                build_direct_tool_approval_response=lambda **kwargs: None,
+                parse_tool_name=lambda name: ("", ""),
+                tool_arguments_payload=lambda arguments: {},
+                parse_page_state=lambda payload: payload,
+                direct_tool_step_payload=lambda *args, **kwargs: {"type": "step", "label": "Tool"},
+                execute_single_direct_tool_call=lambda **kwargs: "done",
+                direct_tool_followup_message=lambda tool_name, result: result,
+                suggest_actions=lambda reply, availability: [],
+                clear_direct_tool_loop_state=lambda session_key: None,
+                persist_direct_chat_memory_best_effort=lambda **kwargs: None,
+                persist_direct_chat_transcript_best_effort=lambda **kwargs: None,
+                record_direct_tool_signature=lambda session_key, tool_call: False,
+                direct_chat_error_reply=lambda error: error,
+                capture_exception=lambda exc: None,
+                generate_chat_reply_stream_with_provider_fallback=lambda **kwargs: iter(()),
+            ),
+            no_provider_reasoning_required_response=lambda: {
+                "reply": "",
+                "actions": [],
+                "mode": "error",
+                "error": "no_provider",
+            },
+            capture_exception=lambda exc: None,
+        )
+
+    def test_build_direct_operator_reply_returns_empty_message_payload(self) -> None:
+        prepared = SimpleNamespace(
+            normalized_message="",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=["next"],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+
+        events = list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=self._runtime_services(prepared),
+                message="",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+            )
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "final")
+        self.assertIn("Tell me the outcome you want", events[0]["payload"]["reply"])
+        self.assertEqual(events[0]["payload"]["suggestions"], ["next"])
+
+    def test_collect_direct_operator_reply_accumulates_chunks(self) -> None:
+        services = self._runtime_services(SimpleNamespace())
+
+        with mock.patch.object(
+            direct_chat_runtime_service,
+            "build_direct_operator_reply",
+            return_value=iter(
+                [
+                    {"type": "chunk", "delta": "Hello "},
+                    {"type": "chunk", "delta": "world"},
+                    {"type": "final", "payload": {"actions": [], "mode": "answer"}},
+                ]
+            ),
+        ):
+            payload = direct_chat_runtime_service.collect_direct_operator_reply(
+                services=services,
+                message="hi",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+            )
+
+        self.assertEqual(payload["reply"], "Hello world")
+        self.assertEqual(payload["mode"], "answer")
+
+
+if __name__ == "__main__":
+    unittest.main()

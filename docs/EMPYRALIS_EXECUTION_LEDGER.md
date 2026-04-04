@@ -659,6 +659,78 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-04 - Direct Chat Runtime Loop Moved Behind Dedicated Runtime Service
+
+#### Stage
+
+Stage 1 continues. The top-level direct-chat runtime loop no longer lives primarily inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is the biggest direct-chat orchestration collapse so far. The chat module now delegates its main runtime control flow to [server_modules/direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_service.py), while preserving the public wrappers that the rest of the runtime and the tests already call.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_service.py) with:
+  - `DirectChatRuntimeServices`
+  - `build_direct_operator_reply()`
+  - `collect_direct_operator_reply()`
+  - `build_chat_turn_event_stream()`
+  - `execute_chat_turn()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so:
+  - `build_direct_operator_reply()` is now a thin wrapper over the runtime service
+  - `collect_direct_operator_reply()` delegates to the runtime service
+  - `build_chat_turn_event_stream()` delegates to the runtime service
+  - `execute_chat_turn()` delegates to the runtime service
+  - a new `_direct_chat_runtime_services()` bundle wires the existing extracted subsystems together
+- Added focused coverage in:
+  - [server_modules/tests/test_direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_service.py)
+- Reduced [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) from `3715` lines to `3308` lines in this cut
+
+#### Current Truth
+
+- The direct-chat stack now has service boundaries for:
+  - entry preparation
+  - prompt assembly
+  - provider routing
+  - tool and handoff routing
+  - durable-run handoff lifecycle
+  - provider-backed generation
+  - top-level response shaping
+  - top-level runtime orchestration
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is materially smaller and closer to a compatibility-and-glue layer.
+- The canonical direct-chat runtime now looks like a composed system rather than one oversized module.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is still too large and still owns legacy helper and compatibility surface.
+- The direct-chat runtime still depends on callback bundles assembled inside the legacy chat module rather than a more formal runtime composition root.
+- Run orchestration, connector decomposition, skills convergence, computer-control formalization, Rust supervisor work, and durable infrastructure phases remain ahead.
+
+#### Next Required Work
+
+1. Keep shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) toward compatibility glue by extracting more wrappers or collapsing them into a formal composition root.
+2. Start the next architecture phase by converging the run path more aggressively around [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) and the canonical turn runtime.
+3. Decide how the connector monolith in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) gets split into thin channel adapters without breaking production behavior.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_response_service`
+  - `server_modules.tests.test_direct_chat_entry_service`
+  - `server_modules.tests.test_direct_chat_generation_service`
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-04 - Direct Chat Durable-Run Handoff Lifecycle Moved Behind Dedicated Handoff Service
 
 #### Stage

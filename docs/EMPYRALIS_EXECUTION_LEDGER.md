@@ -1305,6 +1305,71 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Top-Level Telegram And WhatsApp Registry Wiring Moved Behind Channel Registry Bridge
+
+#### Stage
+
+Stage 2 connector convergence continues. The autopilot connector module no longer owns the inline construction bodies for the top-level Telegram and WhatsApp service registries.
+
+This is a composition cut, not just another helper wrapper. The live getter names still exist in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), but the registry wiring now crosses a dedicated bridge module first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_channel_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_registry_bridge_service.py) to own:
+  - top-level Telegram autopilot registry construction
+  - top-level WhatsApp autopilot registry construction
+  - shared caching for both channel registries
+  - the callback wiring from support/runtime/helper registries into the channel registries
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_channel_registry_bridge_service()` owns bridge construction
+  - `_telegram_service_registry()` now delegates through the bridge
+  - `_whatsapp_service_registry()` now delegates through the bridge
+  - the inline Telegram and WhatsApp registry constructor blocks were removed from the connector module
+  - the bridge preserves late-bound `runs` lookup semantics so live module patches still flow into the Telegram run-dispatch service
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_channel_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_channel_registry_bridge_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exports the historical channel entrypoints, but it no longer owns the full top-level registry assembly inline.
+- The channel composition layer is now split more cleanly:
+  - [server_modules/connectors/autopilot_channel_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_registry_bridge_service.py)
+  - [server_modules/connectors/autopilot_support_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_support_service_registry.py)
+  - [server_modules/connectors/autopilot_runtime_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_service_registry.py)
+  - [server_modules/connectors/telegram_autopilot_helper_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_autopilot_helper_registry.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `996` lines from `1190` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a meaningful amount of top-level endpoint export surface and runtime bootstrap state.
+- The Telegram helper registry bootstrapping and the shared endpoint registry are still the main remaining composition-heavy bands inside the connector module.
+- The compatibility layer is thinner than before, but the module is not yet a pure shell around a single runtime contract.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by moving the remaining endpoint/bootstrap composition bands behind dedicated services.
+2. Keep preserving the historical exported getter and entrypoint names while the internals converge on registry-based composition.
+3. Maintain focused deterministic tests for each extracted bridge or registry cut before widening the verification set again.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_channel_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_channel_registry_bridge_service.py)
+  - [server_modules/tests/test_autopilot_channel_registry_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_channel_registry_bridge_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_channel_registry_bridge_service`
+  - `server_modules.tests.test_telegram_autopilot_service_registry`
+  - `server_modules.tests.test_whatsapp_autopilot_service_registry`
+  - `server_modules.tests.test_autopilot_runtime_service_registry`
+  - `server_modules.tests.test_autopilot_support_service_registry`
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Machine-Mode Run Wrapper Band Removed From Autopilot Connectors
 
 #### Stage

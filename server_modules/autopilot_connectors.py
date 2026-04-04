@@ -14,6 +14,7 @@ from server_modules.connectors.telegram_profile_service import (
     TelegramProfileService,
 )
 from server_modules.connectors.telegram_action_service import TelegramActionService
+from server_modules.connectors.telegram_inbound_context_service import TelegramInboundContextService
 from server_modules.connectors.telegram_poll_state_service import TelegramPollStateService
 from server_modules.connectors.telegram_run_action_service import TelegramRunActionService
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
@@ -240,6 +241,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
 _TELEGRAM_SENDER_FILTER_SERVICE: Optional[TelegramSenderFilterService] = None
 _TELEGRAM_ACTION_SERVICE: Optional[TelegramActionService] = None
+_TELEGRAM_INBOUND_CONTEXT_SERVICE: Optional[TelegramInboundContextService] = None
 _TELEGRAM_POLL_STATE_SERVICE: Optional[TelegramPollStateService] = None
 _TELEGRAM_RUN_ACTION_SERVICE: Optional[TelegramRunActionService] = None
 _WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
@@ -321,6 +323,29 @@ def _telegram_action_service() -> TelegramActionService:
             ),
         )
     return _TELEGRAM_ACTION_SERVICE
+
+
+def _telegram_inbound_context_service() -> TelegramInboundContextService:
+    global _TELEGRAM_INBOUND_CONTEXT_SERVICE
+    if _TELEGRAM_INBOUND_CONTEXT_SERVICE is None:
+        _TELEGRAM_INBOUND_CONTEXT_SERVICE = TelegramInboundContextService(
+            media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
+            extract_message=lambda update: _telegram_extract_message(update),
+            chat_matches=lambda configured_chat_id, chat: _telegram_chat_matches(configured_chat_id, chat),
+            store_attachments=lambda **kwargs: _telegram_store_attachments(**kwargs),
+            route_message=lambda message_text, profile: _telegram_route_message(message_text, profile),
+            session_key_builder=lambda chat_id: _telegram_session_key(chat_id),
+            trace_id_builder=lambda chat_id, update_id, message_id: _telegram_trace_id(chat_id, update_id, message_id),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            guided_setup_handler=lambda **kwargs: _telegram_handle_guided_automation_setup(**kwargs),
+            send_message=lambda **kwargs: _telegram_send_message(
+                kwargs.pop("bot_token", ""),
+                kwargs.pop("chat_id", ""),
+                kwargs.pop("text", ""),
+                **kwargs,
+            ),
+        )
+    return _TELEGRAM_INBOUND_CONTEXT_SERVICE
 
 
 def _telegram_increment_processed_updates() -> None:
@@ -3562,20 +3587,19 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
         for update in updates:
             if not isinstance(update, dict):
                 continue
-            update_id = int(update.get("update_id") or 0)
+            extracted_message = _telegram_inbound_context_service().extract_inbound_message(
+                update=update,
+                configured_chat_id=configured_chat_id,
+            )
+            update_id = int(extracted_message.get("update_id") or 0)
             if update_id <= max_seen:
                 continue
             max_seen = update_id
-
-            message = _telegram_extract_message(update)
-            if not isinstance(message, dict):
+            if not bool(extracted_message.get("handled")):
                 continue
-            chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
-            sender = message.get("from") if isinstance(message.get("from"), dict) else {}
-            if bool(sender.get("is_bot")):
-                continue
-            if not _telegram_chat_matches(configured_chat_id, chat):
-                continue
+            message = extracted_message.get("message") if isinstance(extracted_message.get("message"), dict) else {}
+            chat = extracted_message.get("chat") if isinstance(extracted_message.get("chat"), dict) else {}
+            sender = extracted_message.get("sender") if isinstance(extracted_message.get("sender"), dict) else {}
             if not _telegram_sender_allowed(sender, allow_from):
                 sender_id = str(sender.get("id") or "").strip()
                 sender_username = str(sender.get("username") or "").strip().lower()
@@ -3595,99 +3619,44 @@ def _telegram_poll_connector(entry: Dict[str, Any]):
                 )
                 continue
 
-            chat_id = str(chat.get("id") or configured_chat_id).strip()
-            sender_id = str(sender.get("id") or "").strip()
-            inbound_message_id = str(message.get("message_id") or "").strip()
-            inbound_parent_id = str(message.get("reply_to_message_id") or "").strip()
-            message_text = str(message.get("text") or "")
-            raw_attachments = message.get("attachments") if isinstance(message.get("attachments"), list) else []
-            stored_attachments = _telegram_store_attachments(
+            inbound_context = _telegram_inbound_context_service().build_inbound_context(
                 bot_token=bot_token,
                 workspace_id=workspace_id,
-                chat_id=chat_id,
+                connector_id=connector_id,
+                profile=profile,
+                configured_chat_id=configured_chat_id,
+                extracted_message=message,
+                extracted_chat=chat,
+                extracted_sender=sender,
                 update_id=update_id,
-                message_id=inbound_message_id or "",
-                attachments=raw_attachments,
             )
-            routed = _telegram_route_message(message_text, profile)
-            action = str(routed.get("action") or "ignore").strip().lower()
-            if action == "ignore" and stored_attachments:
-                routed = {
-                    "action": "run",
-                    "goal": "Analyze the attached image(s) and help me with what they contain.",
-                    "source": "image_only",
-                }
-                action = "run"
-            session_key = _telegram_session_key(chat_id)
-
-            trace_id = _telegram_trace_id(chat_id, update_id, inbound_message_id or "")
-            inbound_event = _record_channel_event(
-                channel="telegram",
-                direction="inbound",
-                event_type="message",
-                text=message_text,
-                workspace_id=workspace_id,
-                session_key=session_key,
-                session_id=session_key,
-                message_id=inbound_message_id or None,
-                parent_id=inbound_parent_id or None,
-                action=action,
-                metadata={
-                    "connector_id": connector_id,
-                    "sender_id": sender_id,
-                    "update_id": update_id,
-                    "profile_id": profile.get("id"),
-                    "attachments_count": len(stored_attachments),
-                    "trace_id": trace_id,
-                    "delivery_status": "received",
-                    "attachments": [
-                        {
-                            "kind": str(item.get("kind") or "").strip(),
-                            "mime_type": str(item.get("mime_type") or "").strip(),
-                            "path": str(item.get("relative_path") or item.get("path") or "").strip(),
-                            "bytes": int(item.get("bytes") or 0),
-                        }
-                        for item in stored_attachments[:ORION_TELEGRAM_MEDIA_MAX_ITEMS]
-                        if isinstance(item, dict)
-                    ],
-                },
+            chat_id = str(inbound_context.get("chat_id") or "").strip()
+            sender_id = str(inbound_context.get("sender_id") or "").strip()
+            inbound_message_id = str(inbound_context.get("inbound_message_id") or "").strip()
+            message_text = str(inbound_context.get("message_text") or "")
+            stored_attachments = (
+                inbound_context.get("stored_attachments")
+                if isinstance(inbound_context.get("stored_attachments"), list)
+                else []
             )
-            source_event_id = str((inbound_event or {}).get("id") or "").strip()
-            guided_setup = _telegram_handle_guided_automation_setup(
+            routed = inbound_context.get("routed") if isinstance(inbound_context.get("routed"), dict) else {}
+            action = str(inbound_context.get("action") or "ignore").strip().lower()
+            session_key = str(inbound_context.get("session_key") or "").strip()
+            trace_id = str(inbound_context.get("trace_id") or "").strip()
+            source_event_id = str(inbound_context.get("source_event_id") or "").strip()
+            guided_setup = _telegram_inbound_context_service().handle_guided_setup(
                 workspace_id=workspace_id,
+                connector_id=connector_id,
+                profile=profile,
+                bot_token=bot_token,
                 chat_id=chat_id,
                 message_text=message_text,
+                inbound_message_id=inbound_message_id,
+                session_key=session_key,
+                trace_id=trace_id,
+                source_event_id=source_event_id,
             )
             if bool(guided_setup.get("handled")):
-                _record_channel_event(
-                    channel="telegram",
-                    direction="system",
-                    event_type="automation_setup_reply",
-                    text=str(guided_setup.get("reply") or "").strip(),
-                    workspace_id=workspace_id,
-                    session_key=session_key,
-                    session_id=session_key,
-                    parent_id=inbound_message_id or None,
-                    action="automation_setup",
-                    metadata={
-                        "connector_id": connector_id,
-                        "profile_id": profile.get("id"),
-                        "trace_id": trace_id,
-                        "source_event_id": source_event_id,
-                    },
-                )
-                _telegram_send_message(
-                    bot_token,
-                    chat_id,
-                    str(guided_setup.get("reply") or "").strip(),
-                    workspace_id=workspace_id,
-                    action="automation_setup",
-                    connector_id=connector_id,
-                    parent_message_id=inbound_message_id or None,
-                    profile=profile,
-                    trace_id=trace_id,
-                    source_event_id=source_event_id,
-                )
                 continue
             if action == "ignore":
                 continue

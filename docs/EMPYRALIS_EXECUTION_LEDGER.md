@@ -169,6 +169,84 @@ Stage 1 has started: canonical runtime convergence scaffolding has been created,
 - `a7ac871` `docs: mark current documentation and quarantine legacy docs`
 - `6a9359b` `chore: canonize architecture and scaffold core services`
 
+### 2026-04-04 - Telegram Inbound Update Context Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The Telegram poll loop no longer owns raw inbound message extraction, inbound-event context assembly, attachment-aware image-only fallback promotion, or guided automation setup reply orchestration inline.
+
+This does not finish the Telegram poll loop yet. The loop still sequences updates, enforces sender allowlists, delegates non-run and run actions, and records processed-update state. But the inbound normalization block is now a real connector service boundary instead of monolith-owned glue.
+
+#### Completed Work
+
+- Added [server_modules/connectors/telegram_inbound_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_inbound_context_service.py).
+- Moved Telegram raw inbound extraction behind that service:
+  - update to message extraction
+  - chat and bot-sender filtering
+  - configured-chat matching
+- Moved Telegram inbound event/context assembly behind that service:
+  - attachment storage
+  - routed action calculation
+  - image-only attachment fallback to `run`
+  - session key and trace id derivation
+  - inbound channel event recording
+- Moved Telegram guided automation setup interception behind that service:
+  - guided-setup decision
+  - automation setup reply event recording
+  - automation setup reply send
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so `_telegram_poll_connector()` now delegates inbound extraction and inbound context assembly to the new service instead of owning that block inline.
+- Added focused service coverage in [server_modules/tests/test_telegram_inbound_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_inbound_context_service.py).
+
+#### Current Truth
+
+- Telegram connector behavior is now split across smaller service boundaries for:
+  - routing
+  - profile/onboarding
+  - camera setup
+  - media handling
+  - sender filtering
+  - non-run actions
+  - run actions
+  - run dispatch
+  - poll-state patching
+  - inbound update context assembly
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is still the poll-loop coordinator, but another heavy inline ownership block has been removed.
+- The Telegram poll loop is now closer to coordination-only code than to a single-module connector implementation.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the top-level Telegram poll sequencing loop.
+- Sender allowlist enforcement still lives in the poll loop even though denied-sender handling is already service-owned.
+- The remaining loop still coordinates action dispatch and processed-update bookkeeping inline.
+- The broader connector monolith still contains other channel behavior outside the Telegram slices already extracted.
+
+#### Next Required Work
+
+1. Keep reducing the remaining Telegram poll loop so it becomes sequencing code around services, not a place where connector behavior accumulates again.
+2. Decide whether sender-allowlist evaluation itself should move behind a Telegram ingress service boundary now that denied-sender handling is already extracted.
+3. Continue cutting non-Telegram channel behavior out of [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) until the file is a thin coordination layer rather than the connector implementation.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/telegram_inbound_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_inbound_context_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_telegram_inbound_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_telegram_inbound_context_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_telegram_inbound_context_service`
+  - `server_modules.tests.test_telegram_run_action_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_action_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `server_modules.tests.test_telegram_poll_state_service`
+  - `server_modules.tests.test_telegram_sender_filter_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Canonical Turn Contract Routed Into Live Entry Boundaries
 
 #### Stage

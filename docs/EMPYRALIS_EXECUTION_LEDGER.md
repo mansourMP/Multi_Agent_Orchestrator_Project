@@ -714,6 +714,66 @@ This is the first Telegram cut that moves an end-to-end dispatch path, not just 
   - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-04 - WhatsApp Run Finalization Moved Behind Connector Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The WhatsApp channel no longer owns its run-finalization lifecycle inline inside the connector monolith.
+
+This keeps the webhook transport surface smaller while preserving the existing async finalization behavior.
+
+#### Completed Work
+
+- Added [server_modules/connectors/whatsapp_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_run_dispatch_service.py) with service-owned:
+  - WhatsApp ack text shaping
+  - async run finalization
+  - Twilio outbound send handling
+  - dead-letter fallback on outbound failure
+  - run completion/error event recording
+  - connector state updates for success and failure
+  - finalizer thread startup
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_whatsapp_finalize_run_async()` delegates to the service
+  - the WhatsApp webhook `action == "run"` branch gets ack text from the service
+  - the webhook starts the async finalizer through the service instead of owning the thread creation inline
+- Added focused coverage in:
+  - [server_modules/tests/test_whatsapp_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_run_dispatch_service.py)
+
+#### Current Truth
+
+- Telegram and WhatsApp now both cross dedicated run-dispatch service boundaries for key channel run-lifecycle behavior.
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the top-level webhook and polling transport orchestration.
+- Cross-channel run waiting still reuses the compatible `_wait_for_run_terminal_status()` wrapper, which now routes through the Telegram run dispatch service.
+
+#### Open Gaps
+
+- The top-level Telegram polling loop still owns too much channel orchestration and connector-state patching.
+- WhatsApp webhook routing still lives inline in the monolith.
+- The broader channel monolith still mixes cross-channel transport, channel-specific flows, and state persistence concerns.
+
+#### Next Required Work
+
+1. Keep reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by extracting another top-level channel routing or state-update seam.
+2. Decide whether cross-channel run waiting should move into a channel-neutral service after the channel adapters are thinner.
+3. Continue toward thin channel adapters around canonical runtime services.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/connectors/whatsapp_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_run_dispatch_service.py)
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/tests/test_whatsapp_run_dispatch_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_whatsapp_run_dispatch_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_whatsapp_run_dispatch_service`
+  - `server_modules.tests.test_telegram_run_dispatch_service`
+  - `server_modules.tests.test_telegram_routing_service`
+  - `server_modules.tests.test_telegram_media_service`
+  - `server_modules.tests.test_telegram_camera_setup_service`
+  - `server_modules.tests.test_telegram_profile_service`
+  - `server_modules.tests.test_telegram_space_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+
 ### 2026-04-04 - Telegram Space-Status MCP Slice Moved Behind Connector Service
 
 #### Stage

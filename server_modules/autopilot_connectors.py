@@ -16,6 +16,7 @@ from server_modules.connectors.telegram_profile_service import (
 from server_modules.connectors.telegram_run_dispatch_service import TelegramRunDispatchService
 from server_modules.connectors.telegram_routing_service import TelegramRoutingService
 from server_modules.connectors.telegram_space_service import telegram_space_question_via_mcp
+from server_modules.connectors.whatsapp_run_dispatch_service import WhatsAppRunDispatchService
 from server_modules.installed_skills import query_active_installed_skills
 try:
     from fastapi import Request, Response
@@ -232,6 +233,7 @@ _TELEGRAM_ROUTING_SERVICE = TelegramRoutingService(
     skill_goal_builder=lambda skill: _telegram_skill_goal(skill),
 )
 _TELEGRAM_RUN_DISPATCH_SERVICE: Optional[TelegramRunDispatchService] = None
+_WHATSAPP_RUN_DISPATCH_SERVICE: Optional[WhatsAppRunDispatchService] = None
 
 
 def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
@@ -255,6 +257,35 @@ def _telegram_run_dispatch_service() -> TelegramRunDispatchService:
             pending_confirmation_payload=lambda run: _pending_confirmation_payload(run),
         )
     return _TELEGRAM_RUN_DISPATCH_SERVICE
+
+
+def _whatsapp_run_dispatch_service() -> WhatsAppRunDispatchService:
+    global _WHATSAPP_RUN_DISPATCH_SERVICE
+    if _WHATSAPP_RUN_DISPATCH_SERVICE is None:
+        _WHATSAPP_RUN_DISPATCH_SERVICE = WhatsAppRunDispatchService(
+            default_timeout_seconds=int(globals().get("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
+            default_max_reply_chars=int(globals().get("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
+            send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
+            include_run_meta=lambda: _autopilot_include_run_meta(),
+            truncate_one_line=lambda text, limit: _truncate_one_line(text, limit),
+            wait_for_run_terminal_status=lambda run_id, timeout_seconds=None, max_reply_chars=None: _wait_for_run_terminal_status(
+                run_id,
+                timeout_seconds=timeout_seconds,
+                max_reply_chars=max_reply_chars,
+            ),
+            run_reply_text=lambda status, run_id, summary: _autopilot_run_reply_text(status, run_id, summary),
+            send_whatsapp_message=lambda **kwargs: _twilio_send_whatsapp_message(**kwargs),
+            append_dead_letter=lambda **kwargs: _append_channel_dead_letter(**kwargs),
+            record_channel_event=lambda **kwargs: _record_channel_event(**kwargs),
+            set_connector_state=lambda connector_id, payload: _set_whatsapp_connector_state(connector_id, payload),
+            utc_now_iso=lambda: _utc_now_iso(),
+            classify_error=lambda detail: _classify_autopilot_error(detail),
+            log_error=lambda message: _whatsapp_autopilot_log(message),
+            mark_error=lambda detail: _whatsapp_autopilot_mark_error(detail, source="run_finalize"),
+            session_key_builder=lambda reply_to, from_number: _whatsapp_session_key(reply_to, from_number),
+            safe_path_token=lambda value: _telegram_safe_path_token(value),
+        )
+    return _WHATSAPP_RUN_DISPATCH_SERVICE
 
 
 def _runtime_skills_snapshot_safe() -> Dict[str, Any]:
@@ -3297,115 +3328,14 @@ def _whatsapp_finalize_run_async(
     secret: Dict[str, Any],
     reply_to_number: str,
 ):
-    session_key = _whatsapp_session_key(reply_to_number, str(secret.get("from_number") or ""))
-    trace_id = f"wa:{_telegram_safe_path_token(connector_id)}:{_telegram_safe_path_token(run_id)[:12]}"
-    try:
-        result = _wait_for_run_terminal_status(
-            run_id,
-            timeout_seconds=ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS,
-            max_reply_chars=ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS,
-        )
-        status = str(result.get("status") or "").lower()
-        summary = _truncate_one_line(str(result.get("summary") or "Run finished."), ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS)
-        message = _autopilot_run_reply_text(status, run_id, summary)
-        try:
-            sent = _twilio_send_whatsapp_message(
-                account_sid=str(secret.get("account_sid") or ""),
-                auth_token=str(secret.get("auth_token") or ""),
-                from_number=str(secret.get("from_number") or ""),
-                to_number=reply_to_number,
-                body=message,
-            )
-        except Exception as send_exc:
-            _append_channel_dead_letter(
-                channel="whatsapp",
-                direction="outbound",
-                event_type="message",
-                reason=str(send_exc),
-                text=message,
-                workspace_id=workspace_id,
-                session_key=session_key,
-                run_id=run_id,
-                action="run",
-                connector_id=connector_id,
-                trace_id=trace_id,
-                metadata={"transport": "twilio_messages_api"},
-            )
-            raise
-        outbound_message_id = str(sent.get("sid") or "").strip() if isinstance(sent, dict) else ""
-        _record_channel_event(
-            channel="whatsapp",
-            direction="outbound",
-            event_type="message",
-            text=message,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            session_id=session_key,
-            message_id=outbound_message_id or None,
-            run_id=run_id,
-            action="run",
-            metadata={
-                "connector_id": connector_id,
-                "profile_id": profile.get("id"),
-                "trace_id": trace_id,
-                "delivery_status": "sent",
-            },
-        )
-        _record_channel_event(
-            channel="whatsapp",
-            direction="system",
-            event_type=f"run_{status if status in {'completed', 'failed', 'timeout'} else 'finished'}",
-            text=summary,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            session_id=session_key,
-            run_id=run_id,
-            action="run",
-            metadata={"connector_id": connector_id, "profile_id": profile.get("id"), "trace_id": trace_id},
-        )
-        _set_whatsapp_connector_state(
-            connector_id,
-            {
-                "workspace_id": workspace_id,
-                "profile_id": profile.get("id"),
-                "last_run_id": run_id,
-                "last_action": "run",
-                "last_error": None,
-                "last_error_category": None,
-                "last_error_at": None,
-                "last_processed_at": _utc_now_iso(),
-            },
-        )
-    except Exception as exc:
-        detail = str(exc)
-        category = _classify_autopilot_error(detail)
-        _whatsapp_autopilot_log(f"finalize error run_id={run_id}: {detail}")
-        _record_channel_event(
-            channel="whatsapp",
-            direction="system",
-            event_type="error",
-            text=detail,
-            workspace_id=workspace_id,
-            session_key=session_key,
-            session_id=session_key,
-            run_id=run_id,
-            action="run",
-            metadata={"connector_id": connector_id, "profile_id": profile.get("id")},
-        )
-        _set_whatsapp_connector_state(
-            connector_id,
-            {
-                "workspace_id": workspace_id,
-                "profile_id": profile.get("id"),
-                "last_run_id": run_id,
-                "last_action": "run",
-                "last_error": detail,
-                "last_error_category": category,
-                "last_error_at": _utc_now_iso(),
-                "last_processed_at": _utc_now_iso(),
-            },
-        )
-        _whatsapp_autopilot_mark_error(detail, source="run_finalize")
+    _whatsapp_run_dispatch_service().finalize_run_async(
+        run_id,
+        connector_id,
+        workspace_id,
+        profile,
+        secret,
+        reply_to_number,
+    )
 
 
 async def _parse_form_urlencoded(request: Request) -> Dict[str, str]:
@@ -4288,20 +4218,20 @@ async def handle_whatsapp_twilio_webhook(request: Request):
             )
             run_id = str(run_info.get("run_id") or "")
             if ORION_WHATSAPP_AUTOPILOT_SEND_ACK and run_id:
-                response_text = "⏣ Empyralis started your request."
-                if _autopilot_include_run_meta():
-                    response_text += f"\nrun_id: {run_id}"
+                response_text = _whatsapp_run_dispatch_service().ack_text(run_id)
             elif ORION_WHATSAPP_AUTOPILOT_SEND_ACK:
-                response_text = "⏣ Empyralis started your request."
+                response_text = _whatsapp_run_dispatch_service().ack_text("")
             else:
                 response_text = ""
             if run_id:
-                thread = threading.Thread(
-                    target=_whatsapp_finalize_run_async,
-                    args=(run_id, connector_id, workspace_id, profile, secret, inbound_from),
-                    daemon=True,
+                _whatsapp_run_dispatch_service().start_finalize_thread(
+                    run_id,
+                    connector_id,
+                    workspace_id,
+                    profile,
+                    secret,
+                    inbound_from,
                 )
-                thread.start()
     else:
         action = "help"
         response_text = _whatsapp_help_text(profile)

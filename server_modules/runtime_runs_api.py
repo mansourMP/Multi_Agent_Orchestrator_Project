@@ -287,38 +287,26 @@ def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> N
     )
 
 
-def _default_chat_stream_session(
-    key: str,
-    *,
-    thread_id: str,
-    request_id: str,
-    workspace_id: str,
-) -> dict[str, Any]:
-    return chat_stream_state_service.default_chat_stream_session(
-        key,
-        thread_id=thread_id,
-        request_id=request_id,
-        workspace_id=workspace_id,
-        now_ts=time.time(),
-        now_iso=_chat_stream_now_iso,
-    )
+_default_chat_stream_session = lambda key, *, thread_id, request_id, workspace_id: chat_stream_state_service.default_chat_stream_session(
+    key,
+    thread_id=thread_id,
+    request_id=request_id,
+    workspace_id=workspace_id,
+    now_ts=time.time(),
+    now_iso=_chat_stream_now_iso,
+)
 
 
-def _persist_chat_stream_session_state(session: dict[str, Any]) -> None:
-    return chat_stream_state_service.persist_chat_stream_session_state(
-        session,
-        db_path=_chat_stream_state_db_path(),
-        now_iso=_chat_stream_now_iso,
-        upsert_state=upsert_chat_stream_state,
-    )
+_persist_chat_stream_session_state = lambda session: chat_stream_state_service.persist_chat_stream_session_state(
+    session,
+    db_path=_chat_stream_state_db_path(),
+    now_iso=_chat_stream_now_iso,
+    upsert_state=upsert_chat_stream_state,
+)
 
 
-def _chat_stream_interrupted_final_payload(partial_text: str, error_text: str) -> dict[str, Any]:
-    return chat_stream_state_service.chat_stream_interrupted_final_payload(partial_text, error_text)
-
-
-def _chat_stream_replay_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    return chat_stream_state_service.chat_stream_replay_payload_from_state(state)
+_chat_stream_interrupted_final_payload = chat_stream_state_service.chat_stream_interrupted_final_payload
+_chat_stream_replay_payload_from_state = chat_stream_state_service.chat_stream_replay_payload_from_state
 
 
 def _build_chat_stream_replay_session(
@@ -339,7 +327,6 @@ def _build_chat_stream_replay_session(
         replay_payload_from_state=_chat_stream_replay_payload_from_state,
         now_iso=_chat_stream_now_iso,
     )
-    return session
 
 
 def _load_replayable_chat_stream_session(

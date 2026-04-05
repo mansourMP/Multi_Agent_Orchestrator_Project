@@ -1565,6 +1565,70 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Tool Execution Flow Moved Behind Execution Service
+
+#### Stage
+
+Stage 1 continues. The direct-tool execution band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+The chat module still exports the historical helper names for compatibility, but the implementation now crosses a dedicated direct-tool execution boundary.
+
+#### Completed Work
+
+- Added [server_modules/direct_tool_execution_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_execution_service.py) to own:
+  - direct-tool step payload shaping
+  - thinking step payload shaping
+  - first URL and file-path extraction
+  - local-path resolution
+  - direct-tool follow-up message formatting
+  - single direct-tool execution dispatch
+  - multi-tool direct execution aggregation
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the historical helpers now delegate through injected callbacks into the new service instead of owning the implementation inline.
+- Preserved late-bound compatibility in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so tests and no-provider flows can still patch:
+  - `_execute_single_direct_tool_call()`
+  - `_execute_direct_tool_calls()`
+  - `_direct_tool_step_payload()`
+  - `_thinking_step_payload()`
+  - `_extract_first_url()`
+  - `_extract_first_path_reference()`
+  - `_resolve_chat_local_path()`
+  - `_direct_tool_followup_message()`
+- Added focused coverage in [server_modules/tests/test_direct_tool_execution_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_execution_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `3243` to `2964` lines in this cut.
+- Direct-tool execution behavior now has a dedicated service seam instead of a large inline branch cluster inside the chat module.
+- The chat module still supplies the dependency graph and compatibility wrapper surface, so existing callers do not need to change.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much higher-level direct-chat orchestration, including provider routing, prompt assembly, and response coordination.
+- The no-provider service still depends on callbacks exported from the chat module instead of a thinner runtime composition layer.
+- Approval response shaping and execution planning already cross service boundaries, but the full no-provider runtime path is not yet reduced to a minimal coordinator.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting the next orchestration slice around no-provider runtime assembly or direct-chat response flow.
+2. Keep preserving late-bound module patch points while the runtime composition moves into dedicated services.
+3. Maintain focused offline tests around direct-tool, no-provider, and iteration-cap behavior after each extraction cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_tool_execution_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_execution_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_tool_execution_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_execution_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_tool_execution_service`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

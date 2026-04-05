@@ -65,6 +65,7 @@ from server_modules.runtime_state_store import (
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_run_access_service
+from server_modules import runtime_run_control_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
@@ -1479,34 +1480,13 @@ def register_run_routes(app) -> None:
     async def resume_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         run_id_str = str(run_id)
-        run = runs.get(run_id_str)
-        if not isinstance(run, dict):
-            raise HTTPException(status_code=404, detail="Run ID not found")
-        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
-        _enforce_run_owner_access(current_user, snapshot)
-        if str(run.get("status") or "").strip().lower() != "waiting_for_input":
-            raise HTTPException(status_code=409, detail="Run is not waiting for input.")
-        if isinstance(_get_pending_confirmation(run), dict) and _get_pending_confirmation(run):
-            raise HTTPException(status_code=409, detail="Run requires confirmation resolution, not direct resume.")
-        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
-        if not checkpoint:
-            raise HTTPException(status_code=409, detail="Run does not have a resumable browser checkpoint.")
-        emit_log(
-            run["logs"],
-            "info",
-            "Resume requested for paused browser operator run.",
-            event="browser_resume_requested",
-            data={
-                "run_id": run_id_str,
-                "next_action_index": checkpoint.get("next_action_index"),
-                "session_profile": checkpoint.get("session_profile"),
-            },
+        return runtime_run_control_service.resume_waiting_run(
+            run_id_str,
+            run=runs.get(run_id_str),
+            current_user=current_user,
+            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            get_pending_confirmation=_get_pending_confirmation,
+            emit_log=emit_log,
+            schedule_restored_run_resume=_schedule_restored_run_resume,
         )
-        if not _schedule_restored_run_resume(run_id_str, run):
-            raise HTTPException(status_code=409, detail="Run could not be resumed.")
-        return {
-            "status": "ok",
-            "run_id": run_id_str,
-            "resume_kind": "browser_checkpoint",
-            "next_action_index": checkpoint.get("next_action_index"),
-        }

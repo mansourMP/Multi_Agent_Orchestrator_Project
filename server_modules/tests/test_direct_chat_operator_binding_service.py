@@ -126,6 +126,34 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIs(inputs.build_context_used, namespace["_build_context_used"])
         self.assertEqual(inputs.supported_providers, ["openai"])
 
+    def test_build_direct_chat_runtime_bindings_reads_underscored_namespace(self) -> None:
+        namespace = _operator_namespace()
+
+        bindings = service.build_direct_chat_runtime_bindings(
+            namespace=namespace,
+            parse_page_state=lambda payload: payload,
+            capture_exception=lambda exc: None,
+            generate_chat_reply_stream_with_provider_fallback=lambda **kwargs: iter(()),
+            compact_conversation_history=lambda **kwargs: {"messages": [], "history_mode": "none", "prior_messages_used": False},
+            parse_memory_write=lambda value: None,
+            parse_memory_read=lambda value: None,
+            handle_memory_request=lambda workspace_id, message: None,
+            list_memory_entries=lambda workspace_id: [],
+            get_memory=lambda workspace_id: "",
+            delete_memory=lambda workspace_id, key: False,
+            no_provider_reasoning_required_response=lambda: {"reply": "fallback", "actions": [], "mode": "answer"},
+            supported_providers=["openai"],
+            direct_chat_compaction_token_limit=12000,
+        )
+
+        inputs = bindings.callback_facade_inputs()
+        callbacks = bindings.runtime_facade_callbacks()
+        services_payload = bindings.response_services()
+
+        self.assertIs(inputs.build_context_used, namespace["_build_context_used"])
+        self.assertIs(callbacks.resolve_provider_for_direct_chat_message, namespace["_resolve_provider_for_direct_chat_message"])
+        self.assertIsNotNone(services_payload)
+
 
 if __name__ == "__main__":
     unittest.main()

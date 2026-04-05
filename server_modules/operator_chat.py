@@ -22,7 +22,6 @@ from scripts.orion_local_worker_llm import (
 )
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
-from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_entry_policy_service
@@ -985,51 +984,28 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 )
 
 
-_direct_chat_callback_facade_inputs = lambda: direct_chat_operator_binding_service.build_direct_chat_callback_facade_inputs(
+_direct_chat_runtime_bindings = direct_chat_operator_binding_service.build_direct_chat_runtime_bindings(
     namespace=globals(),
-    parse_page_state=parse_json_object_loose,
-    capture_exception=sentry_sdk.capture_exception,
-    generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
-    parse_memory_write=memory_service.parse_no_provider_memory_write,
-    parse_memory_read=memory_service.parse_no_provider_memory_read,
-    handle_memory_request=memory_service.handle_no_provider_memory_request,
-    compact_conversation_history=compact_conversation_history,
+    parse_page_state=lambda payload: parse_json_object_loose(payload),
+    capture_exception=lambda exc: sentry_sdk.capture_exception(exc),
+    generate_chat_reply_stream_with_provider_fallback=lambda **kwargs: generate_chat_reply_stream_with_provider_fallback(**kwargs),
+    parse_memory_write=lambda value: memory_service.parse_no_provider_memory_write(value),
+    parse_memory_read=lambda value: memory_service.parse_no_provider_memory_read(value),
+    handle_memory_request=lambda workspace_id, message: memory_service.handle_no_provider_memory_request(workspace_id, message),
+    compact_conversation_history=lambda *args, **kwargs: compact_conversation_history(*args, **kwargs),
     direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
-    list_memory_entries=list_memory_entries,
-    get_memory=get_memory,
-    delete_memory=delete_memory,
-    no_provider_reasoning_required_response=no_provider_service.no_provider_reasoning_required_response,
+    list_memory_entries=lambda workspace_id: list_memory_entries(workspace_id),
+    get_memory=lambda workspace_id: get_memory(workspace_id),
+    delete_memory=lambda workspace_id, key: delete_memory(workspace_id, key),
+    no_provider_reasoning_required_response=lambda: no_provider_service.no_provider_reasoning_required_response(),
     supported_providers=list(SUPPORTED_PROVIDERS),
 )
-
-
-_direct_chat_generation_services = lambda: direct_chat_composition_service.build_direct_chat_generation_services(
-    _direct_chat_callback_facade_inputs(),
-)
-_direct_chat_runtime_facade_callbacks = lambda: direct_chat_composition_service.build_direct_chat_runtime_facade_callbacks(
-    _direct_chat_callback_facade_inputs(),
-)
-_prepare_direct_chat_request = lambda *, resolved_turn_request, session_ctx, message, workspace_id, thread_id, requested_model, requested_provider, prior_messages, reasoning_effort, availability, approved_action, max_iterations: direct_chat_composition_service.prepare_direct_chat_request(
-    resolved_turn_request=resolved_turn_request,
-    session_ctx=session_ctx,
-    message=message,
-    workspace_id=workspace_id,
-    thread_id=thread_id,
-    requested_model=requested_model,
-    requested_provider=requested_provider,
-    prior_messages=prior_messages,
-    reasoning_effort=reasoning_effort,
-    availability=availability,
-    approved_action=approved_action,
-    max_iterations=max_iterations,
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
-_direct_chat_response_services = lambda: direct_chat_composition_service.build_direct_chat_response_services(
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
-_direct_chat_runtime_services = lambda: direct_chat_composition_service.build_direct_chat_runtime_services(
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
+_direct_chat_callback_facade_inputs = _direct_chat_runtime_bindings.callback_facade_inputs
+_direct_chat_generation_services = _direct_chat_runtime_bindings.generation_services
+_direct_chat_runtime_facade_callbacks = _direct_chat_runtime_bindings.runtime_facade_callbacks
+_prepare_direct_chat_request = _direct_chat_runtime_bindings.prepare_request
+_direct_chat_response_services = _direct_chat_runtime_bindings.response_services
+_direct_chat_runtime_services = _direct_chat_runtime_bindings.runtime_services
 
 
 build_direct_operator_reply = lambda *, message, workspace_id, requested_model, requested_provider, thread_id="", prior_messages=None, reasoning_effort="", availability=None, approved_action=None, max_iterations=None, session_ctx=None, agent_turn_request=None: direct_chat_runtime_entry_facade_service.build_direct_operator_reply(

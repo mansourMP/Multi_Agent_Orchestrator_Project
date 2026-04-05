@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_runtime_facade_service
+
+
+@dataclass(slots=True)
+class DirectChatOperatorRuntimeBindings:
+    callback_facade_inputs: Any
+    generation_services: Any
+    runtime_facade_callbacks: Any
+    prepare_request: Any
+    response_services: Any
+    runtime_services: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -224,4 +235,75 @@ def build_direct_chat_callback_facade_inputs(
         no_provider_reasoning_required_response=no_provider_reasoning_required_response,
         supported_providers=supported_providers,
         direct_chat_compaction_token_limit=direct_chat_compaction_token_limit,
+    )
+
+
+def build_direct_chat_runtime_bindings(
+    *,
+    namespace: Dict[str, Any],
+    parse_page_state: Any,
+    capture_exception: Any,
+    generate_chat_reply_stream_with_provider_fallback: Any,
+    compact_conversation_history: Any,
+    parse_memory_write: Any,
+    parse_memory_read: Any,
+    handle_memory_request: Any,
+    list_memory_entries: Any,
+    get_memory: Any,
+    delete_memory: Any,
+    no_provider_reasoning_required_response: Any,
+    supported_providers: list[str],
+    direct_chat_compaction_token_limit: int,
+) -> DirectChatOperatorRuntimeBindings:
+    def callback_facade_inputs():
+        return build_direct_chat_callback_facade_inputs(
+            namespace=namespace,
+            parse_page_state=parse_page_state,
+            capture_exception=capture_exception,
+            generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
+            compact_conversation_history=compact_conversation_history,
+            parse_memory_write=parse_memory_write,
+            parse_memory_read=parse_memory_read,
+            handle_memory_request=handle_memory_request,
+            list_memory_entries=list_memory_entries,
+            get_memory=get_memory,
+            delete_memory=delete_memory,
+            no_provider_reasoning_required_response=no_provider_reasoning_required_response,
+            supported_providers=supported_providers,
+            direct_chat_compaction_token_limit=direct_chat_compaction_token_limit,
+        )
+
+    def generation_services():
+        return direct_chat_composition_service.build_direct_chat_generation_services(
+            callback_facade_inputs()
+        )
+
+    def runtime_facade_callbacks():
+        return direct_chat_composition_service.build_direct_chat_runtime_facade_callbacks(
+            callback_facade_inputs()
+        )
+
+    def prepare_request(**kwargs):
+        return direct_chat_composition_service.prepare_direct_chat_request(
+            callbacks=runtime_facade_callbacks(),
+            **kwargs,
+        )
+
+    def response_services():
+        return direct_chat_composition_service.build_direct_chat_response_services(
+            callbacks=runtime_facade_callbacks(),
+        )
+
+    def runtime_services():
+        return direct_chat_composition_service.build_direct_chat_runtime_services(
+            callbacks=runtime_facade_callbacks(),
+        )
+
+    return DirectChatOperatorRuntimeBindings(
+        callback_facade_inputs=callback_facade_inputs,
+        generation_services=generation_services,
+        runtime_facade_callbacks=runtime_facade_callbacks,
+        prepare_request=prepare_request,
+        response_services=response_services,
+        runtime_services=runtime_services,
     )

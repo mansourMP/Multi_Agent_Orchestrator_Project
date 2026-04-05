@@ -30,6 +30,7 @@ from server_modules.direct_chat_service import (
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
 from server_modules import direct_chat_stream_state_service as chat_stream_state_service
+from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import (
     RunCreationServices,
@@ -434,14 +435,7 @@ def _get_or_create_chat_stream_session(
 
 
 def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    if not isinstance(raw_event, dict):
-        return None, None
-    event_name = str(raw_event.get("type") or "message").strip() or "message"
-    if event_name == "final":
-        payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
-        return "final", payload
-    payload = {key: value for key, value in raw_event.items() if key != "type"}
-    return event_name, payload
+    return chat_stream_transport_service.chat_stream_payload(raw_event)
 
 
 def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
@@ -462,89 +456,29 @@ def _complete_chat_stream_session(session: dict[str, Any]) -> None:
 
 
 def _chat_stream_error_payload(message: str) -> dict[str, Any]:
-    detail = str(message or "").strip() or "unknown_error"
-    return {
-        "reply": f"Chat failed: {detail}",
-        "actions": [],
-        "mode": "answer",
-        "error": detail,
-    }
+    return chat_stream_transport_service.chat_stream_error_payload(message)
 
 
 def _extract_direct_chat_error_response(raw_event: Any) -> Optional[dict[str, str]]:
-    if not isinstance(raw_event, dict):
-        return None
-    if str(raw_event.get("type") or "").strip().lower() != "final":
-        return None
-    payload = raw_event.get("payload") if isinstance(raw_event.get("payload"), dict) else {}
-    error_code = str(payload.get("error") or "").strip()
-    if error_code != "no_provider":
-        return None
-    message = str(payload.get("message") or "").strip() or "No AI provider configured"
-    return {
-        "error": "no_provider",
-        "message": message,
-    }
+    return chat_stream_transport_service.extract_direct_chat_error_response(raw_event)
 
 
 def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:
-    condition = session.get("condition")
-    if not isinstance(condition, threading.Condition):
-        return
-    with condition:
-        if bool(session.get("producer_started")):
-            return
-        session["producer_started"] = True
-
-    def _producer_main() -> None:
-        final_emitted = False
-        try:
-            for raw_event in producer_fn():
-                event_name, payload = _chat_stream_payload(raw_event)
-                if not event_name or not isinstance(payload, dict):
-                    continue
-                if event_name == "final":
-                    final_emitted = True
-                _append_chat_stream_event(session, event_name, payload)
-        except Exception as exc:
-            sentry_sdk.capture_exception(exc)
-            if not final_emitted:
-                _append_chat_stream_event(session, "final", _chat_stream_error_payload(str(exc)))
-        finally:
-            _complete_chat_stream_session(session)
-
-    worker = threading.Thread(
-        target=_producer_main,
-        daemon=True,
-        name=f"chat-stream-{str(session.get('request_id') or '')[:10]}",
+    return chat_stream_transport_service.start_chat_stream_producer(
+        session,
+        producer_fn=producer_fn,
+        append_event=_append_chat_stream_event,
+        complete_session=_complete_chat_stream_session,
+        capture_exception=sentry_sdk.capture_exception,
     )
-    worker.start()
 
 
 def _iter_chat_stream_events(session: dict[str, Any], last_event_id: Any):
-    cursor = _normalize_chat_stream_cursor(last_event_id)
-    condition = session.get("condition")
-    if not isinstance(condition, threading.Condition):
-        return
-    while True:
-        with condition:
-            session["last_accessed_at"] = time.time()
-            pending = [
-                dict(item)
-                for item in (session.get("events") if isinstance(session.get("events"), list) else [])
-                if int(item.get("seq") or 0) > cursor
-            ]
-            completed = bool(session.get("completed"))
-            if not pending and completed:
-                break
-            if not pending:
-                condition.wait(timeout=15.0)
-                continue
-        for item in pending:
-            cursor = int(item.get("seq") or cursor)
-            yield f"id: {item['id']}\n".encode("utf-8")
-            yield f"event: {item['event']}\n".encode("utf-8")
-            yield f"data: {json.dumps(item.get('payload') or {}, ensure_ascii=False)}\n\n".encode("utf-8")
+    yield from chat_stream_transport_service.iter_chat_stream_events(
+        session,
+        last_event_id=last_event_id,
+        normalize_cursor=_normalize_chat_stream_cursor,
+    )
 
 
 def _can_view_sensitive_run_payload(user: Optional[dict]) -> bool:

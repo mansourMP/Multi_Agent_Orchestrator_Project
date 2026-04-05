@@ -1689,6 +1689,64 @@ The compatibility shell still exists, but the constructor assembly and fallback 
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 
+### 2026-04-05 - Compatibility Wrapper Band Moved Behind Export Facade
+
+#### Stage
+
+Stage 1 continues. The remaining one-line compatibility wrapper band no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+The connector module still exports the historical helper and endpoint names, but those names now route through a dedicated late-bound export facade instead of a long series of thin wrapper functions.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_connector_export_facade.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_export_facade.py) to own:
+  - service-registry wrapper exports
+  - bridge/runtime wrapper exports
+  - Telegram compatibility wrapper exports
+  - channel event and dead-letter export forwarding
+  - Telegram/WhatsApp status and webhook export forwarding
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the public compatibility names are now bound from a single `_AUTOPILOT_EXPORT_FACADE` instance instead of hand-written wrapper defs.
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_connector_export_facade.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_export_facade.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `272` lines from `411` before this cut.
+- The compatibility shell still exports the same operational names, but it no longer owns the bulk wrapper boilerplate directly.
+- Late-bound behavior is preserved where it matters:
+  - patched module-level `_record_channel_event` still flows into throttled event recording
+  - patched `create_run` and runtime policy helpers still flow through the builder path established in the prior cut
+  - machine-mode and event-dedupe behavior still run through the same public connector names
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now materially smaller, but it still imports a broad compatibility surface and still acts as a re-export shell.
+- The module still carries historical config and helper exports that may be reducible further once the public contract is narrowed.
+- Some compatibility imports are now only there to preserve module-level availability rather than true ownership.
+
+#### Next Required Work
+
+1. Continue thinning [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by reducing unnecessary import/re-export surface after confirming which names are still part of the real public contract.
+2. Decide whether the remaining connector shell should keep broad config re-exports or move to an explicitly smaller supported export set.
+3. Keep preserving late-bound module patch semantics as the shell is reduced further.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_connector_export_facade.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_export_facade.py)
+  - [server_modules/tests/test_autopilot_connector_export_facade.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_export_facade.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_connector_export_facade`
+  - `server_modules.tests.test_autopilot_connector_shell_builder`
+  - `server_modules.tests.test_autopilot_connector_shell_service`
+  - `server_modules.tests.test_autopilot_connector_config_exports`
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+
 ### 2026-04-05 - Top-Level Telegram And WhatsApp Registry Wiring Moved Behind Channel Registry Bridge
 
 #### Stage

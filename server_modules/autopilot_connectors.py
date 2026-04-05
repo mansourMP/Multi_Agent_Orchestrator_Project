@@ -40,6 +40,7 @@ from server_modules.connectors.autopilot_connector_config import (
     ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
     PROJECT_ROOT,
 )
+from server_modules.connectors.autopilot_connector_export_facade import AutopilotConnectorExportFacade
 from server_modules.connectors.autopilot_connector_shell_builder import build_autopilot_connector_shell_service
 from server_modules.connectors.autopilot_connector_shell_service import AutopilotConnectorShellService
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
@@ -93,34 +94,6 @@ _SYNC_SERVER_GLOBALS = (
     "WHATSAPP_AUTOPILOT_STATE",
 )
 _AUTOPILOT_CONNECTOR_SHELL_SERVICE: Optional[AutopilotConnectorShellService] = None
-
-
-def _autopilot_channel_registry_bridge_service() -> AutopilotChannelRegistryBridgeService:
-    return _autopilot_registry_facade_service().channel_registry_bridge_service()
-
-
-def _telegram_service_registry() -> TelegramAutopilotServiceRegistry:
-    return _autopilot_registry_facade_service().telegram_service_registry()
-
-
-def _telegram_helper_registry_bridge_service() -> TelegramHelperRegistryBridgeService:
-    return _autopilot_registry_facade_service().helper_registry_bridge_service()
-
-
-def _telegram_helper_registry() -> TelegramAutopilotHelperRegistry:
-    return _autopilot_registry_facade_service().telegram_helper_registry()
-
-
-def _telegram_run_dispatch_service():
-    return _telegram_service_registry().telegram_run_dispatch_service()
-
-
-def _autopilot_support_service_registry() -> AutopilotSupportServiceRegistry:
-    return _autopilot_registry_facade_service().support_service_registry()
-
-
-def _autopilot_runtime_service_registry() -> AutopilotRuntimeServiceRegistry:
-    return _autopilot_registry_facade_service().runtime_service_registry()
 
 
 def _autopilot_connector_shell_service() -> AutopilotConnectorShellService:
@@ -239,173 +212,61 @@ def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
 def _autopilot_runtime_facade_service() -> AutopilotRuntimeFacadeService:
     return _autopilot_connector_shell_service().runtime_facade_service()
 
-def _load_telegram_autopilot_state() -> None:
-    _autopilot_runtime_facade_service().load_telegram_autopilot_state()
+_AUTOPILOT_EXPORT_FACADE = AutopilotConnectorExportFacade(global_namespace=globals())
 
-
-def _load_whatsapp_autopilot_state() -> None:
-    _autopilot_runtime_facade_service().load_whatsapp_autopilot_state()
-
-
-def _telegram_autopilot_snapshot() -> Dict[str, Any]:
-    return _autopilot_runtime_facade_service().telegram_autopilot_snapshot()
-
-
-def _whatsapp_autopilot_snapshot() -> Dict[str, Any]:
-    return _autopilot_runtime_facade_service().whatsapp_autopilot_snapshot()
-
-
-def _whatsapp_autopilot_activate() -> None:
-    _autopilot_runtime_facade_service().whatsapp_autopilot_activate()
-
-def _telegram_increment_processed_updates() -> None:
-    _autopilot_runtime_facade_service().telegram_increment_processed_updates()
-
-
-def _telegram_set_connectors_seen(count: int) -> None:
-    _autopilot_runtime_facade_service().telegram_set_connectors_seen(count)
-
-
-def _mark_telegram_autopilot_started(started_at: str) -> None:
-    _autopilot_runtime_facade_service().mark_telegram_autopilot_started(started_at)
-
-def _init():
-    _autopilot_runtime_facade_service().init_runtime()
-
-def _record_channel_event(
-    channel: str,
-    direction: str,
-    event_type: str,
-    text: str = "",
-    workspace_id: Optional[str] = None,
-    session_key: Optional[str] = None,
-    session_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    parent_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-    action: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    return _autopilot_runtime_facade_service().record_channel_event(**locals())
-
-
-def _append_channel_dead_letter(
-    *,
-    channel: str,
-    direction: str,
-    event_type: str,
-    reason: str,
-    text: str = "",
-    workspace_id: str = "",
-    session_key: str = "",
-    run_id: str = "",
-    action: str = "",
-    connector_id: str = "",
-    trace_id: str = "",
-    source_event_id: str = "",
-    metadata: Optional[Dict[str, Any]] = None,
-) -> None:
-    _autopilot_runtime_facade_service().append_channel_dead_letter(**locals())
-
-
-def _record_channel_event_throttled(
-    *,
-    channel: str,
-    direction: str,
-    event_type: str,
-    text: str = "",
-    workspace_id: Optional[str] = None,
-    session_key: Optional[str] = None,
-    session_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    parent_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-    action: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    dedupe_seconds: float = 30.0,
-) -> bool:
-    kwargs = dict(locals())
-    kwargs["record_event_func"] = _record_channel_event
-    return _autopilot_runtime_facade_service().record_channel_event_throttled(**kwargs)
-
-
-def _telegram_menu_service() -> TelegramMenuService:
-    return _autopilot_runtime_service_registry().menu_service()
-
-
-def _telegram_safe_path_token(value: Any) -> str:
-    return _telegram_compatibility_bridge_service().safe_path_token(value)
-
-
-def _telegram_build_goal_with_profile(goal: str, profile_data: Dict[str, str]) -> str:
-    return _telegram_compatibility_bridge_service().build_goal_with_profile(goal, profile_data)
-
-
-def _telegram_workspace_connector_context(
-    goal: str,
-    workspace_id: str,
-    current_connector_id: str,
-) -> Dict[str, Any]:
-    return _telegram_compatibility_bridge_service().workspace_connector_context(
-        goal,
-        workspace_id,
-        current_connector_id,
-    )
-
-
-def _telegram_extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return _telegram_compatibility_bridge_service().extract_message(update)
-
-
-def _telegram_build_goal_with_attachments(goal: str, attachments: List[Dict[str, Any]]) -> str:
-    return _telegram_compatibility_bridge_service().build_goal_with_attachments(goal, attachments)
-
-
-def _telegram_route_message(raw_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    return _telegram_compatibility_bridge_service().route_message(raw_text, profile)
-
-
-async def handle_telegram_send_message(
-    text: str,
-    workspace_id: Optional[str] = None,
-    session_key: Optional[str] = None,
-    chat_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    return await _autopilot_runtime_facade_service().handle_telegram_send_message(**locals())
-
-
-async def handle_telegram_autopilot_test_message(
-    text: str,
-    workspace_id: Optional[str] = None,
-    session_key: Optional[str] = None,
-    chat_id: Optional[str] = None,
-    connector_id: Optional[str] = None,
-    sender_id: Optional[str] = None,
-    timeout_seconds: Optional[int] = None,
-) -> Dict[str, Any]:
-    return await _autopilot_runtime_facade_service().handle_telegram_autopilot_test_message(**locals())
-
-
-# --- COPIED ENDPOINTS ---
-async def handle_whatsapp_twilio_webhook(request: Request):
-    return await _autopilot_runtime_facade_service().handle_whatsapp_webhook(
-        raw_body=await request.body(),
-        query_secret=str(request.query_params.get("secret") or ""),
-        header_secret=str(request.headers.get("x-orion-webhook-secret") or ""),
-    )
-
-
-def _run_telegram_autopilot_forever():
-    _autopilot_runtime_facade_service().run_telegram_autopilot_forever()
-
-
-async def handle_telegram_autopilot_status():
-    return await _autopilot_runtime_facade_service().telegram_status_payload()
-
-
-async def handle_whatsapp_autopilot_status():
-    return await _autopilot_runtime_facade_service().whatsapp_status_payload()
-
-
-async def handle_list_autopilot_profiles():
-    return await _autopilot_runtime_facade_service().autopilot_profiles_payload()
+_autopilot_channel_registry_bridge_service = _AUTOPILOT_EXPORT_FACADE.autopilot_channel_registry_bridge_service
+_telegram_service_registry = _AUTOPILOT_EXPORT_FACADE.telegram_service_registry
+_telegram_helper_registry_bridge_service = _AUTOPILOT_EXPORT_FACADE.telegram_helper_registry_bridge_service
+_telegram_helper_registry = _AUTOPILOT_EXPORT_FACADE.telegram_helper_registry
+_telegram_run_dispatch_service = _AUTOPILOT_EXPORT_FACADE.telegram_run_dispatch_service
+_autopilot_support_service_registry = _AUTOPILOT_EXPORT_FACADE.autopilot_support_service_registry
+_autopilot_runtime_service_registry = _AUTOPILOT_EXPORT_FACADE.autopilot_runtime_service_registry
+_autopilot_shared_service_registry = _AUTOPILOT_EXPORT_FACADE.autopilot_shared_service_registry
+_autopilot_status_service = _AUTOPILOT_EXPORT_FACADE.autopilot_status_service
+_autopilot_endpoint_service = _AUTOPILOT_EXPORT_FACADE.autopilot_endpoint_service
+_autopilot_event_service = _AUTOPILOT_EXPORT_FACADE.autopilot_event_service
+_whatsapp_service_registry = _AUTOPILOT_EXPORT_FACADE.whatsapp_service_registry
+_autopilot_profile_service = _AUTOPILOT_EXPORT_FACADE.autopilot_profile_service
+_telegram_connector_support_service = _AUTOPILOT_EXPORT_FACADE.telegram_connector_support_service
+_runtime_status_service = _AUTOPILOT_EXPORT_FACADE.runtime_status_service
+_autopilot_workflow_setup_service = _AUTOPILOT_EXPORT_FACADE.autopilot_workflow_setup_service
+_telegram_connector_context_service = _AUTOPILOT_EXPORT_FACADE.telegram_connector_context_service
+_autopilot_approval_service = _AUTOPILOT_EXPORT_FACADE.autopilot_approval_service
+_telegram_transport_service = _AUTOPILOT_EXPORT_FACADE.telegram_transport_service
+_telegram_terminal_service = _AUTOPILOT_EXPORT_FACADE.telegram_terminal_service
+_autopilot_common_support_service = _AUTOPILOT_EXPORT_FACADE.autopilot_common_support_service
+_autopilot_run_entry_service = _AUTOPILOT_EXPORT_FACADE.autopilot_run_entry_service
+_autopilot_runtime_support_service = _AUTOPILOT_EXPORT_FACADE.autopilot_runtime_support_service
+_autopilot_skill_service = _AUTOPILOT_EXPORT_FACADE.autopilot_skill_service
+_autopilot_channel_support_service = _AUTOPILOT_EXPORT_FACADE.autopilot_channel_support_service
+_autopilot_event_bridge_service = _AUTOPILOT_EXPORT_FACADE.autopilot_event_bridge_service
+_autopilot_terminal_bridge_service = _AUTOPILOT_EXPORT_FACADE.autopilot_terminal_bridge_service
+_autopilot_state_bridge_service = _AUTOPILOT_EXPORT_FACADE.autopilot_state_bridge_service
+_telegram_compatibility_bridge_service = _AUTOPILOT_EXPORT_FACADE.telegram_compatibility_bridge_service
+_whatsapp_webhook_bridge_service = _AUTOPILOT_EXPORT_FACADE.whatsapp_webhook_bridge_service
+_load_telegram_autopilot_state = _AUTOPILOT_EXPORT_FACADE.load_telegram_autopilot_state
+_load_whatsapp_autopilot_state = _AUTOPILOT_EXPORT_FACADE.load_whatsapp_autopilot_state
+_telegram_autopilot_snapshot = _AUTOPILOT_EXPORT_FACADE.telegram_autopilot_snapshot
+_whatsapp_autopilot_snapshot = _AUTOPILOT_EXPORT_FACADE.whatsapp_autopilot_snapshot
+_whatsapp_autopilot_activate = _AUTOPILOT_EXPORT_FACADE.whatsapp_autopilot_activate
+_telegram_increment_processed_updates = _AUTOPILOT_EXPORT_FACADE.telegram_increment_processed_updates
+_telegram_set_connectors_seen = _AUTOPILOT_EXPORT_FACADE.telegram_set_connectors_seen
+_mark_telegram_autopilot_started = _AUTOPILOT_EXPORT_FACADE.mark_telegram_autopilot_started
+_init = _AUTOPILOT_EXPORT_FACADE.init_runtime
+_record_channel_event = _AUTOPILOT_EXPORT_FACADE.record_channel_event
+_append_channel_dead_letter = _AUTOPILOT_EXPORT_FACADE.append_channel_dead_letter
+_record_channel_event_throttled = _AUTOPILOT_EXPORT_FACADE.record_channel_event_throttled
+_telegram_menu_service = _AUTOPILOT_EXPORT_FACADE.telegram_menu_service
+_telegram_safe_path_token = _AUTOPILOT_EXPORT_FACADE.telegram_safe_path_token
+_telegram_build_goal_with_profile = _AUTOPILOT_EXPORT_FACADE.telegram_build_goal_with_profile
+_telegram_workspace_connector_context = _AUTOPILOT_EXPORT_FACADE.telegram_workspace_connector_context
+_telegram_extract_message = _AUTOPILOT_EXPORT_FACADE.telegram_extract_message
+_telegram_build_goal_with_attachments = _AUTOPILOT_EXPORT_FACADE.telegram_build_goal_with_attachments
+_telegram_route_message = _AUTOPILOT_EXPORT_FACADE.telegram_route_message
+handle_telegram_send_message = _AUTOPILOT_EXPORT_FACADE.handle_telegram_send_message
+handle_telegram_autopilot_test_message = _AUTOPILOT_EXPORT_FACADE.handle_telegram_autopilot_test_message
+handle_whatsapp_twilio_webhook = _AUTOPILOT_EXPORT_FACADE.handle_whatsapp_twilio_webhook
+_run_telegram_autopilot_forever = _AUTOPILOT_EXPORT_FACADE.run_telegram_autopilot_forever
+handle_telegram_autopilot_status = _AUTOPILOT_EXPORT_FACADE.handle_telegram_autopilot_status
+handle_whatsapp_autopilot_status = _AUTOPILOT_EXPORT_FACADE.handle_whatsapp_autopilot_status
+handle_list_autopilot_profiles = _AUTOPILOT_EXPORT_FACADE.handle_list_autopilot_profiles

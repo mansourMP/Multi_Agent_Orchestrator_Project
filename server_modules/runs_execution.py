@@ -101,7 +101,7 @@ from server_modules.runs_engine import (
 from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.runs_output import _compact_event_text, _json_safe, _persist_live_run_state
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
-from server_modules.run_service import RunExecutionServices, build_legacy_run_execution_services, LegacyRunExecutionCallbacks
+from server_modules.run_service import RunExecutionServices
 from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
@@ -121,8 +121,7 @@ NODE_TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
 def _workflow_child_run_execution_services() -> RunExecutionServices:
     from server_modules import runs_delegation as _runs_delegation
 
-    return run_service.build_legacy_run_execution_services_from_values(
-        stamp_request_owner=lambda req, current_user: req,
+    return run_service.build_system_run_execution_services(
         prepare_run_start_request=lambda req: _runs_delegation._prepare_run_start_request(req),
         create_run_from_request=lambda req: _runs_delegation._create_run_from_request(req),
     )

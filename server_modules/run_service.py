@@ -202,6 +202,18 @@ def build_run_execution_services(
     )
 
 
+def build_system_run_execution_services(
+    *,
+    prepare_run_start_request: Any,
+    create_run_from_request: Any,
+) -> RunExecutionServices:
+    return build_run_execution_services(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=prepare_run_start_request,
+        create_run_from_request=create_run_from_request,
+    )
+
+
 def build_legacy_run_execution_services(
     *,
     callbacks: LegacyRunExecutionCallbacks,

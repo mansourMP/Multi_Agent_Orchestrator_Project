@@ -121,8 +121,7 @@ _normalize_requested_max_iterations = run_service.normalize_requested_max_iterat
 
 
 def _delegation_run_execution_services() -> run_service.RunExecutionServices:
-    return run_service.build_legacy_run_execution_services_from_values(
-        stamp_request_owner=lambda req, current_user: req,
+    return run_service.build_system_run_execution_services(
         prepare_run_start_request=_prepare_run_start_request,
         create_run_from_request=lambda req: _create_run_from_request(req),
     )

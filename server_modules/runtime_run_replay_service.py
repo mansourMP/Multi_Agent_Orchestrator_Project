@@ -9,6 +9,14 @@ def replay_item_response(*, item: dict[str, Any]) -> dict[str, Any]:
     return {"item": item}
 
 
+def replay_item_response_for_run(
+    run_id: str,
+    *,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+) -> dict[str, Any]:
+    return replay_item_response(item=get_replay_payload(run_id))
+
+
 def replay_run_from_item(
     *,
     item: dict[str, Any],
@@ -31,3 +39,21 @@ def replay_run_from_item(
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+def replay_run_from_run_id(
+    run_id: str,
+    *,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+    run_start_request_class: Callable[..., Any],
+    execute_system_run_start_request_via_turn_runtime: Callable[..., Any],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+) -> Any:
+    return replay_run_from_item(
+        item=get_replay_payload(run_id),
+        run_start_request_class=run_start_request_class,
+        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        run_execution_services=run_execution_services,
+    )

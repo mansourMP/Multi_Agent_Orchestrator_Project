@@ -5,6 +5,23 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 
+def build_resume_waiting_run_callbacks(
+    *,
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    get_pending_confirmation: Callable[[dict[str, Any]], Any],
+    emit_log: Callable[..., None],
+    schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
+) -> dict[str, Any]:
+    return {
+        "serialize_run_snapshot": serialize_run_snapshot,
+        "enforce_run_owner_access": enforce_run_owner_access,
+        "get_pending_confirmation": get_pending_confirmation,
+        "emit_log": emit_log,
+        "schedule_restored_run_resume": schedule_restored_run_resume,
+    }
+
+
 def resume_waiting_run(
     run_id: str,
     *,

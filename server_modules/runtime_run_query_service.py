@@ -42,6 +42,54 @@ def build_run_detail_response_callbacks(
     }
 
 
+def build_default_run_detail_response_callbacks(
+    *,
+    import_module: Callable[..., Any],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    can_view_sensitive_run_payload: Callable[[Any], bool],
+    limited_run_context_view: Callable[[dict[str, Any]], dict[str, Any]],
+    limited_result_data_view_fn: Callable[[Any], Any],
+    get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
+    build_archived_run_detail_response: Callable[..., dict[str, Any]],
+    build_live_run_detail_response: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    runs_delegation = import_module(
+        "server_modules.runs_delegation",
+        fromlist=["_build_delegation_summary", "_find_run_relationships"],
+    )
+    runs_output = import_module(
+        "server_modules.runs_output",
+        fromlist=[
+            "_get_replay_payload",
+            "_limited_node_states_view",
+            "_resolve_run_connector_binding",
+            "_serialize_run_snapshot",
+            "redact_sensitive",
+        ],
+    )
+    runtime_memory = import_module(
+        "server_modules.runtime_memory",
+        fromlist=["_trim_memory_trace"],
+    )
+    return build_run_detail_response_callbacks(
+        get_replay_payload=runs_output._get_replay_payload,
+        serialize_run_snapshot=runs_output._serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        can_view_sensitive_run_payload=can_view_sensitive_run_payload,
+        limited_run_context_view=limited_run_context_view,
+        build_delegation_summary=runs_delegation._build_delegation_summary,
+        find_run_relationships=runs_delegation._find_run_relationships,
+        resolve_run_connector_binding=runs_output._resolve_run_connector_binding,
+        redact_sensitive=runs_output.redact_sensitive,
+        limited_result_data_view_fn=limited_result_data_view_fn,
+        limited_node_states_view_fn=runs_output._limited_node_states_view,
+        trim_memory_trace_fn=runtime_memory._trim_memory_trace,
+        get_pending_confirmation_fn=get_pending_confirmation_fn,
+        build_archived_run_detail_response=build_archived_run_detail_response,
+        build_live_run_detail_response=build_live_run_detail_response,
+    )
+
+
 def build_run_detail_response(
     run_id: str,
     *,

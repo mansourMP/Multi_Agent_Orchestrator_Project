@@ -730,32 +730,16 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}")
     async def get_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        from server_modules.runs_delegation import _build_delegation_summary, _find_run_relationships
-        from server_modules.runs_output import (
-            _get_replay_payload,
-            _limited_node_states_view,
-            _resolve_run_connector_binding,
-            _serialize_run_snapshot,
-            redact_sensitive,
-        )
-        from server_modules.runtime_memory import _trim_memory_trace
         return runtime_run_query_service.build_run_detail_response(
             str(run_id),
             current_user=current_user,
             runs=runs,
-            **runtime_run_query_service.build_run_detail_response_callbacks(
-                get_replay_payload=_get_replay_payload,
-                serialize_run_snapshot=_serialize_run_snapshot,
+            **runtime_run_query_service.build_default_run_detail_response_callbacks(
+                import_module=__import__,
                 enforce_run_owner_access=_enforce_run_owner_access,
                 can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
                 limited_run_context_view=_limited_run_context_view,
-                build_delegation_summary=_build_delegation_summary,
-                find_run_relationships=_find_run_relationships,
-                resolve_run_connector_binding=_resolve_run_connector_binding,
-                redact_sensitive=redact_sensitive,
                 limited_result_data_view_fn=_limited_result_data_view,
-                limited_node_states_view_fn=_limited_node_states_view,
-                trim_memory_trace_fn=_trim_memory_trace,
                 get_pending_confirmation_fn=_get_pending_confirmation,
                 build_archived_run_detail_response=runtime_run_detail_service.build_archived_run_detail_response,
                 build_live_run_detail_response=runtime_run_detail_service.build_live_run_detail_response,
@@ -817,15 +801,17 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def get_run_replay(run_id: uuid.UUID):
         _refresh_server_exports()
-        return runtime_run_replay_service.replay_item_response(
-            item=_get_replay_payload(str(run_id)),
+        return runtime_run_replay_service.replay_item_response_for_run(
+            str(run_id),
+            get_replay_payload=_get_replay_payload,
         )
 
     @app.post("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def replay_run(run_id: uuid.UUID):
         _refresh_server_exports()
-        return runtime_run_replay_service.replay_run_from_item(
-            item=_get_replay_payload(str(run_id)),
+        return runtime_run_replay_service.replay_run_from_run_id(
+            str(run_id),
+            get_replay_payload=_get_replay_payload,
             run_start_request_class=RunStartRequest,
             execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
@@ -901,9 +887,11 @@ def register_run_routes(app) -> None:
             run_id_str,
             run=runs.get(run_id_str),
             current_user=current_user,
-            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            get_pending_confirmation=_get_pending_confirmation,
-            emit_log=emit_log,
-            schedule_restored_run_resume=_schedule_restored_run_resume,
+            **runtime_run_control_service.build_resume_waiting_run_callbacks(
+                serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                get_pending_confirmation=_get_pending_confirmation,
+                emit_log=emit_log,
+                schedule_restored_run_resume=_schedule_restored_run_resume,
+            ),
         )

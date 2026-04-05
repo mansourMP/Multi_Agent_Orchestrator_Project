@@ -6,6 +6,19 @@ from server_modules import runtime_run_control_service
 
 
 class RuntimeRunControlServiceTests(unittest.TestCase):
+    def test_build_resume_waiting_run_callbacks_preserves_callables(self):
+        serialize_run_snapshot = lambda run_id, run: {"run_id": run_id}
+        callbacks = runtime_run_control_service.build_resume_waiting_run_callbacks(
+            serialize_run_snapshot=serialize_run_snapshot,
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            get_pending_confirmation=lambda run: None,
+            emit_log=lambda *args, **kwargs: None,
+            schedule_restored_run_resume=lambda run_id, run: True,
+        )
+
+        self.assertIs(callbacks["serialize_run_snapshot"], serialize_run_snapshot)
+        self.assertIn("schedule_restored_run_resume", callbacks)
+
     def test_resume_waiting_run_requires_checkpoint(self):
         with self.assertRaises(HTTPException):
             runtime_run_control_service.resume_waiting_run(

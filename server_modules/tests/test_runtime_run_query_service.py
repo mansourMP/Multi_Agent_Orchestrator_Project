@@ -6,6 +6,51 @@ from server_modules import runtime_run_query_service
 
 
 class RuntimeRunQueryServiceTests(unittest.TestCase):
+    def test_build_default_run_detail_response_callbacks_imports_default_modules(self):
+        modules = {
+            "server_modules.runs_delegation": type(
+                "RunsDelegationModule",
+                (),
+                {
+                    "_build_delegation_summary": staticmethod(lambda snapshot, child_runs: {"count": len(child_runs)}),
+                    "_find_run_relationships": staticmethod(lambda run_id, snapshot: (None, [])),
+                },
+            )(),
+            "server_modules.runs_output": type(
+                "RunsOutputModule",
+                (),
+                {
+                    "_get_replay_payload": staticmethod(lambda run_id: {"run_id": run_id}),
+                    "_limited_node_states_view": staticmethod(lambda value: {"trimmed": True}),
+                    "_resolve_run_connector_binding": staticmethod(lambda snapshot: {"connector": "telegram"}),
+                    "_serialize_run_snapshot": staticmethod(lambda run_id, run: {"run_id": run_id}),
+                    "redact_sensitive": staticmethod(lambda context: {"redacted": True}),
+                },
+            )(),
+            "server_modules.runtime_memory": type(
+                "RuntimeMemoryModule",
+                (),
+                {
+                    "_trim_memory_trace": staticmethod(lambda value: {"trimmed": True}),
+                },
+            )(),
+        }
+
+        callbacks = runtime_run_query_service.build_default_run_detail_response_callbacks(
+            import_module=lambda name, fromlist=(): modules[name],
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: False,
+            limited_run_context_view=lambda context: {},
+            limited_result_data_view_fn=lambda value: {},
+            get_pending_confirmation_fn=lambda run: None,
+            build_archived_run_detail_response=lambda **kwargs: {},
+            build_live_run_detail_response=lambda **kwargs: {},
+        )
+
+        self.assertIn("get_replay_payload", callbacks)
+        self.assertIn("find_run_relationships", callbacks)
+        self.assertIn("trim_memory_trace_fn", callbacks)
+
     def test_build_run_detail_response_callbacks_preserves_callables(self):
         get_replay_payload = lambda run_id: {"run_id": run_id}
         callbacks = runtime_run_query_service.build_run_detail_response_callbacks(

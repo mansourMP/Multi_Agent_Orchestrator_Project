@@ -554,62 +554,18 @@ def register_run_routes(app) -> None:
         if key not in module_globals:
             module_globals[key] = value
 
-    def _start_heartbeat_run(tasks: List[str], metadata: Dict[str, Any]) -> Dict[str, Any]:
-        from server_modules import runs_core as _runs_core
+    from server_modules import runs_core as _runs_core
 
-        pending_schedule_result = _runs_core.trigger_pending_heartbeat_schedules()
-        pending_started = pending_schedule_result.get("started") if isinstance(pending_schedule_result, dict) else []
-        if not tasks:
-            if pending_started:
-                first = pending_started[0] if isinstance(pending_started, list) and pending_started else {}
-                return {
-                    "acted": True,
-                    "run_id": str((first or {}).get("run_id") or "").strip() or None,
-                    "summary": f"Heartbeat started {len(pending_started)} pending schedule(s).",
-                }
-            return {
-                "acted": False,
-                "summary": "No pending heartbeat tasks.",
-            }
-        heartbeat_goal = (
-            "Heartbeat checklist tasks:\n"
-            + "\n".join(f"- {task}" for task in tasks)
-            + "\n\nHandle the pending items from HEARTBEAT.md."
-        )
-        request = RunStartRequest(
-            engine="orion",
-            workspace_id=str(metadata.get("workspace_id") or "default").strip() or "default",
-            user_goal=heartbeat_goal,
-            agent_role="orchestrator",
-            metadata={
-                "source": "heartbeat",
-                "heartbeat_tasks": list(tasks),
-                "heartbeat_pending_schedules": pending_started if isinstance(pending_started, list) else [],
-                "heartbeat_trigger": str(metadata.get("trigger") or "scheduled"),
-                "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
-            },
-        )
-        result = execute_system_run_start_request_via_turn_runtime(
-            request,
-            stamp_request_owner_fn=_stamp_request_owner,
-            services=_run_execution_services(),
-        )
-        return {
-            "acted": True,
-            **(result if isinstance(result, dict) else {}),
-            "summary": (
-                f"Heartbeat started a run for {len(tasks)} task(s)."
-                + (f" Also started {len(pending_started)} pending schedule(s)." if pending_started else "")
-            ),
-        }
-
-    def _heartbeat_notify(message: str) -> None:
-        try:
-            import asyncio
-
-            asyncio.run(handle_telegram_send_message(message, workspace_id="default"))
-        except Exception:
-            return
+    heartbeat_run_callback = runtime_heartbeat_service.build_heartbeat_run_callback(
+        run_start_request_class=RunStartRequest,
+        trigger_pending_heartbeat_schedules=_runs_core.trigger_pending_heartbeat_schedules,
+        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        stamp_request_owner_fn=_stamp_request_owner,
+        run_execution_services=_run_execution_services,
+    )
+    heartbeat_notify_callback = runtime_heartbeat_service.build_heartbeat_notify_callback(
+        handle_telegram_send_message=handle_telegram_send_message,
+    )
 
     global _HEARTBEAT_SCHEDULER
     _HEARTBEAT_SCHEDULER = runtime_heartbeat_service.ensure_heartbeat_scheduler_started(
@@ -618,8 +574,8 @@ def register_run_routes(app) -> None:
         scheduler_factory=lambda: HeartbeatScheduler(
             interval_seconds=30 * 60,
             workspace_id="default",
-            run_callback=_start_heartbeat_run,
-            notify_callback=_heartbeat_notify,
+            run_callback=heartbeat_run_callback,
+            notify_callback=heartbeat_notify_callback,
         ),
     )
     _load_webhook_triggers()

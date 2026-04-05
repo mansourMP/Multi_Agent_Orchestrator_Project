@@ -1499,6 +1499,76 @@ This is a real composition cut. The historical getters still exist in [server_mo
   - `server_modules.tests.test_runtime_status_service`
   - `scripts.orion_terminal.tests.test_telegram_connector_context`
 
+### 2026-04-05 - Shared Registry And Bridge-Construction Cluster Moved Behind Unified Bridge Registry
+
+#### Stage
+
+Stage 2 connector convergence continues. The autopilot connector module no longer owns the shared-service registry constructor or the remaining event/terminal/state/compatibility/webhook bridge-construction cluster inline.
+
+This is a real ownership cut. The historical getters are still exported from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), but those getters now flow through a unified bridge registry first.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_registry_service.py) to own:
+  - shared-service registry construction and caching
+  - event-bridge construction and caching
+  - terminal-bridge construction and caching
+  - state-bridge construction and caching
+  - Telegram compatibility-bridge construction and caching
+  - WhatsApp webhook-bridge construction and caching
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_shared_service_registry()` now constructs the unified bridge registry and delegates to its shared-registry accessor
+  - `_autopilot_event_bridge_service()`, `_autopilot_terminal_bridge_service()`, `_autopilot_state_bridge_service()`, `_telegram_compatibility_bridge_service()`, and `_whatsapp_webhook_bridge_service()` now delegate through the unified bridge registry
+  - the old inline constructor blocks for those services were removed from the connector module
+  - direct-import compatibility was preserved with late-safe lookups for enabled flags, profile catalogs/defaults, webhook secrets, and Telegram state/lock values
+- Added focused coverage in:
+  - [server_modules/tests/test_autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_bridge_registry_service.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still exposes the historical bridge getter names, but it no longer owns their constructor bodies inline.
+- The remaining bridge/bootstrap composition now crosses:
+  - [server_modules/connectors/autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_registry_service.py)
+  - [server_modules/connectors/autopilot_shared_service_registry.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_shared_service_registry.py)
+  - [server_modules/connectors/autopilot_event_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_event_bridge_service.py)
+  - [server_modules/connectors/autopilot_terminal_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_terminal_bridge_service.py)
+  - [server_modules/connectors/autopilot_state_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_state_bridge_service.py)
+  - [server_modules/connectors/telegram_compatibility_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/telegram_compatibility_bridge_service.py)
+  - [server_modules/connectors/whatsapp_webhook_bridge_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/whatsapp_webhook_bridge_service.py)
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `905` lines from `926` before this cut.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the top-level exported wrapper functions and init/state helper surface.
+- The `_init()` path and the top-level endpoint/export band are still local to the connector module.
+- The connector module is approaching a thinner shell, but it still has live export and bootstrap responsibilities rather than being a pure runtime contract façade.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by moving the remaining init/state/export helper band behind dedicated services where that actually removes ownership.
+2. Keep preserving direct-import compatibility for terminal and connector-context tests whenever bridge construction depends on server-hydrated globals.
+3. Avoid wrapper-only churn; prefer cuts that remove constructor or bootstrap ownership from the connector module.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_registry_service.py)
+  - [server_modules/tests/test_autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_bridge_registry_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_bridge_registry_service`
+  - `server_modules.tests.test_autopilot_shared_service_registry`
+  - `server_modules.tests.test_autopilot_terminal_bridge_service`
+  - `server_modules.tests.test_autopilot_state_bridge_service`
+  - `server_modules.tests.test_telegram_compatibility_bridge_service`
+  - `server_modules.tests.test_whatsapp_webhook_bridge_service`
+  - `server_modules.tests.test_autopilot_event_bridge_service`
+  - `server_modules.tests.test_autopilot_status_service`
+  - `server_modules.tests.test_autopilot_endpoint_service`
+  - `scripts.orion_terminal.tests.test_telegram_autopilot_profile_commands`
+  - `scripts.orion_terminal.tests.test_telegram_connector_context`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Machine-Mode Run Wrapper Band Removed From Autopilot Connectors
 
 #### Stage

@@ -8,6 +8,7 @@ from urllib import request as urlrequest, error as urlerror
 from server_modules.automation_intents import classify_automation_intent
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_channel_registry_bridge_service import AutopilotChannelRegistryBridgeService
+from server_modules.connectors.autopilot_bridge_registry_service import AutopilotBridgeRegistryService
 from server_modules.connectors.autopilot_channel_support_service import AutopilotChannelSupportService
 from server_modules.connectors.autopilot_common_support_service import AutopilotCommonSupportService
 from server_modules.connectors.autopilot_event_bridge_service import AutopilotEventBridgeService
@@ -223,7 +224,7 @@ _TELEGRAM_MENU_GOAL_TEMPLATES: Dict[str, str] = {
 }
 DEFAULT_CHAT_PREFIX = "/empyralis"
 _AUTOPILOT_CHANNEL_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotChannelRegistryBridgeService] = None
-_AUTOPILOT_SHARED_SERVICE_REGISTRY: Optional[AutopilotSharedServiceRegistry] = None
+_AUTOPILOT_BRIDGE_REGISTRY_SERVICE: Optional[AutopilotBridgeRegistryService] = None
 _AUTOPILOT_RUNTIME_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotRuntimeRegistryBridgeService] = None
 _AUTOPILOT_SUPPORT_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotSupportRegistryBridgeService] = None
 _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
@@ -265,12 +266,12 @@ def _autopilot_channel_registry_bridge_service() -> AutopilotChannelRegistryBrid
             telegram_run_timeout_seconds=int(globals().get("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
             telegram_max_reply_chars=int(globals().get("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
             telegram_send_ack=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_SEND_ACK")),
-            telegram_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
+            telegram_enabled=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ENABLED", False)),
             telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
             telegram_guided_automation_setup_enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
             telegram_trust_mode_value=ORION_TELEGRAM_AUTOPILOT_TRUST_MODE,
             telegram_execution_target_value=ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET,
-            whatsapp_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
+            whatsapp_enabled=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
             whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
             whatsapp_require_prefix=ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX,
             whatsapp_prefix=ORION_WHATSAPP_AUTOPILOT_PREFIX,
@@ -279,8 +280,8 @@ def _autopilot_channel_registry_bridge_service() -> AutopilotChannelRegistryBrid
             whatsapp_send_ack=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
             whatsapp_trust_mode_value=ORION_WHATSAPP_AUTOPILOT_TRUST_MODE,
             whatsapp_execution_target_value=ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET,
-            telegram_state=TELEGRAM_AUTOPILOT_STATE,
-            telegram_lock=TELEGRAM_AUTOPILOT_LOCK,
+            telegram_state=globals().get("TELEGRAM_AUTOPILOT_STATE") or {},
+            telegram_lock=globals().get("TELEGRAM_AUTOPILOT_LOCK") or threading.Lock(),
             telegram_state_file=ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
             whatsapp_state=WHATSAPP_AUTOPILOT_STATE,
             whatsapp_lock=WHATSAPP_AUTOPILOT_LOCK,
@@ -501,9 +502,9 @@ def _autopilot_runtime_service_registry() -> AutopilotRuntimeServiceRegistry:
 
 
 def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
-    global _AUTOPILOT_SHARED_SERVICE_REGISTRY
-    if _AUTOPILOT_SHARED_SERVICE_REGISTRY is None:
-        _AUTOPILOT_SHARED_SERVICE_REGISTRY = AutopilotSharedServiceRegistry(
+    global _AUTOPILOT_BRIDGE_REGISTRY_SERVICE
+    if _AUTOPILOT_BRIDGE_REGISTRY_SERVICE is None:
+        _AUTOPILOT_BRIDGE_REGISTRY_SERVICE = AutopilotBridgeRegistryService(
             normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
             append_channel_event=lambda **kwargs: globals().get("_append_channel_event")(**kwargs),
             utc_now_iso=lambda: _utc_now_iso(),
@@ -525,8 +526,49 @@ def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
                 ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID
             ),
             resolve_whatsapp_profile=lambda entry: _autopilot_profile_service().resolve_whatsapp_profile(entry),
+            init_runtime=lambda: _init(),
+            event_service=lambda: _autopilot_event_service(),
+            telegram_terminal_service=lambda: _telegram_terminal_service(),
+            telegram_supervisor_service=lambda: _telegram_service_registry().telegram_autopilot_supervisor_service(),
+            autopilot_status_service=lambda: _autopilot_status_service(),
+            autopilot_endpoint_service=lambda: _autopilot_endpoint_service(),
+            telegram_enabled=bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ENABLED", False)),
+            telegram_default_profile=str(globals().get("ORION_TELEGRAM_AUTOPILOT_PROFILE") or ""),
+            telegram_catalog=globals().get("TELEGRAM_AUTOPILOT_PROFILE_CATALOG") or {},
+            whatsapp_enabled=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
+            whatsapp_default_profile=str(globals().get("ORION_WHATSAPP_AUTOPILOT_PROFILE") or ""),
+            whatsapp_catalog=globals().get("WHATSAPP_AUTOPILOT_PROFILE_CATALOG") or {},
+            whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
+            telegram_state_service=lambda: _telegram_service_registry().telegram_autopilot_state_service(),
+            whatsapp_state_service=lambda: _whatsapp_service_registry().whatsapp_autopilot_state_service(),
+            telegram_runtime_service=lambda: _telegram_service_registry().telegram_autopilot_runtime_service(),
+            telegram_state=globals().get("TELEGRAM_AUTOPILOT_STATE") or {},
+            telegram_lock=globals().get("TELEGRAM_AUTOPILOT_LOCK") or threading.Lock(),
+            safe_path_token=lambda value: telegram_safe_path_token(value),
+            build_goal_with_profile=lambda goal, profile_data: _telegram_helper_registry().profile_service().build_goal_with_profile(
+                goal,
+                profile_data,
+            ),
+            workspace_connector_context=lambda goal, workspace_id, current_connector_id: _telegram_connector_context_service().workspace_connector_context(
+                goal,
+                workspace_id,
+                current_connector_id,
+            ),
+            extract_message=lambda update: _telegram_helper_registry().media_service().extract_message(update),
+            build_goal_with_attachments=lambda goal, attachments: _telegram_helper_registry().media_service().build_goal_with_attachments(
+                goal,
+                attachments,
+            ),
+            route_message=lambda raw_text, profile: _telegram_helper_registry().routing_service().route_message(raw_text, profile),
+            parse_form_urlencoded=lambda raw: _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
+            webhook_result=lambda **kwargs: _autopilot_endpoint_service().whatsapp_webhook_result(**kwargs),
+            handle_inbound=lambda payload: _whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(payload),
+            twiml_response=lambda text: _whatsapp_service_registry().whatsapp_transport_service().twiml_response(text),
+            forbidden_response=lambda content: Response(status_code=403, content=content),
+            webhook_enabled=bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
+            configured_webhook_secret=str(globals().get("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET") or ""),
         )
-    return _AUTOPILOT_SHARED_SERVICE_REGISTRY
+    return _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.shared_service_registry()
 
 
 def _autopilot_status_service():
@@ -598,46 +640,15 @@ def _autopilot_channel_support_service() -> AutopilotChannelSupportService:
 
 
 def _autopilot_event_bridge_service() -> AutopilotEventBridgeService:
-    global _AUTOPILOT_EVENT_BRIDGE_SERVICE
-    if _AUTOPILOT_EVENT_BRIDGE_SERVICE is None:
-        _AUTOPILOT_EVENT_BRIDGE_SERVICE = AutopilotEventBridgeService(
-            init_runtime=lambda: _init(),
-            event_service=lambda: _autopilot_event_service(),
-        )
-    return _AUTOPILOT_EVENT_BRIDGE_SERVICE
+    return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.event_bridge_service()
 
 
 def _autopilot_terminal_bridge_service() -> AutopilotTerminalBridgeService:
-    global _AUTOPILOT_TERMINAL_BRIDGE_SERVICE
-    if _AUTOPILOT_TERMINAL_BRIDGE_SERVICE is None:
-        _AUTOPILOT_TERMINAL_BRIDGE_SERVICE = AutopilotTerminalBridgeService(
-            init_runtime=lambda: _init(),
-            telegram_terminal_service=lambda: _telegram_terminal_service(),
-            telegram_supervisor_service=lambda: _telegram_service_registry().telegram_autopilot_supervisor_service(),
-            autopilot_status_service=lambda: _autopilot_status_service(),
-            autopilot_endpoint_service=lambda: _autopilot_endpoint_service(),
-            telegram_enabled=ORION_TELEGRAM_AUTOPILOT_ENABLED,
-            telegram_default_profile=ORION_TELEGRAM_AUTOPILOT_PROFILE,
-            telegram_catalog=TELEGRAM_AUTOPILOT_PROFILE_CATALOG,
-            whatsapp_enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
-            whatsapp_default_profile=ORION_WHATSAPP_AUTOPILOT_PROFILE,
-            whatsapp_catalog=WHATSAPP_AUTOPILOT_PROFILE_CATALOG,
-            whatsapp_webhook_path="/channels/whatsapp/twilio/webhook",
-        )
-    return _AUTOPILOT_TERMINAL_BRIDGE_SERVICE
+    return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.terminal_bridge_service()
 
 
 def _autopilot_state_bridge_service() -> AutopilotStateBridgeService:
-    global _AUTOPILOT_STATE_BRIDGE_SERVICE
-    if _AUTOPILOT_STATE_BRIDGE_SERVICE is None:
-        _AUTOPILOT_STATE_BRIDGE_SERVICE = AutopilotStateBridgeService(
-            telegram_state_service=lambda: _telegram_service_registry().telegram_autopilot_state_service(),
-            whatsapp_state_service=lambda: _whatsapp_service_registry().whatsapp_autopilot_state_service(),
-            telegram_runtime_service=lambda: _telegram_service_registry().telegram_autopilot_runtime_service(),
-            telegram_state=TELEGRAM_AUTOPILOT_STATE,
-            telegram_lock=TELEGRAM_AUTOPILOT_LOCK,
-        )
-    return _AUTOPILOT_STATE_BRIDGE_SERVICE
+    return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.state_bridge_service()
 
 
 def _normalize_workspace_id_fallback(value: Any) -> str:
@@ -654,43 +665,11 @@ def _normalize_workspace_id_fallback(value: Any) -> str:
 
 
 def _telegram_compatibility_bridge_service() -> TelegramCompatibilityBridgeService:
-    global _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE
-    if _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE is None:
-        _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE = TelegramCompatibilityBridgeService(
-            safe_path_token=lambda value: telegram_safe_path_token(value),
-            build_goal_with_profile=lambda goal, profile_data: _telegram_helper_registry().profile_service().build_goal_with_profile(
-                goal,
-                profile_data,
-            ),
-            workspace_connector_context=lambda goal, workspace_id, current_connector_id: _telegram_connector_context_service().workspace_connector_context(
-                goal,
-                workspace_id,
-                current_connector_id,
-            ),
-            extract_message=lambda update: _telegram_helper_registry().media_service().extract_message(update),
-            build_goal_with_attachments=lambda goal, attachments: _telegram_helper_registry().media_service().build_goal_with_attachments(
-                goal,
-                attachments,
-            ),
-            route_message=lambda raw_text, profile: _telegram_helper_registry().routing_service().route_message(raw_text, profile),
-        )
-    return _TELEGRAM_COMPATIBILITY_BRIDGE_SERVICE
+    return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.compatibility_bridge_service()
 
 
 def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
-    global _WHATSAPP_WEBHOOK_BRIDGE_SERVICE
-    if _WHATSAPP_WEBHOOK_BRIDGE_SERVICE is None:
-        _WHATSAPP_WEBHOOK_BRIDGE_SERVICE = WhatsAppWebhookBridgeService(
-            init_runtime=lambda: _init(),
-            parse_form_urlencoded=lambda raw: _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
-            webhook_result=lambda **kwargs: _autopilot_endpoint_service().whatsapp_webhook_result(**kwargs),
-            handle_inbound=lambda payload: _whatsapp_service_registry().whatsapp_webhook_service().handle_inbound(payload),
-            twiml_response=lambda text: _whatsapp_service_registry().whatsapp_transport_service().twiml_response(text),
-            forbidden_response=lambda content: Response(status_code=403, content=content),
-            enabled=ORION_WHATSAPP_AUTOPILOT_ENABLED,
-            configured_secret=ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET,
-        )
-    return _WHATSAPP_WEBHOOK_BRIDGE_SERVICE
+    return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.webhook_bridge_service()
 
 def _load_telegram_autopilot_state() -> None:
     _autopilot_state_bridge_service().load_telegram_autopilot_state()

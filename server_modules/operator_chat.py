@@ -976,108 +976,57 @@ _build_builtin_direct_chat_tools = direct_chat_tool_catalog_service.build_builti
 registered_direct_chat_tool_names_for_logging = direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging
 
 
-def _message_requests_http_request_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_http_request_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_requests_image_generation_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_image_generation_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_requests_browser_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_browser_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_can_use_direct_connector_tools(
-    message: str,
-    *,
-    provider: str,
-    tools: List[Dict[str, Any]],
-) -> bool:
-    return direct_chat_tool_catalog_service.message_can_use_direct_connector_tools(
-        message,
-        provider=provider,
-        tools=tools,
-        callbacks=_direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _looks_like_local_path_request(compact_message: str) -> bool:
-    return direct_chat_tool_catalog_service.looks_like_local_path_request(compact_message)
-
-
-def _message_requests_local_file_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_local_file_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_requests_local_shell_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_local_shell_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_requests_local_screenshot_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_local_screenshot_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_requests_local_computer_tool(message: str) -> bool:
-    return direct_chat_tool_catalog_service.message_requests_local_computer_tool(
-        message,
-        _direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_can_use_direct_local_tools(
-    message: str,
-    *,
-    provider: str,
-    tools: List[Dict[str, Any]],
-) -> bool:
-    return direct_chat_tool_catalog_service.message_can_use_direct_local_tools(
-        message,
-        provider=provider,
-        tools=tools,
-        callbacks=_direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _message_can_use_builtin_direct_tools(
-    message: str,
-    *,
-    tools: List[Dict[str, Any]],
-) -> bool:
-    return direct_chat_tool_catalog_service.message_can_use_builtin_direct_tools(
-        message,
-        tools=tools,
-        callbacks=_direct_chat_tool_policy_callbacks(),
-    )
-
-
-def _parse_tool_name(tool_name: str) -> tuple[str, str]:
-    return direct_chat_operator_binding_service.parse_tool_name(tool_name)
-
-
-def _tool_arguments_payload(arguments: Any) -> Dict[str, Any]:
-    return direct_chat_operator_binding_service.tool_arguments_payload(
-        arguments,
-        parse_json_object_loose_fn=parse_json_object_loose,
-    )
+_message_requests_http_request_tool = lambda message: direct_chat_tool_catalog_service.message_requests_http_request_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_requests_image_generation_tool = lambda message: direct_chat_tool_catalog_service.message_requests_image_generation_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_requests_browser_tool = lambda message: direct_chat_tool_catalog_service.message_requests_browser_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_can_use_direct_connector_tools = lambda message, *, provider, tools: direct_chat_tool_catalog_service.message_can_use_direct_connector_tools(
+    message,
+    provider=provider,
+    tools=tools,
+    callbacks=_direct_chat_tool_policy_callbacks(),
+)
+_looks_like_local_path_request = direct_chat_tool_catalog_service.looks_like_local_path_request
+_message_requests_local_file_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_file_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_requests_local_shell_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_shell_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_requests_local_screenshot_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_screenshot_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_requests_local_computer_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_computer_tool(
+    message,
+    _direct_chat_tool_policy_callbacks(),
+)
+_message_can_use_direct_local_tools = lambda message, *, provider, tools: direct_chat_tool_catalog_service.message_can_use_direct_local_tools(
+    message,
+    provider=provider,
+    tools=tools,
+    callbacks=_direct_chat_tool_policy_callbacks(),
+)
+_message_can_use_builtin_direct_tools = lambda message, *, tools: direct_chat_tool_catalog_service.message_can_use_builtin_direct_tools(
+    message,
+    tools=tools,
+    callbacks=_direct_chat_tool_policy_callbacks(),
+)
+_parse_tool_name = direct_chat_operator_binding_service.parse_tool_name
+_tool_arguments_payload = lambda arguments: direct_chat_operator_binding_service.tool_arguments_payload(
+    arguments,
+    parse_json_object_loose_fn=parse_json_object_loose,
+)
 
 
 _extract_first_email = direct_tool_config_service.extract_first_email
@@ -1154,32 +1103,20 @@ def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectTo
     )
 
 
-def _no_provider_execution_services() -> no_provider_service.NoProviderExecutionServices:
-    return direct_tool_runtime_facade_service.build_no_provider_execution_services(
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
-
-
-def _build_direct_tool_approval_response(
-    *,
-    tool_calls: List[Dict[str, Any]],
-    tool_capabilities: List[Dict[str, Any]],
-    session_ctx: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    return direct_tool_runtime_facade_service.build_direct_tool_approval_response(
-        tool_calls=tool_calls,
-        tool_capabilities=tool_capabilities,
-        session_ctx=session_ctx,
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
-
-
-def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, Any]]) -> bool:
-    return direct_tool_runtime_facade_service.message_has_obvious_direct_tool_intent(
-        message,
-        tools,
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
+_no_provider_execution_services = lambda: direct_tool_runtime_facade_service.build_no_provider_execution_services(
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
+_build_direct_tool_approval_response = lambda *, tool_calls, tool_capabilities, session_ctx=None: direct_tool_runtime_facade_service.build_direct_tool_approval_response(
+    tool_calls=tool_calls,
+    tool_capabilities=tool_capabilities,
+    session_ctx=session_ctx,
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
+_message_has_obvious_direct_tool_intent = lambda message, tools: direct_tool_runtime_facade_service.message_has_obvious_direct_tool_intent(
+    message,
+    tools,
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
 
 
 _direct_tool_followup_message = direct_tool_execution_service.direct_tool_followup_message
@@ -1253,33 +1190,26 @@ def _approval_required_for_direct_tool(
     )
 
 
-def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:
-    return direct_chat_provider_facade_service.credential_auth_mode(
-        provider,
-        credentials,
-        normalize_auth_mode_fn=normalize_auth_mode,
-    )
-
-
-def _supports_direct_message_native_chat(provider: str, credentials: Optional[Dict[str, Any]]) -> bool:
-    return direct_chat_provider_facade_service.supports_direct_message_native_chat(
-        provider,
-        credentials,
-        credential_auth_mode_fn=_credential_auth_mode,
-        get_claude_code_session_token_fn=get_claude_code_session_token,
-        provider_has_key_fn=provider_has_key,
-    )
-
-
-def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tuple[str, Dict[str, Any]]:
-    return direct_chat_provider_facade_service.preferred_provider(
-        workspace_id,
-        requested_provider,
-        supported_providers=SUPPORTED_PROVIDERS,
-        direct_chat_credentials_fn=_direct_chat_credentials,
-        supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-        credential_auth_mode_fn=_credential_auth_mode,
-    )
+_credential_auth_mode = lambda provider, credentials: direct_chat_provider_facade_service.credential_auth_mode(
+    provider,
+    credentials,
+    normalize_auth_mode_fn=normalize_auth_mode,
+)
+_supports_direct_message_native_chat = lambda provider, credentials: direct_chat_provider_facade_service.supports_direct_message_native_chat(
+    provider,
+    credentials,
+    credential_auth_mode_fn=_credential_auth_mode,
+    get_claude_code_session_token_fn=get_claude_code_session_token,
+    provider_has_key_fn=provider_has_key,
+)
+_preferred_provider = lambda workspace_id, requested_provider="": direct_chat_provider_facade_service.preferred_provider(
+    workspace_id,
+    requested_provider,
+    supported_providers=SUPPORTED_PROVIDERS,
+    direct_chat_credentials_fn=_direct_chat_credentials,
+    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
+    credential_auth_mode_fn=_credential_auth_mode,
+)
 
 
 _provider_display_name = direct_chat_provider_facade_service.provider_display_name
@@ -1291,12 +1221,11 @@ _provider_unavailable_response = partial(
 )
 
 
-def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]:
-    return direct_chat_provider_facade_service.direct_chat_credentials(
-        workspace_id,
-        provider,
-        build_provider_credential_candidates_fn=_build_provider_credential_candidates,
-    )
+_direct_chat_credentials = lambda workspace_id, provider: direct_chat_provider_facade_service.direct_chat_credentials(
+    workspace_id,
+    provider,
+    build_provider_credential_candidates_fn=_build_provider_credential_candidates,
+)
 
 
 _normalize_reasoning_effort = direct_chat_provider_facade_service.normalize_reasoning_effort
@@ -1315,12 +1244,6 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
     "Use the information to answer the user's question directly and concisely. "
     "Never paste raw content."
 )
-
-
-def _direct_chat_generation_services() -> direct_chat_generation_service.DirectChatGenerationServices:
-    return direct_chat_composition_service.build_direct_chat_generation_services(
-        _direct_chat_callback_facade_inputs(),
-    )
 
 
 def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs:
@@ -1342,54 +1265,33 @@ def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service
     )
 
 
-def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_service.DirectChatRuntimeFacadeCallbacks:
-    return direct_chat_composition_service.build_direct_chat_runtime_facade_callbacks(
-        _direct_chat_callback_facade_inputs(),
-    )
-
-
-def _prepare_direct_chat_request(
-    *,
-    resolved_turn_request: Optional[Any],
-    session_ctx: Optional[Dict[str, Any]],
-    message: str,
-    workspace_id: str,
-    thread_id: str,
-    requested_model: str,
-    requested_provider: str,
-    prior_messages: Optional[List[Dict[str, Any]]],
-    reasoning_effort: str,
-    availability: Optional[Dict[str, Any]],
-    approved_action: Optional[Dict[str, Any]],
-    max_iterations: Optional[int],
-) -> direct_chat_entry_service.PreparedDirectChatRequest:
-    return direct_chat_composition_service.prepare_direct_chat_request(
-        resolved_turn_request=resolved_turn_request,
-        session_ctx=session_ctx,
-        message=message,
-        workspace_id=workspace_id,
-        thread_id=thread_id,
-        requested_model=requested_model,
-        requested_provider=requested_provider,
-        prior_messages=prior_messages,
-        reasoning_effort=reasoning_effort,
-        availability=availability,
-        approved_action=approved_action,
-        max_iterations=max_iterations,
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
-
-
-def _direct_chat_response_services() -> direct_chat_response_service.DirectChatResponseServices:
-    return direct_chat_composition_service.build_direct_chat_response_services(
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
-
-
-def _direct_chat_runtime_services() -> direct_chat_runtime_service.DirectChatRuntimeServices:
-    return direct_chat_composition_service.build_direct_chat_runtime_services(
-        callbacks=_direct_chat_runtime_facade_callbacks(),
-    )
+_direct_chat_generation_services = lambda: direct_chat_composition_service.build_direct_chat_generation_services(
+    _direct_chat_callback_facade_inputs(),
+)
+_direct_chat_runtime_facade_callbacks = lambda: direct_chat_composition_service.build_direct_chat_runtime_facade_callbacks(
+    _direct_chat_callback_facade_inputs(),
+)
+_prepare_direct_chat_request = lambda *, resolved_turn_request, session_ctx, message, workspace_id, thread_id, requested_model, requested_provider, prior_messages, reasoning_effort, availability, approved_action, max_iterations: direct_chat_composition_service.prepare_direct_chat_request(
+    resolved_turn_request=resolved_turn_request,
+    session_ctx=session_ctx,
+    message=message,
+    workspace_id=workspace_id,
+    thread_id=thread_id,
+    requested_model=requested_model,
+    requested_provider=requested_provider,
+    prior_messages=prior_messages,
+    reasoning_effort=reasoning_effort,
+    availability=availability,
+    approved_action=approved_action,
+    max_iterations=max_iterations,
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
+_direct_chat_response_services = lambda: direct_chat_composition_service.build_direct_chat_response_services(
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
+_direct_chat_runtime_services = lambda: direct_chat_composition_service.build_direct_chat_runtime_services(
+    callbacks=_direct_chat_runtime_facade_callbacks(),
+)
 
 
 def build_direct_operator_reply(

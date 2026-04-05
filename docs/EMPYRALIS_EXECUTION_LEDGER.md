@@ -1565,6 +1565,62 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Operator Chat Runtime Wrapper Band Collapsed
+
+#### Stage
+
+Stage 1 refactor continues. The direct-chat/operator shell now owns materially less fixed delegation code while keeping the same module-level compatibility surface.
+
+#### Completed Work
+
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) to collapse a dense group of thin wrappers into direct aliases and late-bound lambda bindings for:
+  - direct-chat tool-policy delegation
+  - no-provider runtime delegation
+  - provider/runtime facade delegation
+  - direct-chat composition delegation
+- Preserved module-level patchability for the operator-chat tests by keeping callback lookups late-bound through the existing underscored names instead of eagerly binding patched helpers.
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1462` lines to `1364` lines in this cut.
+- The operator shell still exports the same helper names used by the offline test harnesses.
+- This was a shell-thinning cut, not a behavior change or architecture rewrite.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much top-level orchestration and entry-policy glue.
+- The direct-chat runtime is still assembled from multiple late-bound compatibility helpers instead of a fully canonical single boundary.
+- Higher-level route planning, approval control flow, and durable run handoff behavior are still partially coordinated from the operator shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by collapsing or extracting the remaining orchestration-heavy wrapper bands.
+2. Keep preserving the patched module-level names that the offline operator-chat tests rely on while moving ownership outward.
+3. Push the shell toward a thin coordinator around the canonical direct-chat and run services.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_memory_facade_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_direct_chat_support_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Direct Chat Entry Policy Band Moved Behind Entry Policy Service
 
 #### Stage

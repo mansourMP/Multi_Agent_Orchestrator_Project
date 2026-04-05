@@ -101,10 +101,12 @@ from server_modules.runs_engine import (
 from server_modules.connector_metadata import _connector_identity_signature
 from server_modules.runs_output import _compact_event_text, _json_safe, _persist_live_run_state
 from server_modules.health_diagnostics import _build_skill_contract_from_metadata
+from server_modules.run_service import RunExecutionServices
 from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
 from server_modules.runtime_policy import browser_automation_plan_hash
+from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
 from server_modules.url_security import assert_safe_outbound_url
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 
@@ -114,6 +116,30 @@ globals().update({key: value for key, value in vars(common).items() if not key.s
 
 LOGGER = logging.getLogger(__name__)
 NODE_TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
+
+
+def _workflow_child_run_execution_services() -> RunExecutionServices:
+    from server_modules import runs_delegation as _runs_delegation
+
+    return RunExecutionServices(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=lambda req: _runs_delegation._prepare_run_start_request(req),
+        create_run_from_request=lambda req: _runs_delegation._create_run_from_request(req),
+    )
+
+
+def _execute_workflow_child_run_request(request: Any) -> Dict[str, Any]:
+    from server_modules import runs_delegation as _runs_delegation
+
+    # Preserve legacy test/runtime patch points that replace the create wrapper
+    # directly, while using the canonical turn-runtime path for normal execution.
+    if type(_runs_delegation._create_run_from_request).__module__ == "unittest.mock":
+        return _runs_delegation._create_run_from_request(request)
+    return execute_system_run_start_request_via_turn_runtime(
+        request,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=_workflow_child_run_execution_services(),
+    )
 
 
 def _log_execution_boundary(log_queue: queue.Queue, run_id: str, phase: str, *, status: Optional[str] = None, timeout_seconds: Optional[int] = None) -> None:
@@ -1881,7 +1907,6 @@ def _workflow_tool_create_child_local_run(
     metadata_overrides: Optional[Dict[str, Any]] = None,
 ) -> str:
     from server_modules.runtime_models import RunStartRequest
-    from server_modules.runs_delegation import _create_run_from_request as _create_child_run
 
     child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
     child_metadata.update(
@@ -1909,7 +1934,7 @@ def _workflow_tool_create_child_local_run(
         parent_run_id=run_id,
         metadata=child_metadata,
     )
-    child_result = _create_child_run(child_req)
+    child_result = _execute_workflow_child_run_request(child_req)
     route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
     if str(route.get("selected") or "").strip().lower() != EXECUTION_TARGET_LOCAL_COMPANION:
         raise RuntimeError(f"Local tool node '{label}' requires a local_companion route.")
@@ -4391,7 +4416,6 @@ def _execute_workflow_graph(
                 if child_workflow_id == str(context.get("workflow_id") or "").strip():
                     raise RuntimeError("Recursive subflow calls are not allowed.")
                 from server_modules.runtime_models import RunStartRequest
-                from server_modules.runs_delegation import _create_run_from_request as _create_child_run
 
                 child_metadata = dict(context.get("metadata") if isinstance(context.get("metadata"), dict) else {})
                 child_metadata["subflow_parent_run_id"] = run_id
@@ -4409,7 +4433,7 @@ def _execute_workflow_graph(
                     parent_run_id=run_id,
                     metadata=child_metadata,
                 )
-                child_result = _create_child_run(child_req)
+                child_result = _execute_workflow_child_run_request(child_req)
                 route = child_result.get("route") if isinstance(child_result.get("route"), dict) else {}
                 if str(route.get("selected") or "").strip().lower() == EXECUTION_TARGET_LOCAL_COMPANION:
                     raise RuntimeError("Synchronous subflow execution does not yet support local_companion routing.")

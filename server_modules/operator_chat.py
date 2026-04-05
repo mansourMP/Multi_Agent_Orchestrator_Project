@@ -540,77 +540,32 @@ _action_marker_count = partial(
 _path_like_reference_count = direct_chat_routing_service.path_like_reference_count
 
 
-_durable_run_preferred_response = partial(
-    direct_chat_handoff_facade_service.durable_run_preferred_response,
+_direct_chat_handoff_bindings = direct_chat_operator_binding_service.build_direct_chat_handoff_bindings(
     run_action_fn=_run_action,
-)
-
-_run_handoff_execution_target = direct_chat_handoff_facade_service.run_handoff_execution_target
-_can_auto_start_run_handoff = direct_chat_handoff_facade_service.can_auto_start_run_handoff
-
-_direct_chat_run_handoff_failure_payload = partial(
-    direct_chat_handoff_facade_service.direct_chat_run_handoff_failure_payload,
-    run_action_fn=_run_action,
-)
-
-
-_start_direct_chat_run_handoff = partial(
-    direct_chat_handoff_facade_service.start_direct_chat_run_handoff,
     safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
-)
-
-
-_direct_chat_run_handoff_reply = partial(
-    direct_chat_handoff_facade_service.direct_chat_run_handoff_reply,
-    open_action_fn=_open_action,
-)
-
-_direct_chat_run_actions = partial(
-    direct_chat_handoff_facade_service.direct_chat_run_actions,
-    open_action_fn=_open_action,
-)
-
-_direct_chat_run_snapshot = direct_chat_handoff_facade_service.direct_chat_run_snapshot
-_direct_chat_run_event_to_step = direct_chat_handoff_facade_service.direct_chat_run_event_to_step
-_direct_chat_run_snapshot_to_step = direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step
-
-
-_direct_chat_run_final_payload = lambda *, run_id, run, snapshot, requested_workspace_id, requested_provider, requested_model, reasoning_effort, connected_systems, tool_capabilities, fallback_reason, reply_override=None, continuing=False: direct_chat_handoff_facade_service.direct_chat_run_final_payload(
-    run_id=run_id,
-    run=run,
-    snapshot=snapshot,
-    requested_workspace_id=requested_workspace_id,
-    requested_provider=requested_provider,
-    requested_model=requested_model,
-    reasoning_effort=reasoning_effort,
-    connected_systems=connected_systems,
-    tool_capabilities=tool_capabilities,
-    fallback_reason=fallback_reason,
-    reply_override=reply_override,
-    continuing=continuing,
-    build_context_used_fn=_build_context_used,
-    open_action_fn=_open_action,
-)
-_stream_direct_chat_run_handoff = lambda *, started_run, requested_workspace_id, requested_provider, requested_model, reasoning_effort, connected_systems, tool_capabilities, fallback_reason: direct_chat_handoff_facade_service.stream_direct_chat_run_handoff(
-    started_run=started_run,
-    requested_workspace_id=requested_workspace_id,
-    requested_provider=requested_provider,
-    requested_model=requested_model,
-    reasoning_effort=reasoning_effort,
-    connected_systems=connected_systems,
-    tool_capabilities=tool_capabilities,
-    fallback_reason=fallback_reason,
-    direct_chat_run_snapshot_fn=_direct_chat_run_snapshot,
-    direct_chat_run_event_to_step_fn=_direct_chat_run_event_to_step,
-    direct_chat_run_snapshot_to_step_fn=_direct_chat_run_snapshot_to_step,
-    direct_chat_run_final_payload_fn=_direct_chat_run_final_payload,
     open_action_fn=_open_action,
     build_context_used_fn=_build_context_used,
+    direct_chat_run_snapshot_fn=lambda run_id: _direct_chat_run_snapshot(run_id),
+    direct_chat_run_event_to_step_fn=lambda run_id, event: _direct_chat_run_event_to_step(run_id, event),
+    direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: _direct_chat_run_snapshot_to_step(run_id, snapshot),
+    direct_chat_run_final_payload_fn=lambda **kwargs: _direct_chat_run_final_payload(**kwargs),
     live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
     poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
     monotonic_fn=time.monotonic,
     sleep_fn=time.sleep,
 )
+_durable_run_preferred_response = _direct_chat_handoff_bindings.durable_run_preferred_response
+_run_handoff_execution_target = _direct_chat_handoff_bindings.run_handoff_execution_target
+_can_auto_start_run_handoff = _direct_chat_handoff_bindings.can_auto_start_run_handoff
+_direct_chat_run_handoff_failure_payload = _direct_chat_handoff_bindings.direct_chat_run_handoff_failure_payload
+_start_direct_chat_run_handoff = _direct_chat_handoff_bindings.start_direct_chat_run_handoff
+_direct_chat_run_handoff_reply = _direct_chat_handoff_bindings.direct_chat_run_handoff_reply
+_direct_chat_run_actions = _direct_chat_handoff_bindings.direct_chat_run_actions
+_direct_chat_run_snapshot = _direct_chat_handoff_bindings.direct_chat_run_snapshot
+_direct_chat_run_event_to_step = _direct_chat_handoff_bindings.direct_chat_run_event_to_step
+_direct_chat_run_snapshot_to_step = _direct_chat_handoff_bindings.direct_chat_run_snapshot_to_step
+_direct_chat_run_final_payload = _direct_chat_handoff_bindings.direct_chat_run_final_payload
+_stream_direct_chat_run_handoff = _direct_chat_handoff_bindings.stream_direct_chat_run_handoff
 
 
 _provider_supports_direct_tool_calls = direct_chat_tool_catalog_service.provider_supports_direct_tool_calls

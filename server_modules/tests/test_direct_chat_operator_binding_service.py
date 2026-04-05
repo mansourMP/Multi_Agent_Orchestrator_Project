@@ -265,6 +265,51 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertEqual(credentials["api_key"], "sk-test")
         self.assertEqual(bindings.direct_chat_error_reply("max_tool_iterations_reached:7"), "limit:7")
 
+    def test_build_direct_chat_handoff_bindings_preserves_handoff_helpers(self) -> None:
+        calls = []
+
+        def _run_action(message):
+            return {"kind": "run", "message": message}
+
+        def _open_action(label, href, **kwargs):
+            return {"label": label, "href": href, **kwargs}
+
+        def _build_context_used(**kwargs):
+            calls.append(kwargs)
+            return kwargs
+
+        bindings = service.build_direct_chat_handoff_bindings(
+            run_action_fn=_run_action,
+            safe_positive_int_fn=lambda value, default: default,
+            open_action_fn=_open_action,
+            build_context_used_fn=_build_context_used,
+            live_window_seconds=1.0,
+            poll_seconds=0.0,
+            monotonic_fn=lambda: 10.0,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        payload = bindings.direct_chat_run_final_payload(
+            run_id="run-1",
+            run={"id": "run-1"},
+            snapshot={"status": "completed", "usage_masked": {}, "fallback_used": False},
+            requested_workspace_id="default",
+            requested_provider="openai",
+            requested_model="gpt-5.4",
+            reasoning_effort=None,
+            connected_systems=[],
+            tool_capabilities=[],
+            fallback_reason=None,
+        )
+
+        preferred = bindings.durable_run_preferred_response("do it")
+
+        self.assertEqual(preferred["mode"], "answer_with_action")
+        self.assertEqual(preferred["actions"][0]["kind"], "run")
+        self.assertEqual(bindings.direct_chat_run_actions("run-1")[0]["label"], "Open run")
+        self.assertEqual(payload["context_used"]["run_created"], True)
+        self.assertTrue(calls)
+
 
 if __name__ == "__main__":
     unittest.main()

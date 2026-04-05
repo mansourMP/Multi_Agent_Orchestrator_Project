@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_entry_policy_service
+from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_routing_service
@@ -54,6 +55,22 @@ class DirectChatOperatorEntryBindings:
     provider_unavailable_response: Any
     direct_chat_credentials: Any
     direct_chat_error_reply: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorHandoffBindings:
+    durable_run_preferred_response: Any
+    run_handoff_execution_target: Any
+    can_auto_start_run_handoff: Any
+    direct_chat_run_handoff_failure_payload: Any
+    start_direct_chat_run_handoff: Any
+    direct_chat_run_handoff_reply: Any
+    direct_chat_run_actions: Any
+    direct_chat_run_snapshot: Any
+    direct_chat_run_event_to_step: Any
+    direct_chat_run_snapshot_to_step: Any
+    direct_chat_run_final_payload: Any
+    stream_direct_chat_run_handoff: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -723,4 +740,153 @@ def build_direct_chat_entry_bindings(
         provider_unavailable_response=provider_unavailable_response,
         direct_chat_credentials=direct_chat_credentials,
         direct_chat_error_reply=direct_chat_error_reply,
+    )
+
+
+def build_direct_chat_handoff_bindings(
+    *,
+    run_action_fn: Any,
+    safe_positive_int_fn: Any,
+    open_action_fn: Any,
+    build_context_used_fn: Any,
+    direct_chat_run_snapshot_fn: Any | None = None,
+    direct_chat_run_event_to_step_fn: Any | None = None,
+    direct_chat_run_snapshot_to_step_fn: Any | None = None,
+    direct_chat_run_final_payload_fn: Any | None = None,
+    live_window_seconds: float,
+    poll_seconds: float,
+    monotonic_fn: Any,
+    sleep_fn: Any,
+) -> DirectChatOperatorHandoffBindings:
+    def durable_run_preferred_response(message: str) -> Dict[str, Any]:
+        return direct_chat_handoff_facade_service.durable_run_preferred_response(
+            message,
+            run_action_fn=run_action_fn,
+        )
+
+    def direct_chat_run_handoff_failure_payload(message: str, error_detail: str) -> Dict[str, Any]:
+        return direct_chat_handoff_facade_service.direct_chat_run_handoff_failure_payload(
+            message,
+            error_detail,
+            run_action_fn=run_action_fn,
+        )
+
+    def start_direct_chat_run_handoff(
+        *,
+        message: str,
+        workspace_id: str,
+        requested_provider: str,
+        requested_model: str,
+        thread_id: str,
+        availability: Dict[str, Any],
+        max_iterations: Optional[int],
+    ) -> Dict[str, Any]:
+        return direct_chat_handoff_facade_service.start_direct_chat_run_handoff(
+            message=message,
+            workspace_id=workspace_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            thread_id=thread_id,
+            availability=availability,
+            max_iterations=max_iterations,
+            safe_positive_int_fn=safe_positive_int_fn,
+        )
+
+    def direct_chat_run_handoff_reply(started: Dict[str, Any]) -> Dict[str, Any]:
+        return direct_chat_handoff_facade_service.direct_chat_run_handoff_reply(
+            started,
+            open_action_fn=open_action_fn,
+        )
+
+    def direct_chat_run_actions(
+        run_id: str,
+        *,
+        waiting_for_confirmation: bool = False,
+    ) -> list[Dict[str, Any]]:
+        return direct_chat_handoff_facade_service.direct_chat_run_actions(
+            run_id,
+            waiting_for_confirmation=waiting_for_confirmation,
+            open_action_fn=open_action_fn,
+        )
+
+    def direct_chat_run_final_payload(
+        *,
+        run_id: str,
+        run: Optional[Dict[str, Any]],
+        snapshot: Dict[str, Any],
+        requested_workspace_id: str,
+        requested_provider: str,
+        requested_model: str,
+        reasoning_effort: Optional[str],
+        connected_systems: list[str],
+        tool_capabilities: list[Dict[str, Any]],
+        fallback_reason: Optional[str],
+        reply_override: Optional[str] = None,
+        continuing: bool = False,
+    ) -> Dict[str, Any]:
+        return direct_chat_handoff_facade_service.direct_chat_run_final_payload(
+            run_id=run_id,
+            run=run,
+            snapshot=snapshot,
+            requested_workspace_id=requested_workspace_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            reasoning_effort=reasoning_effort,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            fallback_reason=fallback_reason,
+            reply_override=reply_override,
+            continuing=continuing,
+            build_context_used_fn=build_context_used_fn,
+            open_action_fn=open_action_fn,
+        )
+
+    def stream_direct_chat_run_handoff(
+        *,
+        started_run: Dict[str, Any],
+        requested_workspace_id: str,
+        requested_provider: str,
+        requested_model: str,
+        reasoning_effort: Optional[str],
+        connected_systems: list[str],
+        tool_capabilities: list[Dict[str, Any]],
+        fallback_reason: Optional[str],
+    ):
+        return direct_chat_handoff_facade_service.stream_direct_chat_run_handoff(
+            started_run=started_run,
+            requested_workspace_id=requested_workspace_id,
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            reasoning_effort=reasoning_effort,
+            connected_systems=connected_systems,
+            tool_capabilities=tool_capabilities,
+            fallback_reason=fallback_reason,
+            direct_chat_run_snapshot_fn=direct_chat_run_snapshot_fn
+            or direct_chat_handoff_facade_service.direct_chat_run_snapshot,
+            direct_chat_run_event_to_step_fn=direct_chat_run_event_to_step_fn
+            or direct_chat_handoff_facade_service.direct_chat_run_event_to_step,
+            direct_chat_run_snapshot_to_step_fn=direct_chat_run_snapshot_to_step_fn
+            or direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step,
+            direct_chat_run_final_payload_fn=direct_chat_run_final_payload_fn or direct_chat_run_final_payload,
+            open_action_fn=open_action_fn,
+            build_context_used_fn=build_context_used_fn,
+            live_window_seconds=live_window_seconds,
+            poll_seconds=poll_seconds,
+            monotonic_fn=monotonic_fn,
+            sleep_fn=sleep_fn,
+        )
+
+    return DirectChatOperatorHandoffBindings(
+        durable_run_preferred_response=durable_run_preferred_response,
+        run_handoff_execution_target=direct_chat_handoff_facade_service.run_handoff_execution_target,
+        can_auto_start_run_handoff=direct_chat_handoff_facade_service.can_auto_start_run_handoff,
+        direct_chat_run_handoff_failure_payload=direct_chat_run_handoff_failure_payload,
+        start_direct_chat_run_handoff=start_direct_chat_run_handoff,
+        direct_chat_run_handoff_reply=direct_chat_run_handoff_reply,
+        direct_chat_run_actions=direct_chat_run_actions,
+        direct_chat_run_snapshot=direct_chat_handoff_facade_service.direct_chat_run_snapshot,
+        direct_chat_run_event_to_step=direct_chat_handoff_facade_service.direct_chat_run_event_to_step,
+        direct_chat_run_snapshot_to_step=direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step,
+        direct_chat_run_final_payload=direct_chat_run_final_payload,
+        stream_direct_chat_run_handoff=stream_direct_chat_run_handoff,
     )

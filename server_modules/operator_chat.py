@@ -29,6 +29,7 @@ from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_entry_service
 from server_modules import direct_chat_callback_facade_service
+from server_modules import direct_chat_context_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_runtime_service
@@ -393,13 +394,7 @@ def _local_worker_available(availability: Dict[str, Any]) -> bool:
 
 
 def _agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
-    context = session_ctx if isinstance(session_ctx, dict) else {}
-    meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
-    return (
-        str(context.get("user_id") or "").strip()
-        or str(meta.get("owner_user_id") or "").strip()
-        or str(meta.get("user_id") or "").strip()
-    )
+    return direct_chat_context_service.agent_machine_owner_user_id(session_ctx)
 
 
 def _agent_machine_full_trust_for_session(session_ctx: Optional[Dict[str, Any]]) -> bool:
@@ -430,116 +425,77 @@ def _resolve_direct_chat_availability(
 
 
 def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
-    ai_ready = bool(availability.get("ai_ready"))
-    tools = _normalize_tool_capabilities(availability)
-    connected_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected")]
-    unavailable_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected") and item.get("runtime_usable") is False]
-    unverified_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected") and item.get("runtime_usable") is None]
-    return [
-        f"Workspace: {workspace_id or 'default'}",
-        f"AI account: {'ready' if ai_ready else 'not ready'}",
-        f"Connected systems: {', '.join(connected_labels) if connected_labels else 'none'}",
-        f"Unavailable now: {', '.join(unavailable_labels) if unavailable_labels else 'none'}",
-        f"Not verified: {', '.join(unverified_labels) if unverified_labels else 'none'}",
-    ]
+    return direct_chat_context_service.availability_lines(
+        workspace_id,
+        availability,
+        normalize_tool_capabilities=_normalize_tool_capabilities,
+    )
 
 
 def _connected_system_labels(availability: Dict[str, Any]) -> List[str]:
-    return [str(item.get("label") or "").strip() for item in _normalize_tool_capabilities(availability) if item.get("connected")]
+    return direct_chat_context_service.connected_system_labels(
+        availability,
+        normalize_tool_capabilities=_normalize_tool_capabilities,
+    )
 
 
 def _context_tool_capabilities(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    trimmed: List[Dict[str, Any]] = []
-    for item in _normalize_tool_capabilities(availability):
-        if not item.get("connected"):
-            continue
-        trimmed.append(
-            {
-                "id": item.get("id"),
-                "label": item.get("label"),
-                "connected": True,
-                "authenticated": item.get("authenticated") if isinstance(item.get("authenticated"), bool) else None,
-                "runtime_usable": item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None,
-                "read_actions": (item.get("read_actions") or [])[:MAX_CONTEXT_TOOL_ACTIONS],
-                "write_actions": (item.get("write_actions") or [])[:MAX_CONTEXT_TOOL_ACTIONS],
-                "approval_required_actions": (item.get("approval_required_actions") or [])[:MAX_CONTEXT_TOOL_ACTIONS],
-            }
-        )
-        if len(trimmed) >= MAX_CONTEXT_TOOL_CAPABILITIES:
-            break
-    return trimmed
+    return direct_chat_context_service.context_tool_capabilities(
+        availability,
+        normalize_tool_capabilities=_normalize_tool_capabilities,
+        max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
+        max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
+    )
 
 
 def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
-    if not isinstance(prior_messages, list):
-        return []
-    normalized: List[Dict[str, str]] = []
-    for item in prior_messages:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip().lower()
-        if role not in {"user", "assistant"}:
-            continue
-        content = re.sub(r"\s+", " ", str(item.get("content") or "").strip())
-        if not content:
-            continue
-        if len(content) > MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS:
-            content = content[: MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS - 1].rstrip() + "…"
-        normalized.append({"role": role, "content": content})
-    return normalized[-MAX_DIRECT_CHAT_PRIOR_MESSAGES:]
+    return direct_chat_context_service.normalize_prior_messages(
+        prior_messages,
+        max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
+        max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
+    )
 
 
 def _direct_tool_session_key(workspace_id: str, thread_id: str) -> str:
-    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-    normalized_thread_id = str(thread_id or "").strip() or "direct-chat"
-    return f"{normalized_workspace_id}:{normalized_thread_id}"
+    return direct_chat_context_service.direct_tool_session_key(workspace_id, thread_id)
 
 
 def _direct_chat_session_key(workspace_id: str, thread_id: str) -> str:
-    return _direct_tool_session_key(workspace_id, thread_id)
+    return direct_chat_context_service.direct_chat_session_key(workspace_id, thread_id)
 
 
 def _parse_slash_command(message: str) -> Dict[str, str]:
-    normalized = str(message or "").strip()
-    if not normalized.startswith("/"):
-        return {}
-    tokens = normalized.split()
-    if not tokens:
-        return {}
-    command = tokens[0][1:].strip().lower()
-    remainder = normalized[len(tokens[0]):].strip()
-    return {
-        "command": command,
-        "remainder": remainder,
-    }
+    return direct_chat_context_service.parse_slash_command(message)
 
 
 def _session_model_preference(session_key: str) -> Dict[str, Optional[str]]:
-    stored = _DIRECT_CHAT_MODEL_PREFERENCES.get(session_key)
-    if not isinstance(stored, dict):
-        return {"provider": None, "model": None}
-    return {
-        "provider": str(stored.get("provider") or "").strip() or None,
-        "model": str(stored.get("model") or "").strip() or None,
-    }
+    return direct_chat_context_service.session_model_preference(
+        session_key,
+        store=_DIRECT_CHAT_MODEL_PREFERENCES,
+    )
 
 
 def _set_session_model_preference(session_key: str, *, provider: Optional[str], model: Optional[str]) -> None:
-    _DIRECT_CHAT_MODEL_PREFERENCES[session_key] = {
-        "provider": str(provider or "").strip() or None,
-        "model": str(model or "").strip() or None,
-    }
+    direct_chat_context_service.set_session_model_preference(
+        session_key,
+        provider=provider,
+        model=model,
+        store=_DIRECT_CHAT_MODEL_PREFERENCES,
+    )
 
 
 def _mark_thread_cleared(session_key: str) -> None:
-    _DIRECT_CHAT_CLEAR_MARKERS.add(session_key)
+    direct_chat_context_service.mark_thread_cleared(
+        session_key,
+        clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
+    )
 
 
 def _consume_thread_cleared(session_key: str) -> bool:
-    if session_key not in _DIRECT_CHAT_CLEAR_MARKERS:
-        return False
-    _DIRECT_CHAT_CLEAR_MARKERS.discard(session_key)
-    return True
+    return direct_chat_context_service.consume_thread_cleared(
+        session_key,
+        clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
+    )
 
 
 def _connected_provider_tokens(workspace_id: str) -> List[str]:
@@ -626,38 +582,11 @@ def _active_run_count(workspace_id: str) -> int:
         from server_modules.shared import runs as live_runs
     except Exception:
         return 0
-    total = 0
-    for run in list(live_runs.values()) if isinstance(live_runs, dict) else []:
-        if not isinstance(run, dict):
-            continue
-        status = str(run.get("status") or "").strip().lower()
-        if status in {"completed", "failed", "timeout", "stopped", "cancelled"}:
-            continue
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        run_workspace_id = str(context.get("workspace_id") or "").strip() or "default"
-        if run_workspace_id == workspace_id:
-            total += 1
-    return total
+    return direct_chat_context_service.active_run_count(workspace_id, live_runs=live_runs)
 
 
 def _slash_command_help_text() -> str:
-    return (
-        "Available commands:\n"
-        "/status\n"
-        "/memory\n"
-        "/forget <key>\n"
-        "/model <name>\n"
-        "/clear\n"
-        "/help\n\n"
-        "Built-in tools when relevant:\n"
-        "memory_search / memory_get\n"
-        "web search\n"
-        "web fetch\n"
-        "http_request\n"
-        "generate_image\n"
-        "browser navigate / screenshot / click / fill / get_page_state\n"
-        "computer ocr / click / type / applescript / clipboard / notify / list_apps / launch_app / speak"
-    )
+    return direct_chat_context_service.slash_command_help_text()
 
 
 def _tool_call_signature(tool_call: Dict[str, Any]) -> str:

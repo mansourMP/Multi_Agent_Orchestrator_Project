@@ -1956,6 +1956,85 @@ This cut moves more routing policy into the existing routing service boundary in
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Chat Context And Session Helpers Moved Behind Context Service
+
+#### Stage
+
+Stage 1 continues. The availability/context/session helper band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut removes another chunk of operator-owned state and formatting logic from the chat module.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_context_service.py) to own:
+  - agent-machine owner resolution
+  - availability/status line formatting
+  - connected-system label extraction
+  - context tool-capability trimming
+  - prior-message normalization
+  - direct-chat/direct-tool session key helpers
+  - slash-command parsing
+  - session model-preference storage helpers
+  - thread-clear marker helpers
+  - active-run counting
+  - slash-command help text
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new service:
+  - `_agent_machine_owner_user_id()`
+  - `_availability_lines()`
+  - `_connected_system_labels()`
+  - `_context_tool_capabilities()`
+  - `_normalize_prior_messages()`
+  - `_direct_tool_session_key()`
+  - `_direct_chat_session_key()`
+  - `_parse_slash_command()`
+  - `_session_model_preference()`
+  - `_set_session_model_preference()`
+  - `_mark_thread_cleared()`
+  - `_consume_thread_cleared()`
+  - `_active_run_count()`
+  - `_slash_command_help_text()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_context_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `2033` to `1962` lines in this cut.
+- Session-state and context formatting logic now has a dedicated service boundary instead of being embedded in the chat runtime module.
+- The remaining chat module is increasingly concentrated on orchestration rather than local state and formatting helpers.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns high-level direct-chat orchestration and run-handoff composition.
+- The handoff and top-level response entry flow still have meaningful orchestration weight inside the chat module.
+- The module is much thinner than before, but it is still not yet the target minimal shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around top-level direct-chat runtime composition or handoff flow.
+2. Keep the operator-chat wrapper names stable so existing tests and callers can still patch the same entrypoints.
+3. Maintain focused regression coverage around entry preparation, session state, routing, direct tools, and runtime handoff after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_context_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_context_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_context_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_context_service`
+  - `server_modules.tests.test_direct_chat_entry_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_tool_catalog_service`
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

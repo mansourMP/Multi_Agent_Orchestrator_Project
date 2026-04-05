@@ -1,0 +1,50 @@
+import unittest
+
+from server_modules import direct_chat_context_service as service
+
+
+class DirectChatContextServiceTests(unittest.TestCase):
+    def test_session_model_preference_round_trip(self) -> None:
+        store = {}
+
+        service.set_session_model_preference("session-1", provider="openai", model="gpt-5.4", store=store)
+
+        payload = service.session_model_preference("session-1", store=store)
+        self.assertEqual(payload["provider"], "openai")
+        self.assertEqual(payload["model"], "gpt-5.4")
+
+    def test_normalize_prior_messages_filters_and_truncates(self) -> None:
+        payload = service.normalize_prior_messages(
+            [
+                {"role": "system", "content": "skip"},
+                {"role": "user", "content": " hello   world "},
+                {"role": "assistant", "content": "x" * 20},
+            ],
+            max_direct_chat_prior_message_chars=10,
+            max_direct_chat_prior_messages=5,
+        )
+
+        self.assertEqual(payload[0], {"role": "user", "content": "hello wor…"})
+        self.assertTrue(payload[1]["content"].endswith("…"))
+
+    def test_active_run_count_counts_only_live_workspace_runs(self) -> None:
+        total = service.active_run_count(
+            "default",
+            live_runs={
+                "1": {"status": "running", "context": {"workspace_id": "default"}},
+                "2": {"status": "completed", "context": {"workspace_id": "default"}},
+                "3": {"status": "queued", "context": {"workspace_id": "other"}},
+                "4": {"status": "queued", "context": {"workspace_id": "default"}},
+            },
+        )
+
+        self.assertEqual(total, 2)
+
+    def test_parse_slash_command_extracts_command_and_remainder(self) -> None:
+        payload = service.parse_slash_command("/model openai:gpt-5.4 keep going")
+        self.assertEqual(payload["command"], "model")
+        self.assertEqual(payload["remainder"], "openai:gpt-5.4 keep going")
+
+
+if __name__ == "__main__":
+    unittest.main()

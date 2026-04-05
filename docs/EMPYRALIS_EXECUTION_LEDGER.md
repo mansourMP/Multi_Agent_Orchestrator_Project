@@ -414,6 +414,70 @@ This is a material reduction, not just another wrapper shuffle. The compatibilit
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 - Result: `22 passed`
+
+### 2026-04-05 - Connector Config and State-Path Setup Moved Into Dedicated Config Module
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining environment/configuration and state-path setup block is no longer owned inline by [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This cut keeps the historical names available on the connector module, but the shell now imports those definitions from a dedicated config module instead of owning the env and path-resolution block directly.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_connector_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_config.py).
+- Added focused coverage in [server_modules/tests/test_autopilot_connector_config_exports.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_config_exports.py).
+- Moved the following setup out of [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) into the new config module:
+  - `_AUTOPILOT_ERROR_CATEGORY_HINTS`
+  - `_AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS`
+  - `_AUTOPILOT_EVENT_DEDUP`
+  - `_AUTOPILOT_EVENT_DEDUP_LOCK`
+  - `EMPYRALIS_STATE_HOME`
+  - `PROJECT_ROOT`
+  - `EMPYRALIST_RUNTIME_URL`
+  - `EMPYRALIST_WORKFLOW_API_URL`
+  - `EMPYRALIST_WEB_URL`
+  - `_telegram_get_updates_process_lock()`
+  - `_resolve_state_file()`
+  - `_resolve_state_dir()`
+  - Telegram media/profile/onboarding/camera state path constants
+  - channel dead-letter path and lock constants
+  - Telegram quick-goal and menu template maps
+  - `DEFAULT_CHAT_PREFIX`
+- Trimmed the connector shell import block so it now imports these config names instead of defining them inline.
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) from `729` lines to `590` lines in this cut.
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) now behaves more clearly like a compatibility/export shell.
+- The extracted config names are still available through `server_modules.autopilot_connectors`, so direct-import callers and tests do not need to change.
+- The shell now owns far less inert setup code and more clearly contains only façade wiring plus compatibility wrappers.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is much smaller, but it still contains remaining façade builders and compatibility exports.
+- The module is not yet a pure minimal adapter surface.
+- This cut only externalizes configuration/state-path setup; broader runtime convergence and remaining connector shell cleanup still remain.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by identifying whether the remaining bridge/runtime façade builders can collapse further.
+2. Keep direct-export tests in place wherever names move out of the connector shell but must remain accessible through it.
+3. Maintain focused verification on `test_agent_machine_mode` and `test_autopilot_event_dedupe` after each shell-reduction cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_connector_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_config.py)
+- Focused repo-venv tests passed:
+  - `server_modules.tests.test_autopilot_connector_config_exports`
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+- Result: `23 passed`
 - The broader connector monolith still contains other channel behavior outside the Telegram slices already extracted.
 
 #### Next Required Work

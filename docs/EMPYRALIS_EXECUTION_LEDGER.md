@@ -2178,6 +2178,82 @@ This cut removes another metadata-heavy block from the chat runtime shell.
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Durable Run Handoff Wrapper Band Moved Behind Handoff Facade
+
+#### Stage
+
+Stage 1 continues. The durable-run handoff wrapper band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut removes another orchestration-facing band from the chat runtime shell while preserving the same patchable wrapper names.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_handoff_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_handoff_facade_service.py) to own:
+  - durable-run preferred response shaping
+  - run-handoff execution-target and auto-start checks
+  - handoff failure payload shaping
+  - run-start dependency loading and handoff start orchestration
+  - run snapshot dependency loading
+  - snapshot/event/final-payload bridge helpers
+  - live handoff stream delegation
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new facade:
+  - `_durable_run_preferred_response()`
+  - `_run_handoff_execution_target()`
+  - `_can_auto_start_run_handoff()`
+  - `_direct_chat_run_handoff_failure_payload()`
+  - `_start_direct_chat_run_handoff()`
+  - `_direct_chat_run_handoff_reply()`
+  - `_direct_chat_run_actions()`
+  - `_direct_chat_run_snapshot()`
+  - `_direct_chat_run_event_to_step()`
+  - `_direct_chat_run_snapshot_to_step()`
+  - `_direct_chat_run_final_payload()`
+  - `_stream_direct_chat_run_handoff()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_handoff_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_handoff_facade_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1797` to `1784` lines in this cut.
+- Durable-run handoff wrapper assembly now has a dedicated facade boundary instead of being embedded directly in the chat runtime module.
+- The remaining chat module is increasingly concentrated on provider/tool/runtime composition rather than handoff glue.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns top-level direct-chat orchestration and callback/input assembly.
+- The provider-selection and request/runtime composition flow still have meaningful orchestration weight inside the chat module.
+- The module is thinner than before, but it is still not yet the target minimal shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around request preparation, provider/runtime composition, or direct-tool callback assembly.
+2. Keep the operator-chat wrapper names stable so existing tests and callers can still patch the same entrypoints.
+3. Maintain focused regression coverage around handoff flow, routing, availability, direct tools, entry preparation, and runtime assembly after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_handoff_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_handoff_facade_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_handoff_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_handoff_facade_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_handoff_facade_service`
+  - `server_modules.tests.test_direct_chat_handoff_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_response_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_availability_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_context_service`
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

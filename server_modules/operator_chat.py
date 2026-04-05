@@ -24,6 +24,7 @@ from scripts.orion_local_worker_llm import (
 from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
+from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
@@ -946,22 +947,22 @@ def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.Direc
 
 
 def _durable_run_preferred_response(message: str) -> Dict[str, Any]:
-    return direct_chat_handoff_service.durable_run_preferred_response(
+    return direct_chat_handoff_facade_service.durable_run_preferred_response(
         message,
         run_action_fn=_run_action,
     )
 
 
 def _run_handoff_execution_target(availability: Dict[str, Any]) -> str:
-    return direct_chat_handoff_service.run_handoff_execution_target(availability)
+    return direct_chat_handoff_facade_service.run_handoff_execution_target(availability)
 
 
 def _can_auto_start_run_handoff(availability: Dict[str, Any]) -> bool:
-    return direct_chat_handoff_service.can_auto_start_run_handoff(availability)
+    return direct_chat_handoff_facade_service.can_auto_start_run_handoff(availability)
 
 
 def _direct_chat_run_handoff_failure_payload(message: str, error_detail: str) -> Dict[str, Any]:
-    return direct_chat_handoff_service.direct_chat_run_handoff_failure_payload(
+    return direct_chat_handoff_facade_service.direct_chat_run_handoff_failure_payload(
         message,
         error_detail,
         run_action_fn=_run_action,
@@ -978,10 +979,7 @@ def _start_direct_chat_run_handoff(
     availability: Dict[str, Any],
     max_iterations: Optional[int] = None,
 ) -> Dict[str, Any]:
-    from server_modules.runs_delegation import _create_run_from_request
-    from server_modules.runtime_models import RunStartRequest
-
-    return direct_chat_handoff_service.start_direct_chat_run_handoff(
+    return direct_chat_handoff_facade_service.start_direct_chat_run_handoff(
         message=message,
         workspace_id=workspace_id,
         requested_provider=requested_provider,
@@ -989,21 +987,19 @@ def _start_direct_chat_run_handoff(
         thread_id=thread_id,
         availability=availability,
         max_iterations=max_iterations,
-        create_run_from_request_fn=_create_run_from_request,
-        run_start_request_cls=RunStartRequest,
         safe_positive_int_fn=_safe_positive_int,
     )
 
 
 def _direct_chat_run_handoff_reply(started: Dict[str, Any]) -> Dict[str, Any]:
-    return direct_chat_handoff_service.direct_chat_run_handoff_reply(
+    return direct_chat_handoff_facade_service.direct_chat_run_handoff_reply(
         started,
         open_action_fn=_open_action,
     )
 
 
 def _direct_chat_run_actions(run_id: str, *, waiting_for_confirmation: bool = False) -> List[Dict[str, Any]]:
-    return direct_chat_handoff_service.direct_chat_run_actions(
+    return direct_chat_handoff_facade_service.direct_chat_run_actions(
         run_id,
         waiting_for_confirmation=waiting_for_confirmation,
         open_action_fn=_open_action,
@@ -1011,24 +1007,15 @@ def _direct_chat_run_actions(run_id: str, *, waiting_for_confirmation: bool = Fa
 
 
 def _direct_chat_run_snapshot(run_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    from server_modules.runs_delegation import _lookup_run_snapshot
-    from server_modules.runs_output import _serialize_run_snapshot
-    from server_modules.shared import runs
-
-    return direct_chat_handoff_service.direct_chat_run_snapshot(
-        run_id,
-        runs_mapping=runs,
-        lookup_run_snapshot_fn=_lookup_run_snapshot,
-        serialize_run_snapshot_fn=_serialize_run_snapshot,
-    )
+    return direct_chat_handoff_facade_service.direct_chat_run_snapshot(run_id)
 
 
 def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-    return direct_chat_handoff_service.direct_chat_run_event_to_step(run_id, event)
+    return direct_chat_handoff_facade_service.direct_chat_run_event_to_step(run_id, event)
 
 
 def _direct_chat_run_snapshot_to_step(run_id: str, snapshot: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-    return direct_chat_handoff_service.direct_chat_run_snapshot_to_step(run_id, snapshot)
+    return direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step(run_id, snapshot)
 
 
 def _direct_chat_run_final_payload(
@@ -1046,7 +1033,7 @@ def _direct_chat_run_final_payload(
     reply_override: Optional[str] = None,
     continuing: bool = False,
 ) -> Dict[str, Any]:
-    return direct_chat_handoff_service.direct_chat_run_final_payload(
+    return direct_chat_handoff_facade_service.direct_chat_run_final_payload(
         run_id=run_id,
         run=run,
         snapshot=snapshot,
@@ -1075,7 +1062,7 @@ def _stream_direct_chat_run_handoff(
     tool_capabilities: List[Dict[str, Any]],
     fallback_reason: Optional[str],
 ) -> Iterator[Dict[str, Any]]:
-    yield from direct_chat_handoff_service.stream_direct_chat_run_handoff(
+    yield from direct_chat_handoff_facade_service.stream_direct_chat_run_handoff(
         started_run=started_run,
         requested_workspace_id=requested_workspace_id,
         requested_provider=requested_provider,

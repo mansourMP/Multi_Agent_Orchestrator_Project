@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import os
 import sentry_sdk
 import threading
 import time
@@ -20,7 +19,6 @@ from server_modules.agent_turn import (
     resolve_direct_chat_turn_request,
 )
 from server_modules.direct_chat_service import (
-    DirectChatExecutionServices,
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
     build_direct_chat_request_meta as _service_build_direct_chat_request_meta,
@@ -29,6 +27,7 @@ from server_modules.direct_chat_service import (
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
+from server_modules import direct_chat_stream_runtime_service as chat_stream_runtime_service
 from server_modules import direct_chat_stream_state_service as chat_stream_state_service
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
 from server_modules.heartbeat import HeartbeatScheduler
@@ -241,29 +240,17 @@ def _normalize_chat_stream_cursor(value: Any) -> int:
 
 
 def _chat_stream_state_db_path() -> Path:
-    override = globals().get("_CHAT_STREAM_STATE_DB_OVERRIDE")
-    if override:
-        return Path(override)
-    try:
-        return Path(_late_server_export("ORION_RUNTIME_STATE_DB"))
-    except Exception:
-        from server_modules.runtime_config import ORION_RUNTIME_STATE_DB
+    from server_modules.runtime_config import ORION_RUNTIME_STATE_DB
 
-        return Path(ORION_RUNTIME_STATE_DB)
+    return chat_stream_runtime_service.resolve_chat_stream_state_db_path(
+        override=globals().get("_CHAT_STREAM_STATE_DB_OVERRIDE"),
+        late_server_export=_late_server_export,
+        fallback_db_path=ORION_RUNTIME_STATE_DB,
+    )
 
 
 def _configured_direct_chat_worker_count() -> int:
-    for env_name in ("ORION_RUNTIME_UVICORN_WORKERS", "UVICORN_WORKERS", "WEB_CONCURRENCY"):
-        raw_value = str(os.getenv(env_name) or "").strip()
-        if not raw_value:
-            continue
-        try:
-            parsed = int(raw_value)
-        except Exception:
-            continue
-        if parsed > 0:
-            return parsed
-    return 1
+    return chat_stream_runtime_service.configured_direct_chat_worker_count()
 
 
 def ensure_single_worker_direct_chat_stream_runtime() -> None:
@@ -273,7 +260,7 @@ def ensure_single_worker_direct_chat_stream_runtime() -> None:
 
 
 def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> None:
-    return chat_stream_state_service.initialize_runtime_state(
+    return chat_stream_runtime_service.initialize_chat_stream_runtime_state(
         now_ts=now_ts,
         ensure_single_worker_runtime_fn=ensure_single_worker_direct_chat_stream_runtime,
         db_path=_chat_stream_state_db_path(),
@@ -362,13 +349,17 @@ _direct_chat_session_manager_enabled = lambda: _service_direct_chat_session_mana
 def _direct_chat_session_manager():
     from server_modules.session_manager.manager import get_default_session_manager
 
-    return get_default_session_manager(db_path=_chat_stream_state_db_path())
+    return chat_stream_runtime_service.build_direct_chat_session_manager(
+        get_default_session_manager=get_default_session_manager,
+        db_path=_chat_stream_state_db_path(),
+    )
 
 
-def _direct_chat_execution_services() -> DirectChatExecutionServices:
+def _direct_chat_execution_services():
     from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
 
-    return build_direct_chat_execution_services(
+    return chat_stream_runtime_service.build_direct_chat_execution_services(
+        builder=build_direct_chat_execution_services,
         chat_stream_key=_chat_stream_key,
         session_manager_enabled=_direct_chat_session_manager_enabled,
         session_manager_factory=_direct_chat_session_manager,
@@ -405,7 +396,7 @@ def _get_or_create_chat_stream_session(
     workspace_id: str,
 ) -> dict[str, Any]:
     with _CHAT_STREAM_LOCK:
-        return chat_stream_state_service.get_or_create_chat_stream_session(
+        return chat_stream_runtime_service.get_or_create_chat_stream_session(
             _CHAT_STREAM_SESSIONS,
             key=key,
             thread_id=thread_id,
@@ -426,7 +417,7 @@ def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Opti
 
 
 def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
-    return chat_stream_state_service.append_chat_stream_event(
+    return chat_stream_runtime_service.append_chat_stream_event(
         session,
         event_name=event_name,
         payload=payload,
@@ -436,7 +427,7 @@ def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload:
 
 
 def _complete_chat_stream_session(session: dict[str, Any]) -> None:
-    return chat_stream_state_service.complete_chat_stream_session(
+    return chat_stream_runtime_service.complete_chat_stream_session(
         session,
         persist_session_state=_persist_chat_stream_session_state,
     )

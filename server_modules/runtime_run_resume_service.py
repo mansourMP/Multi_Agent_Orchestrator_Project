@@ -20,6 +20,13 @@ def run_thread_is_alive(
     return False
 
 
+def build_run_thread_is_alive_fn(
+    *,
+    enumerate_threads: Callable[[], list[Any]],
+) -> Callable[[dict], bool]:
+    return lambda run: run_thread_is_alive(run, enumerate_threads=enumerate_threads)
+
+
 def schedule_restored_run_resume(
     run_id: str,
     run: dict,
@@ -74,3 +81,20 @@ def schedule_restored_run_resume(
     )
     worker.start()
     return True
+
+
+def build_schedule_restored_run_resume_fn(
+    *,
+    run_thread_is_alive_fn: Callable[[dict], bool],
+    utc_now_iso: Callable[[], str],
+    late_server_export: Callable[[str], Any],
+    thread_class: Callable[..., Any],
+) -> Callable[[str, dict], bool]:
+    return lambda run_id, run: schedule_restored_run_resume(
+        run_id,
+        run,
+        run_thread_is_alive_fn=run_thread_is_alive_fn,
+        utc_now_iso=utc_now_iso,
+        late_server_export=late_server_export,
+        thread_class=thread_class,
+    )

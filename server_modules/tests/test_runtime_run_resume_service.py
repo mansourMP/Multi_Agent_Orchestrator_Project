@@ -71,6 +71,33 @@ class RuntimeRunResumeServiceTests(unittest.TestCase):
         self.assertTrue(run["context"]["metadata"]["browser_resume_supported"])
         self.assertEqual(enqueued[0][0], "run-2")
 
+    def test_build_run_thread_is_alive_fn_wraps_enumerator(self):
+        run_thread_is_alive_fn = runtime_run_resume_service.build_run_thread_is_alive_fn(
+            enumerate_threads=lambda: [_ThreadWorker(7, True)],
+        )
+
+        self.assertTrue(run_thread_is_alive_fn({"thread_id": 7}))
+
+    def test_build_schedule_restored_run_resume_fn_wraps_callbacks(self):
+        persisted = []
+        worker = Mock()
+        schedule = runtime_run_resume_service.build_schedule_restored_run_resume_fn(
+            run_thread_is_alive_fn=lambda run: False,
+            utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+            late_server_export=lambda name: (
+                (lambda run_id, run: persisted.append((run_id, run.get("updated_at"))))
+                if name == "_persist_live_run_state"
+                else Mock()
+            ),
+            thread_class=lambda **kwargs: worker,
+        )
+
+        result = schedule("run-3", {"status": "waiting_for_input", "thread_id": None})
+
+        self.assertTrue(result)
+        self.assertEqual(persisted[0][0], "run-3")
+        worker.start.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

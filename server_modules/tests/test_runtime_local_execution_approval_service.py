@@ -130,6 +130,36 @@ class RuntimeLocalExecutionApprovalServiceTests(unittest.TestCase):
                 enqueue_local_companion_run=lambda run_id, **kwargs: None,
             )
 
+    def test_build_resolve_local_execution_start_approval_fn_resolves_with_late_root_dir(self):
+        run = {
+            "logs": queue.Queue(),
+            "context": {"metadata": {"local_execution_waiting_confirmation": True}},
+        }
+        enqueued = []
+
+        resolver = runtime_local_execution_approval_service.build_resolve_local_execution_start_approval_fn(
+            get_pending_confirmation=lambda run: {"approval_id": "approval-1", "correlation_id": "corr-1"},
+            approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+            parse_utc_ts=lambda value: None,
+            utc_now=lambda: None,
+            utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+            set_pending_confirmation=lambda run, pending: None,
+            emit_log=lambda *args, **kwargs: None,
+            append_approval_audit=lambda **kwargs: None,
+            browser_plan_hash_from_inputs=lambda inputs: "",
+            clear_pending_confirmation=lambda run: None,
+            set_run_status=lambda run_id, status: None,
+            mark_local_execution_tools_approved=lambda metadata: None,
+            build_browser_execution_binding=lambda root_dir, plan_hash, profile: {"root_dir": root_dir},
+            root_dir=lambda: "/tmp/root",
+            enqueue_local_companion_run=lambda run_id, **kwargs: enqueued.append((run_id, kwargs)),
+        )
+
+        payload = resolver("run-1", run, "approval-1", "approve")
+
+        self.assertEqual(payload["decision_kind"], "approved")
+        self.assertEqual(enqueued[0][0], "run-1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -333,45 +333,35 @@ _enforce_run_owner_access = lambda current_user, payload: runtime_run_access_ser
 _stamp_request_owner = runtime_run_access_service.stamp_request_owner
 
 
-_resolve_local_execution_start_approval = lambda run_id_str, run, approval_id, decision_text, note="": runtime_local_execution_approval_service.resolve_local_execution_start_approval(
-        run_id_str,
-        run,
-        approval_id,
-        decision_text,
-        note=note,
-        **runtime_local_execution_approval_service.build_local_execution_approval_callbacks(
-            get_pending_confirmation=_get_pending_confirmation,
-            approval_correlation_id=_approval_correlation_id,
-            parse_utc_ts=_parse_utc_ts,
-            utc_now=_utc_now,
-            utc_now_iso=_utc_now_iso,
-            set_pending_confirmation=_set_pending_confirmation,
-            emit_log=emit_log,
-            append_approval_audit=_append_approval_audit,
-            browser_plan_hash_from_inputs=browser_automation_plan_hash_from_pack_inputs,
-            clear_pending_confirmation=_clear_pending_confirmation,
-            set_run_status=set_run_status,
-            mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
-            build_browser_execution_binding=build_browser_execution_binding,
-            root_dir=_late_server_export("ROOT_DIR"),
-            enqueue_local_companion_run=_enqueue_local_companion_run,
-        ),
-    )
-
-
-_run_thread_is_alive = lambda run: runtime_run_resume_service.run_thread_is_alive(
-    run,
-    enumerate_threads=threading.enumerate,
+_resolve_local_execution_start_approval = runtime_local_execution_approval_service.build_resolve_local_execution_start_approval_fn(
+    get_pending_confirmation=lambda run: _get_pending_confirmation(run),
+    approval_correlation_id=lambda *args, **kwargs: _approval_correlation_id(*args, **kwargs),
+    parse_utc_ts=lambda value: _parse_utc_ts(value),
+    utc_now=_utc_now,
+    utc_now_iso=_utc_now_iso,
+    set_pending_confirmation=lambda run, pending: _set_pending_confirmation(run, pending),
+    emit_log=lambda *args, **kwargs: emit_log(*args, **kwargs),
+    append_approval_audit=lambda **kwargs: _append_approval_audit(**kwargs),
+    browser_plan_hash_from_inputs=browser_automation_plan_hash_from_pack_inputs,
+    clear_pending_confirmation=lambda run: _clear_pending_confirmation(run),
+    set_run_status=lambda run_id, status: set_run_status(run_id, status),
+    mark_local_execution_tools_approved=lambda metadata: _mark_local_execution_tools_approved(metadata),
+    build_browser_execution_binding=build_browser_execution_binding,
+    root_dir=lambda: _late_server_export("ROOT_DIR"),
+    enqueue_local_companion_run=lambda run_id, **kwargs: _enqueue_local_companion_run(run_id, **kwargs),
 )
 
 
-_schedule_restored_run_resume = lambda run_id_str, run: runtime_run_resume_service.schedule_restored_run_resume(
-    run_id_str,
-    run,
-    run_thread_is_alive_fn=_run_thread_is_alive,
+_run_thread_is_alive = runtime_run_resume_service.build_run_thread_is_alive_fn(
+    enumerate_threads=lambda: threading.enumerate(),
+)
+
+
+_schedule_restored_run_resume = runtime_run_resume_service.build_schedule_restored_run_resume_fn(
+    run_thread_is_alive_fn=lambda run: _run_thread_is_alive(run),
     utc_now_iso=_utc_now_iso,
-    late_server_export=_late_server_export,
-    thread_class=threading.Thread,
+    late_server_export=lambda name: _late_server_export(name),
+    thread_class=lambda **kwargs: threading.Thread(**kwargs),
 )
 
 

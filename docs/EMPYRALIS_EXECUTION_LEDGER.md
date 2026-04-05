@@ -1565,6 +1565,61 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Top-Level Runtime Entry Wiring Moved Behind Runtime Entry Facade
+
+#### Stage
+
+Stage 1 continues. The top-level direct-chat runtime entry wrappers no longer bind directly to the runtime service from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is still an ownership reduction rather than a line-count win. The chat shell remains large, but another boundary in the runtime entry path is now explicit and testable.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_runtime_entry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_entry_facade_service.py) to own the delegation layer for:
+  - `build_direct_operator_reply()`
+  - `collect_direct_operator_reply()`
+  - `build_chat_turn_event_stream()`
+  - `execute_chat_turn()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the historical top-level runtime entry wrappers now delegate through the new facade instead of calling [server_modules/direct_chat_runtime_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_service.py) inline.
+- Added focused compatibility coverage in [server_modules/tests/test_direct_chat_runtime_entry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_entry_facade_service.py).
+
+#### Current Truth
+
+- The direct-chat runtime service remains the canonical implementation boundary for execution behavior.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still exports the same public runtime entry names, but it no longer owns this delegation band inline.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is now `1788` lines, up from `1787`, so this cut should be treated as a boundary extraction and compatibility cleanup rather than a shrink pass.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much direct-chat orchestration, including provider-aware reply flow, availability policy, and remaining runtime composition glue.
+- Several recent cuts reduced ownership without materially reducing total shell size, which means the next reductions need to target higher-density orchestration clusters.
+- The runtime path is more modular, but the chat shell is still not yet a thin coordinator around one canonical service graph.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another high-density orchestration band instead of only thin wrapper layers.
+2. Keep the public compatibility surface stable while consolidating more of the direct-chat runtime path behind dedicated services.
+3. Preserve deterministic offline test coverage as the remaining orchestration code is moved out of the chat shell.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_runtime_entry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_entry_facade_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_runtime_entry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_entry_facade_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Direct Tool Execution Flow Moved Behind Execution Service
 
 #### Stage

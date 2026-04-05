@@ -29,6 +29,7 @@ from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
+from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
@@ -1732,7 +1733,7 @@ def build_direct_operator_reply(
     session_ctx: Optional[Dict[str, Any]] = None,
     agent_turn_request: Optional[Any] = None,
 ) -> Iterator[Dict[str, Any]]:
-    yield from direct_chat_runtime_service.build_direct_operator_reply(
+    yield from direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
         services=_direct_chat_runtime_services(),
         message=message,
         workspace_id=workspace_id,
@@ -1752,7 +1753,7 @@ def build_direct_operator_reply(
 def collect_direct_operator_reply(
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    return direct_chat_runtime_service.collect_direct_operator_reply(
+    return direct_chat_runtime_entry_facade_service.collect_direct_operator_reply(
         services=_direct_chat_runtime_services(),
         **kwargs,
     )
@@ -1764,7 +1765,7 @@ def build_chat_turn_event_stream(
     message: str,
     request_meta: Optional[Dict[str, Any]] = None,
 ) -> Iterator[Dict[str, Any]]:
-    return direct_chat_runtime_service.build_chat_turn_event_stream(
+    return direct_chat_runtime_entry_facade_service.build_chat_turn_event_stream(
         services=_direct_chat_runtime_services(),
         session_ctx=session_ctx,
         message=message,
@@ -1778,7 +1779,7 @@ def execute_chat_turn(
     stream_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
     request_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return direct_chat_runtime_service.execute_chat_turn(
+    return direct_chat_runtime_entry_facade_service.execute_chat_turn(
         services=_direct_chat_runtime_services(),
         session_ctx=session_ctx,
         message=message,

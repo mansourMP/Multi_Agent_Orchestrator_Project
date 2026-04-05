@@ -1633,6 +1633,62 @@ This cut keeps the old compatibility exports in place, but the module now crosse
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 
+### 2026-04-05 - Connector Shell Construction Moved Behind Dedicated Builder Module
+
+#### Stage
+
+Stage 1 continues. The remaining late-bound shell-construction block no longer lives inline inside [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+The compatibility shell still exists, but the constructor assembly and fallback import logic now live behind a dedicated builder boundary.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_connector_shell_builder.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_shell_builder.py) to own:
+  - shell construction for [server_modules/connectors/autopilot_connector_shell_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_shell_service.py)
+  - late-bound module-global lookup for runtime-owned callbacks and stores
+  - fallback imports for runtime/common, vault, run, and policy helpers
+  - workspace-id normalization fallback logic previously owned by the connector module
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so `_autopilot_connector_shell_service()` now delegates to the builder module instead of assembling the shell inline.
+- Added focused builder coverage in:
+  - [server_modules/tests/test_autopilot_connector_shell_builder.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_shell_builder.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `411` lines from `528` before this cut.
+- The connector module still re-exports the compatibility surface, but it no longer owns the large late-bound builder block directly.
+- The builder boundary preserves the behavior that matters for the historical shell:
+  - patched module globals still override runtime callbacks when tests patch `create_run`, routing helpers, or runtime policy functions
+  - direct-import harnesses still work when runtime-owned globals are absent during import
+  - machine-mode and throttled-event flows still pass through the same public connector entrypoints
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still has a broad wrapper/export surface and remains thicker than the target architecture wants.
+- The connector shell still re-exports many internal helper names that should eventually reduce to a smaller public contract.
+- The module still imports a wide compatibility surface to preserve historical names, even though more of the ownership has moved out.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by shrinking the wrapper/export band, not just the construction band.
+2. Decide whether the next cut should group the remaining public wrappers behind one additional export façade or collapse them into channel-specific boundaries.
+3. Keep validating late-bound patch behavior as the compatibility shell gets thinner.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_connector_shell_builder.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_shell_builder.py)
+  - [server_modules/tests/test_autopilot_connector_shell_builder.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_shell_builder.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_connector_shell_builder`
+  - `server_modules.tests.test_autopilot_connector_shell_service`
+  - `server_modules.tests.test_autopilot_connector_config_exports`
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+
 ### 2026-04-05 - Top-Level Telegram And WhatsApp Registry Wiring Moved Behind Channel Registry Bridge
 
 #### Stage

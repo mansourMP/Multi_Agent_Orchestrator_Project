@@ -507,52 +507,22 @@ _build_builtin_direct_chat_tools = direct_chat_tool_catalog_service.build_builti
 registered_direct_chat_tool_names_for_logging = direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging
 
 
-_message_requests_http_request_tool = lambda message: direct_chat_tool_catalog_service.message_requests_http_request_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
+_direct_chat_tool_routing_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_routing_bindings(
+    direct_chat_tool_policy_callbacks=lambda: _direct_chat_tool_policy_callbacks(),
+    direct_chat_routing_policy_callbacks=lambda: _direct_chat_routing_policy_callbacks(),
+    compact_text_fn=_compact_text,
 )
-_message_requests_image_generation_tool = lambda message: direct_chat_tool_catalog_service.message_requests_image_generation_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_requests_browser_tool = lambda message: direct_chat_tool_catalog_service.message_requests_browser_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_can_use_direct_connector_tools = lambda message, *, provider, tools: direct_chat_tool_catalog_service.message_can_use_direct_connector_tools(
-    message,
-    provider=provider,
-    tools=tools,
-    callbacks=_direct_chat_tool_policy_callbacks(),
-)
-_looks_like_local_path_request = direct_chat_tool_catalog_service.looks_like_local_path_request
-_message_requests_local_file_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_file_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_requests_local_shell_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_shell_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_requests_local_screenshot_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_screenshot_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_requests_local_computer_tool = lambda message: direct_chat_tool_catalog_service.message_requests_local_computer_tool(
-    message,
-    _direct_chat_tool_policy_callbacks(),
-)
-_message_can_use_direct_local_tools = lambda message, *, provider, tools: direct_chat_tool_catalog_service.message_can_use_direct_local_tools(
-    message,
-    provider=provider,
-    tools=tools,
-    callbacks=_direct_chat_tool_policy_callbacks(),
-)
-_message_can_use_builtin_direct_tools = lambda message, *, tools: direct_chat_tool_catalog_service.message_can_use_builtin_direct_tools(
-    message,
-    tools=tools,
-    callbacks=_direct_chat_tool_policy_callbacks(),
-)
+_message_requests_http_request_tool = _direct_chat_tool_routing_bindings.message_requests_http_request_tool
+_message_requests_image_generation_tool = _direct_chat_tool_routing_bindings.message_requests_image_generation_tool
+_message_requests_browser_tool = _direct_chat_tool_routing_bindings.message_requests_browser_tool
+_message_can_use_direct_connector_tools = _direct_chat_tool_routing_bindings.message_can_use_direct_connector_tools
+_looks_like_local_path_request = _direct_chat_tool_routing_bindings.looks_like_local_path_request
+_message_requests_local_file_tool = _direct_chat_tool_routing_bindings.message_requests_local_file_tool
+_message_requests_local_shell_tool = _direct_chat_tool_routing_bindings.message_requests_local_shell_tool
+_message_requests_local_screenshot_tool = _direct_chat_tool_routing_bindings.message_requests_local_screenshot_tool
+_message_requests_local_computer_tool = _direct_chat_tool_routing_bindings.message_requests_local_computer_tool
+_message_can_use_direct_local_tools = _direct_chat_tool_routing_bindings.message_can_use_direct_local_tools
+_message_can_use_builtin_direct_tools = _direct_chat_tool_routing_bindings.message_can_use_builtin_direct_tools
 _parse_tool_name = direct_chat_operator_binding_service.parse_tool_name
 _tool_arguments_payload = lambda arguments: direct_chat_operator_binding_service.tool_arguments_payload(
     arguments,
@@ -605,13 +575,7 @@ _resolve_chat_local_path = direct_tool_execution_service.resolve_chat_local_path
 _direct_tool_followup_message = direct_tool_execution_service.direct_tool_followup_message
 
 
-_approval_required_for_direct_tool = lambda connector_id, action_id, arguments, tool_capabilities: direct_tool_approval_service.approval_required_for_direct_tool(
-    connector_id,
-    action_id,
-    arguments,
-    tool_capabilities,
-    compact_text=_compact_text,
-)
+_approval_required_for_direct_tool = _direct_chat_tool_routing_bindings.approval_required_for_direct_tool
 
 
 _provider_display_name = direct_chat_provider_facade_service.provider_display_name
@@ -746,18 +710,8 @@ _direct_chat_response_services = _direct_chat_runtime_bindings.response_services
 _direct_chat_runtime_services = _direct_chat_runtime_bindings.runtime_services
 
 
-_preview_run_response = lambda message, availability: direct_chat_routing_service.preview_run_response(
-    message,
-    availability,
-    _direct_chat_routing_policy_callbacks(),
-)
-
-
-_prefer_durable_run_handoff = lambda message, availability: direct_chat_routing_service.prefer_durable_run_handoff(
-    message,
-    availability,
-    _direct_chat_routing_policy_callbacks(),
-)
+_preview_run_response = _direct_chat_tool_routing_bindings.preview_run_response
+_prefer_durable_run_handoff = _direct_chat_tool_routing_bindings.prefer_durable_run_handoff
 
 
 build_direct_operator_reply = lambda *, message, workspace_id, requested_model, requested_provider, thread_id="", prior_messages=None, reasoning_effort="", availability=None, approved_action=None, max_iterations=None, session_ctx=None, agent_turn_request=None: direct_chat_runtime_entry_facade_service.build_direct_operator_reply(

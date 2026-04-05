@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 
 from server_modules import direct_chat_operator_binding_service as service
+from server_modules import direct_chat_routing_service
+from server_modules import direct_chat_tool_catalog_service
 
 
 def _operator_namespace() -> dict:
@@ -343,6 +345,78 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIn("Google Workspace is not connected", gate["reply"])
         self.assertIsInstance(suggestions, list)
         self.assertTrue(suggestions)
+
+    def test_build_direct_chat_tool_routing_bindings_preserves_tool_and_preview_helpers(self) -> None:
+        tool_callbacks = direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks(
+            compact_text=lambda value: " ".join(str(value or "").strip().lower().split()),
+            question_like=lambda compact: compact.startswith(("what ", "why ", "how ", "can ")),
+            mentions_any=lambda compact, keywords: any(token in compact for token in keywords),
+            extract_first_path_reference=lambda message: "/tmp/demo.txt" if "/tmp/demo.txt" in str(message or "") else "",
+            extract_first_url=lambda message: "https://example.com" if "example.com" in str(message or "") else "",
+            provider_supports_direct_tool_calls=service.direct_chat_tool_catalog_service.provider_supports_direct_tool_calls,
+            is_obvious_smtp_write_request=lambda compact: "email" in compact and "send" in compact,
+            google_workspace_keywords=("gmail", "calendar", "drive"),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            discord_keywords=("discord",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            browser_keywords=("browser", "go to", "page title"),
+            local_file_keywords=("read file", "open file"),
+            local_shell_keywords=("run command", "shell"),
+            local_screenshot_keywords=("screenshot",),
+            local_computer_control_keywords=("click screen", "ocr screen"),
+            web_lookup_keywords=("search web", "look up"),
+            http_request_keywords=("http", "api request"),
+            image_generation_keywords=("generate image",),
+            llm_task_keywords=("think deeply",),
+        )
+        routing_callbacks = direct_chat_routing_service.DirectChatRoutingPolicyCallbacks(
+            compact_text=lambda value: str(value or "").strip().lower(),
+            mentions_any=lambda text, keywords: any(keyword in text for keyword in keywords),
+            question_like=lambda compact: compact.startswith(("what ", "why ", "how ", "can ")),
+            is_explicit_workflow_request=lambda message: "workflow" in str(message or "").lower(),
+            starts_like_direct_run=lambda compact: compact.startswith(("run ", "execute ", "send ")),
+            workflow_action=lambda message: {"kind": "workflow", "message": message},
+            run_action=lambda message: {"kind": "run", "message": message},
+            message_requests_local_file_tool=lambda message: "/tmp/" in str(message or ""),
+            message_requests_local_shell_tool=lambda message: "shell" in str(message or "").lower(),
+            message_requests_local_screenshot_tool=lambda message: "screenshot" in str(message or "").lower(),
+            complex_task_sequence_markers=("then", "after that"),
+            complex_task_outcome_markers=("end to end", "done"),
+            execution_markers=("run", "execute", "send"),
+            google_workspace_keywords=("gmail",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        bindings = service.build_direct_chat_tool_routing_bindings(
+            direct_chat_tool_policy_callbacks=lambda: tool_callbacks,
+            direct_chat_routing_policy_callbacks=lambda: routing_callbacks,
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+        )
+
+        self.assertTrue(
+            bindings.message_can_use_direct_connector_tools(
+                "Send a telegram message",
+                provider="codex_cli",
+                tools=[{"name": "telegram_bot__send_message"}],
+            )
+        )
+        preview = bindings.preview_run_response("Run the deployment check", {"ai_ready": True})
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview["actions"][0]["kind"], "run")
+        self.assertTrue(
+            bindings.approval_required_for_direct_tool(
+                "computer",
+                "click",
+                {},
+                [],
+            )
+        )
 
 
 if __name__ == "__main__":

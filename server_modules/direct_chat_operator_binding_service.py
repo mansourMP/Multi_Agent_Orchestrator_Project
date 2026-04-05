@@ -13,6 +13,7 @@ from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_tool_catalog_service
+from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_runtime_facade_service
 
@@ -92,6 +93,24 @@ class DirectChatOperatorAvailabilityBindings:
     heartbeat_pending_tasks_for_suggestions: Any
     recent_run_prompts_for_suggestions: Any
     build_proactive_suggestions: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorToolRoutingBindings:
+    message_requests_http_request_tool: Any
+    message_requests_image_generation_tool: Any
+    message_requests_browser_tool: Any
+    message_can_use_direct_connector_tools: Any
+    looks_like_local_path_request: Any
+    message_requests_local_file_tool: Any
+    message_requests_local_shell_tool: Any
+    message_requests_local_screenshot_tool: Any
+    message_requests_local_computer_tool: Any
+    message_can_use_direct_local_tools: Any
+    message_can_use_builtin_direct_tools: Any
+    approval_required_for_direct_tool: Any
+    preview_run_response: Any
+    prefer_durable_run_handoff: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -1074,4 +1093,121 @@ def build_direct_chat_availability_bindings(
         heartbeat_pending_tasks_for_suggestions=heartbeat_pending_tasks_for_suggestions,
         recent_run_prompts_for_suggestions=recent_run_prompts_for_suggestions,
         build_proactive_suggestions=build_proactive_suggestions,
+    )
+
+
+def build_direct_chat_tool_routing_bindings(
+    *,
+    direct_chat_tool_policy_callbacks: Any,
+    direct_chat_routing_policy_callbacks: Any,
+    compact_text_fn: Any,
+) -> DirectChatOperatorToolRoutingBindings:
+    def message_requests_http_request_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_http_request_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_image_generation_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_image_generation_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_browser_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_browser_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_can_use_direct_connector_tools(message: str, *, provider: str, tools) -> bool:
+        return direct_chat_tool_catalog_service.message_can_use_direct_connector_tools(
+            message,
+            provider=provider,
+            tools=tools,
+            callbacks=direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_local_file_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_local_file_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_local_shell_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_local_shell_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_local_screenshot_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_local_screenshot_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_requests_local_computer_tool(message: str) -> bool:
+        return direct_chat_tool_catalog_service.message_requests_local_computer_tool(
+            message,
+            direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_can_use_direct_local_tools(message: str, *, provider: str, tools) -> bool:
+        return direct_chat_tool_catalog_service.message_can_use_direct_local_tools(
+            message,
+            provider=provider,
+            tools=tools,
+            callbacks=direct_chat_tool_policy_callbacks(),
+        )
+
+    def message_can_use_builtin_direct_tools(message: str, *, tools) -> bool:
+        return direct_chat_tool_catalog_service.message_can_use_builtin_direct_tools(
+            message,
+            tools=tools,
+            callbacks=direct_chat_tool_policy_callbacks(),
+        )
+
+    def approval_required_for_direct_tool(
+        connector_id: str,
+        action_id: str,
+        arguments: dict[str, Any],
+        tool_capabilities: list[dict[str, Any]],
+    ) -> bool:
+        return direct_tool_approval_service.approval_required_for_direct_tool(
+            connector_id,
+            action_id,
+            arguments,
+            tool_capabilities,
+            compact_text=compact_text_fn,
+        )
+
+    def preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return direct_chat_routing_service.preview_run_response(
+            message,
+            availability,
+            direct_chat_routing_policy_callbacks(),
+        )
+
+    def prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> bool:
+        return direct_chat_routing_service.prefer_durable_run_handoff(
+            message,
+            availability,
+            direct_chat_routing_policy_callbacks(),
+        )
+
+    return DirectChatOperatorToolRoutingBindings(
+        message_requests_http_request_tool=message_requests_http_request_tool,
+        message_requests_image_generation_tool=message_requests_image_generation_tool,
+        message_requests_browser_tool=message_requests_browser_tool,
+        message_can_use_direct_connector_tools=message_can_use_direct_connector_tools,
+        looks_like_local_path_request=direct_chat_tool_catalog_service.looks_like_local_path_request,
+        message_requests_local_file_tool=message_requests_local_file_tool,
+        message_requests_local_shell_tool=message_requests_local_shell_tool,
+        message_requests_local_screenshot_tool=message_requests_local_screenshot_tool,
+        message_requests_local_computer_tool=message_requests_local_computer_tool,
+        message_can_use_direct_local_tools=message_can_use_direct_local_tools,
+        message_can_use_builtin_direct_tools=message_can_use_builtin_direct_tools,
+        approval_required_for_direct_tool=approval_required_for_direct_tool,
+        preview_run_response=preview_run_response,
+        prefer_durable_run_handoff=prefer_durable_run_handoff,
     )

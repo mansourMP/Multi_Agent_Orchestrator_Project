@@ -345,6 +345,20 @@ def build_runs_delegation_creation_result(
     }
 
 
+def build_runs_core_result_services() -> RunPreparedResultServices:
+    return build_run_prepared_result_services(
+        create_run_from_prepared_request=create_run_from_prepared_request,
+        build_result=lambda request, *, created: build_runs_core_creation_result(request, created=created),
+    )
+
+
+def build_runs_delegation_result_services() -> RunPreparedResultServices:
+    return build_run_prepared_result_services(
+        create_run_from_prepared_request=create_run_from_prepared_request,
+        build_result=lambda _request, *, created: build_runs_delegation_creation_result(created=created),
+    )
+
+
 def is_valid_run_state(value: str) -> bool:
     return value in RUN_STATES
 

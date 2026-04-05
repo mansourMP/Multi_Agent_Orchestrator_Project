@@ -13,7 +13,9 @@ from server_modules.run_service import (
     build_run_preparation_services,
     build_run_prepared_result_services,
     build_runs_core_creation_result,
+    build_runs_core_result_services,
     build_runs_delegation_creation_result,
+    build_runs_delegation_result_services,
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
     create_run_result_from_prepared_request,
@@ -168,6 +170,10 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(prepared["metadata"]["postprocessed"])
+
+    def test_build_runs_result_services_preserve_shared_result_builders(self):
+        self.assertIsNotNone(build_runs_core_result_services().build_result)
+        self.assertIsNotNone(build_runs_delegation_result_services().build_result)
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

@@ -1205,10 +1205,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
                     now_iso=lambda: datetime.utcnow().isoformat() + "Z",
                 ),
             ),
-            result_services=run_service.build_run_prepared_result_services(
-                create_run_from_prepared_request=run_service.create_run_from_prepared_request,
-                build_result=lambda request, *, created: run_service.build_runs_core_creation_result(request, created=created),
-            ),
+            result_services=run_service.build_runs_core_result_services(),
         ),
     )
 

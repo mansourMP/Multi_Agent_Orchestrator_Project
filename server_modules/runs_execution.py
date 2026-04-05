@@ -106,7 +106,7 @@ from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
 from server_modules.runtime_policy import browser_automation_plan_hash
-from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
 from server_modules.url_security import assert_safe_outbound_url
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 
@@ -116,6 +116,20 @@ globals().update({key: value for key, value in vars(common).items() if not key.s
 
 LOGGER = logging.getLogger(__name__)
 NODE_TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
+
+
+def execute_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    stamp_request_owner_fn: Any,
+    services: RunExecutionServices,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return execute_unowned_system_run_start_request_via_turn_runtime(
+        request,
+        services=services,
+        current_user=current_user,
+    )
 
 
 def _workflow_child_run_execution_services() -> RunExecutionServices:

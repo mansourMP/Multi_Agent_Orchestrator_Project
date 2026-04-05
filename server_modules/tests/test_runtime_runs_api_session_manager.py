@@ -13,6 +13,7 @@ from server_modules.turn_runtime import (
     execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
+    execute_unowned_system_run_start_request_via_turn_runtime,
 )
 
 
@@ -190,6 +191,33 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-2")
         self.assertEqual(captured["current_user"]["auth_type"], "api_key")
+
+    def test_execute_unowned_system_run_start_request_via_turn_runtime_uses_noop_owner_stamp(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        captured = {}
+        original = object()
+
+        def _fake_system_execute(request_payload, *, stamp_request_owner_fn, current_user=None, **kwargs):
+            captured["stamped"] = stamp_request_owner_fn(original, {"user_id": "ignored"})
+            captured["current_user"] = dict(current_user or {})
+            return {"run_id": "run-3", "status": "starting"}
+
+        with patch.object(
+            turn_runtime,
+            "execute_system_run_start_request_via_turn_runtime",
+            side_effect=_fake_system_execute,
+        ):
+            result = execute_unowned_system_run_start_request_via_turn_runtime(
+                request,
+                services=RunExecutionServices(
+                    stamp_request_owner=lambda req, current_user: req,
+                    prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                    create_run_from_request=lambda req: {"run_id": "unused"},
+                ),
+            )
+
+        self.assertEqual(result["run_id"], "run-3")
+        self.assertIs(captured["stamped"], original)
 
 
 if __name__ == "__main__":

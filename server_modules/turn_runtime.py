@@ -93,3 +93,17 @@ def execute_system_run_start_request_via_turn_runtime(
             services=services,
         )
     )
+
+
+def execute_unowned_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    services: RunExecutionServices,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return execute_system_run_start_request_via_turn_runtime(
+        request,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=services,
+        current_user=current_user,
+    )

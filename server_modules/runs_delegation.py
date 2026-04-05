@@ -14,7 +14,7 @@ from server_modules.runs_output import (
     _serialize_run_snapshot,
     _upsert_run_history_snapshot,
 )
-from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -118,6 +118,20 @@ def normalize_agent_role(value: Any) -> str:
 
 _safe_int = run_service.safe_int
 _normalize_requested_max_iterations = run_service.normalize_requested_max_iterations
+
+
+def execute_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    stamp_request_owner_fn: Any,
+    services: run_service.RunExecutionServices,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return execute_unowned_system_run_start_request_via_turn_runtime(
+        request,
+        services=services,
+        current_user=current_user,
+    )
 
 
 def _delegation_run_execution_services() -> run_service.RunExecutionServices:

@@ -11,7 +11,7 @@ from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules import run_service as run_service
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
-from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import execute_unowned_system_run_start_request_via_turn_runtime
 from server_modules.runs_history import (
     _append_approval_audit,
     _approval_correlation_id,
@@ -1150,6 +1150,20 @@ _local_execution_confirmation_prompt = run_service.local_execution_confirmation_
 _local_execution_block_prompt = run_service.local_execution_block_prompt
 _mark_local_execution_tools_approved = run_service.mark_local_execution_tools_approved
 _apply_browser_execution_metadata = run_service.apply_browser_execution_metadata
+
+
+def execute_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    stamp_request_owner_fn: Any,
+    services: run_service.RunExecutionServices,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return execute_unowned_system_run_start_request_via_turn_runtime(
+        request,
+        services=services,
+        current_user=current_user,
+    )
 
 
 def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_service.RunExecutionServices:

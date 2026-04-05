@@ -26,6 +26,58 @@ RUN_STATES = (
 )
 
 
+AUTO_DELEGATION_ROLE_RULES: Dict[str, Dict[str, Any]] = {
+    "research": {
+        "keywords": [
+            "research", "market", "analysis", "analyze", "brief", "summary", "competitor",
+            "plan", "strategy", "launch", "marketing", "investigate", "study",
+        ],
+        "goal": "Research and summarize the key findings for this objective: {objective}",
+        "reason": "Research and planning support is needed.",
+    },
+    "builder": {
+        "keywords": [
+            "build", "implement", "fix", "ship", "code", "frontend", "backend", "bug",
+            "automation", "platform", "app", "browser", "workflow", "integrat",
+        ],
+        "goal": "Implement or validate the execution work needed for this objective: {objective}",
+        "reason": "Execution or implementation work is needed.",
+    },
+    "sales": {
+        "keywords": [
+            "sales", "lead", "booking", "book", "appointment", "pipeline", "conversion",
+            "convert", "follow-up", "follow up", "outreach",
+        ],
+        "goal": "Handle the sales or booking follow-through required for this objective: {objective}",
+        "reason": "Sales or booking work is needed.",
+    },
+    "support": {
+        "keywords": [
+            "support", "customer", "inbox", "message", "feedback", "complaint", "reply",
+            "telegram", "whatsapp", "email",
+        ],
+        "goal": "Handle customer-facing support follow-up for this objective: {objective}",
+        "reason": "Customer support work is needed.",
+    },
+    "finance": {
+        "keywords": [
+            "finance", "budget", "revenue", "price", "pricing", "invoice", "expense",
+            "spreadsheet", "sheet", "excel", "report",
+        ],
+        "goal": "Prepare the financial or spreadsheet work needed for this objective: {objective}",
+        "reason": "Financial or reporting work is needed.",
+    },
+    "private-assistant": {
+        "keywords": [
+            "personal", "study", "exam", "reminder", "calendar", "routine", "habit",
+            "travel", "meal", "homework",
+        ],
+        "goal": "Handle the personal assistant follow-up for this objective: {objective}",
+        "reason": "Personal assistance is needed.",
+    },
+}
+
+
 @dataclass(slots=True)
 class RunRecord:
     run_id: str
@@ -2040,6 +2092,189 @@ def find_run_relationships(
         reverse=True,
     )
     return parent_summary, child_summaries
+
+
+def llm_auto_delegate_role(
+    *,
+    objective: str,
+    business_plan: Optional[str],
+    parent_snapshot: Dict[str, Any],
+    routing_role_rules: Dict[str, Dict[str, Any]],
+    normalize_agent_role: Callable[[Any], str],
+    llm_task_fn: Callable[..., Any],
+    routing_context: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    if not isinstance(routing_context, dict):
+        return None
+
+    agent_list_lines = [
+        f"- {role}: {str(rule.get('reason') or '').strip() or str(rule.get('goal') or '').strip()}"
+        for role, rule in routing_role_rules.items()
+    ]
+    prompt_parts = [
+        "You are routing a task to the most appropriate specialist agent.",
+        "",
+        "Available agents:",
+        *agent_list_lines,
+        "",
+        "Task to route:",
+        objective.strip() or "Coordinate the delegated work needed for this run.",
+    ]
+    if business_plan:
+        prompt_parts.extend(["", f"Business context: {business_plan.strip()}"])
+    result = llm_task_fn(
+        "\n".join(prompt_parts).strip() + '\n\nRespond with JSON only: {"agent":"<agent_name>","reason":"<one sentence why>"}',
+        schema={
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["agent", "reason"],
+        },
+        context={
+            "provider": routing_context.get("provider"),
+            "model": routing_context.get("model"),
+        },
+        metadata={
+            "provider": routing_context.get("provider"),
+            "model": routing_context.get("model"),
+            "source": "delegation_routing",
+            "disable_provider_fallback": True,
+            "tools": [],
+            "workspace_id": parent_snapshot.get("workspace_id"),
+        },
+    )
+    if not isinstance(result, dict):
+        return None
+    agent_role = normalize_agent_role(result.get("agent"))
+    reason = str(result.get("reason") or "").strip()
+    if not agent_role or not reason:
+        return None
+    return {"agent_role": agent_role, "reason": reason}
+
+
+def emit_auto_delegation_routing_log(
+    parent_run_id: str,
+    plan: List[Dict[str, Any]],
+    *,
+    runs_by_id: Dict[str, Any],
+    emit_log_fn: Callable[..., Any],
+    strategy: str,
+    reason: str = "",
+) -> None:
+    run = runs_by_id.get(parent_run_id)
+    if not isinstance(run, dict):
+        return
+    log_queue = run.get("logs")
+    if log_queue is None:
+        return
+    emit_log_fn(
+        log_queue,
+        "info",
+        "Delegation routing selected specialist agents.",
+        event="delegation_routing",
+        data={
+            "parent_run_id": parent_run_id,
+            "strategy": strategy,
+            "reason": str(reason or "").strip() or None,
+            "plan": plan,
+        },
+    )
+
+
+def build_auto_delegation_plan(
+    parent_snapshot: Dict[str, Any],
+    *,
+    max_children: int = 3,
+    routing_role_rules: Dict[str, Dict[str, Any]],
+    normalize_agent_role: Callable[[Any], str],
+    llm_auto_delegate_role_fn: Callable[..., Optional[Dict[str, str]]],
+) -> List[Dict[str, Any]]:
+    parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
+    parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
+    objective = str(
+        parent_snapshot.get("user_goal")
+        or parent_context.get("user_goal")
+        or parent_context.get("business_plan")
+        or parent_snapshot.get("result_summary")
+        or ""
+    ).strip()
+    business_plan = str(parent_context.get("business_plan") or "").strip() or None
+    combined = " ".join(
+        part for part in [
+            objective,
+            business_plan or "",
+            str(parent_snapshot.get("result_summary") or "").strip(),
+            str((parent_metadata or {}).get("skill_scope") or "").strip(),
+        ] if part
+    ).lower()
+
+    if not objective:
+        objective = "Coordinate the delegated work needed for this run."
+
+    llm_route = None
+    try:
+        llm_route = llm_auto_delegate_role_fn(
+            objective=objective,
+            business_plan=business_plan,
+            parent_snapshot=parent_snapshot,
+        )
+    except Exception:
+        llm_route = None
+
+    scored: List[Tuple[int, str, Dict[str, Any]]] = []
+    for role, rule in routing_role_rules.items():
+        keywords = [str(item).lower() for item in (rule.get("keywords") or []) if str(item).strip()]
+        score = sum(1 for keyword in keywords if keyword in combined)
+        if role == "research" and any(term in combined for term in ("plan", "strategy", "launch", "marketing")):
+            score += 1
+        if score <= 0:
+            continue
+        scored.append((score, role, rule))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    chosen: List[Tuple[str, Dict[str, Any]]] = []
+    seen_roles: Set[str] = set()
+    if isinstance(llm_route, dict):
+        llm_role = normalize_agent_role(llm_route.get("agent_role"))
+        llm_rule = routing_role_rules.get(llm_role or "")
+        if llm_role and isinstance(llm_rule, dict):
+            chosen.append((llm_role, llm_rule))
+            seen_roles.add(llm_role)
+    for _, role, rule in scored:
+        if role in seen_roles:
+            continue
+        chosen.append((role, rule))
+        seen_roles.add(role)
+        if len(chosen) >= max_children:
+            break
+
+    if not chosen:
+        chosen.append(("research", routing_role_rules["research"]))
+        if len(chosen) < max_children and any(term in combined for term in ("build", "implement", "fix", "platform", "app", "automation")):
+            chosen.append(("builder", routing_role_rules["builder"]))
+
+    plan: List[Dict[str, Any]] = []
+    for role, rule in chosen[:max_children]:
+        route_reason = str(rule.get("reason") or "").strip() or None
+        route_source = "keyword"
+        if isinstance(llm_route, dict) and role == str(llm_route.get("agent_role") or "").strip():
+            route_reason = str(llm_route.get("reason") or "").strip() or route_reason
+            route_source = "llm"
+        plan.append(
+            {
+                "agent_role": role,
+                "user_goal": str(rule.get("goal") or "{objective}").format(objective=objective),
+                "business_plan": business_plan,
+                "metadata": {
+                    "auto_delegation_rule": role,
+                    "auto_delegation_reason": route_reason,
+                    "auto_delegation_source": route_source,
+                },
+            }
+        )
+    return plan
 
 
 def build_delegation_summary(

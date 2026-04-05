@@ -8,8 +8,10 @@ from fastapi import HTTPException
 
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
+    AUTO_DELEGATION_ROLE_RULES,
     apply_browser_execution_metadata,
     build_run_creation_services,
+    build_auto_delegation_plan,
     build_server_run_creation_services,
     build_legacy_run_execution_services,
     build_legacy_run_execution_services_from_values,
@@ -80,7 +82,9 @@ from server_modules.run_service import (
     prepare_run_start_request,
     build_retry_child_payload,
     find_run_relationships,
+    emit_auto_delegation_routing_log,
     iter_known_run_snapshots,
+    llm_auto_delegate_role,
     refresh_parent_delegation_state,
     schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
@@ -1606,6 +1610,71 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(parent["run_id"], "root-run")
         self.assertEqual([item["run_id"] for item in children], ["child-newer", "child-older"])
+
+    def test_llm_auto_delegate_role_returns_normalized_route(self):
+        route = llm_auto_delegate_role(
+            objective="Prepare a spreadsheet summary",
+            business_plan="Review revenue outliers",
+            parent_snapshot={"workspace_id": "default"},
+            routing_role_rules=AUTO_DELEGATION_ROLE_RULES,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            llm_task_fn=lambda *args, **kwargs: {"agent": "finance", "reason": "Spreadsheet work fits finance."},
+            routing_context={"provider": "openai", "model": "gpt-test"},
+        )
+
+        self.assertEqual(route, {"agent_role": "finance", "reason": "Spreadsheet work fits finance."})
+
+    def test_build_auto_delegation_plan_prefers_llm_route(self):
+        plan = build_auto_delegation_plan(
+            {
+                "run_id": "parent-run",
+                "user_goal": "Prepare a revenue spreadsheet and summarize outliers.",
+                "context": {"metadata": {}},
+            },
+            max_children=2,
+            routing_role_rules=AUTO_DELEGATION_ROLE_RULES,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            llm_auto_delegate_role_fn=lambda **kwargs: {
+                "agent_role": "finance",
+                "reason": "Spreadsheet work fits the finance specialist.",
+            },
+        )
+
+        self.assertEqual(plan[0]["agent_role"], "finance")
+        self.assertEqual(plan[0]["metadata"]["auto_delegation_source"], "llm")
+
+    def test_build_auto_delegation_plan_falls_back_to_keyword_when_llm_fails(self):
+        plan = build_auto_delegation_plan(
+            {
+                "run_id": "parent-run",
+                "user_goal": "Build and fix the platform automation flow.",
+                "context": {"metadata": {}},
+            },
+            max_children=1,
+            routing_role_rules=AUTO_DELEGATION_ROLE_RULES,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            llm_auto_delegate_role_fn=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("routing offline")),
+        )
+
+        self.assertEqual(plan[0]["agent_role"], "builder")
+        self.assertEqual(plan[0]["metadata"]["auto_delegation_source"], "keyword")
+
+    def test_emit_auto_delegation_routing_log_emits_delegation_event(self):
+        log_queue = queue.Queue()
+        calls = []
+
+        emit_auto_delegation_routing_log(
+            "parent-run",
+            [{"agent_role": "finance"}],
+            runs_by_id={"parent-run": {"logs": log_queue}},
+            emit_log_fn=lambda *args, **kwargs: calls.append((args, kwargs)),
+            strategy="llm",
+            reason="Spreadsheet work fits finance.",
+        )
+
+        self.assertEqual(calls[0][0][0], log_queue)
+        self.assertEqual(calls[0][1]["event"], "delegation_routing")
+        self.assertEqual(calls[0][1]["data"]["strategy"], "llm")
 
     def test_refresh_parent_delegation_state_updates_live_parent_and_emits_log(self):
         parent_logs = queue.Queue()

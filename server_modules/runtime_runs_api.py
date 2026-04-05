@@ -68,6 +68,7 @@ from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
+from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
@@ -802,203 +803,65 @@ def register_run_routes(app) -> None:
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        body.validate_fields()
-        parent_run_id = str(run_id)
-        parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
-        _enforce_run_owner_access(current_user, parent_snapshot)
-        parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
-        parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
-        parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
-        if parent_role != "orchestrator":
-            raise HTTPException(status_code=400, detail="Delegation is only available from orchestrator-owned runs.")
-
-        note = str(body.note or "").strip() or None
-        created: List[Dict[str, Any]] = []
-        for child in body.children:
-            target_role = normalize_agent_role(child.agent_role)
-            if not target_role or target_role == "orchestrator":
-                raise HTTPException(status_code=400, detail="Delegated child runs must target a specialist agent role.")
-            child_payload = {
-                "agent_role": target_role,
-                "user_goal": child.user_goal,
-                "business_plan": child.business_plan,
-                "metadata": child.metadata if isinstance(child.metadata, dict) else {},
-            }
-            delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = execute_system_run_start_request_via_turn_runtime(
-                delegated_req,
-                stamp_request_owner_fn=_stamp_request_owner,
-                services=_run_execution_services(),
-            )
-            created.append(
-                {
-                    **result,
-                    "parent_run_id": parent_run_id,
-                    "delegation_root_run_id": _late_server_export("_normalize_run_id_token")(
-                        parent_snapshot.get("delegation_root_run_id")
-                        or (parent_metadata or {}).get("delegation_root_run_id")
-                        or parent_run_id
-                    )
-                    or parent_run_id,
-                    "delegated_by_role": parent_role,
-                    "user_goal": child.user_goal,
-                }
-            )
-
-        _late_server_export("_refresh_parent_delegation_state")(parent_run_id)
-
-        return {
-            "ok": True,
-            "parent_run_id": parent_run_id,
-            "count": len(created),
-            "items": created,
-        }
+        return runtime_run_delegation_service.delegate_run_children(
+            str(run_id),
+            body=body,
+            current_user=current_user,
+            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            normalize_agent_role=normalize_agent_role,
+            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=_stamp_request_owner,
+            run_execution_services=_run_execution_services,
+            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+        )
 
     @app.post("/runs/{run_id}/delegate/auto", dependencies=[Depends(require_api_key)])
     async def auto_delegate_run(run_id: uuid.UUID, body: Optional[RunAutoDelegationRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        req = body or RunAutoDelegationRequest()
-        req.validate_fields()
-        parent_run_id = str(run_id)
-        parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
-        _enforce_run_owner_access(current_user, parent_snapshot)
-        parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
-        parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
-        parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
-        if parent_role != "orchestrator":
-            raise HTTPException(status_code=400, detail="Auto-delegation is only available from orchestrator-owned runs.")
-
-        plan = _late_server_export("_build_auto_delegation_plan")(parent_snapshot, max_children=int(req.max_children or 3))
-        if not plan:
-            raise HTTPException(status_code=400, detail="No specialist delegation rules matched this run.")
-        routing_source = str((((plan[0].get("metadata") if isinstance(plan[0], dict) else {}) or {}).get("auto_delegation_source") or "keyword")).strip() if plan else "keyword"
-        routing_reason = str((((plan[0].get("metadata") if isinstance(plan[0], dict) else {}) or {}).get("auto_delegation_reason") or "")).strip()
-        emit_routing_log = _late_server_export("_emit_auto_delegation_routing_log")
-        if callable(emit_routing_log):
-            emit_routing_log(parent_run_id, plan, strategy=routing_source, reason=routing_reason)
-
-        note = str(req.note or "").strip() or "Auto-planned by orchestrator rules."
-        created: List[Dict[str, Any]] = []
-        for child in plan:
-            delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child, note=note)
-            result = execute_system_run_start_request_via_turn_runtime(
-                delegated_req,
-                stamp_request_owner_fn=_stamp_request_owner,
-                services=_run_execution_services(),
-            )
-            created.append(
-                {
-                    **result,
-                    "parent_run_id": parent_run_id,
-                    "delegation_root_run_id": _late_server_export("_normalize_run_id_token")(
-                        parent_snapshot.get("delegation_root_run_id")
-                        or (parent_metadata or {}).get("delegation_root_run_id")
-                        or parent_run_id
-                    )
-                    or parent_run_id,
-                    "delegated_by_role": parent_role,
-                    "user_goal": child.get("user_goal"),
-                    "auto_delegation_rule": (child.get("metadata") or {}).get("auto_delegation_rule"),
-                }
-            )
-
-        _late_server_export("_refresh_parent_delegation_state")(parent_run_id)
-
-        return {
-            "ok": True,
-            "parent_run_id": parent_run_id,
-            "count": len(created),
-            "note": note,
-            "plan": plan,
-            "items": created,
-        }
+        return runtime_run_delegation_service.auto_delegate_run_children(
+            str(run_id),
+            request_payload=body or RunAutoDelegationRequest(),
+            current_user=current_user,
+            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            normalize_agent_role=normalize_agent_role,
+            build_auto_delegation_plan=_late_server_export("_build_auto_delegation_plan"),
+            emit_auto_delegation_routing_log=_late_server_export("_emit_auto_delegation_routing_log"),
+            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=_stamp_request_owner,
+            run_execution_services=_run_execution_services,
+            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+        )
 
     @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[Depends(require_api_key)])
     async def retry_failed_delegation_runs(run_id: uuid.UUID, body: Optional[RunDelegationRetryRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         if ORION_SINGLE_AGENT_MODE:
             raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        req = body or RunDelegationRetryRequest()
-        req.validate_fields()
-        parent_run_id = str(run_id)
-        parent_snapshot = _late_server_export("_lookup_run_snapshot")(parent_run_id)
-        _enforce_run_owner_access(current_user, parent_snapshot)
-        parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
-        parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
-        parent_role = normalize_agent_role(parent_snapshot.get("agent_role") or (parent_metadata or {}).get("agent_role"))
-        if parent_role != "orchestrator":
-            raise HTTPException(status_code=400, detail="Retry delegation is only available from orchestrator-owned runs.")
-
-        _, child_runs = _late_server_export("_find_run_relationships")(parent_run_id, parent_snapshot)
-        if not child_runs:
-            raise HTTPException(status_code=400, detail="This orchestrator run does not have delegated child runs.")
-
-        latest_by_lineage: Dict[str, Dict[str, Any]] = {}
-        for child in child_runs:
-            lineage_key = (
-                _late_server_export("_normalize_run_id_token")(child.get("retry_root_run_id"))
-                or _late_server_export("_normalize_run_id_token")(child.get("retry_of_run_id"))
-                or _late_server_export("_normalize_run_id_token")(child.get("run_id"))
-                or str(child.get("run_id") or "")
-            )
-            previous = latest_by_lineage.get(lineage_key)
-            child_sort_key = (
-                _parse_utc_ts(child.get("updated_at")) or _parse_utc_ts(child.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-                str(child.get("run_id") or ""),
-            )
-            previous_sort_key = (
-                _parse_utc_ts(previous.get("updated_at")) or _parse_utc_ts(previous.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
-                str(previous.get("run_id") or ""),
-            ) if isinstance(previous, dict) else None
-            if previous_sort_key is None or child_sort_key > previous_sort_key:
-                latest_by_lineage[lineage_key] = child
-
-        failed_effective_children = [
-            child for child in latest_by_lineage.values()
-            if str(child.get("status") or "").strip().lower() in {"failed", "error", "timeout", "cancelled", "stopped"}
-        ]
-        if req.failed_run_ids:
-            allowed = set(req.failed_run_ids)
-            failed_effective_children = [
-                child for child in failed_effective_children if str(child.get("run_id") or "").strip() in allowed
-            ]
-
-        if not failed_effective_children:
-            raise HTTPException(status_code=400, detail="No retryable failed child runs were found for this orchestrator run.")
-
-        note = str(req.note or "").strip() or "Retry requested from orchestration summary."
-        created: List[Dict[str, Any]] = []
-        for child in failed_effective_children:
-            child_payload = _build_retry_child_payload(parent_snapshot, child, note=note)
-            delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = execute_system_run_start_request_via_turn_runtime(
-                delegated_req,
-                stamp_request_owner_fn=_stamp_request_owner,
-                services=_run_execution_services(),
-            )
-            created.append(
-                {
-                    **result,
-                    "parent_run_id": parent_run_id,
-                    "retry_of_run_id": child_payload.get("metadata", {}).get("retry_of_run_id"),
-                    "retry_root_run_id": child_payload.get("metadata", {}).get("retry_root_run_id"),
-                    "retry_sequence": child_payload.get("metadata", {}).get("retry_sequence"),
-                    "agent_role": child_payload.get("agent_role"),
-                    "user_goal": child_payload.get("user_goal"),
-                }
-            )
-
-        _late_server_export("_refresh_parent_delegation_state")(parent_run_id)
-
-        return {
-            "ok": True,
-            "parent_run_id": parent_run_id,
-            "count": len(created),
-            "note": note,
-            "items": created,
-        }
+        return runtime_run_delegation_service.retry_failed_delegation_runs(
+            str(run_id),
+            request_payload=body or RunDelegationRetryRequest(),
+            current_user=current_user,
+            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            normalize_agent_role=normalize_agent_role,
+            find_run_relationships=_late_server_export("_find_run_relationships"),
+            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+            parse_utc_ts=_parse_utc_ts,
+            build_retry_child_payload=_build_retry_child_payload,
+            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=_stamp_request_owner,
+            run_execution_services=_run_execution_services,
+            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+        )
 
     @app.post("/routing/preview", dependencies=[Depends(require_api_key)])
     async def preview_routing(body: Optional[RunStartRequest] = None):

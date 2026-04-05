@@ -1473,7 +1473,7 @@ def register_run_routes(app) -> None:
                 "metadata": child.metadata if isinstance(child.metadata, dict) else {},
             }
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _create_run_result(delegated_req)
+            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
             created.append(
                 {
                     **result,
@@ -1527,7 +1527,7 @@ def register_run_routes(app) -> None:
         created: List[Dict[str, Any]] = []
         for child in plan:
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child, note=note)
-            result = _create_run_result(delegated_req)
+            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
             created.append(
                 {
                     **result,
@@ -1613,7 +1613,7 @@ def register_run_routes(app) -> None:
         for child in failed_effective_children:
             child_payload = _build_retry_child_payload(parent_snapshot, child, note=note)
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _create_run_result(delegated_req)
+            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
             created.append(
                 {
                     **result,
@@ -1961,7 +1961,7 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=400, detail="Replay request is not available for this run.")
         try:
             req = RunStartRequest(**replay_payload)
-            return _create_run_result(req)
+            return _execute_system_run_start_request_via_turn_runtime(req)
         except HTTPException:
             raise
         except Exception as exc:

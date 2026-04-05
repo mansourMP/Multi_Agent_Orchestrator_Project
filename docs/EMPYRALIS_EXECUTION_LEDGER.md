@@ -343,6 +343,77 @@ This does not change the historical import surface. The connector module still e
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 - Result: `24 passed`
+
+### 2026-04-05 - Channel, Helper, Support, and Runtime Registry Setup Moved Behind Registry Façade
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining constructor band for channel, helper, support, and runtime registry setup is no longer owned inline by [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This is a material reduction, not just another wrapper shuffle. The compatibility module now delegates the registry build graph through one dedicated façade service instead of manually instantiating each registry bridge inline.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_registry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_registry_facade_service.py).
+- Added focused coverage in [server_modules/tests/test_autopilot_registry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_registry_facade_service.py).
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these constructor/access bands now delegate through the registry façade:
+  - `_autopilot_channel_registry_bridge_service()`
+  - `_telegram_service_registry()`
+  - `_telegram_helper_registry_bridge_service()`
+  - `_telegram_helper_registry()`
+  - `_autopilot_support_service_registry()`
+  - `_autopilot_runtime_service_registry()`
+  - `_autopilot_profile_service()`
+  - `_telegram_connector_support_service()`
+  - `_runtime_status_service()`
+  - `_autopilot_workflow_setup_service()`
+  - `_telegram_connector_context_service()`
+  - `_autopilot_approval_service()`
+  - `_telegram_transport_service()`
+  - `_telegram_terminal_service()`
+  - `_autopilot_common_support_service()`
+  - `_autopilot_run_entry_service()`
+  - `_autopilot_runtime_support_service()`
+  - `_autopilot_skill_service()`
+  - `_autopilot_channel_support_service()`
+  - `_telegram_menu_service()`
+- Removed the inline singleton construction blocks for the four registry bridge builders from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+- Removed stale connector-level singleton globals that were no longer the real owners after the bridge and runtime façade cuts.
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) from `850` lines to `729` lines in this cut.
+
+#### Current Truth
+
+- Registry construction for channel, helper, support, and runtime services now lives behind one façade service instead of being spread across multiple long inline constructor functions.
+- The compatibility module remains the stable import boundary, but most of its former constructor weight is gone.
+- Late-bound behavior is still preserved because workspace ids, enabled flags, prefixes, profile catalogs, engines, run timeouts, run/reply limits, state maps, locks, and webhook/runtime settings are still resolved through getters when the façade builds the registry bridges.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now smaller, but it still contains environment/constants setup, compatibility wrappers, and remaining top-level accessors.
+- The module is not yet a pure thin adapter shell.
+- This cut only addresses the registry-construction band; broader canonical runtime convergence remains unfinished outside the connector refactor.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) toward a minimal compatibility surface now that both bridge and registry assembly are externalized.
+2. Audit the remaining top-of-file environment and state-resolution section for another coherent extraction seam.
+3. Keep verifying direct-import and late-bound patch compatibility after each cut, especially on `test_agent_machine_mode` and `test_autopilot_event_dedupe`.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_registry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_registry_facade_service.py)
+  - [server_modules/tests/test_autopilot_registry_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_registry_facade_service.py)
+- Focused repo-venv tests passed:
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_channel_registry_bridge_service`
+  - `server_modules.tests.test_telegram_helper_registry_bridge_service`
+  - `server_modules.tests.test_autopilot_support_registry_bridge_service`
+  - `server_modules.tests.test_autopilot_runtime_registry_bridge_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+- Result: `22 passed`
 - The broader connector monolith still contains other channel behavior outside the Telegram slices already extracted.
 
 #### Next Required Work

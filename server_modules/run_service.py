@@ -658,6 +658,86 @@ def build_runs_delegation_legacy_request_services(
     )
 
 
+def build_runs_core_legacy_preparation_services(
+    *,
+    engine_registry: dict[str, Any],
+    engine_validation_errors: list[str],
+    supported_outcome_packs: set[str],
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]],
+    normalize_trust_mode: Callable[[Any], str],
+    trust_mode_aliases: dict[str, str],
+    valid_trust_modes: set[str],
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: set[str],
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    normalize_agent_role: Callable[[Any], str],
+    detect_agent_role: Callable[[RunStartRequest, dict[str, Any]], tuple[str, str]],
+    resolve_app_permissions: Callable[[Any], dict[str, Any]],
+    action_policy_from_app_permissions: Callable[[dict[str, Any]], dict[str, Any]],
+    merge_action_policies: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Optional[dict[str, Any]]],
+    postprocess_metadata: Optional[Callable[[dict[str, Any], RunStartRequest], dict[str, Any]]] = None,
+) -> LegacyRunPreparationServices:
+    return build_legacy_run_preparation_services_from_values(
+        engine_registry=engine_registry,
+        engine_validation_errors=engine_validation_errors,
+        supported_outcome_packs=supported_outcome_packs,
+        normalize_requested_max_iterations=normalize_requested_max_iterations,
+        normalize_trust_mode=normalize_trust_mode,
+        trust_mode_aliases=trust_mode_aliases,
+        valid_trust_modes=valid_trust_modes,
+        normalize_execution_target=normalize_execution_target,
+        valid_execution_targets=valid_execution_targets,
+        normalize_run_id_token=normalize_run_id_token,
+        normalize_agent_role=normalize_agent_role,
+        detect_agent_role=detect_agent_role,
+        resolve_app_permissions=resolve_app_permissions,
+        action_policy_from_app_permissions=action_policy_from_app_permissions,
+        merge_action_policies=merge_action_policies,
+        fetch_workflow_snapshot=fetch_workflow_snapshot,
+        postprocess_metadata=postprocess_metadata,
+    )
+
+
+def build_runs_delegation_legacy_preparation_services(
+    *,
+    engine_registry: dict[str, Any],
+    engine_validation_errors: list[str],
+    supported_outcome_packs: set[str],
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]],
+    normalize_trust_mode: Callable[[Any], str],
+    trust_mode_aliases: dict[str, str],
+    valid_trust_modes: set[str],
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: set[str],
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    normalize_agent_role: Callable[[Any], str],
+    detect_agent_role: Callable[[RunStartRequest, dict[str, Any]], tuple[str, str]],
+    resolve_app_permissions: Callable[[Any], dict[str, Any]],
+    action_policy_from_app_permissions: Callable[[dict[str, Any]], dict[str, Any]],
+    merge_action_policies: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Optional[dict[str, Any]]],
+) -> LegacyRunPreparationServices:
+    return build_legacy_run_preparation_services_from_values(
+        engine_registry=engine_registry,
+        engine_validation_errors=engine_validation_errors,
+        supported_outcome_packs=supported_outcome_packs,
+        normalize_requested_max_iterations=normalize_requested_max_iterations,
+        normalize_trust_mode=normalize_trust_mode,
+        trust_mode_aliases=trust_mode_aliases,
+        valid_trust_modes=valid_trust_modes,
+        normalize_execution_target=normalize_execution_target,
+        valid_execution_targets=valid_execution_targets,
+        normalize_run_id_token=normalize_run_id_token,
+        normalize_agent_role=normalize_agent_role,
+        detect_agent_role=detect_agent_role,
+        resolve_app_permissions=resolve_app_permissions,
+        action_policy_from_app_permissions=action_policy_from_app_permissions,
+        merge_action_policies=merge_action_policies,
+        fetch_workflow_snapshot=fetch_workflow_snapshot,
+    )
+
+
 def is_valid_run_state(value: str) -> bool:
     return value in RUN_STATES
 

@@ -1174,7 +1174,7 @@ def _execute_scheduled_run_request(req: RunStartRequest, *, schedule_id: Optiona
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     return run_service.prepare_legacy_run_start_request(
         req,
-        services=run_service.build_legacy_run_preparation_services_from_values(
+        services=run_service.build_runs_core_legacy_preparation_services(
             engine_registry=ENGINE_REGISTRY,
             engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
             supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,

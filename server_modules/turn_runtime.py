@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from server_modules.agent_turn import AgentTurnRequest, resolve_run_start_turn_request
 from server_modules.direct_chat_service import DirectChatExecutionServices, execute_direct_chat_turn_request
+from server_modules import run_service as run_service
 from server_modules.run_service import RunExecutionServices, execute_durable_turn_request
 
 
@@ -58,19 +59,14 @@ async def execute_run_start_request_via_turn_runtime(
     stamp_request_owner_fn: Any,
     services: RunExecutionServices,
 ) -> Dict[str, Any]:
-    resolution = resolve_run_start_turn_request(
+    return await run_service.execute_run_start_request_via_turn_runtime(
+        request,
         current_user=current_user,
-        body=request,
         stamp_request_owner_fn=stamp_request_owner_fn,
-    )
-    execution = await execute_durable_turn_request(
-        turn_request=resolution.turn_request,
-        current_user=current_user,
         services=services,
-        base_request=resolution.request,
+        resolve_run_start_turn_request_fn=resolve_run_start_turn_request,
+        execute_durable_turn_request_fn=execute_durable_turn_request,
     )
-    result = execution.get("result")
-    return dict(result) if isinstance(result, dict) else {"result": result}
 
 
 def execute_system_run_start_request_via_turn_runtime(
@@ -80,18 +76,12 @@ def execute_system_run_start_request_via_turn_runtime(
     services: RunExecutionServices,
     current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    system_user = (
-        dict(current_user)
-        if isinstance(current_user, dict)
-        else {"auth_type": "api_key", "user_id": "", "email": ""}
-    )
-    return asyncio.run(
-        execute_run_start_request_via_turn_runtime(
-            request,
-            current_user=system_user,
-            stamp_request_owner_fn=stamp_request_owner_fn,
-            services=services,
-        )
+    return run_service.execute_system_run_start_request_via_turn_runtime(
+        request,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        services=services,
+        current_user=current_user,
+        execute_run_start_request_via_turn_runtime_fn=execute_run_start_request_via_turn_runtime,
     )
 
 
@@ -101,11 +91,11 @@ def execute_unowned_system_run_start_request_via_turn_runtime(
     services: RunExecutionServices,
     current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return execute_system_run_start_request_via_turn_runtime(
+    return run_service.execute_unowned_system_run_start_request_via_turn_runtime(
         request,
-        stamp_request_owner_fn=lambda req, current_user: req,
         services=services,
         current_user=current_user,
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
     )
 
 
@@ -116,10 +106,10 @@ def execute_built_unowned_system_run_start_request_via_turn_runtime(
     build_run_execution_services_fn: Any,
     current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return execute_system_run_start_request_via_turn_runtime_fn(
+    return run_service.execute_built_unowned_system_run_start_request_via_turn_runtime(
         request,
-        stamp_request_owner_fn=lambda req, current_user: req,
-        services=build_run_execution_services_fn(),
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime_fn,
+        build_run_execution_services_fn=build_run_execution_services_fn,
         current_user=current_user,
     )
 
@@ -132,13 +122,13 @@ def execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
     create_run_from_request_fn: Any,
     current_user: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    if type(create_run_from_request_fn).__module__ == "unittest.mock":
-        return create_run_from_request_fn(request)
-    return execute_built_unowned_system_run_start_request_via_turn_runtime(
+    return run_service.execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
         request,
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime_fn,
         build_run_execution_services_fn=build_run_execution_services_fn,
+        create_run_from_request_fn=create_run_from_request_fn,
         current_user=current_user,
+        execute_built_unowned_system_run_start_request_via_turn_runtime_fn=execute_built_unowned_system_run_start_request_via_turn_runtime,
     )
 
 

@@ -59,6 +59,11 @@ from server_modules.run_service import (
     create_legacy_run_result_from_request,
     create_run_result_from_prepared_request,
     execute_delegated_run_request,
+    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
+    execute_built_unowned_system_run_start_request_via_turn_runtime,
+    execute_run_start_request_via_turn_runtime,
+    execute_system_run_start_request_via_turn_runtime,
+    execute_unowned_system_run_start_request_via_turn_runtime,
     local_execution_block_prompt,
     local_execution_confirmation_prompt,
     local_execution_requires_start_confirmation,
@@ -1691,6 +1696,148 @@ class RunServiceTests(unittest.TestCase):
         self.assertIs(captured["services"].prepare_run_start_request, prepare)
         self.assertIs(captured["services"].create_run_from_request, create)
         self.assertIs(captured["create_run"], create)
+
+    def test_execute_run_start_request_via_turn_runtime_returns_result_payload(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        result = __import__("asyncio").run(
+            execute_run_start_request_via_turn_runtime(
+                request,
+                current_user={"user_id": "user-1"},
+                stamp_request_owner_fn=lambda req, current_user: req,
+                services=services,
+                resolve_run_start_turn_request_fn=lambda **kwargs: type(
+                    "Resolution",
+                    (),
+                    {"turn_request": "turn-1", "request": request},
+                )(),
+                execute_durable_turn_request_fn=AsyncMock(
+                    return_value={"result": {"run_id": "run-1", "status": "starting"}}
+                ),
+            )
+        )
+
+        self.assertEqual(result["run_id"], "run-1")
+        self.assertEqual(result["status"], "starting")
+
+    def test_execute_system_run_start_request_via_turn_runtime_uses_system_user(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        captured = {}
+
+        async def _fake_execute(request_payload, *, current_user, **kwargs):
+            captured["current_user"] = dict(current_user or {})
+            return {"run_id": "run-2", "status": "starting"}
+
+        result = execute_system_run_start_request_via_turn_runtime(
+            request,
+            stamp_request_owner_fn=lambda req, current_user: req,
+            services=RunExecutionServices(
+                stamp_request_owner=lambda req, current_user: req,
+                prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                create_run_from_request=lambda req: {"run_id": "unused"},
+            ),
+            execute_run_start_request_via_turn_runtime_fn=_fake_execute,
+        )
+
+        self.assertEqual(result["run_id"], "run-2")
+        self.assertEqual(captured["current_user"]["auth_type"], "api_key")
+
+    def test_execute_unowned_system_run_start_request_via_turn_runtime_uses_noop_owner_stamp(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        captured = {}
+        original = object()
+
+        def _fake_system_execute(request_payload, *, stamp_request_owner_fn, current_user=None, **kwargs):
+            captured["stamped"] = stamp_request_owner_fn(original, {"user_id": "ignored"})
+            captured["current_user"] = dict(current_user or {})
+            return {"run_id": "run-3", "status": "starting"}
+
+        result = execute_unowned_system_run_start_request_via_turn_runtime(
+            request,
+            services=RunExecutionServices(
+                stamp_request_owner=lambda req, current_user: req,
+                prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                create_run_from_request=lambda req: {"run_id": "unused"},
+            ),
+            execute_system_run_start_request_via_turn_runtime_fn=_fake_system_execute,
+        )
+
+        self.assertEqual(result["run_id"], "run-3")
+        self.assertIs(captured["stamped"], original)
+
+    def test_execute_built_unowned_system_run_start_request_via_turn_runtime_builds_services(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+        captured = {}
+
+        def _fake_execute(request_payload, *, stamp_request_owner_fn, services, **kwargs):
+            captured["stamped"] = stamp_request_owner_fn("req", {"user_id": "ignored"})
+            captured["services"] = services
+            return {"run_id": "run-4", "status": "starting"}
+
+        result = execute_built_unowned_system_run_start_request_via_turn_runtime(
+            request,
+            execute_system_run_start_request_via_turn_runtime_fn=_fake_execute,
+            build_run_execution_services_fn=lambda: built_services,
+        )
+
+        self.assertEqual(result["run_id"], "run-4")
+        self.assertEqual(captured["stamped"], "req")
+        self.assertIs(captured["services"], built_services)
+
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_bypasses_mocked_create(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        create_run = unittest.mock.Mock(return_value={"run_id": "run-5", "status": "starting"})
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        with patch(
+            "server_modules.run_service.execute_built_unowned_system_run_start_request_via_turn_runtime"
+        ) as execute_built:
+            result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+                request,
+                execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
+                build_run_execution_services_fn=lambda: built_services,
+                create_run_from_request_fn=create_run,
+            )
+
+        self.assertEqual(result["run_id"], "run-5")
+        create_run.assert_called_once_with(request)
+        execute_built.assert_not_called()
+
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_when_not_mocked(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        with patch(
+            "server_modules.run_service.execute_built_unowned_system_run_start_request_via_turn_runtime",
+            return_value={"run_id": "run-6", "status": "starting"},
+        ) as execute_built:
+            result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+                request,
+                execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
+                build_run_execution_services_fn=lambda: built_services,
+                create_run_from_request_fn=lambda req: {"run_id": "unused"},
+            )
+
+        self.assertEqual(result["run_id"], "run-6")
+        execute_built.assert_called_once()
 
     def test_build_auto_delegation_plan_prefers_llm_route(self):
         plan = build_auto_delegation_plan(

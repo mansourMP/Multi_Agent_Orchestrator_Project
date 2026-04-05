@@ -1565,6 +1565,59 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Chat API Turn Normalization Moved Behind `agent_turn.py`
+
+#### Stage
+
+Stage 2 continues. The direct-chat API entry path now normalizes request-body inputs through [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py) instead of assembling those fields inline in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py).
+
+This is the first concrete cut in the current pass that moves API-layer entry normalization closer to the canonical `agent_turn()` boundary rather than only cleaning up durable-run internals.
+
+#### Completed Work
+
+- Expanded [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py) with:
+  - `DirectChatTurnResolution`
+  - `resolve_direct_chat_turn_request()`
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so `/chat/respond` now:
+  - delegates direct-chat body normalization to the canonical `agent_turn` helper
+  - reuses the normalized workspace, thread, request ID, and turn request returned by that helper
+  - keeps existing HTTP response semantics and error behavior
+- Expanded [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py) with focused coverage for the new direct-chat resolution helper.
+
+#### Current Truth
+
+- Direct-chat API request normalization is now partly centralized in [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+- Durable-run and direct-chat execution still converge through the turn runtime, but some entry orchestration remains in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py).
+- `run_service.py` continues to own more of the durable-run lifecycle, while `agent_turn.py` now owns more of the direct-chat request normalization surface.
+
+#### Open Gaps
+
+- [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) still owns endpoint-specific execution wiring and stream/session orchestration.
+- `agent_turn.py` is still not the sole canonical entry boundary for all API-layer request preparation.
+- Direct chat and durable runs still converge through some API-layer glue before the final architecture target is reached.
+
+#### Next Required Work
+
+1. Continue moving API-level turn-entry normalization behind [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+2. Keep [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) as the only place new shared durable-run lifecycle logic is added.
+3. Reduce [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) toward endpoint wiring, streaming/session orchestration, and compatibility only.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py)
+  - [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py)
+  - [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py)
+  - [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Shared Run Result Service Constructors Extracted
 
 #### Stage

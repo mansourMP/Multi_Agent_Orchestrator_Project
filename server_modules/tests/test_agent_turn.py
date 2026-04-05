@@ -4,6 +4,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
     build_run_start_turn_request,
+    resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
     serialize_agent_turn_request,
 )
@@ -97,6 +98,19 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
         self.assertEqual(converted.metadata["channel"], "web")
+
+    def test_resolve_direct_chat_turn_request_normalizes_api_inputs(self):
+        resolved = resolve_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={"message": "hello", "workspace_id": "workspace-1", "thread_id": "thread-1"},
+            request_signature_fn=lambda body: "req-1",
+        )
+
+        self.assertEqual(resolved.workspace_id, "workspace-1")
+        self.assertEqual(resolved.thread_id, "thread-1")
+        self.assertEqual(resolved.client_request_id, "req-1")
+        self.assertEqual(resolved.turn_request.message, "hello")
+        self.assertEqual(resolved.turn_request.workspace_id, "workspace-1")
 
 
 if __name__ == "__main__":

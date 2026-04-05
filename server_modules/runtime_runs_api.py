@@ -19,6 +19,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
     build_run_start_turn_request,
+    resolve_direct_chat_turn_request,
 )
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
@@ -1178,18 +1179,16 @@ def register_run_routes(app) -> None:
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Invalid chat payload.")
 
-        message = str(body.get("message") or "").strip()
-        if not message:
-            raise HTTPException(status_code=400, detail="Chat message is required.")
+        try:
+            direct_resolution = resolve_direct_chat_turn_request(
+                current_user=current_user,
+                body=body,
+                request_signature_fn=_chat_stream_request_signature,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        direct_turn_request = build_direct_chat_turn_request(
-            current_user=current_user,
-            body=body,
-            workspace_id=str(body.get("workspace_id") or "default").strip() or "default",
-            thread_id=str(body.get("thread_id") or "").strip() or "direct-chat",
-            client_request_id=str(body.get("client_request_id") or "").strip() or _chat_stream_request_signature(body),
-            message=message,
-        )
+        direct_turn_request = direct_resolution.turn_request
         execution = await execute_agent_turn_request(
             turn_request=direct_turn_request,
             current_user=current_user,
@@ -1199,10 +1198,10 @@ def register_run_routes(app) -> None:
             ),
             chat_body=body,
         )
-        workspace_id = str(execution.get("workspace_id") or direct_turn_request.workspace_id or "default").strip() or "default"
+        workspace_id = str(execution.get("workspace_id") or direct_resolution.workspace_id or "default").strip() or "default"
         session_key = str(execution.get("session_key") or "").strip()
-        thread_id = str(execution.get("thread_id") or direct_turn_request.session_id or "direct-chat").strip() or "direct-chat"
-        client_request_id = str(execution.get("client_request_id") or "").strip()
+        thread_id = str(execution.get("thread_id") or direct_resolution.thread_id or "direct-chat").strip() or "direct-chat"
+        client_request_id = str(execution.get("client_request_id") or direct_resolution.client_request_id or "").strip()
         replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
         producer = execution["producer"]
 

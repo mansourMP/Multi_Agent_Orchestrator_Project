@@ -50,6 +50,15 @@ class AgentTurnResponse:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class DirectChatTurnResolution:
+    turn_request: AgentTurnRequest
+    workspace_id: str
+    thread_id: str
+    client_request_id: str
+    message: str
+
+
 class AgentTurnRuntime(Protocol):
     def handle_turn(self, request: AgentTurnRequest) -> AgentTurnResponse: ...
 
@@ -210,6 +219,41 @@ def build_direct_chat_turn_request(
         response_mode="stream",
         machine_target=str(body.get("machine_target") or "").strip() or None,
         policy_context=policy_context,
+    )
+
+
+def resolve_direct_chat_turn_request(
+    *,
+    current_user: Any,
+    body: Dict[str, Any],
+    request_signature_fn: Any,
+) -> DirectChatTurnResolution:
+    if not isinstance(body, dict):
+        raise ValueError("Invalid chat payload.")
+    message = str(body.get("message") or "").strip()
+    if not message:
+        raise ValueError("Chat message is required.")
+    workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
+    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
+    client_request_id = (
+        str(body.get("client_request_id") or "").strip()
+        or str(request_signature_fn(body) if callable(request_signature_fn) else "").strip()
+        or "direct-chat-request"
+    )
+    turn_request = build_direct_chat_turn_request(
+        current_user=current_user,
+        body=body,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+        message=message,
+    )
+    return DirectChatTurnResolution(
+        turn_request=turn_request,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+        message=message,
     )
 
 

@@ -7,11 +7,14 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
+    build_run_precheck_result,
     build_legacy_local_execution_creation_services,
     build_legacy_orion_preparation_services,
     build_prepared_run_creation_services,
+    build_run_preview_context,
     build_run_preparation_services,
     build_run_prepared_result_services,
+    build_run_routing_preview,
     build_runs_core_creation_result,
     build_runs_core_result_services,
     build_runs_delegation_creation_result,
@@ -29,6 +32,7 @@ from server_modules.run_service import (
     RunPreparationServices,
     RunCreationServices,
     RunExecutionServices,
+    RunRoutingPreviewServices,
     LegacyLocalExecutionCreationCallbacks,
     LegacyOrionPreparationCallbacks,
     LegacyRunPreparationServices,
@@ -194,6 +198,99 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
         self.assertEqual(converted.metadata["channel"], "web")
+
+    def test_build_run_preview_context_preserves_workflow_metadata(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            workflow_id="workflow-1",
+            provider="openai",
+            model="gpt-test",
+            credential_id="cred-1",
+            agents=[{"id": "agent-1"}],
+        )
+
+        preview_context = build_run_preview_context(
+            request,
+            metadata={"agent_role": "builder"},
+            workflow_snapshot={"definition": {"version": "1"}, "name": "Inbox", "status": "active"},
+        )
+
+        self.assertEqual(preview_context["workflow_id"], "workflow-1")
+        self.assertEqual(preview_context["workflow_definition"], {"version": "1"})
+        self.assertEqual(preview_context["workflow_name"], "Inbox")
+        self.assertEqual(preview_context["workflow_status"], "active")
+        self.assertEqual(preview_context["metadata"]["agent_role"], "builder")
+
+    def test_build_run_routing_preview_uses_shared_route_and_precheck_flow(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+        )
+
+        with patch("server_modules.run_service.decide_execution_target", return_value={"selected": "cloud"}), patch(
+            "server_modules.run_service.apply_execution_route_metadata",
+            side_effect=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+        ):
+            preview = build_run_routing_preview(
+                request,
+                services=RunRoutingPreviewServices(
+                    prepare_run_start_request=lambda req: {
+                        "engine": "orion",
+                        "metadata": {"agent_role": "builder"},
+                        "workflow_snapshot": {"definition": {"version": "1"}, "name": "Inbox", "status": "active"},
+                    },
+                    compute_tool_policy_precheck=lambda context: {
+                        "blocked_count": 0,
+                        "workflow_name": context.get("workflow_name"),
+                        "selected_target": context["metadata"].get("execution_target_selected"),
+                    },
+                ),
+            )
+
+        self.assertEqual(preview["engine"], "orion")
+        self.assertEqual(preview["route"]["selected"], "cloud")
+        self.assertEqual(preview["metadata"]["execution_target_selected"], "cloud")
+        self.assertEqual(preview["tool_policy_precheck"]["workflow_name"], "Inbox")
+        self.assertEqual(preview["tool_policy_precheck"]["selected_target"], "cloud")
+
+    def test_build_run_precheck_result_adds_doctor_preflight(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+        )
+
+        with patch("server_modules.run_service.decide_execution_target", return_value={"selected": "cloud"}), patch(
+            "server_modules.run_service.apply_execution_route_metadata",
+            side_effect=lambda metadata, route: {**metadata, "execution_target_selected": route["selected"]},
+        ), patch(
+            "server_modules.run_service.build_doctor_run_gate_live",
+            new=AsyncMock(return_value={"blocking": False, "title": "ok"}),
+        ):
+            preview = asyncio.run(
+                build_run_precheck_result(
+                    request,
+                    services=RunRoutingPreviewServices(
+                        prepare_run_start_request=lambda req: {
+                            "engine": "orion",
+                            "metadata": {"agent_role": "builder"},
+                            "workflow_snapshot": None,
+                        },
+                        compute_tool_policy_precheck=lambda context: {"blocked_count": 0},
+                    ),
+                )
+            )
+
+        self.assertEqual(preview["route"]["selected"], "cloud")
+        self.assertFalse(preview["doctor_preflight"]["blocking"])
+        self.assertEqual(preview["tool_policy_precheck"]["blocked_count"], 0)
 
     def test_execute_durable_turn_request_returns_run_result(self):
         run_request = RunStartRequest(

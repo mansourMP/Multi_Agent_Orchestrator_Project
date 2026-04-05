@@ -54,6 +54,12 @@ class RunExecutionServices:
 
 
 @dataclass(slots=True)
+class RunRoutingPreviewServices:
+    prepare_run_start_request: Any
+    compute_tool_policy_precheck: Any
+
+
+@dataclass(slots=True)
 class RunCreationServices:
     create_run_from_request: Any
 
@@ -385,6 +391,72 @@ def _hint_text(value: Any) -> Optional[str]:
 
 def _hint_list(value: Any) -> Optional[List[dict]]:
     return list(value) if isinstance(value, list) else None
+
+
+def build_run_preview_context(
+    req: RunStartRequest,
+    *,
+    metadata: Dict[str, Any],
+    workflow_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "workflow_id": req.workflow_id,
+        "workspace_id": req.workspace_id,
+        "user_goal": req.user_goal,
+        "business_plan": req.business_plan,
+        "max_iterations": getattr(req, "max_iterations", None),
+        "agent_role": req.agent_role,
+        "provider": req.provider,
+        "model": req.model,
+        "credential_id": req.credential_id,
+        "agents": req.agents or [],
+        "metadata": metadata,
+        "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
+        "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
+        "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
+    }
+
+
+def build_run_routing_preview(
+    req: RunStartRequest,
+    *,
+    services: RunRoutingPreviewServices,
+) -> Dict[str, Any]:
+    prepared = services.prepare_run_start_request(req)
+    metadata = dict(prepared["metadata"])
+    workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
+    route = decide_execution_target(metadata)
+    metadata = apply_execution_route_metadata(metadata, route)
+    preview_context = build_run_preview_context(
+        req,
+        metadata=metadata,
+        workflow_snapshot=workflow_snapshot,
+    )
+    return {
+        "engine": prepared["engine"],
+        "metadata": metadata,
+        "route": route,
+        "tool_policy_precheck": services.compute_tool_policy_precheck(preview_context),
+        "workflow_snapshot": workflow_snapshot,
+    }
+
+
+async def build_run_precheck_result(
+    req: RunStartRequest,
+    *,
+    services: RunRoutingPreviewServices,
+) -> Dict[str, Any]:
+    preview = build_run_routing_preview(req, services=services)
+    doctor_preflight = await build_doctor_run_gate_live(
+        execution_target=preview["route"]["selected"],
+        metadata=preview["metadata"],
+        provider=req.provider,
+        credential_id=req.credential_id,
+    )
+    return {
+        **preview,
+        "doctor_preflight": doctor_preflight,
+    }
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -779,22 +851,11 @@ def create_run_from_prepared_request(
     if schedule_id:
         metadata["schedule_id"] = schedule_id
         metadata["scheduled"] = True
-    preview_context = {
-        "workflow_id": req.workflow_id,
-        "workspace_id": req.workspace_id,
-        "user_goal": req.user_goal,
-        "business_plan": req.business_plan,
-        "max_iterations": getattr(req, "max_iterations", None),
-        "agent_role": req.agent_role,
-        "provider": req.provider,
-        "model": req.model,
-        "credential_id": req.credential_id,
-        "agents": req.agents or [],
-        "metadata": metadata,
-        "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
-        "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
-        "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
-    }
+    preview_context = build_run_preview_context(
+        req,
+        metadata=metadata,
+        workflow_snapshot=workflow_snapshot,
+    )
     owner_user_id = services.agent_machine_inherited_owner_user_id(str(metadata.get("owner_user_id") or "").strip())
     if owner_user_id:
         metadata["owner_user_id"] = owner_user_id

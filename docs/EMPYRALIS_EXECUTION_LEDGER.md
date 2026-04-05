@@ -1565,6 +1565,61 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+## 2026-04-05 - Run Preview And Precheck Delegated To run_service.py
+
+### Why This Cut
+
+`runtime_runs_api.py` was still owning the shared route-preview and precheck assembly for `/routing/preview` and `/runs/precheck`, even though the same preparation, route selection, metadata binding, and doctor-gate concerns already belong to the canonical durable-run path. That kept lifecycle logic split between the API layer and [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+### What Changed
+
+- Added shared preview/precheck helpers to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py):
+  - `RunRoutingPreviewServices`
+  - `build_run_preview_context(...)`
+  - `build_run_routing_preview(...)`
+  - `build_run_precheck_result(...)`
+- Reused `build_run_preview_context(...)` inside `create_run_from_prepared_request(...)` so the canonical run lifecycle and the preview endpoints now shape tool-policy preview context through the same helper.
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so:
+  - `/routing/preview` delegates to `build_run_routing_preview(...)`
+  - `/runs/precheck` delegates to `build_run_precheck_result(...)`
+- Added focused service coverage in [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) for:
+  - workflow snapshot propagation in preview context
+  - shared route/precheck assembly
+  - doctor-preflight attachment during precheck
+
+### Current Truth
+
+- The API layer no longer reconstructs route preview and precheck context inline for those endpoints.
+- [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) now owns another shared durable-run lifecycle slice: preview-context shaping, route preview, and doctor-backed precheck assembly.
+- [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) is thinner, but it still owns endpoint orchestration and response wiring.
+
+### Open Gaps
+
+- `runtime_runs_api.py` still contains broader entry orchestration that should continue moving behind `agent_turn.py` and shared runtime services.
+- `runs_core.py` and `runs_delegation.py` still retain adapter-era runtime ownership beyond pure compatibility surfaces.
+- `agent_turn.py` is now handling direct-chat normalization, but durable-run and scheduled/channel entry convergence is not complete yet.
+
+### Next Required Work
+
+1. Continue moving durable-run entry normalization out of [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) and behind [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+2. Keep pulling remaining shared lifecycle behavior out of [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+3. Preserve the existing patched compatibility names while reducing legacy modules to callback sources and adapters only.
+
+### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+
 ### 2026-04-05 - Direct Chat API Turn Normalization Moved Behind `agent_turn.py`
 
 #### Stage

@@ -28,9 +28,15 @@ from server_modules.direct_chat_service import (
     direct_chat_actor_key as _service_direct_chat_actor_key,
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
 )
-from server_modules.doctor_gate import build_doctor_run_gate_live
 from server_modules.heartbeat import HeartbeatScheduler
-from server_modules.run_service import RunCreationServices, RunExecutionServices, create_run_result_from_request
+from server_modules.run_service import (
+    RunCreationServices,
+    RunExecutionServices,
+    RunRoutingPreviewServices,
+    build_run_precheck_result,
+    build_run_routing_preview,
+    create_run_result_from_request,
+)
 from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
@@ -109,6 +115,13 @@ def _run_execution_services() -> RunExecutionServices:
         stamp_request_owner=_stamp_request_owner,
         prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
         create_run_from_request=_late_server_export("_create_run_from_request"),
+    )
+
+
+def _run_routing_preview_services() -> RunRoutingPreviewServices:
+    return RunRoutingPreviewServices(
+        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+        compute_tool_policy_precheck=_late_server_export("_compute_tool_policy_precheck"),
     )
 
 
@@ -1589,76 +1602,28 @@ def register_run_routes(app) -> None:
     async def preview_routing(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
         req = body or RunStartRequest()
-        prepared = _late_server_export("_prepare_run_start_request")(req)
-        metadata = dict(prepared["metadata"])
-        workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
-        route = decide_execution_target(metadata)
-        metadata = apply_execution_route_metadata(metadata, route)
-        precheck = _compute_tool_policy_precheck(
-            {
-                "workflow_id": req.workflow_id,
-                "workspace_id": req.workspace_id,
-                "user_goal": req.user_goal,
-                "business_plan": req.business_plan,
-                "agent_role": req.agent_role,
-                "provider": req.provider,
-                "model": req.model,
-                "credential_id": req.credential_id,
-                "agents": req.agents or [],
-                "metadata": metadata,
-                "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
-                "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
-                "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
-            }
-        )
+        preview = build_run_routing_preview(req, services=_run_routing_preview_services())
         return {
-            "engine": prepared["engine"],
-            "agent_role": metadata.get("agent_role"),
-            "agent_role_source": metadata.get("agent_role_source"),
-            "route": route,
-            "tool_policy_precheck": precheck,
+            "engine": preview["engine"],
+            "agent_role": preview["metadata"].get("agent_role"),
+            "agent_role_source": preview["metadata"].get("agent_role_source"),
+            "route": preview["route"],
+            "tool_policy_precheck": preview["tool_policy_precheck"],
         }
 
     @app.post("/runs/precheck", dependencies=[Depends(require_api_key)])
     async def precheck_run(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
         req = body or RunStartRequest()
-        prepared = _late_server_export("_prepare_run_start_request")(req)
-        metadata = dict(prepared["metadata"])
-        workflow_snapshot = prepared.get("workflow_snapshot") if isinstance(prepared.get("workflow_snapshot"), dict) else None
-        route = decide_execution_target(metadata)
-        metadata = apply_execution_route_metadata(metadata, route)
-        precheck = _compute_tool_policy_precheck(
-            {
-                "workflow_id": req.workflow_id,
-                "workspace_id": req.workspace_id,
-                "user_goal": req.user_goal,
-                "business_plan": req.business_plan,
-                "agent_role": req.agent_role,
-                "provider": req.provider,
-                "model": req.model,
-                "credential_id": req.credential_id,
-                "agents": req.agents or [],
-                "metadata": metadata,
-                "workflow_definition": workflow_snapshot.get("definition") if isinstance(workflow_snapshot, dict) else None,
-                "workflow_name": workflow_snapshot.get("name") if isinstance(workflow_snapshot, dict) else None,
-                "workflow_status": workflow_snapshot.get("status") if isinstance(workflow_snapshot, dict) else None,
-            }
-        )
-        doctor_preflight = await build_doctor_run_gate_live(
-            execution_target=route["selected"],
-            metadata=metadata,
-            provider=req.provider,
-            credential_id=req.credential_id,
-        )
+        preview = await build_run_precheck_result(req, services=_run_routing_preview_services())
         return {
             "ok": True,
-            "engine": prepared["engine"],
-            "agent_role": metadata.get("agent_role"),
-            "agent_role_source": metadata.get("agent_role_source"),
-            "route": route,
-            "tool_policy_precheck": precheck,
-            "doctor_preflight": doctor_preflight,
+            "engine": preview["engine"],
+            "agent_role": preview["metadata"].get("agent_role"),
+            "agent_role_source": preview["metadata"].get("agent_role_source"),
+            "route": preview["route"],
+            "tool_policy_precheck": preview["tool_policy_precheck"],
+            "doctor_preflight": preview["doctor_preflight"],
         }
 
     @app.get("/runs/{run_id}")

@@ -4,6 +4,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
     build_run_start_turn_request,
+    ensure_direct_chat_turn_request,
     resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
     serialize_agent_turn_request,
@@ -111,6 +112,30 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(resolved.client_request_id, "req-1")
         self.assertEqual(resolved.turn_request.message, "hello")
         self.assertEqual(resolved.turn_request.workspace_id, "workspace-1")
+
+    def test_ensure_direct_chat_turn_request_accepts_serialized_contract(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        ensured = ensure_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="ignored",
+            agent_turn_request=serialize_agent_turn_request(request),
+        )
+
+        self.assertEqual(ensured.workspace_id, "default")
+        self.assertEqual(ensured.session_id, "thread-1")
+        self.assertEqual(ensured.message, "hello")
 
 
 if __name__ == "__main__":

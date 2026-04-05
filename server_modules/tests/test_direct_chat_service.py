@@ -1,9 +1,10 @@
 import unittest
 
-from server_modules.agent_turn import build_direct_chat_turn_request
+from server_modules.agent_turn import build_direct_chat_turn_request, serialize_agent_turn_request
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
     build_direct_chat_event_producer,
+    build_direct_chat_request_meta,
     execute_direct_chat_turn_request,
 )
 
@@ -65,6 +66,28 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(call["request_meta"]["agent_turn_request"]["session_id"], "thread-1")
         self.assertEqual(call["request_meta"]["agent_turn_request"]["message"], "hello")
         self.assertEqual(manager.eviction_calls, 1)
+
+    def test_build_direct_chat_request_meta_accepts_serialized_turn_request(self):
+        turn_request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        request_meta = build_direct_chat_request_meta(
+            body={"thread_id": "thread-1"},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            agent_turn_request=serialize_agent_turn_request(turn_request),
+        )
+
+        self.assertEqual(request_meta["agent_turn_request"]["workspace_id"], "default")
+        self.assertEqual(request_meta["agent_turn_request"]["session_id"], "thread-1")
+        self.assertEqual(request_meta["agent_turn_request"]["message"], "hello")
 
     def test_execute_direct_chat_turn_request_returns_stream_plan(self):
         turn_request = build_direct_chat_turn_request(

@@ -1565,6 +1565,58 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+## 2026-04-05 - Direct Chat Turn Fallback Moved Behind agent_turn.py
+
+### Why This Cut
+
+[server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py) was still rebuilding a direct-chat turn request when one was not passed in, and it only treated a live `AgentTurnRequest` object as canonical. That left a slice of direct-chat request normalization outside [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py), even though the direct-chat runtime already passes around the serialized turn contract.
+
+### What Changed
+
+- Added `ensure_direct_chat_turn_request(...)` to [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+  - It accepts either:
+    - a live `AgentTurnRequest`
+    - a serialized turn payload
+    - or no turn request at all, in which case it builds one through the canonical direct-chat turn builder
+- Updated [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py):
+  - `build_direct_chat_event_producer(...)` now delegates fallback turn resolution through `ensure_direct_chat_turn_request(...)`
+  - `build_direct_chat_request_meta(...)` now accepts serialized turn contracts and normalizes them through `resolve_agent_turn_request(...)`
+- Added focused coverage in:
+  - [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py)
+  - [server_modules/tests/test_direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_service.py)
+
+### Current Truth
+
+- `agent_turn.py` now owns another direct-chat normalization slice: ensuring the runtime has a canonical turn contract whether the caller passes a live object, a serialized payload, or nothing.
+- [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py) no longer owns fallback turn construction details inline.
+- The serialized `agent_turn_request` payload is now treated as a first-class input to direct-chat request metadata shaping instead of a secondary representation.
+
+### Open Gaps
+
+- `runtime_runs_api.py` still owns broader direct-chat and durable-run endpoint orchestration.
+- `agent_turn.py` is not yet the only inbound normalization boundary for all scheduled and channel-driven work.
+- `runs_core.py` and `runs_delegation.py` still retain legacy runtime ownership that should continue collapsing into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+### Next Required Work
+
+1. Continue moving API-layer direct-chat and durable-run entry handling behind [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py) and shared runtime services.
+2. Keep reducing shared lifecycle behavior in legacy run modules so [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) remains the only place for new durable-run behavior.
+3. Preserve the current serialized turn contract compatibility surface until a later explicit cleanup phase removes the legacy patch points.
+
+### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py)
+  - [server_modules/direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_service.py)
+  - [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py)
+  - [server_modules/tests/test_direct_chat_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ## 2026-04-05 - Run Preview And Precheck Delegated To run_service.py
 
 ### Why This Cut

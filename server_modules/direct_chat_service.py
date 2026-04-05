@@ -6,7 +6,8 @@ from typing import Any, Callable, Optional
 
 from server_modules.agent_turn import (
     AgentTurnRequest,
-    build_direct_chat_turn_request,
+    ensure_direct_chat_turn_request,
+    resolve_agent_turn_request,
     serialize_agent_turn_request,
 )
 
@@ -42,7 +43,7 @@ def build_direct_chat_request_meta(
     workspace_id: str,
     thread_id: str,
     client_request_id: str,
-    agent_turn_request: Optional[AgentTurnRequest] = None,
+    agent_turn_request: Optional[Any] = None,
 ) -> dict[str, Any]:
     request_meta = {
         "request_id": client_request_id,
@@ -63,8 +64,9 @@ def build_direct_chat_request_meta(
             "thread_id": thread_id,
         },
     }
-    if isinstance(agent_turn_request, AgentTurnRequest):
-        request_meta["agent_turn_request"] = serialize_agent_turn_request(agent_turn_request)
+    resolved_turn_request = resolve_agent_turn_request(agent_turn_request)
+    if isinstance(resolved_turn_request, AgentTurnRequest):
+        request_meta["agent_turn_request"] = serialize_agent_turn_request(resolved_turn_request)
     return request_meta
 
 
@@ -80,13 +82,14 @@ def build_direct_chat_event_producer(
     services: DirectChatExecutionServices,
     agent_turn_request: Optional[AgentTurnRequest] = None,
 ):
-    turn_request = agent_turn_request if isinstance(agent_turn_request, AgentTurnRequest) else build_direct_chat_turn_request(
+    turn_request = ensure_direct_chat_turn_request(
         current_user=current_user,
         body=body,
         workspace_id=workspace_id,
         thread_id=thread_id,
         client_request_id=client_request_id,
         message=message,
+        agent_turn_request=agent_turn_request,
     )
     serialized_turn_request = serialize_agent_turn_request(turn_request)
     normalized_workspace_id = str(turn_request.workspace_id or workspace_id or "default").strip() or "default"

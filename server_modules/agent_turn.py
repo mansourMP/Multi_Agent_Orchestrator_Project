@@ -257,6 +257,29 @@ def resolve_direct_chat_turn_request(
     )
 
 
+def ensure_direct_chat_turn_request(
+    *,
+    current_user: Any,
+    body: Dict[str, Any],
+    workspace_id: str,
+    thread_id: str,
+    client_request_id: str,
+    message: str,
+    agent_turn_request: Any = None,
+) -> AgentTurnRequest:
+    resolved = resolve_agent_turn_request(agent_turn_request)
+    if isinstance(resolved, AgentTurnRequest):
+        return resolved
+    return build_direct_chat_turn_request(
+        current_user=current_user,
+        body=body,
+        workspace_id=workspace_id,
+        thread_id=thread_id,
+        client_request_id=client_request_id,
+        message=message,
+    )
+
+
 def build_run_start_turn_request(req: Any) -> AgentTurnRequest:
     metadata = _metadata_dict(getattr(req, "metadata", None))
     actor_id = _request_actor_id(None, metadata)

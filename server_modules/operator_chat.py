@@ -31,6 +31,7 @@ from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_entry_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_service
+from server_modules import direct_tool_approval_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -2514,64 +2515,6 @@ def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
     return summary or json.dumps(result, ensure_ascii=True, indent=2)
 
 
-def _shell_command_requires_approval(command: str) -> bool:
-    compact = _compact_text(command)
-    if not compact:
-        return False
-    destructive_markers = (
-        "rm -rf",
-        "rm -r ",
-        "rm -f ",
-        "sudo rm",
-        "del /f",
-        "del /q",
-        "rmdir /s",
-        "format ",
-        "mkfs",
-        "diskutil erase",
-        "shred ",
-        "dd if=",
-    )
-    return any(marker in compact for marker in destructive_markers)
-
-
-def _file_write_requires_approval(arguments: Dict[str, Any]) -> bool:
-    path = str(arguments.get("path") or arguments.get("file_path") or "").strip().lower()
-    if not path:
-        return False
-    protected_markers = (
-        "/etc/",
-        "/bin/",
-        "/usr/",
-        "/system/",
-        "/library/",
-        ".ssh/",
-        ".gnupg/",
-        ".env",
-        ".git/config",
-    )
-    return any(marker in path for marker in protected_markers)
-
-
-def _local_direct_tool_requires_approval(connector_id: str, action_id: str, arguments: Dict[str, Any]) -> bool:
-    normalized_connector = str(connector_id or "").strip().lower()
-    normalized_action = str(action_id or "").strip().lower()
-    if normalized_connector == "shell" and normalized_action == "exec":
-        return _shell_command_requires_approval(str(arguments.get("command") or ""))
-    if normalized_connector == "file" and normalized_action == "write":
-        return _file_write_requires_approval(arguments)
-    if normalized_connector == "computer":
-        return True
-    return False
-
-
-def _browser_direct_tool_requires_approval(action_id: str, arguments: Dict[str, Any]) -> bool:
-    normalized_action = str(action_id or "").strip().lower()
-    if normalized_action in {"click", "fill", "execute_js", "download_file"}:
-        return True
-    return False
-
-
 def _titleize_direct_step_token(value: str) -> str:
     words = [part for part in str(value or "").strip().replace("-", "_").split("_") if part]
     return " ".join(word.capitalize() for word in words)
@@ -3031,24 +2974,16 @@ def _approval_required_for_direct_tool(
     arguments: Dict[str, Any],
     tool_capabilities: List[Dict[str, Any]],
 ) -> bool:
-    normalized_connector_id = str(connector_id or "").strip().lower()
-    normalized_action_id = str(action_id or "").strip()
-    if normalized_connector_id == "http" and normalized_action_id == "request":
-        from server_modules.tools_http import http_request_requires_approval
+    from server_modules.tools_http import http_request_requires_approval
 
-        return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
-    if normalized_connector_id == "browser":
-        return _browser_direct_tool_requires_approval(normalized_action_id, arguments)
-    if normalized_connector_id in {"file", "shell", "screenshot", "computer"}:
-        return _local_direct_tool_requires_approval(normalized_connector_id, normalized_action_id, arguments)
-    for item in tool_capabilities:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id") or "").strip().lower() != normalized_connector_id:
-            continue
-        required_actions = item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else []
-        return normalized_action_id in {str(entry or "").strip() for entry in required_actions}
-    return False
+    return direct_tool_approval_service.approval_required_for_direct_tool(
+        connector_id,
+        action_id,
+        arguments,
+        tool_capabilities,
+        compact_text=_compact_text,
+        http_request_requires_approval=http_request_requires_approval,
+    )
 
 
 def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:

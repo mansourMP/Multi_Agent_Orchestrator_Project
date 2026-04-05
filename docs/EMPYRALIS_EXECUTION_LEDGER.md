@@ -1747,6 +1747,61 @@ The connector module still exports the historical helper and endpoint names, but
   - `server_modules.tests.test_agent_machine_mode`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 
+### 2026-04-05 - Direct-Tool Approval Policy Moved Behind Dedicated Service
+
+#### Stage
+
+Stage 1 continues. Direct-tool approval policy no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is a real control-flow extraction, not just helper shuffling. The chat module still wires the no-provider execution bundle, but the approval decision rules are now owned by a dedicated service boundary.
+
+#### Completed Work
+
+- Added [server_modules/direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_approval_service.py) to own:
+  - shell-command destructive approval rules
+  - protected file-write approval rules
+  - local direct-tool approval routing
+  - browser direct-tool approval routing
+  - connector/http approval decision logic for direct tools
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so `_approval_required_for_direct_tool()` now delegates into the dedicated approval service instead of owning that policy inline.
+- Added focused service coverage in:
+  - [server_modules/tests/test_direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_approval_service.py)
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is now down to `3243` lines.
+- The direct-tool approval rules are now separated from the chat entrypoint/orchestration layer.
+- The no-provider execution bundle still receives an approval callback from the chat module, but that callback now fronts a dedicated service instead of an inline policy band.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much top-level orchestration, especially around direct-tool execution flow and context assembly.
+- The no-provider execution bundle still depends on injected callbacks from the chat module for direct-tool execution and loop orchestration.
+- The direct-chat stack is still not yet reduced to a coordination-only shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting direct-tool execution orchestration or follow-up shaping, not just policy helpers.
+2. Keep moving the no-provider path from callback injection toward service-owned control flow.
+3. Preserve the current approval behavior across HTTP, browser, local tools, and machine-mode bypass while reducing chat-module ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_approval_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_approval_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_tool_approval_service`
+  - `server_modules.tests.test_no_provider_service`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_session_transcript_store`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_tools_http`
+
 ### 2026-04-05 - Dead Pre-Facade Wrapper Layer And Import Overhead Removed From Connector Shell
 
 #### Stage

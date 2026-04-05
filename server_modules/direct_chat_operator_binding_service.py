@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from server_modules import direct_chat_composition_service
+from server_modules import direct_chat_entry_policy_service
+from server_modules import direct_chat_prompt_service
+from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_execution_service
@@ -35,6 +38,22 @@ class DirectChatOperatorToolRuntimeBindings:
     message_has_obvious_direct_tool_intent: Any
     execute_single_direct_tool_call: Any
     execute_direct_tool_calls: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorEntryBindings:
+    build_direct_chat_system_prompt: Any
+    direct_chat_runtime_available: Any
+    resolve_direct_chat_availability: Any
+    connected_provider_tokens: Any
+    resolve_provider_for_direct_chat_message: Any
+    plan_direct_chat_route: Any
+    credential_auth_mode: Any
+    supports_direct_message_native_chat: Any
+    preferred_provider: Any
+    provider_unavailable_response: Any
+    direct_chat_credentials: Any
+    direct_chat_error_reply: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -508,4 +527,200 @@ def build_direct_chat_tool_runtime_bindings(
         message_has_obvious_direct_tool_intent=message_has_obvious_direct_tool_intent,
         execute_single_direct_tool_call=execute_single_direct_tool_call,
         execute_direct_tool_calls=execute_direct_tool_calls,
+    )
+
+
+def build_direct_chat_entry_bindings(
+    *,
+    availability_lines: Any,
+    build_operator_system_prompt: Any,
+    memory_tool_names: Any,
+    local_worker_registry: Dict[str, Any],
+    is_worker_online_fn: Any,
+    preferred_provider_fn: Any,
+    supports_direct_message_native_chat_fn: Any,
+    resolve_workspace_tool_capabilities_fn: Any,
+    supported_providers: list[str] | tuple[str, ...],
+    direct_chat_credentials_fn: Any,
+    build_provider_credential_candidates_fn: Any,
+    compact_text_fn: Any,
+    mentions_any_fn: Any,
+    message_requests_local_file_tool_fn: Any,
+    message_requests_local_shell_tool_fn: Any,
+    message_requests_local_screenshot_tool_fn: Any,
+    message_requests_local_computer_tool_fn: Any,
+    is_obvious_smtp_write_request_fn: Any,
+    preview_run_response_fn: Any,
+    prefer_durable_run_handoff_fn: Any,
+    durable_run_preferred_response_fn: Any,
+    message_can_use_direct_connector_tools_fn: Any,
+    message_can_use_direct_local_tools_fn: Any,
+    message_can_use_builtin_direct_tools_fn: Any,
+    can_auto_start_run_handoff_fn: Any,
+    credential_auth_mode_fn: Any,
+    normalize_auth_mode_fn: Any,
+    get_claude_code_session_token_fn: Any,
+    provider_has_key_fn: Any,
+    connect_action_fn: Any,
+    chat_iteration_limit_reply_fn: Any,
+    safe_positive_int_fn: Any,
+    chat_max_iterations_default: int,
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    discord_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+) -> DirectChatOperatorEntryBindings:
+    def build_direct_chat_system_prompt(*, workspace_id, availability, tools):
+        return direct_chat_prompt_service.build_system_prompt(
+            workspace_id=workspace_id,
+            availability=availability,
+            tools=tools,
+            availability_lines=availability_lines,
+            build_operator_system_prompt=build_operator_system_prompt,
+            memory_tool_names=memory_tool_names,
+        )
+
+    def direct_chat_runtime_available():
+        return direct_chat_entry_policy_service.direct_chat_runtime_available(
+            local_worker_registry,
+            is_worker_online_fn=is_worker_online_fn,
+        )
+
+    def resolve_direct_chat_availability(workspace_id, requested_provider="", availability_override=None):
+        return direct_chat_entry_policy_service.resolve_direct_chat_availability(
+            workspace_id,
+            requested_provider,
+            direct_chat_runtime_available_fn=direct_chat_runtime_available,
+            preferred_provider_fn=preferred_provider_fn,
+            supports_direct_message_native_chat_fn=supports_direct_message_native_chat_fn,
+            resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities_fn,
+            availability_override=availability_override,
+        )
+
+    def connected_provider_tokens(workspace_id):
+        return direct_chat_entry_policy_service.connected_provider_tokens(
+            workspace_id,
+            supported_providers=supported_providers,
+            direct_chat_credentials_fn=direct_chat_credentials_fn,
+        )
+
+    def resolve_provider_for_direct_chat_message(workspace_id, requested_provider, message, *, tools_present):
+        return direct_chat_entry_policy_service.resolve_provider_for_direct_chat_message(
+            workspace_id,
+            requested_provider,
+            message,
+            tools_present=tools_present,
+            preferred_provider_fn=preferred_provider_fn,
+            direct_chat_credentials_fn=direct_chat_credentials_fn,
+            supports_direct_message_native_chat_fn=supports_direct_message_native_chat_fn,
+            compact_text_fn=compact_text_fn,
+            mentions_any_fn=mentions_any_fn,
+            message_requests_local_file_tool_fn=message_requests_local_file_tool_fn,
+            message_requests_local_shell_tool_fn=message_requests_local_shell_tool_fn,
+            message_requests_local_screenshot_tool_fn=message_requests_local_screenshot_tool_fn,
+            message_requests_local_computer_tool_fn=message_requests_local_computer_tool_fn,
+            google_workspace_keywords=google_workspace_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+        )
+
+    def plan_direct_chat_route(*, message, availability, provider, tools):
+        return direct_chat_entry_policy_service.plan_direct_chat_route(
+            message=message,
+            availability=availability,
+            provider=provider,
+            tools=tools,
+            compact_text_fn=compact_text_fn,
+            mentions_any_fn=mentions_any_fn,
+            is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request_fn,
+            preview_run_response_fn=preview_run_response_fn,
+            prefer_durable_run_handoff_fn=prefer_durable_run_handoff_fn,
+            durable_run_preferred_response_fn=durable_run_preferred_response_fn,
+            message_can_use_direct_connector_tools_fn=lambda inner_message: message_can_use_direct_connector_tools_fn(
+                inner_message,
+                provider=provider,
+                tools=tools,
+            ),
+            message_can_use_direct_local_tools_fn=lambda inner_message: message_can_use_direct_local_tools_fn(
+                inner_message,
+                provider=provider,
+                tools=tools,
+            ),
+            message_can_use_builtin_direct_tools_fn=lambda inner_message: message_can_use_builtin_direct_tools_fn(
+                inner_message,
+                tools=tools,
+            ),
+            can_auto_start_run_handoff_fn=can_auto_start_run_handoff_fn,
+            google_workspace_keywords=google_workspace_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            discord_keywords=discord_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+        )
+
+    def credential_auth_mode(provider, credentials):
+        return direct_chat_provider_facade_service.credential_auth_mode(
+            provider,
+            credentials,
+            normalize_auth_mode_fn=normalize_auth_mode_fn,
+        )
+
+    def supports_direct_message_native_chat(provider, credentials):
+        return direct_chat_provider_facade_service.supports_direct_message_native_chat(
+            provider,
+            credentials,
+            credential_auth_mode_fn=credential_auth_mode_fn,
+            get_claude_code_session_token_fn=get_claude_code_session_token_fn,
+            provider_has_key_fn=provider_has_key_fn,
+        )
+
+    def preferred_provider(workspace_id, requested_provider=""):
+        return direct_chat_provider_facade_service.preferred_provider(
+            workspace_id,
+            requested_provider,
+            supported_providers=supported_providers,
+            direct_chat_credentials_fn=direct_chat_credentials_fn,
+            supports_direct_message_native_chat_fn=supports_direct_message_native_chat_fn,
+            credential_auth_mode_fn=credential_auth_mode_fn,
+        )
+
+    def provider_unavailable_response(provider):
+        return direct_chat_provider_facade_service.provider_unavailable_response(
+            provider,
+            connect_action_fn=connect_action_fn,
+        )
+
+    def direct_chat_credentials(workspace_id, provider):
+        return direct_chat_provider_facade_service.direct_chat_credentials(
+            workspace_id,
+            provider,
+            build_provider_credential_candidates_fn=build_provider_credential_candidates_fn,
+        )
+
+    def direct_chat_error_reply(llm_error):
+        return direct_chat_provider_facade_service.direct_chat_error_reply(
+            llm_error,
+            chat_iteration_limit_reply_fn=chat_iteration_limit_reply_fn,
+            safe_positive_int_fn=safe_positive_int_fn,
+            chat_max_iterations_default=chat_max_iterations_default,
+        )
+
+    return DirectChatOperatorEntryBindings(
+        build_direct_chat_system_prompt=build_direct_chat_system_prompt,
+        direct_chat_runtime_available=direct_chat_runtime_available,
+        resolve_direct_chat_availability=resolve_direct_chat_availability,
+        connected_provider_tokens=connected_provider_tokens,
+        resolve_provider_for_direct_chat_message=resolve_provider_for_direct_chat_message,
+        plan_direct_chat_route=plan_direct_chat_route,
+        credential_auth_mode=credential_auth_mode,
+        supports_direct_message_native_chat=supports_direct_message_native_chat,
+        preferred_provider=preferred_provider,
+        provider_unavailable_response=provider_unavailable_response,
+        direct_chat_credentials=direct_chat_credentials,
+        direct_chat_error_reply=direct_chat_error_reply,
     )

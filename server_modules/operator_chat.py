@@ -29,7 +29,6 @@ from server_modules import direct_chat_operator_binding_service
 from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
-from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_context_service
@@ -300,16 +299,6 @@ _MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get"}
 _compact_text = lambda value: re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
-_build_direct_chat_system_prompt = lambda *, workspace_id, availability, tools: direct_chat_prompt_service.build_system_prompt(
-    workspace_id=workspace_id,
-    availability=availability,
-    tools=tools,
-    availability_lines=_availability_lines,
-    build_operator_system_prompt=build_operator_system_prompt,
-    memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
-)
-
-
 _normalize_tool_capabilities = direct_chat_operator_support_service.normalize_tool_capabilities
 _tool_capability = direct_chat_operator_support_service.tool_capability
 _tool_connected = direct_chat_operator_support_service.tool_connected
@@ -320,19 +309,6 @@ _local_worker_available = direct_chat_operator_support_service.local_worker_avai
 _agent_machine_owner_user_id = direct_chat_context_service.agent_machine_owner_user_id
 _agent_machine_full_trust_for_session = lambda session_ctx: runtime_config.agent_machine_full_trust_enabled(
     _agent_machine_owner_user_id(session_ctx),
-)
-_direct_chat_runtime_available = lambda: direct_chat_entry_policy_service.direct_chat_runtime_available(
-    LOCAL_WORKER_REGISTRY,
-    is_worker_online_fn=_is_worker_online,
-)
-_resolve_direct_chat_availability = lambda workspace_id, requested_provider="", availability_override=None: direct_chat_entry_policy_service.resolve_direct_chat_availability(
-    workspace_id,
-    requested_provider,
-    direct_chat_runtime_available_fn=_direct_chat_runtime_available,
-    preferred_provider_fn=_preferred_provider,
-    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-    resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities,
-    availability_override=availability_override,
 )
 _availability_lines = partial(
     direct_chat_entry_policy_service.availability_lines,
@@ -371,64 +347,6 @@ _mark_thread_cleared = partial(
 _consume_thread_cleared = partial(
     direct_chat_entry_policy_service.consume_thread_cleared,
     clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
-)
-_connected_provider_tokens = lambda workspace_id: direct_chat_entry_policy_service.connected_provider_tokens(
-    workspace_id,
-    supported_providers=SUPPORTED_PROVIDERS,
-    direct_chat_credentials_fn=_direct_chat_credentials,
-)
-_resolve_provider_for_direct_chat_message = lambda workspace_id, requested_provider, message, *, tools_present: direct_chat_entry_policy_service.resolve_provider_for_direct_chat_message(
-    workspace_id,
-    requested_provider,
-    message,
-    tools_present=tools_present,
-    preferred_provider_fn=_preferred_provider,
-    direct_chat_credentials_fn=_direct_chat_credentials,
-    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-    compact_text_fn=_compact_text,
-    mentions_any_fn=_mentions_any,
-    message_requests_local_file_tool_fn=_message_requests_local_file_tool,
-    message_requests_local_shell_tool_fn=_message_requests_local_shell_tool,
-    message_requests_local_screenshot_tool_fn=_message_requests_local_screenshot_tool,
-    message_requests_local_computer_tool_fn=_message_requests_local_computer_tool,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-)
-_plan_direct_chat_route = lambda *, message, availability, provider, tools: direct_chat_entry_policy_service.plan_direct_chat_route(
-    message=message,
-    availability=availability,
-    provider=provider,
-    tools=tools,
-    compact_text_fn=_compact_text,
-    mentions_any_fn=_mentions_any,
-    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-    preview_run_response_fn=_preview_run_response,
-    prefer_durable_run_handoff_fn=_prefer_durable_run_handoff,
-    durable_run_preferred_response_fn=_durable_run_preferred_response,
-    message_can_use_direct_connector_tools_fn=lambda message: _message_can_use_direct_connector_tools(
-        message,
-        provider=provider,
-        tools=tools,
-    ),
-    message_can_use_direct_local_tools_fn=lambda message: _message_can_use_direct_local_tools(
-        message,
-        provider=provider,
-        tools=tools,
-    ),
-    message_can_use_builtin_direct_tools_fn=lambda message: _message_can_use_builtin_direct_tools(
-        message,
-        tools=tools,
-    ),
-    can_auto_start_run_handoff_fn=_can_auto_start_run_handoff,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    discord_keywords=DISCORD_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
 )
 
 
@@ -816,53 +734,10 @@ _approval_required_for_direct_tool = lambda connector_id, action_id, arguments, 
 )
 
 
-_credential_auth_mode = lambda provider, credentials: direct_chat_provider_facade_service.credential_auth_mode(
-    provider,
-    credentials,
-    normalize_auth_mode_fn=normalize_auth_mode,
-)
-_supports_direct_message_native_chat = lambda provider, credentials: direct_chat_provider_facade_service.supports_direct_message_native_chat(
-    provider,
-    credentials,
-    credential_auth_mode_fn=_credential_auth_mode,
-    get_claude_code_session_token_fn=get_claude_code_session_token,
-    provider_has_key_fn=provider_has_key,
-)
-_preferred_provider = lambda workspace_id, requested_provider="": direct_chat_provider_facade_service.preferred_provider(
-    workspace_id,
-    requested_provider,
-    supported_providers=SUPPORTED_PROVIDERS,
-    direct_chat_credentials_fn=_direct_chat_credentials,
-    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-    credential_auth_mode_fn=_credential_auth_mode,
-)
-
-
 _provider_display_name = direct_chat_provider_facade_service.provider_display_name
 
 
-_provider_unavailable_response = partial(
-    direct_chat_provider_facade_service.provider_unavailable_response,
-    connect_action_fn=lambda label, href: _connect_action(label, href),
-)
-
-
-_direct_chat_credentials = lambda workspace_id, provider: direct_chat_provider_facade_service.direct_chat_credentials(
-    workspace_id,
-    provider,
-    build_provider_credential_candidates_fn=_build_provider_credential_candidates,
-)
-
-
 _normalize_reasoning_effort = direct_chat_provider_facade_service.normalize_reasoning_effort
-
-
-_direct_chat_error_reply = partial(
-    direct_chat_provider_facade_service.direct_chat_error_reply,
-    chat_iteration_limit_reply_fn=lambda limit: _chat_iteration_limit_reply(limit),
-    safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
-    chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
-)
 
 
 _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
@@ -919,6 +794,59 @@ _direct_chat_policy_bindings = direct_chat_operator_binding_service.build_direct
 _direct_chat_routing_policy_callbacks = _direct_chat_policy_bindings.routing_policy_callbacks
 _direct_chat_tool_policy_callbacks = _direct_chat_policy_bindings.tool_policy_callbacks
 _direct_tool_execution_callbacks = _direct_chat_policy_bindings.direct_tool_execution_callbacks
+_direct_chat_entry_bindings = direct_chat_operator_binding_service.build_direct_chat_entry_bindings(
+    availability_lines=_availability_lines,
+    build_operator_system_prompt=build_operator_system_prompt,
+    memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
+    local_worker_registry=LOCAL_WORKER_REGISTRY,
+    is_worker_online_fn=lambda *args, **kwargs: _is_worker_online(*args, **kwargs),
+    preferred_provider_fn=lambda workspace_id, requested_provider="": _preferred_provider(workspace_id, requested_provider),
+    supports_direct_message_native_chat_fn=lambda provider, credentials: _supports_direct_message_native_chat(provider, credentials),
+    resolve_workspace_tool_capabilities_fn=lambda workspace_id: resolve_workspace_tool_capabilities(workspace_id),
+    supported_providers=SUPPORTED_PROVIDERS,
+    direct_chat_credentials_fn=lambda workspace_id, provider: _direct_chat_credentials(workspace_id, provider),
+    build_provider_credential_candidates_fn=lambda *args, **kwargs: _build_provider_credential_candidates(*args, **kwargs),
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    message_requests_local_file_tool_fn=lambda message: _message_requests_local_file_tool(message),
+    message_requests_local_shell_tool_fn=lambda message: _message_requests_local_shell_tool(message),
+    message_requests_local_screenshot_tool_fn=lambda message: _message_requests_local_screenshot_tool(message),
+    message_requests_local_computer_tool_fn=lambda message: _message_requests_local_computer_tool(message),
+    is_obvious_smtp_write_request_fn=lambda message: _is_obvious_smtp_write_request(message),
+    preview_run_response_fn=lambda message, availability: _preview_run_response(message, availability),
+    prefer_durable_run_handoff_fn=lambda message, availability: _prefer_durable_run_handoff(message, availability),
+    durable_run_preferred_response_fn=lambda message: _durable_run_preferred_response(message),
+    message_can_use_direct_connector_tools_fn=lambda message, *, provider, tools: _message_can_use_direct_connector_tools(message, provider=provider, tools=tools),
+    message_can_use_direct_local_tools_fn=lambda message, *, provider, tools: _message_can_use_direct_local_tools(message, provider=provider, tools=tools),
+    message_can_use_builtin_direct_tools_fn=lambda message, *, tools: _message_can_use_builtin_direct_tools(message, tools=tools),
+    can_auto_start_run_handoff_fn=lambda availability: _can_auto_start_run_handoff(availability),
+    credential_auth_mode_fn=lambda provider, credentials: _credential_auth_mode(provider, credentials),
+    normalize_auth_mode_fn=normalize_auth_mode,
+    get_claude_code_session_token_fn=lambda: get_claude_code_session_token(),
+    provider_has_key_fn=lambda provider: provider_has_key(provider),
+    connect_action_fn=lambda label, href: _connect_action(label, href),
+    chat_iteration_limit_reply_fn=lambda limit: _chat_iteration_limit_reply(limit),
+    safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
+    chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    discord_keywords=DISCORD_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+)
+_build_direct_chat_system_prompt = _direct_chat_entry_bindings.build_direct_chat_system_prompt
+_direct_chat_runtime_available = _direct_chat_entry_bindings.direct_chat_runtime_available
+_resolve_direct_chat_availability = _direct_chat_entry_bindings.resolve_direct_chat_availability
+_connected_provider_tokens = _direct_chat_entry_bindings.connected_provider_tokens
+_resolve_provider_for_direct_chat_message = _direct_chat_entry_bindings.resolve_provider_for_direct_chat_message
+_plan_direct_chat_route = _direct_chat_entry_bindings.plan_direct_chat_route
+_credential_auth_mode = _direct_chat_entry_bindings.credential_auth_mode
+_supports_direct_message_native_chat = _direct_chat_entry_bindings.supports_direct_message_native_chat
+_preferred_provider = _direct_chat_entry_bindings.preferred_provider
+_provider_unavailable_response = _direct_chat_entry_bindings.provider_unavailable_response
+_direct_chat_credentials = _direct_chat_entry_bindings.direct_chat_credentials
+_direct_chat_error_reply = _direct_chat_entry_bindings.direct_chat_error_reply
 _direct_chat_tool_runtime_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_runtime_bindings(
     direct_chat_runtime_facade_callbacks=lambda: _direct_chat_runtime_facade_callbacks(),
     direct_tool_execution_callbacks=lambda: _direct_tool_execution_callbacks(),

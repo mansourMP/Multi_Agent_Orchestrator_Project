@@ -216,6 +216,55 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertTrue(calls)
 
+    def test_build_direct_chat_entry_bindings_preserves_provider_and_error_helpers(self) -> None:
+        bindings = service.build_direct_chat_entry_bindings(
+            availability_lines=lambda workspace_id, availability: ["AI ready"],
+            build_operator_system_prompt=lambda **kwargs: "base prompt",
+            memory_tool_names=("memory_search",),
+            local_worker_registry={},
+            is_worker_online_fn=lambda *_args, **_kwargs: True,
+            preferred_provider_fn=lambda workspace_id, requested_provider="": ("openai", {"api_key": "sk-test"}),
+            supports_direct_message_native_chat_fn=lambda provider, credentials: True,
+            resolve_workspace_tool_capabilities_fn=lambda workspace_id: [],
+            supported_providers=("openai", "anthropic"),
+            direct_chat_credentials_fn=lambda workspace_id, provider: {"api_key": "sk-test"} if provider == "openai" else {},
+            build_provider_credential_candidates_fn=lambda workspace_id, provider: [{"api_key": "sk-test"}] if provider == "openai" else [],
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            mentions_any_fn=lambda message, markers: False,
+            message_requests_local_file_tool_fn=lambda message: False,
+            message_requests_local_shell_tool_fn=lambda message: False,
+            message_requests_local_screenshot_tool_fn=lambda message: False,
+            message_requests_local_computer_tool_fn=lambda message: False,
+            is_obvious_smtp_write_request_fn=lambda message: False,
+            preview_run_response_fn=lambda message, availability: None,
+            prefer_durable_run_handoff_fn=lambda message, availability: False,
+            durable_run_preferred_response_fn=lambda message: {"mode": "run"},
+            message_can_use_direct_connector_tools_fn=lambda message, *, provider, tools: False,
+            message_can_use_direct_local_tools_fn=lambda message, *, provider, tools: False,
+            message_can_use_builtin_direct_tools_fn=lambda message, *, tools: False,
+            can_auto_start_run_handoff_fn=lambda availability: False,
+            credential_auth_mode_fn=lambda provider, credentials: "api_key",
+            normalize_auth_mode_fn=lambda value="": str(value or "").strip().lower(),
+            get_claude_code_session_token_fn=lambda: "",
+            provider_has_key_fn=lambda provider: provider == "openai",
+            connect_action_fn=lambda label, href: {"label": label, "href": href},
+            chat_iteration_limit_reply_fn=lambda limit: f"limit:{limit}",
+            safe_positive_int_fn=lambda value, default: int(value) if str(value or "").isdigit() else default,
+            chat_max_iterations_default=30,
+            google_workspace_keywords=("gmail",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            discord_keywords=("discord",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        provider, credentials = bindings.preferred_provider("default", "openai")
+
+        self.assertEqual(provider, "openai")
+        self.assertEqual(credentials["api_key"], "sk-test")
+        self.assertEqual(bindings.direct_chat_error_reply("max_tool_iterations_reached:7"), "limit:7")
+
 
 if __name__ == "__main__":
     unittest.main()

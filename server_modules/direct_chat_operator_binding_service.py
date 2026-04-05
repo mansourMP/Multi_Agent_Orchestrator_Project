@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_handoff_facade_service
+from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_routing_service
+from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_runtime_facade_service
@@ -71,6 +74,24 @@ class DirectChatOperatorHandoffBindings:
     direct_chat_run_snapshot_to_step: Any
     direct_chat_run_final_payload: Any
     stream_direct_chat_run_handoff: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorAvailabilityBindings:
+    question_like: Any
+    mentions_any: Any
+    starts_like_direct_run: Any
+    is_obvious_telegram_write_request: Any
+    is_obvious_google_write_request: Any
+    is_obvious_smtp_write_request: Any
+    connector_write_preview_allowed: Any
+    is_explicit_workflow_request: Any
+    no_ai_chat_response: Any
+    tool_gate_response: Any
+    suggest_actions: Any
+    heartbeat_pending_tasks_for_suggestions: Any
+    recent_run_prompts_for_suggestions: Any
+    build_proactive_suggestions: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -889,4 +910,168 @@ def build_direct_chat_handoff_bindings(
         direct_chat_run_snapshot_to_step=direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step,
         direct_chat_run_final_payload=direct_chat_run_final_payload,
         stream_direct_chat_run_handoff=stream_direct_chat_run_handoff,
+    )
+
+
+def build_direct_chat_availability_bindings(
+    *,
+    compact_text_fn: Any,
+    normalize_tool_capabilities_fn: Any,
+    tool_connected_fn: Any,
+    tool_runtime_usable_fn: Any,
+    connect_action_fn: Any,
+    google_repair_action_fn: Any,
+    workflow_action_fn: Any,
+    run_action_fn: Any,
+    workspace_context_dir_fn: Any,
+    memory_suggestion_prompts_fn: Any,
+    question_openers: tuple[str, ...] | list[str],
+    direct_run_openers: tuple[str, ...] | list[str],
+    workflow_request_markers: tuple[str, ...] | list[str],
+    execution_markers: tuple[str, ...] | list[str],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    smtp_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+) -> DirectChatOperatorAvailabilityBindings:
+    def question_like(compact_message: str) -> bool:
+        return direct_chat_availability_service.question_like(
+            compact_message,
+            question_openers=question_openers,
+        )
+
+    def mentions_any(compact_message: str, markers) -> bool:
+        return direct_chat_availability_service.mentions_any(
+            compact_message,
+            markers=markers,
+        )
+
+    def starts_like_direct_run(compact_message: str) -> bool:
+        return direct_chat_availability_service.starts_like_direct_run(
+            compact_message,
+            direct_run_openers=direct_run_openers,
+        )
+
+    def is_obvious_telegram_write_request(compact_message: str) -> bool:
+        return direct_chat_availability_service.is_obvious_telegram_write_request(
+            compact_message,
+            question_like_fn=question_like,
+            mentions_any_fn=mentions_any,
+            starts_like_direct_run_fn=starts_like_direct_run,
+            telegram_keywords=telegram_keywords,
+        )
+
+    def is_obvious_google_write_request(compact_message: str) -> bool:
+        return direct_chat_availability_service.is_obvious_google_write_request(
+            compact_message,
+            question_like_fn=question_like,
+            starts_like_direct_run_fn=starts_like_direct_run,
+        )
+
+    def is_obvious_smtp_write_request(compact_message: str) -> bool:
+        return direct_chat_availability_service.is_obvious_smtp_write_request(
+            compact_message,
+            question_like_fn=question_like,
+            mentions_any_fn=mentions_any,
+            starts_like_direct_run_fn=starts_like_direct_run,
+            smtp_keywords=smtp_keywords,
+        )
+
+    def connector_write_preview_allowed(message: str, availability: Dict[str, Any]) -> bool:
+        return direct_chat_availability_service.connector_write_preview_allowed(
+            message,
+            availability,
+            compact_text_fn=compact_text_fn,
+            is_obvious_telegram_write_request_fn=is_obvious_telegram_write_request,
+            is_obvious_google_write_request_fn=is_obvious_google_write_request,
+            is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request,
+            tool_runtime_usable_fn=tool_runtime_usable_fn,
+        )
+
+    def is_explicit_workflow_request(message: str) -> bool:
+        return direct_chat_availability_service.is_explicit_workflow_request(
+            message,
+            compact_text_fn=compact_text_fn,
+            mentions_any_fn=mentions_any,
+            workflow_request_markers=workflow_request_markers,
+        )
+
+    def no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
+        return direct_chat_availability_service.no_ai_chat_response(
+            availability,
+            normalize_tool_capabilities_fn=normalize_tool_capabilities_fn,
+            connect_action_fn=connect_action_fn,
+        )
+
+    def tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return direct_chat_availability_service.tool_gate_response(
+            message,
+            availability,
+            compact_text_fn=compact_text_fn,
+            mentions_any_fn=mentions_any,
+            is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request,
+            tool_connected_fn=tool_connected_fn,
+            tool_runtime_usable_fn=tool_runtime_usable_fn,
+            connect_action_fn=connect_action_fn,
+            google_repair_action_fn=google_repair_action_fn,
+            google_workspace_keywords=google_workspace_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+        )
+
+    def suggest_actions(message: str, availability: Dict[str, Any]) -> list[Dict[str, Any]]:
+        return direct_chat_availability_service.suggest_actions(
+            message,
+            availability,
+            compact_text_fn=compact_text_fn,
+            mentions_any_fn=mentions_any,
+            question_like_fn=question_like,
+            is_explicit_workflow_request_fn=is_explicit_workflow_request,
+            is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request,
+            tool_runtime_usable_fn=tool_runtime_usable_fn,
+            workflow_action_fn=workflow_action_fn,
+            run_action_fn=run_action_fn,
+            google_workspace_keywords=google_workspace_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+            execution_markers=execution_markers,
+        )
+
+    def heartbeat_pending_tasks_for_suggestions() -> list[str]:
+        return direct_chat_support_binding_service.heartbeat_pending_tasks_for_suggestions(
+            workspace_context_dir_fn=workspace_context_dir_fn,
+        )
+
+    def recent_run_prompts_for_suggestions(workspace_id: str) -> list[str]:
+        return direct_chat_operator_support_service.recent_run_prompts_for_suggestions(workspace_id)
+
+    def build_proactive_suggestions(workspace_id: str) -> list[str]:
+        return direct_chat_support_binding_service.build_proactive_suggestions(
+            workspace_id,
+            heartbeat_tasks=heartbeat_pending_tasks_for_suggestions,
+            recent_run_prompts=recent_run_prompts_for_suggestions,
+            memory_suggestion_prompts=memory_suggestion_prompts_fn,
+        )
+
+    return DirectChatOperatorAvailabilityBindings(
+        question_like=question_like,
+        mentions_any=mentions_any,
+        starts_like_direct_run=starts_like_direct_run,
+        is_obvious_telegram_write_request=is_obvious_telegram_write_request,
+        is_obvious_google_write_request=is_obvious_google_write_request,
+        is_obvious_smtp_write_request=is_obvious_smtp_write_request,
+        connector_write_preview_allowed=connector_write_preview_allowed,
+        is_explicit_workflow_request=is_explicit_workflow_request,
+        no_ai_chat_response=no_ai_chat_response,
+        tool_gate_response=tool_gate_response,
+        suggest_actions=suggest_actions,
+        heartbeat_pending_tasks_for_suggestions=heartbeat_pending_tasks_for_suggestions,
+        recent_run_prompts_for_suggestions=recent_run_prompts_for_suggestions,
+        build_proactive_suggestions=build_proactive_suggestions,
     )

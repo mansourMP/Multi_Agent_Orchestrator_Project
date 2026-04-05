@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from server_modules import direct_chat_operator_binding_service as service
 
@@ -309,6 +310,39 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertEqual(bindings.direct_chat_run_actions("run-1")[0]["label"], "Open run")
         self.assertEqual(payload["context_used"]["run_created"], True)
         self.assertTrue(calls)
+
+    def test_build_direct_chat_availability_bindings_preserves_availability_helpers(self) -> None:
+        bindings = service.build_direct_chat_availability_bindings(
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            normalize_tool_capabilities_fn=lambda availability: availability.get("tools") or [],
+            tool_connected_fn=lambda availability, tool_id: False,
+            tool_runtime_usable_fn=lambda availability, tool_id: True if tool_id == "google_workspace" else None,
+            connect_action_fn=lambda label, href: {"kind": "connect", "label": label, "href": href},
+            google_repair_action_fn=lambda: {"kind": "repair"},
+            workflow_action_fn=lambda message: {"kind": "workflow", "message": message},
+            run_action_fn=lambda message: {"kind": "run", "message": message},
+            workspace_context_dir_fn=lambda: Path("/tmp/context"),
+            memory_suggestion_prompts_fn=lambda workspace_id: [f"memory:{workspace_id}"],
+            question_openers=("what", "how"),
+            direct_run_openers=("run", "execute"),
+            workflow_request_markers=("workflow",),
+            execution_markers=("run", "execute"),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+        )
+
+        gate = bindings.tool_gate_response("summarize my gmail inbox", {})
+        suggestions = bindings.build_proactive_suggestions("default")
+
+        self.assertTrue(bindings.question_like("what can you do"))
+        self.assertIsNotNone(gate)
+        self.assertIn("Google Workspace is not connected", gate["reply"])
+        self.assertIsInstance(suggestions, list)
+        self.assertTrue(suggestions)
 
 
 if __name__ == "__main__":

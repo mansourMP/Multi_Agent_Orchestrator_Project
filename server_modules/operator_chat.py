@@ -416,120 +416,45 @@ _run_action = direct_chat_availability_service.run_action
 _workflow_action = direct_chat_availability_service.workflow_action
 
 
-_question_like = partial(
-    direct_chat_availability_service.question_like,
-    question_openers=QUESTION_OPENERS,
-)
-
-
-_mentions_any = lambda compact_message, markers: direct_chat_availability_service.mentions_any(
-    compact_message,
-    markers=markers,
-)
-
-
-_starts_like_direct_run = partial(
-    direct_chat_availability_service.starts_like_direct_run,
-    direct_run_openers=DIRECT_RUN_OPENERS,
-)
-
-
-_is_obvious_telegram_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_telegram_write_request(
-    compact_message,
-    question_like_fn=_question_like,
-    mentions_any_fn=_mentions_any,
-    starts_like_direct_run_fn=_starts_like_direct_run,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-)
-_is_obvious_google_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_google_write_request(
-    compact_message,
-    question_like_fn=_question_like,
-    starts_like_direct_run_fn=_starts_like_direct_run,
-)
-_is_obvious_smtp_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_smtp_write_request(
-    compact_message,
-    question_like_fn=_question_like,
-    mentions_any_fn=_mentions_any,
-    starts_like_direct_run_fn=_starts_like_direct_run,
-    smtp_keywords=SMTP_KEYWORDS,
-)
-_connector_write_preview_allowed = lambda message, availability: direct_chat_availability_service.connector_write_preview_allowed(
-    message,
-    availability,
+_direct_chat_availability_bindings = direct_chat_operator_binding_service.build_direct_chat_availability_bindings(
     compact_text_fn=_compact_text,
-    is_obvious_telegram_write_request_fn=_is_obvious_telegram_write_request,
-    is_obvious_google_write_request_fn=_is_obvious_google_write_request,
-    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-    tool_runtime_usable_fn=_tool_runtime_usable,
-)
-
-
-_is_explicit_workflow_request = partial(
-    direct_chat_availability_service.is_explicit_workflow_request,
-    compact_text_fn=_compact_text,
-    mentions_any_fn=_mentions_any,
-    workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
-)
-
-
-_no_ai_chat_response = partial(
-    direct_chat_availability_service.no_ai_chat_response,
     normalize_tool_capabilities_fn=lambda availability: _normalize_tool_capabilities(availability),
-    connect_action_fn=lambda label, href: _connect_action(label, href),
-)
-
-
-_tool_gate_response = lambda message, availability: direct_chat_availability_service.tool_gate_response(
-    message,
-    availability,
-    compact_text_fn=_compact_text,
-    mentions_any_fn=_mentions_any,
-    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
     tool_connected_fn=_tool_connected,
     tool_runtime_usable_fn=_tool_runtime_usable,
     connect_action_fn=_connect_action,
     google_repair_action_fn=_google_repair_action,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-)
-_suggest_actions = lambda message, availability: direct_chat_availability_service.suggest_actions(
-    message,
-    availability,
-    compact_text_fn=_compact_text,
-    mentions_any_fn=_mentions_any,
-    question_like_fn=_question_like,
-    is_explicit_workflow_request_fn=_is_explicit_workflow_request,
-    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-    tool_runtime_usable_fn=_tool_runtime_usable,
     workflow_action_fn=_workflow_action,
     run_action_fn=_run_action,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-    execution_markers=EXECUTION_MARKERS,
-)
-_heartbeat_pending_tasks_for_suggestions = lambda: direct_chat_support_binding_service.heartbeat_pending_tasks_for_suggestions(
     workspace_context_dir_fn=workspace_context_dir,
-)
-
-
-_recent_run_prompts_for_suggestions = direct_chat_operator_support_service.recent_run_prompts_for_suggestions
-
-
-_build_proactive_suggestions = partial(
-    direct_chat_support_binding_service.build_proactive_suggestions,
-    heartbeat_tasks=lambda: _heartbeat_pending_tasks_for_suggestions(),
-    recent_run_prompts=lambda workspace_id: _recent_run_prompts_for_suggestions(workspace_id),
-    memory_suggestion_prompts=lambda workspace_id: memory_service.memory_suggestion_prompts(
+    memory_suggestion_prompts_fn=lambda workspace_id: memory_service.memory_suggestion_prompts(
         workspace_id,
         limit=2,
     ),
+    question_openers=QUESTION_OPENERS,
+    direct_run_openers=DIRECT_RUN_OPENERS,
+    workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
+    execution_markers=EXECUTION_MARKERS,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    smtp_keywords=SMTP_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
 )
+_question_like = _direct_chat_availability_bindings.question_like
+_mentions_any = _direct_chat_availability_bindings.mentions_any
+_starts_like_direct_run = _direct_chat_availability_bindings.starts_like_direct_run
+_is_obvious_telegram_write_request = _direct_chat_availability_bindings.is_obvious_telegram_write_request
+_is_obvious_google_write_request = _direct_chat_availability_bindings.is_obvious_google_write_request
+_is_obvious_smtp_write_request = _direct_chat_availability_bindings.is_obvious_smtp_write_request
+_connector_write_preview_allowed = _direct_chat_availability_bindings.connector_write_preview_allowed
+_is_explicit_workflow_request = _direct_chat_availability_bindings.is_explicit_workflow_request
+_no_ai_chat_response = _direct_chat_availability_bindings.no_ai_chat_response
+_tool_gate_response = _direct_chat_availability_bindings.tool_gate_response
+_suggest_actions = _direct_chat_availability_bindings.suggest_actions
+_heartbeat_pending_tasks_for_suggestions = _direct_chat_availability_bindings.heartbeat_pending_tasks_for_suggestions
+_recent_run_prompts_for_suggestions = _direct_chat_availability_bindings.recent_run_prompts_for_suggestions
+_build_proactive_suggestions = _direct_chat_availability_bindings.build_proactive_suggestions
 
 
 _action_marker_count = partial(

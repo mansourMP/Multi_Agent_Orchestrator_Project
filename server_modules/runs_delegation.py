@@ -1,6 +1,7 @@
 import threading
 
 from server_modules import runtime_config as config
+from server_modules import run_service as run_service
 from server_modules import shared as shared
 from server_modules import runtime_common as common
 from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
@@ -114,16 +115,8 @@ def normalize_agent_role(value: Any) -> str:
     return raw if raw in VALID_AGENT_ROLES else ""
 
 
-def _safe_int(value: Any, default: int = 0) -> int:
-    from server_modules.run_service import safe_int
-
-    return safe_int(value, default)
-
-
-def _normalize_requested_max_iterations(value: Any) -> Optional[int]:
-    from server_modules.run_service import normalize_requested_max_iterations
-
-    return normalize_requested_max_iterations(value)
+_safe_int = run_service.safe_int
+_normalize_requested_max_iterations = run_service.normalize_requested_max_iterations
 
 
 def _failure_status(status: Any) -> bool:
@@ -430,11 +423,9 @@ def _build_delegation_summary(
 
 
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
-    from server_modules.run_service import RunPreparationServices, prepare_run_start_request
-
-    return prepare_run_start_request(
+    return run_service.prepare_run_start_request(
         req,
-        services=RunPreparationServices(
+        services=run_service.build_run_preparation_services(
             engine_registry=ENGINE_REGISTRY,
             engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
             supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
@@ -455,54 +446,20 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     )
 
 
-def _local_execution_requires_start_confirmation(metadata: Dict[str, Any], precheck: Dict[str, Any]) -> bool:
-    from server_modules.run_service import local_execution_requires_start_confirmation
-
-    return local_execution_requires_start_confirmation(
-        metadata,
-        precheck,
-        local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
-        local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
-    )
-
-
-def _precheck_human_action_labels(precheck: Dict[str, Any], decision: str = "require_confirmation") -> List[str]:
-    from server_modules.run_service import precheck_human_action_labels
-
-    return precheck_human_action_labels(precheck, decision=decision)
-
-
-def _local_execution_confirmation_prompt(precheck: Dict[str, Any]) -> str:
-    from server_modules.run_service import local_execution_confirmation_prompt
-
-    return local_execution_confirmation_prompt(precheck)
-
-
-def _local_execution_block_prompt(precheck: Dict[str, Any]) -> str:
-    from server_modules.run_service import local_execution_block_prompt
-
-    return local_execution_block_prompt(precheck)
-
-
-def _mark_local_execution_tools_approved(metadata: Dict[str, Any]) -> None:
-    from server_modules.run_service import mark_local_execution_tools_approved
-
-    mark_local_execution_tools_approved(metadata)
-
-
-def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
-    from server_modules.run_service import apply_browser_execution_metadata
-
-    apply_browser_execution_metadata(metadata)
+_local_execution_requires_start_confirmation = lambda metadata, precheck: run_service.local_execution_requires_start_confirmation(
+    metadata,
+    precheck,
+    local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
+    local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+)
+_precheck_human_action_labels = run_service.precheck_human_action_labels
+_local_execution_confirmation_prompt = run_service.local_execution_confirmation_prompt
+_local_execution_block_prompt = run_service.local_execution_block_prompt
+_mark_local_execution_tools_approved = run_service.mark_local_execution_tools_approved
+_apply_browser_execution_metadata = run_service.apply_browser_execution_metadata
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    from server_modules.run_service import (
-        PreparedRunCreationServices,
-        build_runs_delegation_creation_result,
-        create_run_from_prepared_request,
-    )
-
     precheck_fn = globals().get("_compute_tool_policy_precheck")
     create_run_fn = globals().get("create_run")
     begin_confirmation_fn = globals().get("_begin_run_pending_confirmation") or globals().get("_begin_run_pending_approval")
@@ -513,11 +470,11 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     if not callable(begin_confirmation_fn):
         from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
 
-    created = create_run_from_prepared_request(
+    created = run_service.create_run_from_prepared_request(
         req,
         prepared=_prepare_run_start_request(req),
         schedule_id=schedule_id,
-        services=PreparedRunCreationServices(
+        services=run_service.build_prepared_run_creation_services(
             decide_execution_target=decide_execution_target,
             apply_execution_route_metadata=apply_execution_route_metadata,
             build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
@@ -536,7 +493,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),
     )
-    return build_runs_delegation_creation_result(created=created)
+    return run_service.build_runs_delegation_creation_result(created=created)
 
 
 def _lookup_run_snapshot(run_id: str) -> Dict[str, Any]:

@@ -1565,6 +1565,64 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Shared Run Service Bundle Construction Extracted
+
+#### Stage
+
+Stage 1 continues. The durable-run preparation and creation bundle wiring is now owned by [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of being duplicated inline across the legacy run modules.
+
+This is not the end of the durable-run refactor. [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still own their top-level compatibility entrypoints and late-bound patch surfaces, but they now cross a more explicit shared boundary.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `build_run_preparation_services()`
+  - `build_prepared_run_creation_services()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so:
+  - shared normalization and local-execution helper wrappers now bind directly to `run_service`
+  - `_prepare_run_start_request()` builds its service bundle through the canonical `run_service` helper
+  - `_create_run_from_request()` builds its prepared creation services through the canonical `run_service` helper before shaping the legacy result
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so:
+  - shared normalization and local-execution helper wrappers now bind directly to `run_service`
+  - `_prepare_run_start_request()` builds its service bundle through the canonical `run_service` helper
+  - `_create_run_from_request()` builds its prepared creation services through the canonical `run_service` helper while preserving late-bound global lookup for patched delegation tests
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with coverage for the new shared bundle builders.
+
+#### Current Truth
+
+- The durable-run service layer now owns both:
+  - the shared run-preparation service bundle construction
+  - the shared prepared-run creation service bundle construction
+- The legacy run modules still provide the historical module-level entrypoints:
+  - `_prepare_run_start_request()`
+  - `_create_run_from_request()`
+- Compatibility is preserved for current tests and for runtime call sites that still import those legacy names.
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still owns a large amount of runtime lifecycle logic and schedule/run history behavior.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still mixes delegation orchestration, retry policy, and runtime snapshot behavior in one module.
+- The durable-run path still spans multiple modules instead of treating [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) as the single obvious ownership boundary.
+
+#### Next Required Work
+
+1. Continue lifting duplicated run-lifecycle and creation-adjacent logic out of [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Keep the legacy entrypoints stable while reducing their ownership to coordination and compatibility only.
+3. Recenter future durable-run behavior additions in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of adding new logic to the legacy run modules.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Operator Chat Support Helpers Moved Behind Service Boundary
 
 #### Stage

@@ -100,6 +100,88 @@ class PreparedRunCreationServices:
     now_iso: Any = None
 
 
+def build_run_preparation_services(
+    *,
+    engine_registry: Any,
+    engine_validation_errors: Any,
+    supported_outcome_packs: Any,
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]],
+    normalize_trust_mode: Callable[[str], str],
+    trust_mode_aliases: Any,
+    valid_trust_modes: Any,
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: Any,
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    normalize_agent_role: Callable[[Any], str],
+    detect_agent_role: Callable[[RunStartRequest, Dict[str, Any]], tuple[str, str]],
+    resolve_app_permissions: Callable[[str], Any],
+    action_policy_from_app_permissions: Callable[[Any], Dict[str, Any]],
+    merge_action_policies: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Any],
+    postprocess_metadata: Optional[Callable[[RunStartRequest, Dict[str, Any]], Dict[str, Any]]] = None,
+) -> RunPreparationServices:
+    return RunPreparationServices(
+        engine_registry=engine_registry,
+        engine_validation_errors=engine_validation_errors,
+        supported_outcome_packs=supported_outcome_packs,
+        normalize_requested_max_iterations=normalize_requested_max_iterations,
+        normalize_trust_mode=normalize_trust_mode,
+        trust_mode_aliases=trust_mode_aliases,
+        valid_trust_modes=valid_trust_modes,
+        normalize_execution_target=normalize_execution_target,
+        valid_execution_targets=valid_execution_targets,
+        normalize_run_id_token=normalize_run_id_token,
+        normalize_agent_role=normalize_agent_role,
+        detect_agent_role=detect_agent_role,
+        resolve_app_permissions=resolve_app_permissions,
+        action_policy_from_app_permissions=action_policy_from_app_permissions,
+        merge_action_policies=merge_action_policies,
+        fetch_workflow_snapshot=fetch_workflow_snapshot,
+        postprocess_metadata=postprocess_metadata,
+    )
+
+
+def build_prepared_run_creation_services(
+    *,
+    decide_execution_target: Any,
+    apply_execution_route_metadata: Any,
+    build_doctor_run_gate: Any,
+    agent_machine_inherited_owner_user_id: Any,
+    compute_tool_policy_precheck: Any,
+    apply_browser_execution_metadata: Any,
+    local_execution_block_prompt: Any,
+    resolve_runtime_policy_mode: Any,
+    agent_machine_full_trust_enabled: Any,
+    local_execution_requires_start_confirmation: Any,
+    mark_local_execution_tools_approved: Any,
+    precheck_human_action_labels: Any,
+    local_execution_confirmation_prompt: Any,
+    begin_run_pending_confirmation: Any,
+    create_run: Any,
+    load_created_run: Any = None,
+    now_iso: Any = None,
+) -> PreparedRunCreationServices:
+    return PreparedRunCreationServices(
+        decide_execution_target=decide_execution_target,
+        apply_execution_route_metadata=apply_execution_route_metadata,
+        build_doctor_run_gate=build_doctor_run_gate,
+        agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+        compute_tool_policy_precheck=compute_tool_policy_precheck,
+        apply_browser_execution_metadata=apply_browser_execution_metadata,
+        local_execution_block_prompt=local_execution_block_prompt,
+        resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+        agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+        local_execution_requires_start_confirmation=local_execution_requires_start_confirmation,
+        mark_local_execution_tools_approved=mark_local_execution_tools_approved,
+        precheck_human_action_labels=precheck_human_action_labels,
+        local_execution_confirmation_prompt=local_execution_confirmation_prompt,
+        begin_run_pending_confirmation=begin_run_pending_confirmation,
+        create_run=create_run,
+        load_created_run=load_created_run,
+        now_iso=now_iso,
+    )
+
+
 def build_runs_core_creation_result(
     req: RunStartRequest,
     *,

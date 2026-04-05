@@ -7,6 +7,8 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
+    build_prepared_run_creation_services,
+    build_run_preparation_services,
     build_runs_core_creation_result,
     build_runs_delegation_creation_result,
     local_execution_block_prompt,
@@ -35,6 +37,46 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(safe_int("bad", 5), 5)
         self.assertEqual(normalize_requested_max_iterations("9"), 9)
         self.assertIsNone(normalize_requested_max_iterations(""))
+
+    def test_build_service_bundles_preserve_shared_callbacks(self):
+        preparation = build_run_preparation_services(
+            engine_registry={"orion": object()},
+            engine_validation_errors=[],
+            supported_outcome_packs={"local_execution"},
+            normalize_requested_max_iterations=normalize_requested_max_iterations,
+            normalize_trust_mode=lambda value: str(value or ""),
+            trust_mode_aliases={},
+            valid_trust_modes={"guarded"},
+            normalize_execution_target=lambda value: str(value or ""),
+            valid_execution_targets={"cloud"},
+            normalize_run_id_token=lambda value: str(value or "") or None,
+            normalize_agent_role=lambda value: str(value or ""),
+            detect_agent_role=lambda req, metadata: ("builder", "default"),
+            resolve_app_permissions=lambda app_id: {},
+            action_policy_from_app_permissions=lambda permissions: {},
+            merge_action_policies=lambda existing, new: {},
+            fetch_workflow_snapshot=lambda workflow_id: None,
+        )
+        creation = build_prepared_run_creation_services(
+            decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+            apply_execution_route_metadata=lambda metadata, route: metadata,
+            build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+            agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+            compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+            apply_browser_execution_metadata=apply_browser_execution_metadata,
+            local_execution_block_prompt=local_execution_block_prompt,
+            resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+            agent_machine_full_trust_enabled=lambda owner_user_id: False,
+            local_execution_requires_start_confirmation=local_execution_requires_start_confirmation,
+            mark_local_execution_tools_approved=mark_local_execution_tools_approved,
+            precheck_human_action_labels=precheck_human_action_labels,
+            local_execution_confirmation_prompt=local_execution_confirmation_prompt,
+            begin_run_pending_confirmation=lambda *args, **kwargs: {"approval_id": "approval-1"},
+            create_run=lambda **kwargs: "run-1",
+        )
+
+        self.assertIs(preparation.normalize_requested_max_iterations, normalize_requested_max_iterations)
+        self.assertIs(creation.mark_local_execution_tools_approved, mark_local_execution_tools_approved)
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

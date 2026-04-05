@@ -45,6 +45,21 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(result, "manager")
         self.assertEqual(calls, [{"db_path": Path("/tmp/state.db")}])
 
+    def test_build_default_direct_chat_session_manager_factory_imports_manager_module(self):
+        calls = []
+
+        factory = runtime_service.build_default_direct_chat_session_manager_factory(
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            import_module=lambda name, fromlist=(): type(
+                "ManagerModule",
+                (),
+                {"get_default_session_manager": staticmethod(lambda **kwargs: calls.append(kwargs) or "manager")},
+            )(),
+        )
+
+        self.assertEqual(factory(), "manager")
+        self.assertEqual(calls, [{"db_path": Path("/tmp/state.db")}])
+
     def test_build_direct_chat_execution_services_preserves_callbacks(self):
         captured = {}
 
@@ -61,6 +76,28 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertIn("chat_stream_key", captured)
         self.assertIn("session_manager_enabled", captured)
         self.assertIn("session_manager_factory", captured)
+        self.assertIn("build_direct_operator_reply", captured)
+        self.assertIn("build_chat_turn_event_stream", captured)
+
+    def test_build_imported_direct_chat_execution_services_imports_operator_chat_module(self):
+        captured = {}
+
+        result = runtime_service.build_imported_direct_chat_execution_services(
+            builder=lambda **kwargs: captured.update(kwargs) or "services",
+            chat_stream_key=lambda *args, **kwargs: "key",
+            session_manager_enabled=lambda: True,
+            session_manager_factory=lambda: "manager",
+            import_module=lambda name, fromlist=(): type(
+                "OperatorChatModule",
+                (),
+                {
+                    "build_direct_operator_reply": staticmethod(lambda *args, **kwargs: {}),
+                    "build_chat_turn_event_stream": staticmethod(lambda *args, **kwargs: iter(())),
+                },
+            )(),
+        )
+
+        self.assertEqual(result, "services")
         self.assertIn("build_direct_operator_reply", captured)
         self.assertIn("build_chat_turn_event_stream", captured)
 
@@ -83,6 +120,27 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(services.chat_stream_request_signature(), "sig")
         self.assertEqual(services.run_execution_services(), "run")
         self.assertEqual(services.direct_chat_execution_services(), "chat")
+
+    def test_build_direct_chat_stream_response_services_factory_returns_services(self):
+        factory = runtime_service.build_direct_chat_stream_response_services_factory(
+            resolve_direct_chat_turn_request=lambda **kwargs: None,
+            chat_stream_request_signature=lambda **kwargs: "sig",
+            execute_agent_turn_request=lambda **kwargs: None,
+            build_turn_execution_services=lambda **kwargs: None,
+            run_execution_services=lambda: "run",
+            direct_chat_execution_services=lambda: "chat",
+            get_chat_stream_state=lambda *args, **kwargs: None,
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            get_or_create_chat_stream_session=lambda *args, **kwargs: {},
+            extract_direct_chat_error_response=lambda event: None,
+            start_chat_stream_producer=lambda session, producer_fn: None,
+            iter_chat_stream_events=lambda session, last_event_id: iter(()),
+        )
+
+        services = factory()
+
+        self.assertEqual(services.chat_stream_request_signature(), "sig")
+        self.assertEqual(services.run_execution_services(), "run")
 
     def test_build_default_chat_stream_session_factory_uses_state_service_defaults(self):
         factory = runtime_service.build_default_chat_stream_session_factory(

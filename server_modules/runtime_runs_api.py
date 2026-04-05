@@ -248,12 +248,9 @@ _direct_chat_session_manager_enabled = lambda: _service_direct_chat_session_mana
 )
 
 
-_direct_chat_session_manager = lambda: chat_stream_runtime_service.build_direct_chat_session_manager(
-    get_default_session_manager=__import__(
-        "server_modules.session_manager.manager",
-        fromlist=["get_default_session_manager"],
-    ).get_default_session_manager,
-    db_path=_chat_stream_state_db_path(),
+_direct_chat_session_manager = chat_stream_runtime_service.build_default_direct_chat_session_manager_factory(
+    chat_stream_state_db_path=_chat_stream_state_db_path,
+    import_module=__import__,
 )
 
 
@@ -270,23 +267,15 @@ initialize_chat_stream_runtime_state = chat_stream_runtime_service.build_initial
 )
 
 
-_direct_chat_execution_services = lambda: chat_stream_runtime_service.build_direct_chat_execution_services(
+_direct_chat_execution_services = lambda: chat_stream_runtime_service.build_imported_direct_chat_execution_services(
     builder=build_direct_chat_execution_services,
     chat_stream_key=_chat_stream_key,
     session_manager_enabled=_direct_chat_session_manager_enabled,
     session_manager_factory=_direct_chat_session_manager,
-    build_direct_operator_reply=__import__(
-        "server_modules.operator_chat",
-        fromlist=["build_direct_operator_reply"],
-    ).build_direct_operator_reply,
-    build_chat_turn_event_stream=__import__(
-        "server_modules.operator_chat",
-        fromlist=["build_chat_turn_event_stream"],
-    ).build_chat_turn_event_stream,
+    import_module=__import__,
 )
 
-
-_direct_chat_stream_response_services = lambda: chat_stream_runtime_service.build_direct_chat_stream_response_services(
+_direct_chat_stream_response_services = chat_stream_runtime_service.build_direct_chat_stream_response_services_factory(
     resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
     chat_stream_request_signature=_chat_stream_request_signature,
     execute_agent_turn_request=execute_agent_turn_request,
@@ -295,10 +284,10 @@ _direct_chat_stream_response_services = lambda: chat_stream_runtime_service.buil
     direct_chat_execution_services=_direct_chat_execution_services,
     get_chat_stream_state=get_chat_stream_state,
     chat_stream_state_db_path=_chat_stream_state_db_path,
-    get_or_create_chat_stream_session=_get_or_create_chat_stream_session,
-    extract_direct_chat_error_response=_extract_direct_chat_error_response,
-    start_chat_stream_producer=_start_chat_stream_producer,
-    iter_chat_stream_events=_iter_chat_stream_events,
+    get_or_create_chat_stream_session=lambda *args, **kwargs: _get_or_create_chat_stream_session(*args, **kwargs),
+    extract_direct_chat_error_response=lambda *args, **kwargs: _extract_direct_chat_error_response(*args, **kwargs),
+    start_chat_stream_producer=lambda *args, **kwargs: _start_chat_stream_producer(*args, **kwargs),
+    iter_chat_stream_events=lambda *args, **kwargs: _iter_chat_stream_events(*args, **kwargs),
 )
 
 

@@ -288,6 +288,49 @@ def build_legacy_run_preparation_services(
     )
 
 
+def build_legacy_run_preparation_services_from_values(
+    *,
+    engine_registry: dict[str, Any],
+    engine_validation_errors: list[str],
+    supported_outcome_packs: set[str],
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]],
+    normalize_trust_mode: Callable[[Any], str],
+    trust_mode_aliases: dict[str, str],
+    valid_trust_modes: set[str],
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: set[str],
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    normalize_agent_role: Callable[[Any], str],
+    detect_agent_role: Callable[[RunStartRequest, dict[str, Any]], tuple[str, str]],
+    resolve_app_permissions: Callable[[Any], dict[str, Any]],
+    action_policy_from_app_permissions: Callable[[dict[str, Any]], dict[str, Any]],
+    merge_action_policies: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Optional[dict[str, Any]]],
+    postprocess_metadata: Optional[Callable[[dict[str, Any], RunStartRequest], dict[str, Any]]] = None,
+) -> LegacyRunPreparationServices:
+    return build_legacy_run_preparation_services(
+        callbacks=LegacyOrionPreparationCallbacks(
+            engine_registry=engine_registry,
+            engine_validation_errors=engine_validation_errors,
+            supported_outcome_packs=supported_outcome_packs,
+            normalize_requested_max_iterations=normalize_requested_max_iterations,
+            normalize_trust_mode=normalize_trust_mode,
+            trust_mode_aliases=trust_mode_aliases,
+            valid_trust_modes=valid_trust_modes,
+            normalize_execution_target=normalize_execution_target,
+            valid_execution_targets=valid_execution_targets,
+            normalize_run_id_token=normalize_run_id_token,
+            normalize_agent_role=normalize_agent_role,
+            detect_agent_role=detect_agent_role,
+            resolve_app_permissions=resolve_app_permissions,
+            action_policy_from_app_permissions=action_policy_from_app_permissions,
+            merge_action_policies=merge_action_policies,
+            fetch_workflow_snapshot=fetch_workflow_snapshot,
+            postprocess_metadata=postprocess_metadata,
+        ),
+    )
+
+
 def build_prepared_run_creation_services(
     *,
     decide_execution_target: Any,
@@ -368,6 +411,45 @@ def build_legacy_run_request_services(
     return LegacyRunRequestServices(
         prepare_run_start_request=prepare_run_start_request,
         build_creation_services=lambda: build_legacy_local_execution_creation_services(callbacks=callbacks),
+        result_services=result_services,
+    )
+
+
+def build_legacy_run_request_services_from_values(
+    *,
+    prepare_run_start_request: Any,
+    decide_execution_target: Callable[..., dict[str, Any]],
+    apply_execution_route_metadata: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    build_doctor_run_gate: Callable[..., dict[str, Any]],
+    agent_machine_inherited_owner_user_id: Callable[[Any], Any],
+    compute_tool_policy_precheck: Callable[[dict[str, Any]], dict[str, Any]],
+    resolve_runtime_policy_mode: Callable[..., dict[str, Any]],
+    agent_machine_full_trust_enabled: Callable[[Any], bool],
+    begin_run_pending_confirmation: Callable[..., dict[str, Any]],
+    create_run: Callable[..., str],
+    local_execution_target: str,
+    local_execution_pack_id: str,
+    result_services: RunPreparedResultServices,
+    load_created_run: Optional[Callable[[str], dict[str, Any]]] = None,
+    now_iso: Optional[Callable[[], str]] = None,
+) -> LegacyRunRequestServices:
+    return build_legacy_run_request_services(
+        prepare_run_start_request=prepare_run_start_request,
+        callbacks=LegacyLocalExecutionCreationCallbacks(
+            decide_execution_target=decide_execution_target,
+            apply_execution_route_metadata=apply_execution_route_metadata,
+            build_doctor_run_gate=build_doctor_run_gate,
+            agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+            compute_tool_policy_precheck=compute_tool_policy_precheck,
+            resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+            agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+            begin_run_pending_confirmation=begin_run_pending_confirmation,
+            create_run=create_run,
+            local_execution_target=local_execution_target,
+            local_execution_pack_id=local_execution_pack_id,
+            load_created_run=load_created_run,
+            now_iso=now_iso,
+        ),
         result_services=result_services,
     )
 

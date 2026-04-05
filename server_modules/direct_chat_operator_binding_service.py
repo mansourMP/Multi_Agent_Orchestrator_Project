@@ -18,6 +18,7 @@ from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
+from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_loop_guard_service
 from server_modules import direct_tool_runtime_facade_service
@@ -161,6 +162,33 @@ class DirectChatOperatorEntrypointBindings:
     collect_direct_operator_reply: Any
     build_chat_turn_event_stream: Any
     execute_chat_turn: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorToolSupportBindings:
+    parse_tool_name: Any
+    tool_arguments_payload: Any
+    extract_first_email: Any
+    extract_subject_text: Any
+    extract_body_text: Any
+    first_non_empty_line: Any
+    build_direct_tool_config: Any
+    build_direct_local_tool_config: Any
+    tool_write_action_available: Any
+    normalize_direct_approved_action: Any
+    approved_action_to_tool_call: Any
+    run_async_tool_call: Any
+    format_direct_tool_result: Any
+    format_direct_local_tool_result: Any
+    titleize_direct_step_token: Any
+    compact_step_detail: Any
+    thinking_step_payload: Any
+    extract_first_url: Any
+    extract_first_path_reference: Any
+    resolve_chat_local_path: Any
+    direct_tool_followup_message: Any
+    provider_display_name: Any
+    normalize_reasoning_effort: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -1649,4 +1677,55 @@ def build_direct_chat_entrypoint_bindings(
         collect_direct_operator_reply=collect_direct_operator_reply,
         build_chat_turn_event_stream=build_chat_turn_event_stream,
         execute_chat_turn=execute_chat_turn,
+    )
+
+
+def build_direct_chat_tool_support_bindings(
+    *,
+    parse_json_object_loose_fn: Any,
+) -> DirectChatOperatorToolSupportBindings:
+    def build_direct_tool_config(connector_id, action_id, tool_input):
+        return direct_tool_config_service.build_direct_tool_config(
+            connector_id,
+            action_id,
+            tool_input,
+            parse_json_object_loose=parse_json_object_loose_fn,
+        )
+
+    def approved_action_to_tool_call(approved_action):
+        return direct_tool_config_service.approved_action_to_tool_call(
+            approved_action,
+            parse_json_object_loose=parse_json_object_loose_fn,
+        )
+
+    def tool_arguments_payload_wrapper(arguments):
+        return tool_arguments_payload(
+            arguments,
+            parse_json_object_loose_fn=parse_json_object_loose_fn,
+        )
+
+    return DirectChatOperatorToolSupportBindings(
+        parse_tool_name=parse_tool_name,
+        tool_arguments_payload=tool_arguments_payload_wrapper,
+        extract_first_email=direct_tool_config_service.extract_first_email,
+        extract_subject_text=direct_tool_config_service.extract_subject_text,
+        extract_body_text=direct_tool_config_service.extract_body_text,
+        first_non_empty_line=direct_tool_config_service.first_non_empty_line,
+        build_direct_tool_config=build_direct_tool_config,
+        build_direct_local_tool_config=direct_tool_config_service.build_direct_local_tool_config,
+        tool_write_action_available=direct_tool_config_service.tool_write_action_available,
+        normalize_direct_approved_action=normalize_direct_approved_action,
+        approved_action_to_tool_call=approved_action_to_tool_call,
+        run_async_tool_call=direct_tool_config_service.run_async_tool_call,
+        format_direct_tool_result=direct_tool_config_service.format_direct_tool_result,
+        format_direct_local_tool_result=direct_tool_config_service.format_direct_local_tool_result,
+        titleize_direct_step_token=titleize_direct_step_token,
+        compact_step_detail=compact_step_detail,
+        thinking_step_payload=direct_tool_execution_service.thinking_step_payload,
+        extract_first_url=direct_tool_execution_service.extract_first_url,
+        extract_first_path_reference=direct_tool_execution_service.extract_first_path_reference,
+        resolve_chat_local_path=direct_tool_execution_service.resolve_chat_local_path,
+        direct_tool_followup_message=direct_tool_execution_service.direct_tool_followup_message,
+        provider_display_name=direct_chat_provider_facade_service.provider_display_name,
+        normalize_reasoning_effort=direct_chat_provider_facade_service.normalize_reasoning_effort,
     )

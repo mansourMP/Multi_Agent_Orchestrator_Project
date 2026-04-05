@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from server_modules import direct_chat_operator_binding_service as service
 from server_modules import direct_chat_routing_service
@@ -559,7 +560,7 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
             direct_chat_runtime_services_fn=_runtime_services,
         )
 
-        with unittest.mock.patch.object(
+        with mock.patch.object(
             service.direct_chat_runtime_entry_facade_service,
             "collect_direct_operator_reply",
             return_value={"reply": "ok"},
@@ -569,6 +570,27 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "ok")
         self.assertEqual(calls, ["runtime"])
         collect_reply.assert_called_once()
+
+    def test_build_direct_chat_tool_support_bindings_preserves_config_and_support_helpers(self) -> None:
+        bindings = service.build_direct_chat_tool_support_bindings(
+            parse_json_object_loose_fn=lambda value: {"url": "https://example.com"} if value else {},
+        )
+
+        tool_config = bindings.build_direct_tool_config(
+            "google_workspace",
+            "send_email",
+            "to john@example.com subject Demo body Hello there",
+        )
+        approved_tool = bindings.approved_action_to_tool_call(
+            {"connector": "http", "action": "request", "input": '{"url":"https://example.com"}'}
+        )
+
+        self.assertEqual(bindings.parse_tool_name("memory_search"), ("memory", "search"))
+        self.assertEqual(bindings.tool_arguments_payload({"x": 1}), {"x": 1})
+        self.assertEqual(tool_config["to_email"], "john@example.com")
+        self.assertEqual(approved_tool["name"], "http_request")
+        self.assertIn("https://example.com", approved_tool["arguments"])
+        self.assertEqual(bindings.provider_display_name("codex_cli"), "Codex/OpenAI")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from server_modules import direct_chat_stream_state_service as state_service
+from server_modules.direct_chat_stream_response_service import DirectChatStreamResponseServices
 
 
 def resolve_chat_stream_state_db_path(
@@ -88,6 +89,37 @@ def build_direct_chat_execution_services(
         session_manager_factory=session_manager_factory,
         build_direct_operator_reply=build_direct_operator_reply,
         build_chat_turn_event_stream=build_chat_turn_event_stream,
+    )
+
+
+def build_direct_chat_stream_response_services(
+    *,
+    resolve_direct_chat_turn_request: Callable[..., Any],
+    chat_stream_request_signature: Callable[..., str],
+    execute_agent_turn_request: Callable[..., Any],
+    build_turn_execution_services: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    direct_chat_execution_services: Callable[[], Any],
+    get_chat_stream_state: Callable[[Any, str], Optional[dict[str, Any]]],
+    chat_stream_state_db_path: Callable[[], Any],
+    get_or_create_chat_stream_session: Callable[..., dict[str, Any]],
+    extract_direct_chat_error_response: Callable[[Any], Optional[dict[str, str]]],
+    start_chat_stream_producer: Callable[[dict[str, Any], Any], None],
+    iter_chat_stream_events: Callable[[dict[str, Any], Any], Any],
+) -> DirectChatStreamResponseServices:
+    return DirectChatStreamResponseServices(
+        resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
+        chat_stream_request_signature=chat_stream_request_signature,
+        execute_agent_turn_request=execute_agent_turn_request,
+        build_turn_execution_services=build_turn_execution_services,
+        run_execution_services=run_execution_services,
+        direct_chat_execution_services=direct_chat_execution_services,
+        get_chat_stream_state=get_chat_stream_state,
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        get_or_create_chat_stream_session=get_or_create_chat_stream_session,
+        extract_direct_chat_error_response=extract_direct_chat_error_response,
+        start_chat_stream_producer=start_chat_stream_producer,
+        iter_chat_stream_events=iter_chat_stream_events,
     )
 
 

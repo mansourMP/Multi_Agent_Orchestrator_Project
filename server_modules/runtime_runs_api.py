@@ -229,8 +229,7 @@ def _chat_stream_state_db_path() -> Path:
     )
 
 
-def _configured_direct_chat_worker_count() -> int:
-    return chat_stream_runtime_service.configured_direct_chat_worker_count()
+_configured_direct_chat_worker_count = chat_stream_runtime_service.configured_direct_chat_worker_count
 
 
 def ensure_single_worker_direct_chat_stream_runtime() -> None:
@@ -348,21 +347,20 @@ def _direct_chat_execution_services():
     )
 
 
-def _direct_chat_stream_response_services() -> DirectChatStreamResponseServices:
-    return DirectChatStreamResponseServices(
-        resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
-        chat_stream_request_signature=_chat_stream_request_signature,
-        execute_agent_turn_request=execute_agent_turn_request,
-        build_turn_execution_services=build_turn_execution_services,
-        run_execution_services=_run_execution_services,
-        direct_chat_execution_services=_direct_chat_execution_services,
-        get_chat_stream_state=get_chat_stream_state,
-        chat_stream_state_db_path=_chat_stream_state_db_path,
-        get_or_create_chat_stream_session=_get_or_create_chat_stream_session,
-        extract_direct_chat_error_response=_extract_direct_chat_error_response,
-        start_chat_stream_producer=_start_chat_stream_producer,
-        iter_chat_stream_events=_iter_chat_stream_events,
-    )
+_direct_chat_stream_response_services = lambda: chat_stream_runtime_service.build_direct_chat_stream_response_services(
+    resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
+    chat_stream_request_signature=_chat_stream_request_signature,
+    execute_agent_turn_request=execute_agent_turn_request,
+    build_turn_execution_services=build_turn_execution_services,
+    run_execution_services=_run_execution_services,
+    direct_chat_execution_services=_direct_chat_execution_services,
+    get_chat_stream_state=get_chat_stream_state,
+    chat_stream_state_db_path=_chat_stream_state_db_path,
+    get_or_create_chat_stream_session=_get_or_create_chat_stream_session,
+    extract_direct_chat_error_response=_extract_direct_chat_error_response,
+    start_chat_stream_producer=_start_chat_stream_producer,
+    iter_chat_stream_events=_iter_chat_stream_events,
+)
 
 
 _build_direct_chat_request_meta = _service_build_direct_chat_request_meta
@@ -379,12 +377,11 @@ _build_direct_chat_event_producer = lambda *, current_user, body, message, works
 )
 
 
-def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:
-    return chat_stream_state_service.prune_chat_stream_sessions_locked(
-        _CHAT_STREAM_SESSIONS,
-        ttl_seconds=_CHAT_STREAM_TTL_SECONDS,
-        now_ts=now_ts,
-    )
+_prune_chat_stream_sessions_locked = lambda now_ts=None: chat_stream_state_service.prune_chat_stream_sessions_locked(
+    _CHAT_STREAM_SESSIONS,
+    ttl_seconds=_CHAT_STREAM_TTL_SECONDS,
+    now_ts=now_ts,
+)
 
 
 def _get_or_create_chat_stream_session(
@@ -411,33 +408,28 @@ def _get_or_create_chat_stream_session(
         )
 
 
-def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    return chat_stream_transport_service.chat_stream_payload(raw_event)
+_chat_stream_payload = chat_stream_transport_service.chat_stream_payload
 
 
-def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
-    return chat_stream_runtime_service.append_chat_stream_event(
-        session,
-        event_name=event_name,
-        payload=payload,
-        buffer_limit=_CHAT_STREAM_BUFFER_LIMIT,
-        persist_session_state=_persist_chat_stream_session_state,
-    )
+_append_chat_stream_event = lambda session, event_name, payload: chat_stream_runtime_service.append_chat_stream_event(
+    session,
+    event_name=event_name,
+    payload=payload,
+    buffer_limit=_CHAT_STREAM_BUFFER_LIMIT,
+    persist_session_state=_persist_chat_stream_session_state,
+)
 
 
-def _complete_chat_stream_session(session: dict[str, Any]) -> None:
-    return chat_stream_runtime_service.complete_chat_stream_session(
-        session,
-        persist_session_state=_persist_chat_stream_session_state,
-    )
+_complete_chat_stream_session = lambda session: chat_stream_runtime_service.complete_chat_stream_session(
+    session,
+    persist_session_state=_persist_chat_stream_session_state,
+)
 
 
-def _chat_stream_error_payload(message: str) -> dict[str, Any]:
-    return chat_stream_transport_service.chat_stream_error_payload(message)
+_chat_stream_error_payload = chat_stream_transport_service.chat_stream_error_payload
 
 
-def _extract_direct_chat_error_response(raw_event: Any) -> Optional[dict[str, str]]:
-    return chat_stream_transport_service.extract_direct_chat_error_response(raw_event)
+_extract_direct_chat_error_response = chat_stream_transport_service.extract_direct_chat_error_response
 
 
 def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:

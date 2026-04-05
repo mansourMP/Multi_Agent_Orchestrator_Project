@@ -64,6 +64,26 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertIn("build_direct_operator_reply", captured)
         self.assertIn("build_chat_turn_event_stream", captured)
 
+    def test_build_direct_chat_stream_response_services_preserves_callbacks(self):
+        services = runtime_service.build_direct_chat_stream_response_services(
+            resolve_direct_chat_turn_request=lambda **kwargs: None,
+            chat_stream_request_signature=lambda **kwargs: "sig",
+            execute_agent_turn_request=lambda **kwargs: None,
+            build_turn_execution_services=lambda **kwargs: None,
+            run_execution_services=lambda: "run",
+            direct_chat_execution_services=lambda: "chat",
+            get_chat_stream_state=lambda *args, **kwargs: None,
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            get_or_create_chat_stream_session=lambda *args, **kwargs: {},
+            extract_direct_chat_error_response=lambda event: None,
+            start_chat_stream_producer=lambda session, producer_fn: None,
+            iter_chat_stream_events=lambda session, last_event_id: iter(()),
+        )
+
+        self.assertEqual(services.chat_stream_request_signature(), "sig")
+        self.assertEqual(services.run_execution_services(), "run")
+        self.assertEqual(services.direct_chat_execution_services(), "chat")
+
 
 if __name__ == "__main__":
     unittest.main()

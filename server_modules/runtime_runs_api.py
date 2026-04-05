@@ -53,6 +53,7 @@ from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_request_service
+from server_modules import runtime_route_request_handlers_service
 from server_modules import runtime_route_bootstrap_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_approval_service
@@ -531,15 +532,13 @@ def register_run_routes(app) -> None:
     @app.post("/chat/respond", dependencies=[Depends(require_api_key)])
     async def respond_chat(request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        body = await runtime_request_service.read_json_object_payload(
-            request,
-            invalid_detail="Invalid chat payload",
-        )
-        return await build_direct_chat_stream_response(
-            current_user=runtime_request_service.require_authenticated_user(current_user),
-            body=body,
-            last_event_id=request.headers.get("last-event-id") or body.get("last_event_id"),
-            services=_direct_chat_stream_response_services(),
+        return await runtime_route_request_handlers_service.respond_chat_response(
+            request=request,
+            current_user=current_user,
+            read_json_object_payload=runtime_request_service.read_json_object_payload,
+            require_authenticated_user=runtime_request_service.require_authenticated_user,
+            build_direct_chat_stream_response=build_direct_chat_stream_response,
+            direct_chat_stream_response_services=_direct_chat_stream_response_services,
         )
 
     @app.get("/memory/{workspace_id}", dependencies=[Depends(require_api_key)])
@@ -569,13 +568,11 @@ def register_run_routes(app) -> None:
     @app.post("/workspace/context-files/{filename}", dependencies=[Depends(require_api_key)])
     async def update_workspace_context_file(filename: str, request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        body = await runtime_request_service.read_json_payload(
-            request,
-            invalid_detail="Invalid context file payload",
-        )
-        return runtime_workspace_service.update_workspace_context_file_payload(
+        return await runtime_route_request_handlers_service.update_workspace_context_file_response(
             filename,
-            body,
+            request=request,
+            read_json_payload=runtime_request_service.read_json_payload,
+            update_workspace_context_file_payload=runtime_workspace_service.update_workspace_context_file_payload,
             write_workspace_context_file=deps.write_workspace_context_file,
         )
 
@@ -589,23 +586,19 @@ def register_run_routes(app) -> None:
     @app.post("/heartbeat/trigger", dependencies=[Depends(require_api_key)])
     async def trigger_heartbeat(current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        try:
-            return runtime_heartbeat_service.trigger_heartbeat_payload(
-                scheduler=_heartbeat_scheduler(),
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail="Heartbeat scheduler is not configured.")
+        return runtime_route_request_handlers_service.trigger_heartbeat_response(
+            heartbeat_scheduler=_heartbeat_scheduler,
+            trigger_heartbeat_payload=runtime_heartbeat_service.trigger_heartbeat_payload,
+        )
 
     @app.post("/webhooks/register", dependencies=[Depends(require_api_key)])
     async def register_webhook_trigger(request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        _load_webhook_triggers()
-        body = await runtime_request_service.read_json_payload(
-            request,
-            invalid_detail="Invalid webhook trigger payload",
-        )
-        return runtime_webhook_trigger_service.register_webhook_trigger_payload(
-            body,
+        return await runtime_route_request_handlers_service.register_webhook_trigger_response(
+            request=request,
+            load_webhook_triggers=_load_webhook_triggers,
+            read_json_payload=runtime_request_service.read_json_payload,
+            register_webhook_trigger_payload=runtime_webhook_trigger_service.register_webhook_trigger_payload,
             uuid_factory=uuid.uuid4,
             build_webhook_trigger_fn=runtime_webhook_trigger_service.build_webhook_trigger,
             triggers=_WEBHOOK_TRIGGERS,
@@ -616,15 +609,12 @@ def register_run_routes(app) -> None:
     @app.post("/webhooks/ingest/{workspace_id}", dependencies=[Depends(require_api_key)])
     async def ingest_webhook(workspace_id: str, request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        payload = await runtime_request_service.read_json_payload(
-            request,
-            invalid_detail="Invalid webhook payload",
-        )
-        return await runtime_webhook_trigger_service.ingest_webhook_payload(
-            workspace_id=workspace_id,
-            request_url=str(request.url),
-            payload=payload,
+        return await runtime_route_request_handlers_service.ingest_webhook_response(
+            workspace_id,
+            request=request,
             current_user=current_user,
+            read_json_payload=runtime_request_service.read_json_payload,
+            ingest_webhook_payload=runtime_webhook_trigger_service.ingest_webhook_payload,
             match_webhook_trigger_fn=_match_webhook_trigger,
             run_start_request_class=deps.run_start_request_class,
             execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,

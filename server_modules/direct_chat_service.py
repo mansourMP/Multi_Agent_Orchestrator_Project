@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -13,6 +11,7 @@ from server_modules.agent_turn import (
     resolve_agent_turn_session_identity,
     ensure_direct_chat_turn_request,
 )
+from server_modules import direct_chat_transport_service
 
 
 @dataclass(slots=True)
@@ -42,46 +41,31 @@ def build_direct_chat_execution_services(
 
 
 def direct_chat_request_signature(body: dict) -> str:
-    payload = {
-        "workspace_id": str(body.get("workspace_id") or "").strip(),
-        "thread_id": str(body.get("thread_id") or "").strip(),
-        "client_request_id": str(body.get("client_request_id") or "").strip(),
-        "message": str(body.get("message") or "").strip(),
-        "provider": str(body.get("provider") or "").strip(),
-        "model": str(body.get("model") or "").strip(),
-        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
-        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return direct_chat_transport_service.direct_chat_request_signature(body)
 
 
 def direct_chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
-    owner = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
-        or "anonymous"
+    return direct_chat_transport_service.direct_chat_stream_key(
+        current_user,
+        body,
+        request_signature_fn=direct_chat_request_signature,
     )
-    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
-    client_request_id = str(body.get("client_request_id") or "").strip() or direct_chat_request_signature(body)
-    return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
 
 
 def direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:
-    owner = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
-        or "anonymous"
+    return direct_chat_transport_service.direct_chat_actor_key(
+        current_user,
+        workspace_id,
+        thread_id,
     )
-    return direct_chat_actor_key_for_user(owner, workspace_id, thread_id)
 
 
 def direct_chat_actor_key_for_user(user_id: str, workspace_id: str, thread_id: str) -> str:
-    owner = str(user_id or "").strip() or "anonymous"
-    return f"{owner}:{str(workspace_id or 'default').strip() or 'default'}:{str(thread_id or 'direct-chat').strip() or 'direct-chat'}"
+    return direct_chat_transport_service.direct_chat_actor_key_for_user(
+        user_id,
+        workspace_id,
+        thread_id,
+    )
 
 
 def direct_chat_session_manager_enabled(configured: Any = None) -> bool:

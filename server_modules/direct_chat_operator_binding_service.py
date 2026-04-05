@@ -1514,6 +1514,8 @@ def build_direct_chat_shell_bindings(
     monotonic_fn: Any,
     sleep_fn: Any,
     parse_json_object_loose_support_fn: Any,
+    direct_chat_tool_policy_callbacks_fn: Any,
+    direct_chat_routing_policy_callbacks_fn: Any,
 ) -> DirectChatOperatorShellBindings:
     safe_positive_int = direct_chat_entry_policy_service.safe_positive_int
     resolved_chat_iteration_limit = lambda value=None: direct_chat_entry_policy_service.resolved_chat_iteration_limit(
@@ -1595,6 +1597,11 @@ def build_direct_chat_shell_bindings(
         execution_markers=execution_markers,
     )
     path_like_reference_count = direct_chat_routing_service.path_like_reference_count
+    tool_routing_bindings = build_direct_chat_tool_routing_bindings(
+        direct_chat_tool_policy_callbacks=direct_chat_tool_policy_callbacks_fn,
+        direct_chat_routing_policy_callbacks=direct_chat_routing_policy_callbacks_fn,
+        compact_text_fn=compact_text_fn,
+    )
     tool_support_bindings = build_direct_chat_tool_support_bindings(
         parse_json_object_loose_fn=parse_json_object_loose_support_fn,
     )
@@ -1628,7 +1635,7 @@ def build_direct_chat_shell_bindings(
         availability_bindings=availability_bindings,
         handoff_bindings=handoff_bindings,
         tool_support_bindings=tool_support_bindings,
-        tool_routing_bindings=None,
+        tool_routing_bindings=tool_routing_bindings,
     )
 
 

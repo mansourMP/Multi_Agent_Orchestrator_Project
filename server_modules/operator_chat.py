@@ -336,6 +336,8 @@ _direct_chat_shell_bindings = direct_chat_operator_binding_service.build_direct_
     monotonic_fn=time.monotonic,
     sleep_fn=time.sleep,
     parse_json_object_loose_support_fn=parse_json_object_loose,
+    direct_chat_tool_policy_callbacks_fn=lambda: _direct_chat_tool_policy_callbacks(),
+    direct_chat_routing_policy_callbacks_fn=lambda: _direct_chat_routing_policy_callbacks(),
 )
 
 
@@ -423,11 +425,7 @@ _build_builtin_direct_chat_tools = _direct_chat_shell_bindings.build_builtin_dir
 registered_direct_chat_tool_names_for_logging = _direct_chat_shell_bindings.registered_direct_chat_tool_names_for_logging
 
 
-_direct_chat_tool_routing_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_routing_bindings(
-    direct_chat_tool_policy_callbacks=lambda: _direct_chat_tool_policy_callbacks(),
-    direct_chat_routing_policy_callbacks=lambda: _direct_chat_routing_policy_callbacks(),
-    compact_text_fn=_compact_text,
-)
+_direct_chat_tool_routing_bindings = _direct_chat_shell_bindings.tool_routing_bindings
 _message_requests_http_request_tool = _direct_chat_tool_routing_bindings.message_requests_http_request_tool
 _message_requests_image_generation_tool = _direct_chat_tool_routing_bindings.message_requests_image_generation_tool
 _message_requests_browser_tool = _direct_chat_tool_routing_bindings.message_requests_browser_tool

@@ -511,6 +511,26 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
             monotonic_fn=lambda: 1.0,
             sleep_fn=lambda seconds: None,
             parse_json_object_loose_support_fn=lambda value: {},
+            direct_chat_tool_policy_callbacks_fn=lambda: service.DirectChatToolPolicyCallbacks(
+                extract_first_url=lambda value: "",
+                extract_first_path_reference=lambda value: "",
+                message_requests_http_request_tool=lambda compact: False,
+                message_requests_image_generation_tool=lambda compact: False,
+                message_requests_browser_tool=lambda compact: False,
+                message_requests_local_file_tool=lambda compact: False,
+                message_requests_local_shell_tool=lambda compact: False,
+                message_requests_local_screenshot_tool=lambda compact: False,
+                message_requests_local_computer_tool=lambda compact: False,
+                approval_required_for_direct_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
+            ),
+            direct_chat_routing_policy_callbacks_fn=lambda: service.DirectChatRoutingPolicyCallbacks(
+                compact_text=lambda value: str(value or "").strip().lower(),
+                question_like=lambda compact: compact.startswith("what "),
+                mentions_any=lambda compact, markers: False,
+                starts_like_direct_run=lambda compact: compact.startswith("run "),
+                is_obvious_smtp_write_request=lambda compact: False,
+                is_explicit_workflow_request=lambda compact: False,
+            ),
         )
 
         self.assertEqual(shell.safe_positive_int("7", 1), 7)
@@ -518,6 +538,7 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIsNotNone(shell.availability_bindings)
         self.assertIsNotNone(shell.handoff_bindings)
         self.assertIsNotNone(shell.tool_support_bindings)
+        self.assertIsNotNone(shell.tool_routing_bindings)
         self.assertTrue(callable(shell.build_local_direct_chat_tools))
 
     def test_build_direct_chat_operator_binding_bundle_preserves_sub_bindings(self) -> None:

@@ -64,6 +64,7 @@ from server_modules.runtime_state_store import (
 )
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
+from server_modules import runtime_run_detail_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
@@ -446,40 +447,13 @@ def _iter_chat_stream_events(session: dict[str, Any], last_event_id: Any):
     )
 
 
-def _can_view_sensitive_run_payload(user: Optional[dict]) -> bool:
-    if not isinstance(user, dict):
-        return False
-    if bool(user.get("is_admin")):
-        return True
-    return str(user.get("auth_type") or "").strip() == "api_key"
+_can_view_sensitive_run_payload = runtime_run_detail_service.can_view_sensitive_run_payload
 
 
-def _limited_run_context_view(context: dict) -> dict:
-    if not isinstance(context, dict):
-        return {}
-    return {
-        "workspace_id": context.get("workspace_id"),
-        "workflow_id": context.get("workflow_id"),
-        "user_goal": context.get("user_goal"),
-        "business_plan": context.get("business_plan"),
-    }
+_limited_run_context_view = runtime_run_detail_service.limited_run_context_view
 
 
-def _limited_result_data_view(result_data: Any) -> Optional[dict]:
-    if not isinstance(result_data, dict):
-        return None
-    execution_summary = result_data.get("execution_summary") if isinstance(result_data.get("execution_summary"), dict) else {}
-    return {
-        "summary": result_data.get("summary"),
-        "pack_id": result_data.get("pack_id"),
-        "execution_summary": {
-            "risk_level": execution_summary.get("risk_level"),
-            "next_action": execution_summary.get("next_action"),
-            "approval_required": execution_summary.get("approval_required"),
-            "approval_reason": execution_summary.get("approval_reason"),
-            "estimated_time_saved_minutes": execution_summary.get("estimated_time_saved_minutes"),
-        },
-    }
+_limited_result_data_view = runtime_run_detail_service.limited_result_data_view
 
 
 def _extract_run_owner_user_id(payload: Any) -> str:
@@ -1312,98 +1286,19 @@ def register_run_routes(app) -> None:
             parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
             delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
             safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-            response = {
-                "run_id": run_id_str,
-                "engine": snapshot.get("engine", "orion"),
-                "status": snapshot.get("status", "unknown"),
-                "owner_user_id": snapshot.get("owner_user_id"),
-                "owner_email": snapshot.get("owner_email"),
-                "created_at": snapshot.get("created_at"),
-                "updated_at": snapshot.get("updated_at"),
-                "duration_ms": snapshot.get("duration_ms"),
-                "time_to_first_value_ms": snapshot.get("time_to_first_value_ms"),
-                "hitl_wait_total_ms": round(float(snapshot.get("hitl_wait_total_ms") or 0.0), 2),
-                "usage_masked": snapshot.get("usage_masked"),
-                "active_profile_id": snapshot.get("active_profile_id"),
-                "active_profile_label": snapshot.get("active_profile_label"),
-                "active_profile_provider": snapshot.get("active_profile_provider"),
-                "active_profile_model": snapshot.get("active_profile_model"),
-                "active_adapter": snapshot.get("active_adapter"),
-                "requested_provider": snapshot.get("requested_provider"),
-                "effective_provider": snapshot.get("effective_provider"),
-                "requested_model": snapshot.get("requested_model"),
-                "effective_model": snapshot.get("effective_model"),
-                "provider_overridden": bool(snapshot.get("provider_overridden")),
-                "model_overridden": bool(snapshot.get("model_overridden")),
-                "fallback_used": bool(snapshot.get("fallback_used")),
-                "result": snapshot.get("result_summary"),
-                "result_data": snapshot.get("result_data") if include_sensitive else _limited_result_data_view(snapshot.get("result_data")),
-                "agent_role": metadata.get("agent_role"),
-                "agent_role_source": metadata.get("agent_role_source"),
-                "parent_run_id": snapshot.get("parent_run_id"),
-                "delegation_root_run_id": snapshot.get("delegation_root_run_id"),
-                "delegated_by_run_id": snapshot.get("delegated_by_run_id"),
-                "delegated_by_role": snapshot.get("delegated_by_role"),
-                "delegation_note": snapshot.get("delegation_note"),
-                "parent_run": parent_run,
-                "child_runs": child_runs,
-                "delegation_summary": delegation_summary,
-                "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
-                "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
-                "approval_outcome": snapshot.get("approval_outcome"),
-                "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
-                "run_detail_contract": snapshot.get("run_detail_contract") if isinstance(snapshot.get("run_detail_contract"), dict) else {},
-                "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
-                "tool_policy_precheck": snapshot.get("tool_policy_precheck") if include_sensitive else None,
-                "tool_policy_audit": snapshot.get("tool_policy_audit") if include_sensitive else [],
-                "memory_trace": snapshot.get("memory_trace") if include_sensitive else {},
-                "pending_confirmation": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
-                # Deprecated compatibility alias. Prefer `pending_confirmation`.
-                "pending_approval": snapshot.get("pending_confirmation") or snapshot.get("pending_approval"),
-                "browser_checkpoint": snapshot.get("browser_checkpoint") if include_sensitive else None,
-                "dag": snapshot.get("dag") if include_sensitive else None,
-                "context": safe_context,
-                "execution_target_requested": snapshot.get("execution_target_requested"),
-                "execution_target_selected": snapshot.get("execution_target_selected"),
-                "execution_target_reason": snapshot.get("execution_target_reason"),
-                "execution_target_fallback": snapshot.get("execution_target_fallback"),
-                "execution_target_required_capabilities": snapshot.get("execution_target_required_capabilities"),
-                "execution_target_missing_capabilities": snapshot.get("execution_target_missing_capabilities"),
-                "execution_target_matching_runtime_ids": snapshot.get("execution_target_matching_runtime_ids"),
-                "execution_target_available_runtime_ids": snapshot.get("execution_target_available_runtime_ids"),
-                "execution_target_busy_runtime_ids": snapshot.get("execution_target_busy_runtime_ids"),
-                "execution_target_busy_runtime_labels": snapshot.get("execution_target_busy_runtime_labels"),
-                "execution_target_queued_ahead_count": snapshot.get("execution_target_queued_ahead_count"),
-                "execution_target_estimated_wait_band": snapshot.get("execution_target_estimated_wait_band"),
-                "execution_target_waiting_for_runtime": snapshot.get("execution_target_waiting_for_runtime"),
-                "execution_target_waiting_for_capacity": snapshot.get("execution_target_waiting_for_capacity"),
-                "execution_target_preferred_runtime_id": snapshot.get("execution_target_preferred_runtime_id"),
-                "execution_target_preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
-                "execution_target_preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
-                "route": {
-                    "requested": snapshot.get("execution_target_requested"),
-                    "selected": snapshot.get("execution_target_selected"),
-                    "reason": snapshot.get("execution_target_reason"),
-                    "fallback": snapshot.get("execution_target_fallback"),
-                    "required_capabilities": snapshot.get("execution_target_required_capabilities"),
-                    "missing_capabilities": snapshot.get("execution_target_missing_capabilities"),
-                    "matching_runtime_ids": snapshot.get("execution_target_matching_runtime_ids"),
-                    "available_runtime_ids": snapshot.get("execution_target_available_runtime_ids"),
-                    "busy_runtime_ids": snapshot.get("execution_target_busy_runtime_ids"),
-                    "busy_runtime_labels": snapshot.get("execution_target_busy_runtime_labels"),
-                    "queued_ahead_count": snapshot.get("execution_target_queued_ahead_count"),
-                    "estimated_wait_band": snapshot.get("execution_target_estimated_wait_band"),
-                    "waiting_for_runtime": snapshot.get("execution_target_waiting_for_runtime"),
-                    "waiting_for_capacity": snapshot.get("execution_target_waiting_for_capacity"),
-                    "preferred_runtime_id": snapshot.get("execution_target_preferred_runtime_id"),
-                    "preferred_runtime_label": snapshot.get("execution_target_preferred_runtime_label"),
-                    "preferred_runtime_reason": snapshot.get("execution_target_preferred_runtime_reason"),
-                },
-                "archived": True,
-            }
-            if snapshot.get("fallback_reason"):
-                response["fallback_reason"] = snapshot.get("fallback_reason")
-            return response
+            return runtime_run_detail_service.build_archived_run_detail_response(
+                run_id=run_id_str,
+                snapshot=snapshot,
+                metadata=metadata,
+                include_sensitive=include_sensitive,
+                safe_context=safe_context,
+                parent_run=parent_run,
+                child_runs=child_runs,
+                delegation_summary=delegation_summary,
+                connector_binding=_late_server_export("_resolve_run_connector_binding")(snapshot),
+                limited_result_data_view_fn=_limited_result_data_view,
+                limited_node_states_view_fn=_limited_node_states_view,
+            )
 
         context = run.get("context", {})
         metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
@@ -1412,98 +1307,22 @@ def register_run_routes(app) -> None:
         parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
         delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
         safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-        response = {
-            "run_id": run_id_str,
-            "engine": run.get("engine", "orion"),
-            "status": run.get("status", "unknown"),
-            "owner_user_id": str(metadata.get("owner_user_id") or "").strip() or None,
-            "owner_email": str(metadata.get("owner_email") or "").strip().lower() or None,
-            "created_at": run.get("created_at"),
-            "updated_at": run.get("updated_at"),
-            "duration_ms": run.get("duration_ms"),
-            "time_to_first_value_ms": run.get("time_to_first_value_ms"),
-            "hitl_wait_total_ms": round(float(run.get("_hitl_wait_total_ms", 0.0)), 2),
-            "usage_masked": run.get("usage_masked"),
-            "active_profile_id": snapshot.get("active_profile_id"),
-            "active_profile_label": snapshot.get("active_profile_label"),
-            "active_profile_provider": snapshot.get("active_profile_provider"),
-            "active_profile_model": snapshot.get("active_profile_model"),
-            "active_adapter": snapshot.get("active_adapter"),
-            "requested_provider": snapshot.get("requested_provider"),
-            "effective_provider": snapshot.get("effective_provider"),
-            "requested_model": snapshot.get("requested_model"),
-            "effective_model": snapshot.get("effective_model"),
-            "provider_overridden": bool(snapshot.get("provider_overridden")),
-            "model_overridden": bool(snapshot.get("model_overridden")),
-            "fallback_used": bool(snapshot.get("fallback_used")),
-            "result": run.get("result"),
-            "result_data": run.get("result_data") if include_sensitive else _limited_result_data_view(run.get("result_data")),
-            "agent_role": metadata.get("agent_role"),
-            "agent_role_source": metadata.get("agent_role_source"),
-            "parent_run_id": metadata.get("parent_run_id"),
-            "delegation_root_run_id": metadata.get("delegation_root_run_id"),
-            "delegated_by_run_id": metadata.get("delegated_by_run_id"),
-            "delegated_by_role": metadata.get("delegated_by_role"),
-            "delegation_note": metadata.get("delegation_note"),
-            "parent_run": parent_run,
-            "child_runs": child_runs,
-            "delegation_summary": delegation_summary,
-            "connector_binding": _late_server_export("_resolve_run_connector_binding")(snapshot),
-            "tool_capabilities": snapshot.get("tool_capabilities") if isinstance(snapshot.get("tool_capabilities"), list) else [],
-            "approval_outcome": snapshot.get("approval_outcome"),
-            "evidence_items": snapshot.get("evidence_items") if isinstance(snapshot.get("evidence_items"), list) else [],
-            "run_detail_contract": snapshot.get("run_detail_contract") if isinstance(snapshot.get("run_detail_contract"), dict) else {},
-            "node_states": snapshot.get("node_states") if include_sensitive else _limited_node_states_view(snapshot.get("node_states")),
-            "tool_policy_precheck": metadata.get("tool_policy_precheck") if include_sensitive else None,
-            "tool_policy_audit": run.get("tool_policy_audit") if include_sensitive and isinstance(run.get("tool_policy_audit"), list) else [],
-            "memory_trace": _trim_memory_trace(run.get("memory_trace") if include_sensitive and isinstance(run.get("memory_trace"), dict) else {}),
-            "pending_confirmation": _get_pending_confirmation(run) or None,
-            # Deprecated compatibility alias. Prefer `pending_confirmation`.
-            "pending_approval": _get_pending_confirmation(run) or None,
-            "browser_checkpoint": run.get("browser_checkpoint") if include_sensitive and isinstance(run.get("browser_checkpoint"), dict) else None,
-            "dag": run.get("dag") if include_sensitive else None,
-            "context": safe_context,
-            "execution_target_requested": metadata.get("execution_target_requested"),
-            "execution_target_selected": metadata.get("execution_target_selected"),
-            "execution_target_reason": metadata.get("execution_target_reason"),
-            "execution_target_fallback": metadata.get("execution_target_fallback"),
-            "execution_target_required_capabilities": metadata.get("execution_target_required_capabilities"),
-            "execution_target_missing_capabilities": metadata.get("execution_target_missing_capabilities"),
-            "execution_target_matching_runtime_ids": metadata.get("execution_target_matching_runtime_ids"),
-            "execution_target_available_runtime_ids": metadata.get("execution_target_available_runtime_ids"),
-            "execution_target_busy_runtime_ids": metadata.get("execution_target_busy_runtime_ids"),
-            "execution_target_busy_runtime_labels": metadata.get("execution_target_busy_runtime_labels"),
-            "execution_target_queued_ahead_count": metadata.get("execution_target_queued_ahead_count"),
-            "execution_target_estimated_wait_band": metadata.get("execution_target_estimated_wait_band"),
-            "execution_target_waiting_for_runtime": metadata.get("execution_target_waiting_for_runtime"),
-            "execution_target_waiting_for_capacity": metadata.get("execution_target_waiting_for_capacity"),
-            "execution_target_preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
-            "execution_target_preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
-            "execution_target_preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
-            "route": {
-                "requested": metadata.get("execution_target_requested"),
-                "selected": metadata.get("execution_target_selected"),
-                "reason": metadata.get("execution_target_reason"),
-                "fallback": metadata.get("execution_target_fallback"),
-                "required_capabilities": metadata.get("execution_target_required_capabilities"),
-                "missing_capabilities": metadata.get("execution_target_missing_capabilities"),
-                "matching_runtime_ids": metadata.get("execution_target_matching_runtime_ids"),
-                "available_runtime_ids": metadata.get("execution_target_available_runtime_ids"),
-                "busy_runtime_ids": metadata.get("execution_target_busy_runtime_ids"),
-                "busy_runtime_labels": metadata.get("execution_target_busy_runtime_labels"),
-                "queued_ahead_count": metadata.get("execution_target_queued_ahead_count"),
-                "estimated_wait_band": metadata.get("execution_target_estimated_wait_band"),
-                "waiting_for_runtime": metadata.get("execution_target_waiting_for_runtime"),
-                "waiting_for_capacity": metadata.get("execution_target_waiting_for_capacity"),
-                "preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
-                "preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
-                "preferred_runtime_reason": metadata.get("execution_target_preferred_runtime_reason"),
-            },
-            "archived": archived,
-        }
-        if snapshot.get("fallback_reason"):
-            response["fallback_reason"] = snapshot.get("fallback_reason")
-        return response
+        return runtime_run_detail_service.build_live_run_detail_response(
+            run_id=run_id_str,
+            run=run,
+            snapshot=snapshot,
+            metadata=metadata,
+            include_sensitive=include_sensitive,
+            safe_context=safe_context,
+            parent_run=parent_run,
+            child_runs=child_runs,
+            delegation_summary=delegation_summary,
+            connector_binding=_late_server_export("_resolve_run_connector_binding")(snapshot),
+            limited_result_data_view_fn=_limited_result_data_view,
+            limited_node_states_view_fn=_limited_node_states_view,
+            trim_memory_trace_fn=_trim_memory_trace,
+            get_pending_confirmation_fn=_get_pending_confirmation,
+        )
 
     @app.get("/history/runs", dependencies=[Depends(require_api_key)])
     async def get_runs_history(

@@ -3,11 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 from server_modules.heartbeat import HeartbeatScheduler
+from server_modules.run_service import build_run_precheck_result as _build_run_precheck_result
+from server_modules.run_service import build_run_routing_preview as _build_run_routing_preview
 from server_modules import runtime_heartbeat_service as _runtime_heartbeat_service
 from server_modules import runtime_route_binding_service as _runtime_route_binding_service
 from server_modules import runtime_route_bootstrap_service as _runtime_route_bootstrap_service
 from server_modules import runtime_route_registry_service as _runtime_route_registry_service
 from server_modules import runtime_run_detail_service as _runtime_run_detail_service
+from server_modules.usage_reporting import aggregate_usage_summary as _aggregate_usage_summary
+from server_modules.usage_reporting import list_usage_runs as _list_usage_runs
+
+
+def _module_global(module_globals: dict[str, Any], name: str) -> Any:
+    return module_globals[name]
 
 
 def register_runtime_run_routes_from_api(
@@ -42,38 +50,90 @@ def register_runtime_run_routes_from_api(
     runs: dict[str, Any],
     iter_logs_for_run,
     get_replay_payload,
-    direct_chat_stream_response_services,
+    direct_chat_stream_response_services=None,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
-    stamp_request_owner_fn,
-    run_execution_services,
-    build_run_routing_preview,
-    build_run_precheck_result,
-    run_routing_preview_services,
-    usage_snapshots_for_user_fn,
-    aggregate_usage_summary_fn,
-    list_usage_runs_fn,
-    enforce_run_owner_access,
-    current_user_is_privileged,
-    extract_run_owner_user_id,
-    summarize_history_item,
-    normalize_agent_role,
-    can_view_sensitive_run_payload,
-    limited_run_context_view,
-    limited_result_data_view_fn,
-    get_pending_confirmation_fn,
-    parse_utc_ts,
-    build_retry_child_payload,
-    approval_correlation_id,
-    append_approval_audit,
-    resolve_local_execution_start_approval,
-    set_pending_confirmation,
-    utc_now,
-    utc_now_iso,
-    run_thread_is_alive,
-    emit_log,
-    schedule_restored_run_resume,
+    stamp_request_owner_fn=None,
+    run_execution_services=None,
+    build_run_routing_preview=None,
+    build_run_precheck_result=None,
+    run_routing_preview_services=None,
+    usage_snapshots_for_user_fn=None,
+    aggregate_usage_summary_fn=None,
+    list_usage_runs_fn=None,
+    enforce_run_owner_access=None,
+    current_user_is_privileged=None,
+    extract_run_owner_user_id=None,
+    summarize_history_item=None,
+    normalize_agent_role=None,
+    can_view_sensitive_run_payload=None,
+    limited_run_context_view=None,
+    limited_result_data_view_fn=None,
+    get_pending_confirmation_fn=None,
+    parse_utc_ts=None,
+    build_retry_child_payload=None,
+    approval_correlation_id=None,
+    append_approval_audit=None,
+    resolve_local_execution_start_approval=None,
+    set_pending_confirmation=None,
+    utc_now=None,
+    utc_now_iso=None,
+    run_thread_is_alive=None,
+    emit_log=None,
+    schedule_restored_run_resume=None,
 ) -> Any:
+    direct_chat_stream_response_services = direct_chat_stream_response_services or _module_global(
+        module_globals, "_direct_chat_stream_response_services"
+    )
+    stamp_request_owner_fn = stamp_request_owner_fn or _module_global(module_globals, "_stamp_request_owner")
+    run_execution_services = run_execution_services or _module_global(module_globals, "_run_execution_services")
+    build_run_routing_preview = build_run_routing_preview or _build_run_routing_preview
+    build_run_precheck_result = build_run_precheck_result or _build_run_precheck_result
+    run_routing_preview_services = run_routing_preview_services or _module_global(
+        module_globals, "_run_routing_preview_services"
+    )
+    usage_snapshots_for_user_fn = usage_snapshots_for_user_fn or _module_global(
+        module_globals, "_usage_snapshots_for_user"
+    )
+    aggregate_usage_summary_fn = aggregate_usage_summary_fn or _aggregate_usage_summary
+    list_usage_runs_fn = list_usage_runs_fn or _list_usage_runs
+    enforce_run_owner_access = enforce_run_owner_access or _module_global(
+        module_globals, "_enforce_run_owner_access"
+    )
+    current_user_is_privileged = current_user_is_privileged or _module_global(
+        module_globals, "_current_user_is_privileged"
+    )
+    extract_run_owner_user_id = extract_run_owner_user_id or _module_global(
+        module_globals, "_extract_run_owner_user_id"
+    )
+    normalize_agent_role = normalize_agent_role or server_module.normalize_agent_role
+    summarize_history_item = summarize_history_item or server_module._summarize_history_item
+    can_view_sensitive_run_payload = can_view_sensitive_run_payload or _module_global(
+        module_globals, "_can_view_sensitive_run_payload"
+    )
+    limited_run_context_view = limited_run_context_view or _module_global(
+        module_globals, "_limited_run_context_view"
+    )
+    limited_result_data_view_fn = limited_result_data_view_fn or _module_global(
+        module_globals, "_limited_result_data_view"
+    )
+    get_pending_confirmation_fn = get_pending_confirmation_fn or server_module._get_pending_confirmation
+    parse_utc_ts = parse_utc_ts or server_module._parse_utc_ts
+    build_retry_child_payload = build_retry_child_payload or server_module._build_retry_child_payload
+    approval_correlation_id = approval_correlation_id or server_module._approval_correlation_id
+    append_approval_audit = append_approval_audit or server_module._append_approval_audit
+    resolve_local_execution_start_approval = resolve_local_execution_start_approval or _module_global(
+        module_globals, "_resolve_local_execution_start_approval"
+    )
+    set_pending_confirmation = set_pending_confirmation or server_module._set_pending_confirmation
+    utc_now = utc_now or _module_global(module_globals, "_utc_now")
+    utc_now_iso = utc_now_iso or _module_global(module_globals, "_utc_now_iso")
+    run_thread_is_alive = run_thread_is_alive or _module_global(module_globals, "_run_thread_is_alive")
+    emit_log = emit_log or server_module.emit_log
+    schedule_restored_run_resume = schedule_restored_run_resume or _module_global(
+        module_globals, "_schedule_restored_run_resume"
+    )
+
     deps = runtime_route_bootstrap_service.import_runtime_run_route_dependencies(
         import_module=import_module,
         module_globals=module_globals,

@@ -22,8 +22,6 @@ from server_modules import direct_chat_stream_state_service as chat_stream_state
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import (
-    build_run_precheck_result,
-    build_run_routing_preview,
     build_server_run_creation_services,
     build_server_run_execution_services,
     build_server_run_routing_preview_services,
@@ -52,7 +50,6 @@ from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
-from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
 _CHAT_STREAM_BUFFER_LIMIT = 50
@@ -405,35 +402,7 @@ def register_run_routes(app) -> None:
         runs=_server.runs,
         iter_logs_for_run=_server.iter_logs_for_run,
         get_replay_payload=_server._get_replay_payload,
-        direct_chat_stream_response_services=_direct_chat_stream_response_services,
         execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-        stamp_request_owner_fn=_stamp_request_owner,
-        run_execution_services=_run_execution_services,
-        build_run_routing_preview=build_run_routing_preview,
-        build_run_precheck_result=build_run_precheck_result,
-        run_routing_preview_services=_run_routing_preview_services,
-        usage_snapshots_for_user_fn=_usage_snapshots_for_user,
-        aggregate_usage_summary_fn=aggregate_usage_summary,
-        list_usage_runs_fn=list_usage_runs,
         enforce_run_owner_access=_enforce_run_owner_access,
-        current_user_is_privileged=_current_user_is_privileged,
-        extract_run_owner_user_id=_extract_run_owner_user_id,
-        summarize_history_item=_server._summarize_history_item,
-        normalize_agent_role=_server.normalize_agent_role,
-        can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
-        limited_run_context_view=_limited_run_context_view,
-        limited_result_data_view_fn=_limited_result_data_view,
-        get_pending_confirmation_fn=_server._get_pending_confirmation,
-        parse_utc_ts=_server._parse_utc_ts,
-        build_retry_child_payload=_server._build_retry_child_payload,
-        approval_correlation_id=_server._approval_correlation_id,
-        append_approval_audit=_server._append_approval_audit,
-        resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
-        set_pending_confirmation=_server._set_pending_confirmation,
-        utc_now=_utc_now,
-        utc_now_iso=_utc_now_iso,
-        run_thread_is_alive=_run_thread_is_alive,
-        emit_log=_server.emit_log,
-        schedule_restored_run_resume=_schedule_restored_run_resume,
     )

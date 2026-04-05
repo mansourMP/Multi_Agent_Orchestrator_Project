@@ -51,3 +51,32 @@ def usage_snapshots_for_user(
     if not request_user_id:
         raise HTTPException(status_code=401, detail="Authenticated user id is required.")
     return [item for item in items if extract_run_owner_user_id(item) == request_user_id]
+
+
+def usage_summary_payload(
+    *,
+    period: Any,
+    current_user: Any,
+    usage_snapshots_for_user_fn: Callable[..., list[dict[str, Any]]],
+    aggregate_usage_summary_fn: Callable[..., Any],
+) -> Any:
+    snapshots = usage_snapshots_for_user_fn(current_user)
+    return aggregate_usage_summary_fn(snapshots, period=normalize_usage_period(period))
+
+
+def usage_runs_payload(
+    *,
+    limit: int,
+    offset: int,
+    period: Any,
+    current_user: Any,
+    usage_snapshots_for_user_fn: Callable[..., list[dict[str, Any]]],
+    list_usage_runs_fn: Callable[..., Any],
+) -> Any:
+    snapshots = usage_snapshots_for_user_fn(current_user)
+    return list_usage_runs_fn(
+        snapshots,
+        period=normalize_usage_period(period),
+        limit=limit,
+        offset=offset,
+    )

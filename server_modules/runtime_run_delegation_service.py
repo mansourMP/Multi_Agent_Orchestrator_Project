@@ -47,6 +47,101 @@ def _delegation_root_run_id(
     )
 
 
+def build_delegate_run_children_callbacks(
+    *,
+    lookup_run_snapshot: Callable[[str], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    normalize_agent_role: Callable[[Any], str],
+    build_delegated_run_request: Callable[..., Any],
+    execute_system_run_start_request_via_turn_runtime: Callable[..., dict[str, Any]],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    normalize_run_id_token: Callable[[Any], str | None],
+    refresh_parent_delegation_state: Callable[[str], Any],
+) -> dict[str, Any]:
+    return {
+        "lookup_run_snapshot": lookup_run_snapshot,
+        "enforce_run_owner_access": enforce_run_owner_access,
+        "normalize_agent_role": normalize_agent_role,
+        "build_delegated_run_request": build_delegated_run_request,
+        "execute_system_run_start_request_via_turn_runtime": execute_system_run_start_request_via_turn_runtime,
+        "stamp_request_owner_fn": stamp_request_owner_fn,
+        "run_execution_services": run_execution_services,
+        "normalize_run_id_token": normalize_run_id_token,
+        "refresh_parent_delegation_state": refresh_parent_delegation_state,
+    }
+
+
+def build_auto_delegate_run_children_callbacks(
+    *,
+    lookup_run_snapshot: Callable[[str], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    normalize_agent_role: Callable[[Any], str],
+    build_auto_delegation_plan: Callable[..., list[dict[str, Any]]],
+    emit_auto_delegation_routing_log: Callable[..., Any] | None,
+    build_delegated_run_request: Callable[..., Any],
+    execute_system_run_start_request_via_turn_runtime: Callable[..., dict[str, Any]],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    normalize_run_id_token: Callable[[Any], str | None],
+    refresh_parent_delegation_state: Callable[[str], Any],
+) -> dict[str, Any]:
+    callbacks = build_delegate_run_children_callbacks(
+        lookup_run_snapshot=lookup_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        normalize_agent_role=normalize_agent_role,
+        build_delegated_run_request=build_delegated_run_request,
+        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        run_execution_services=run_execution_services,
+        normalize_run_id_token=normalize_run_id_token,
+        refresh_parent_delegation_state=refresh_parent_delegation_state,
+    )
+    callbacks.update(
+        {
+            "build_auto_delegation_plan": build_auto_delegation_plan,
+            "emit_auto_delegation_routing_log": emit_auto_delegation_routing_log,
+        }
+    )
+    return callbacks
+
+
+def build_retry_failed_delegation_callbacks(
+    *,
+    lookup_run_snapshot: Callable[[str], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    normalize_agent_role: Callable[[Any], str],
+    find_run_relationships: Callable[[str, dict[str, Any]], tuple[Any, list[dict[str, Any]]]],
+    normalize_run_id_token: Callable[[Any], str | None],
+    parse_utc_ts: Callable[[Any], Any],
+    build_retry_child_payload: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    build_delegated_run_request: Callable[..., Any],
+    execute_system_run_start_request_via_turn_runtime: Callable[..., dict[str, Any]],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    refresh_parent_delegation_state: Callable[[str], Any],
+) -> dict[str, Any]:
+    callbacks = build_delegate_run_children_callbacks(
+        lookup_run_snapshot=lookup_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        normalize_agent_role=normalize_agent_role,
+        build_delegated_run_request=build_delegated_run_request,
+        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        run_execution_services=run_execution_services,
+        normalize_run_id_token=normalize_run_id_token,
+        refresh_parent_delegation_state=refresh_parent_delegation_state,
+    )
+    callbacks.update(
+        {
+            "find_run_relationships": find_run_relationships,
+            "parse_utc_ts": parse_utc_ts,
+            "build_retry_child_payload": build_retry_child_payload,
+        }
+    )
+    return callbacks
+
+
 def delegate_run_children(
     parent_run_id: str,
     *,

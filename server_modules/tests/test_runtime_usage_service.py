@@ -45,6 +45,33 @@ class RuntimeUsageServiceTests(unittest.TestCase):
                 extract_run_owner_user_id=lambda payload: "",
             )
 
+    def test_usage_summary_payload_normalizes_period(self):
+        payload = runtime_usage_service.usage_summary_payload(
+            period="bogus",
+            current_user={"user_id": "user-1"},
+            usage_snapshots_for_user_fn=lambda current_user: [{"run_id": "run-1"}],
+            aggregate_usage_summary_fn=lambda snapshots, period: {"count": len(snapshots), "period": period},
+        )
+
+        self.assertEqual(payload, {"count": 1, "period": "all"})
+
+    def test_usage_runs_payload_passes_limit_offset_and_period(self):
+        payload = runtime_usage_service.usage_runs_payload(
+            limit=10,
+            offset=5,
+            period="week",
+            current_user={"user_id": "user-1"},
+            usage_snapshots_for_user_fn=lambda current_user: [{"run_id": "run-1"}],
+            list_usage_runs_fn=lambda snapshots, period, limit, offset: {
+                "snapshots": len(snapshots),
+                "period": period,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+
+        self.assertEqual(payload, {"snapshots": 1, "period": "week", "limit": 10, "offset": 5})
+
 
 if __name__ == "__main__":
     unittest.main()

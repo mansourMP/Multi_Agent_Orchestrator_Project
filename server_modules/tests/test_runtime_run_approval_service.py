@@ -13,6 +13,27 @@ class _Payload:
 
 
 class RuntimeRunApprovalServiceTests(unittest.TestCase):
+    def test_build_resolve_run_approval_callbacks_includes_resume_fields(self):
+        callbacks = runtime_run_approval_service.build_resolve_run_approval_callbacks(
+            serialize_run_snapshot=lambda run_id, run: {"run_id": run_id},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            get_pending_confirmation=lambda run: None,
+            set_pending_confirmation=lambda run, pending: None,
+            parse_utc_ts=lambda value: None,
+            utc_now=lambda: None,
+            utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+            approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+            append_approval_audit=lambda **kwargs: None,
+            resolve_local_execution_start_approval=lambda *args, **kwargs: {},
+            run_thread_is_alive=lambda run: False,
+            emit_log=lambda *args, **kwargs: None,
+            schedule_restored_run_resume=lambda run_id, run: True,
+        )
+
+        self.assertIn("serialize_run_snapshot", callbacks)
+        self.assertIn("set_pending_confirmation", callbacks)
+        self.assertIn("schedule_restored_run_resume", callbacks)
+
     def test_submit_run_decision_queues_plain_decision_without_pending_approval(self):
         run = {"input_queue": queue.Queue()}
 

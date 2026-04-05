@@ -647,15 +647,17 @@ def register_run_routes(app) -> None:
             str(run_id),
             body=body,
             current_user=current_user,
-            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            normalize_agent_role=normalize_agent_role,
-            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
-            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-            stamp_request_owner_fn=_stamp_request_owner,
-            run_execution_services=_run_execution_services,
-            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            **runtime_run_delegation_service.build_delegate_run_children_callbacks(
+                lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                normalize_agent_role=normalize_agent_role,
+                build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+                execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+                stamp_request_owner_fn=_stamp_request_owner,
+                run_execution_services=_run_execution_services,
+                normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+                refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            ),
         )
 
     @app.post("/runs/{run_id}/delegate/auto", dependencies=[Depends(require_api_key)])
@@ -667,17 +669,19 @@ def register_run_routes(app) -> None:
             str(run_id),
             request_payload=body or RunAutoDelegationRequest(),
             current_user=current_user,
-            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            normalize_agent_role=normalize_agent_role,
-            build_auto_delegation_plan=_late_server_export("_build_auto_delegation_plan"),
-            emit_auto_delegation_routing_log=_late_server_export("_emit_auto_delegation_routing_log"),
-            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
-            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-            stamp_request_owner_fn=_stamp_request_owner,
-            run_execution_services=_run_execution_services,
-            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            **runtime_run_delegation_service.build_auto_delegate_run_children_callbacks(
+                lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                normalize_agent_role=normalize_agent_role,
+                build_auto_delegation_plan=_late_server_export("_build_auto_delegation_plan"),
+                emit_auto_delegation_routing_log=_late_server_export("_emit_auto_delegation_routing_log"),
+                build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+                execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+                stamp_request_owner_fn=_stamp_request_owner,
+                run_execution_services=_run_execution_services,
+                normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+                refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            ),
         )
 
     @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[Depends(require_api_key)])
@@ -689,18 +693,20 @@ def register_run_routes(app) -> None:
             str(run_id),
             request_payload=body or RunDelegationRetryRequest(),
             current_user=current_user,
-            lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            normalize_agent_role=normalize_agent_role,
-            find_run_relationships=_late_server_export("_find_run_relationships"),
-            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-            parse_utc_ts=_parse_utc_ts,
-            build_retry_child_payload=_build_retry_child_payload,
-            build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
-            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-            stamp_request_owner_fn=_stamp_request_owner,
-            run_execution_services=_run_execution_services,
-            refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            **runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
+                lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                normalize_agent_role=normalize_agent_role,
+                find_run_relationships=_late_server_export("_find_run_relationships"),
+                normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+                parse_utc_ts=_parse_utc_ts,
+                build_retry_child_payload=_build_retry_child_payload,
+                build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
+                execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+                stamp_request_owner_fn=_stamp_request_owner,
+                run_execution_services=_run_execution_services,
+                refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
+            ),
         )
 
     @app.post("/routing/preview", dependencies=[Depends(require_api_key)])
@@ -785,9 +791,12 @@ def register_run_routes(app) -> None:
         period: str = "all",
         current_user=Depends(require_api_key),
     ):
-        _refresh_server_exports()
-        snapshots = _usage_snapshots_for_user(current_user)
-        return aggregate_usage_summary(snapshots, period=_normalize_usage_period(period))
+        return runtime_usage_service.usage_summary_payload(
+            period=period,
+            current_user=current_user,
+            usage_snapshots_for_user_fn=_usage_snapshots_for_user,
+            aggregate_usage_summary_fn=aggregate_usage_summary,
+        )
 
     @app.get("/usage/runs", dependencies=[Depends(require_api_key)])
     async def get_usage_runs(
@@ -796,13 +805,13 @@ def register_run_routes(app) -> None:
         period: str = "all",
         current_user=Depends(require_api_key),
     ):
-        _refresh_server_exports()
-        snapshots = _usage_snapshots_for_user(current_user)
-        return list_usage_runs(
-            snapshots,
-            period=_normalize_usage_period(period),
+        return runtime_usage_service.usage_runs_payload(
             limit=limit,
             offset=offset,
+            period=period,
+            current_user=current_user,
+            usage_snapshots_for_user_fn=_usage_snapshots_for_user,
+            list_usage_runs_fn=list_usage_runs,
         )
 
     @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
@@ -846,12 +855,14 @@ def register_run_routes(app) -> None:
             run=runs.get(run_id_str),
             payload=payload,
             current_user=current_user,
-            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            get_pending_confirmation=_get_pending_confirmation,
-            approval_correlation_id=_approval_correlation_id,
-            append_approval_audit=_append_approval_audit,
-            resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+            **runtime_run_approval_service.build_submit_run_decision_callbacks(
+                serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                get_pending_confirmation=_get_pending_confirmation,
+                approval_correlation_id=_approval_correlation_id,
+                append_approval_audit=_append_approval_audit,
+                resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+            ),
         )
 
     @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[Depends(require_api_key)])
@@ -865,19 +876,21 @@ def register_run_routes(app) -> None:
             run=runs.get(run_id_str),
             payload=payload,
             current_user=current_user,
-            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
-            enforce_run_owner_access=_enforce_run_owner_access,
-            get_pending_confirmation=_get_pending_confirmation,
-            set_pending_confirmation=_set_pending_confirmation,
-            parse_utc_ts=_parse_utc_ts,
-            utc_now=_utc_now,
-            utc_now_iso=_utc_now_iso,
-            approval_correlation_id=_approval_correlation_id,
-            append_approval_audit=_append_approval_audit,
-            resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
-            run_thread_is_alive=_run_thread_is_alive,
-            emit_log=emit_log,
-            schedule_restored_run_resume=_schedule_restored_run_resume,
+            **runtime_run_approval_service.build_resolve_run_approval_callbacks(
+                serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+                enforce_run_owner_access=_enforce_run_owner_access,
+                get_pending_confirmation=_get_pending_confirmation,
+                set_pending_confirmation=_set_pending_confirmation,
+                parse_utc_ts=_parse_utc_ts,
+                utc_now=_utc_now,
+                utc_now_iso=_utc_now_iso,
+                approval_correlation_id=_approval_correlation_id,
+                append_approval_audit=_append_approval_audit,
+                resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+                run_thread_is_alive=_run_thread_is_alive,
+                emit_log=emit_log,
+                schedule_restored_run_resume=_schedule_restored_run_resume,
+            ),
         )
 
     @app.post("/runs/{run_id}/resume", dependencies=[Depends(require_api_key)])

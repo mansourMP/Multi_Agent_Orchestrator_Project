@@ -5,6 +5,63 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 
+def build_submit_run_decision_callbacks(
+    *,
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    get_pending_confirmation: Callable[[dict[str, Any]], Any],
+    approval_correlation_id: Callable[[str], str] | Callable[..., str],
+    append_approval_audit: Callable[..., None],
+    resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "serialize_run_snapshot": serialize_run_snapshot,
+        "enforce_run_owner_access": enforce_run_owner_access,
+        "get_pending_confirmation": get_pending_confirmation,
+        "approval_correlation_id": approval_correlation_id,
+        "append_approval_audit": append_approval_audit,
+        "resolve_local_execution_start_approval": resolve_local_execution_start_approval,
+    }
+
+
+def build_resolve_run_approval_callbacks(
+    *,
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    get_pending_confirmation: Callable[[dict[str, Any]], Any],
+    set_pending_confirmation: Callable[[dict[str, Any], dict[str, Any]], None],
+    parse_utc_ts: Callable[[Any], Any],
+    utc_now: Callable[[], Any],
+    utc_now_iso: Callable[[], str],
+    approval_correlation_id: Callable[..., str],
+    append_approval_audit: Callable[..., None],
+    resolve_local_execution_start_approval: Callable[..., dict[str, Any]],
+    run_thread_is_alive: Callable[[dict[str, Any]], bool],
+    emit_log: Callable[..., None],
+    schedule_restored_run_resume: Callable[[str, dict[str, Any]], bool],
+) -> dict[str, Any]:
+    callbacks = build_submit_run_decision_callbacks(
+        serialize_run_snapshot=serialize_run_snapshot,
+        enforce_run_owner_access=enforce_run_owner_access,
+        get_pending_confirmation=get_pending_confirmation,
+        approval_correlation_id=approval_correlation_id,
+        append_approval_audit=append_approval_audit,
+        resolve_local_execution_start_approval=resolve_local_execution_start_approval,
+    )
+    callbacks.update(
+        {
+            "set_pending_confirmation": set_pending_confirmation,
+            "parse_utc_ts": parse_utc_ts,
+            "utc_now": utc_now,
+            "utc_now_iso": utc_now_iso,
+            "run_thread_is_alive": run_thread_is_alive,
+            "emit_log": emit_log,
+            "schedule_restored_run_resume": schedule_restored_run_resume,
+        }
+    )
+    return callbacks
+
+
 def submit_run_decision(
     run_id: str,
     *,

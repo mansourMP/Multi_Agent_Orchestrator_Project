@@ -51,6 +51,26 @@ def _parent_snapshot(agent_role: str = "orchestrator") -> dict:
 
 
 class RuntimeRunDelegationServiceTests(unittest.TestCase):
+    def test_build_retry_failed_delegation_callbacks_includes_retry_specific_entries(self):
+        callbacks = runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
+            lookup_run_snapshot=lambda run_id: _parent_snapshot(),
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            normalize_agent_role=lambda role: str(role or "").strip().lower(),
+            find_run_relationships=lambda parent_run_id, snapshot: (snapshot, []),
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            parse_utc_ts=lambda value: None,
+            build_retry_child_payload=lambda parent_snapshot, child, note=None: {},
+            build_delegated_run_request=lambda *args, **kwargs: {},
+            execute_system_run_start_request_via_turn_runtime=lambda *args, **kwargs: {},
+            stamp_request_owner_fn=lambda payload: payload,
+            run_execution_services=lambda: object(),
+            refresh_parent_delegation_state=lambda run_id: None,
+        )
+
+        self.assertIn("find_run_relationships", callbacks)
+        self.assertIn("build_retry_child_payload", callbacks)
+        self.assertIn("build_delegated_run_request", callbacks)
+
     def test_delegate_run_children_rejects_orchestrator_target_role(self):
         with self.assertRaises(HTTPException):
             runtime_run_delegation_service.delegate_run_children(

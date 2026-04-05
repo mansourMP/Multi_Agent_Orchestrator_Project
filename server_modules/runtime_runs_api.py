@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import sentry_sdk
 import threading
 import time
@@ -9,14 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi.responses import JSONResponse, StreamingResponse
-
-from server_modules.agent_turn import (
-    AgentTurnRequest,
-    bind_agent_turn_metadata,
-    build_direct_chat_turn_request,
-    resolve_direct_chat_turn_request,
-)
+from server_modules.agent_turn import resolve_direct_chat_turn_request
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
@@ -26,10 +17,7 @@ from server_modules.direct_chat_service import (
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
-from server_modules.direct_chat_stream_response_service import (
-    DirectChatStreamResponseServices,
-    build_direct_chat_stream_response,
-)
+from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response
 from server_modules import direct_chat_stream_runtime_service as chat_stream_runtime_service
 from server_modules import direct_chat_stream_state_service as chat_stream_state_service
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
@@ -46,7 +34,6 @@ from server_modules.run_service import (
     create_run_result_from_request,
 )
 from server_modules.turn_runtime import (
-    TurnExecutionServices,
     build_turn_execution_services,
     execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
@@ -129,40 +116,35 @@ def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
         return
 
 
-def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
-    return runtime_heartbeat_service.heartbeat_scheduler(
-        lock=_HEARTBEAT_SCHEDULER_LOCK,
-        scheduler=_HEARTBEAT_SCHEDULER,
-    )
+_heartbeat_scheduler = lambda: runtime_heartbeat_service.heartbeat_scheduler(
+    lock=_HEARTBEAT_SCHEDULER_LOCK,
+    scheduler=_HEARTBEAT_SCHEDULER,
+)
 
 
-def _run_creation_services() -> RunCreationServices:
-    return build_run_creation_services(
-        create_run_from_request=_late_server_export("_create_run_from_request"),
-    )
+_run_creation_services = lambda: build_run_creation_services(
+    create_run_from_request=_late_server_export("_create_run_from_request"),
+)
 
 
-def _run_execution_services() -> RunExecutionServices:
-    return build_run_execution_services(
-        stamp_request_owner=_stamp_request_owner,
-        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-        create_run_from_request=_late_server_export("_create_run_from_request"),
-    )
+_run_execution_services = lambda: build_run_execution_services(
+    stamp_request_owner=_stamp_request_owner,
+    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+    create_run_from_request=_late_server_export("_create_run_from_request"),
+)
 
 
-def _run_routing_preview_services() -> RunRoutingPreviewServices:
-    return build_run_routing_preview_services(
-        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-        compute_tool_policy_precheck=_late_server_export("_compute_tool_policy_precheck"),
-    )
+_run_routing_preview_services = lambda: build_run_routing_preview_services(
+    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+    compute_tool_policy_precheck=_late_server_export("_compute_tool_policy_precheck"),
+)
 
 
-def _create_run_result(request: RunStartRequest, *, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    return create_run_result_from_request(
-        request,
-        services=_run_creation_services(),
-        schedule_id=schedule_id,
-    )
+_create_run_result = lambda request, *, schedule_id=None: create_run_result_from_request(
+    request,
+    services=_run_creation_services(),
+    schedule_id=schedule_id,
+)
 
 def _load_webhook_triggers() -> None:
     global _WEBHOOK_TRIGGERS_LOADED
@@ -325,26 +307,29 @@ _direct_chat_session_manager_enabled = lambda: _service_direct_chat_session_mana
 )
 
 
-def _direct_chat_session_manager():
-    from server_modules.session_manager.manager import get_default_session_manager
+_direct_chat_session_manager = lambda: chat_stream_runtime_service.build_direct_chat_session_manager(
+    get_default_session_manager=__import__(
+        "server_modules.session_manager.manager",
+        fromlist=["get_default_session_manager"],
+    ).get_default_session_manager,
+    db_path=_chat_stream_state_db_path(),
+)
 
-    return chat_stream_runtime_service.build_direct_chat_session_manager(
-        get_default_session_manager=get_default_session_manager,
-        db_path=_chat_stream_state_db_path(),
-    )
 
-
-def _direct_chat_execution_services():
-    from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
-
-    return chat_stream_runtime_service.build_direct_chat_execution_services(
-        builder=build_direct_chat_execution_services,
-        chat_stream_key=_chat_stream_key,
-        session_manager_enabled=_direct_chat_session_manager_enabled,
-        session_manager_factory=_direct_chat_session_manager,
-        build_direct_operator_reply=build_direct_operator_reply,
-        build_chat_turn_event_stream=build_chat_turn_event_stream,
-    )
+_direct_chat_execution_services = lambda: chat_stream_runtime_service.build_direct_chat_execution_services(
+    builder=build_direct_chat_execution_services,
+    chat_stream_key=_chat_stream_key,
+    session_manager_enabled=_direct_chat_session_manager_enabled,
+    session_manager_factory=_direct_chat_session_manager,
+    build_direct_operator_reply=__import__(
+        "server_modules.operator_chat",
+        fromlist=["build_direct_operator_reply"],
+    ).build_direct_operator_reply,
+    build_chat_turn_event_stream=__import__(
+        "server_modules.operator_chat",
+        fromlist=["build_chat_turn_event_stream"],
+    ).build_chat_turn_event_stream,
+)
 
 
 _direct_chat_stream_response_services = lambda: chat_stream_runtime_service.build_direct_chat_stream_response_services(
@@ -432,22 +417,20 @@ _chat_stream_error_payload = chat_stream_transport_service.chat_stream_error_pay
 _extract_direct_chat_error_response = chat_stream_transport_service.extract_direct_chat_error_response
 
 
-def _start_chat_stream_producer(session: dict[str, Any], producer_fn) -> None:
-    return chat_stream_transport_service.start_chat_stream_producer(
-        session,
-        producer_fn=producer_fn,
-        append_event=_append_chat_stream_event,
-        complete_session=_complete_chat_stream_session,
-        capture_exception=sentry_sdk.capture_exception,
-    )
+_start_chat_stream_producer = lambda session, producer_fn: chat_stream_transport_service.start_chat_stream_producer(
+    session,
+    producer_fn=producer_fn,
+    append_event=_append_chat_stream_event,
+    complete_session=_complete_chat_stream_session,
+    capture_exception=sentry_sdk.capture_exception,
+)
 
 
-def _iter_chat_stream_events(session: dict[str, Any], last_event_id: Any):
-    yield from chat_stream_transport_service.iter_chat_stream_events(
-        session,
-        last_event_id=last_event_id,
-        normalize_cursor=_normalize_chat_stream_cursor,
-    )
+_iter_chat_stream_events = lambda session, last_event_id: chat_stream_transport_service.iter_chat_stream_events(
+    session,
+    last_event_id=last_event_id,
+    normalize_cursor=_normalize_chat_stream_cursor,
+)
 
 
 _can_view_sensitive_run_payload = runtime_run_detail_service.can_view_sensitive_run_payload
@@ -459,29 +442,25 @@ _limited_run_context_view = runtime_run_detail_service.limited_run_context_view
 _limited_result_data_view = runtime_run_detail_service.limited_result_data_view
 
 
-def _extract_run_owner_user_id(payload: Any) -> str:
-    return runtime_run_access_service.extract_run_owner_user_id(payload)
+_extract_run_owner_user_id = runtime_run_access_service.extract_run_owner_user_id
 
 
-def _current_user_is_privileged(current_user: Any) -> bool:
-    return runtime_run_access_service.current_user_is_privileged(
-        current_user,
-        admin_user_ids=set(globals().get("ORION_ADMIN_USER_IDS") or []),
-        admin_emails=set(globals().get("ORION_ADMIN_EMAILS") or []),
-    )
+_current_user_is_privileged = lambda current_user: runtime_run_access_service.current_user_is_privileged(
+    current_user,
+    admin_user_ids=set(globals().get("ORION_ADMIN_USER_IDS") or []),
+    admin_emails=set(globals().get("ORION_ADMIN_EMAILS") or []),
+)
 
 
-def _enforce_run_owner_access(current_user: Any, payload: Any) -> None:
-    return runtime_run_access_service.enforce_run_owner_access(
-        current_user,
-        payload,
-        current_user_is_privileged_fn=_current_user_is_privileged,
-        extract_run_owner_user_id_fn=_extract_run_owner_user_id,
-    )
+_enforce_run_owner_access = lambda current_user, payload: runtime_run_access_service.enforce_run_owner_access(
+    current_user,
+    payload,
+    current_user_is_privileged_fn=_current_user_is_privileged,
+    extract_run_owner_user_id_fn=_extract_run_owner_user_id,
+)
 
 
-def _stamp_request_owner(req: Any, current_user: Any) -> Any:
-    return runtime_run_access_service.stamp_request_owner(req, current_user)
+_stamp_request_owner = runtime_run_access_service.stamp_request_owner
 
 
 def _resolve_local_execution_start_approval(
@@ -515,11 +494,10 @@ def _resolve_local_execution_start_approval(
     )
 
 
-def _run_thread_is_alive(run: dict) -> bool:
-    return runtime_run_resume_service.run_thread_is_alive(
-        run,
-        enumerate_threads=threading.enumerate,
-    )
+_run_thread_is_alive = lambda run: runtime_run_resume_service.run_thread_is_alive(
+    run,
+    enumerate_threads=threading.enumerate,
+)
 
 
 def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:

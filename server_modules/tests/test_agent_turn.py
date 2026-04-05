@@ -1,7 +1,9 @@
 import unittest
 
 from server_modules.agent_turn import (
+    bind_agent_turn_request_meta,
     bind_agent_turn_metadata,
+    build_agent_turn_session_context,
     build_direct_chat_turn_request,
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
@@ -148,6 +150,42 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(converted.metadata["agent_turn_request"]["workspace_id"], "workspace-1")
         self.assertEqual(converted.metadata["agent_turn_request"]["message"], "Original goal")
         self.assertEqual(converted.metadata["channel"], "web")
+
+    def test_bind_agent_turn_request_meta_binds_serialized_turn_request(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        bound = bind_agent_turn_request_meta({"request_id": "req-1"}, request)
+
+        self.assertEqual(bound["agent_turn_request"]["workspace_id"], "workspace-1")
+        self.assertEqual(bound["thread_id"], "thread-1")
+
+    def test_build_agent_turn_session_context_serializes_turn_request(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        context = build_agent_turn_session_context(
+            request,
+            workspace_id="ignored",
+            session_id="ignored",
+            user_id="user-1",
+        )
+
+        self.assertEqual(context["workspace_id"], "workspace-1")
+        self.assertEqual(context["thread_id"], "thread-1")
+        self.assertEqual(context["agent_turn_request"]["message"], "hello")
 
     def test_resolve_direct_chat_turn_request_normalizes_api_inputs(self):
         resolved = resolve_direct_chat_turn_request(

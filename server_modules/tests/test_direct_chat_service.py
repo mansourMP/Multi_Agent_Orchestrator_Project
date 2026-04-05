@@ -87,6 +87,37 @@ class DirectChatServiceTests(unittest.TestCase):
         self.assertEqual(call["request_meta"]["agent_turn_request"]["message"], "hello")
         self.assertEqual(manager.eviction_calls, 1)
 
+    def test_build_direct_chat_event_producer_passes_bound_session_context_without_session_manager(self):
+        captured = {}
+
+        def _build_direct_operator_reply(**kwargs):
+            captured["kwargs"] = kwargs
+            return {"reply": "direct"}
+
+        services = DirectChatExecutionServices(
+            chat_stream_key=lambda current_user, body: ("user-1:thread-1:req-1", "thread-1", "req-1"),
+            session_manager_enabled=lambda: False,
+            session_manager_factory=lambda: _DummyManager(),
+            build_direct_operator_reply=_build_direct_operator_reply,
+            build_chat_turn_event_stream=lambda **kwargs: iter(()),
+        )
+
+        payload = build_direct_chat_event_producer(
+            current_user={"user_id": "user-1", "email": "user@example.com"},
+            body={"thread_id": "thread-1", "provider": "openai", "model": "gpt-test"},
+            message="hello",
+            workspace_id="default",
+            session_key="user-1:thread-1:req-1",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            services=services,
+        )
+
+        self.assertEqual(payload["reply"], "direct")
+        self.assertEqual(captured["kwargs"]["session_ctx"]["workspace_id"], "default")
+        self.assertEqual(captured["kwargs"]["session_ctx"]["thread_id"], "thread-1")
+        self.assertEqual(captured["kwargs"]["session_ctx"]["agent_turn_request"]["message"], "hello")
+
     def test_build_direct_chat_request_meta_accepts_serialized_turn_request(self):
         turn_request = build_direct_chat_turn_request(
             current_user={"user_id": "user-1"},

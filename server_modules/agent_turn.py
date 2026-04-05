@@ -403,3 +403,41 @@ def bind_agent_turn_metadata(
     if request.actor.id and not str(bound.get("request_actor_id") or "").strip():
         bound["request_actor_id"] = str(request.actor.id).strip()
     return bound
+
+
+def bind_agent_turn_request_meta(
+    request_meta: Optional[Dict[str, Any]],
+    request: Any,
+) -> Dict[str, Any]:
+    bound = _metadata_dict(request_meta)
+    resolved = resolve_agent_turn_request(request)
+    if not isinstance(resolved, AgentTurnRequest):
+        return bound
+    bound["agent_turn_request"] = serialize_agent_turn_request(resolved)
+    if resolved.workspace_id and not str(bound.get("workspace_id") or "").strip():
+        bound["workspace_id"] = str(resolved.workspace_id).strip()
+    if resolved.session_id and not str(bound.get("thread_id") or "").strip():
+        bound["thread_id"] = str(resolved.session_id).strip()
+    return bound
+
+
+def build_agent_turn_session_context(
+    request: Any,
+    *,
+    workspace_id: str = "",
+    session_id: str = "",
+    user_id: str = "",
+) -> Dict[str, Any]:
+    resolved = resolve_agent_turn_request(request)
+    if not isinstance(resolved, AgentTurnRequest):
+        return {
+            "workspace_id": str(workspace_id or "default").strip() or "default",
+            "thread_id": str(session_id or "direct-chat").strip() or "direct-chat",
+            "user_id": str(user_id or "").strip(),
+        }
+    return {
+        "workspace_id": str(resolved.workspace_id or workspace_id or "default").strip() or "default",
+        "thread_id": str(resolved.session_id or session_id or "direct-chat").strip() or "direct-chat",
+        "user_id": str(user_id or "").strip(),
+        "agent_turn_request": serialize_agent_turn_request(resolved),
+    }

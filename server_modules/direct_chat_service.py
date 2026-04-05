@@ -8,9 +8,9 @@ from typing import Any, Callable, Optional
 
 from server_modules.agent_turn import (
     AgentTurnRequest,
+    bind_agent_turn_request_meta,
+    build_agent_turn_session_context,
     ensure_direct_chat_turn_request,
-    resolve_agent_turn_request,
-    serialize_agent_turn_request,
 )
 
 
@@ -111,10 +111,7 @@ def build_direct_chat_request_meta(
             "thread_id": thread_id,
         },
     }
-    resolved_turn_request = resolve_agent_turn_request(agent_turn_request)
-    if isinstance(resolved_turn_request, AgentTurnRequest):
-        request_meta["agent_turn_request"] = serialize_agent_turn_request(resolved_turn_request)
-    return request_meta
+    return bind_agent_turn_request_meta(request_meta, agent_turn_request)
 
 
 def build_direct_chat_event_producer(
@@ -138,7 +135,6 @@ def build_direct_chat_event_producer(
         message=message,
         agent_turn_request=agent_turn_request,
     )
-    serialized_turn_request = serialize_agent_turn_request(turn_request)
     normalized_workspace_id = str(turn_request.workspace_id or workspace_id or "default").strip() or "default"
     normalized_thread_id = str(turn_request.session_id or thread_id or "direct-chat").strip() or "direct-chat"
     actor_key = direct_chat_actor_key(current_user, normalized_workspace_id, normalized_thread_id)
@@ -147,12 +143,12 @@ def build_direct_chat_event_producer(
         or str((current_user or {}).get("email") or "").strip().lower()
         or str((current_user or {}).get("auth_type") or "").strip()
     )
-    direct_session_ctx = {
-        "workspace_id": normalized_workspace_id,
-        "thread_id": normalized_thread_id,
-        "user_id": user_id,
-        "agent_turn_request": serialized_turn_request,
-    }
+    direct_session_ctx = build_agent_turn_session_context(
+        turn_request,
+        workspace_id=normalized_workspace_id,
+        session_id=normalized_thread_id,
+        user_id=user_id,
+    )
 
     if not services.session_manager_enabled():
         return services.build_direct_operator_reply(
@@ -166,7 +162,7 @@ def build_direct_chat_event_producer(
             approved_action=body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
             max_iterations=body.get("max_iterations"),
             session_ctx=direct_session_ctx,
-            agent_turn_request=serialized_turn_request,
+            agent_turn_request=turn_request,
         )
 
     manager = services.session_manager_factory()

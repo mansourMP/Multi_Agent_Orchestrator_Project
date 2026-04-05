@@ -12,23 +12,16 @@ def normalize_tool_capabilities(availability: Any) -> List[Dict[str, Any]]:
 
 
 def tool_capability(availability: Dict[str, Any], tool_id: str) -> Optional[Dict[str, Any]]:
-    token = str(tool_id or "").strip().lower()
-    for item in normalize_tool_capabilities(availability):
-        if item.get("id") == token:
-            return item
-    return None
+    item = skills_service.availability_capability(availability, tool_id)
+    return dict(item) if isinstance(item, dict) else None
 
 
 def tool_connected(availability: Dict[str, Any], tool_id: str) -> bool:
-    item = tool_capability(availability, tool_id)
-    return bool(item and item.get("connected"))
+    return skills_service.availability_capability_connected(availability, tool_id)
 
 
 def tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional[bool]:
-    item = tool_capability(availability, tool_id)
-    if not isinstance(item, dict):
-        return None
-    return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
+    return skills_service.availability_capability_runtime_usable(availability, tool_id)
 
 
 def local_worker_available(availability: Dict[str, Any]) -> bool:

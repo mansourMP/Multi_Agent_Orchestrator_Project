@@ -48,6 +48,18 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(payload[0]["id"], "gmail")
         self.assertEqual(payload[0]["connected"], True)
 
+    def test_availability_capability_helpers_read_normalized_payload(self) -> None:
+        availability = {
+            "tool_capabilities": [
+                {"id": " Browser ", "connected": True, "runtime_usable": False},
+            ]
+        }
+
+        self.assertEqual(skills_service.availability_capability(availability, "browser")["id"], "browser")
+        self.assertTrue(skills_service.availability_capability_connected(availability, "browser"))
+        self.assertFalse(skills_service.availability_capability_runtime_usable(availability, "browser"))
+        self.assertIsNone(skills_service.availability_capability(availability, "missing"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,28 @@ def normalize_availability_capability_payloads(availability: Any) -> List[Dict[s
     return normalize_capability_payloads(items)
 
 
+def availability_capability(availability: Any, capability_id: str) -> Dict[str, Any] | None:
+    token = str(capability_id or "").strip().lower()
+    if not token:
+        return None
+    for item in normalize_availability_capability_payloads(availability):
+        if str(item.get("id") or "").strip().lower() == token:
+            return item
+    return None
+
+
+def availability_capability_connected(availability: Any, capability_id: str) -> bool:
+    item = availability_capability(availability, capability_id)
+    return bool(item and item.get("connected"))
+
+
+def availability_capability_runtime_usable(availability: Any, capability_id: str) -> bool | None:
+    item = availability_capability(availability, capability_id)
+    if not isinstance(item, dict):
+        return None
+    return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
+
+
 def resolve_workspace_capability_payloads(
     workspace_id: str,
     *,

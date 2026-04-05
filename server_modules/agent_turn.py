@@ -59,6 +59,12 @@ class DirectChatTurnResolution:
     message: str
 
 
+@dataclass(slots=True)
+class RunStartTurnResolution:
+    request: Any
+    turn_request: AgentTurnRequest
+
+
 class AgentTurnRuntime(Protocol):
     def handle_turn(self, request: AgentTurnRequest) -> AgentTurnResponse: ...
 
@@ -277,6 +283,23 @@ def ensure_direct_chat_turn_request(
         thread_id=thread_id,
         client_request_id=client_request_id,
         message=message,
+    )
+
+
+def resolve_run_start_turn_request(
+    *,
+    current_user: Any,
+    body: Any,
+    stamp_request_owner_fn: Any,
+) -> RunStartTurnResolution:
+    from server_modules.runtime_models import RunStartRequest
+
+    request = body if body is not None else RunStartRequest()
+    if callable(stamp_request_owner_fn):
+        request = stamp_request_owner_fn(request, current_user)
+    return RunStartTurnResolution(
+        request=request,
+        turn_request=build_run_start_turn_request(request),
     )
 
 

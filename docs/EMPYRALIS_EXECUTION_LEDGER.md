@@ -1565,6 +1565,52 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+## 2026-04-05 - Run Start API Normalization Moved Behind agent_turn.py
+
+### Why This Cut
+
+The `/runs/start` endpoint in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) was still stamping the request owner and constructing the run-start turn contract inline before handing control to the shared turn runtime. That left one more inbound durable-run normalization step outside [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+
+### What Changed
+
+- Added `RunStartTurnResolution` and `resolve_run_start_turn_request(...)` to [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+  - The helper:
+    - creates a default `RunStartRequest` when needed
+    - applies the owner-stamping callback
+    - returns both the stamped request and the canonical durable `AgentTurnRequest`
+- Updated [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) so `/runs/start` now delegates that normalization through `resolve_run_start_turn_request(...)` instead of assembling it inline.
+- Added focused coverage in [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py) to verify stamped owner metadata reaches the durable turn contract.
+
+### Current Truth
+
+- Both direct-chat and run-start entry normalization now have explicit canonical helpers in [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py).
+- [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py) is thinner at the `/runs/start` boundary and no longer owns that request-to-turn translation step inline.
+- The durable run path is closer to the Bible rule that every inbound message enters the same turn contract first.
+
+### Open Gaps
+
+- `runtime_runs_api.py` still owns broader endpoint orchestration outside the turn-runtime boundary.
+- Scheduled work, heartbeat work, and channel-triggered work are not yet all normalized through the same explicit helper shape.
+- Legacy run modules still retain runtime ownership that should continue collapsing toward [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+### Next Required Work
+
+1. Continue moving remaining inbound entry normalization behind [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py), especially for scheduled and channel-triggered paths.
+2. Keep reducing endpoint-local orchestration in [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py).
+3. Continue collapsing legacy durable-run ownership behind [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py)
+  - [server_modules/runtime_runs_api.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runtime_runs_api.py)
+  - [server_modules/tests/test_agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_agent_turn.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_agent_turn`
+  - `server_modules.tests.test_runtime_runs_api_session_manager`
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ## 2026-04-05 - Legacy Run Adapter Service Bundles Moved Behind run_service.py
 
 ### Why This Cut

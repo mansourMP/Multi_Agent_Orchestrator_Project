@@ -7,6 +7,7 @@ from server_modules.agent_turn import (
     ensure_direct_chat_turn_request,
     resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
+    resolve_run_start_turn_request,
     serialize_agent_turn_request,
 )
 from server_modules.run_service import build_run_start_request_from_turn
@@ -136,6 +137,28 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(ensured.workspace_id, "default")
         self.assertEqual(ensured.session_id, "thread-1")
         self.assertEqual(ensured.message, "hello")
+
+    def test_resolve_run_start_turn_request_stamps_request_before_turn_build(self):
+        resolution = resolve_run_start_turn_request(
+            current_user={"user_id": "user-1"},
+            body=RunStartRequest(
+                engine="orion",
+                workspace_id="workspace-1",
+                user_goal="Review inbox",
+                metadata={},
+            ),
+            stamp_request_owner_fn=lambda req, current_user: RunStartRequest(
+                engine=req.engine,
+                workspace_id=req.workspace_id,
+                user_goal=req.user_goal,
+                metadata={**dict(req.metadata or {}), "owner_user_id": current_user["user_id"]},
+            ),
+        )
+
+        self.assertEqual(resolution.request.metadata["owner_user_id"], "user-1")
+        self.assertEqual(resolution.turn_request.workspace_id, "workspace-1")
+        self.assertEqual(resolution.turn_request.message, "Review inbox")
+        self.assertEqual(resolution.turn_request.actor.id, "user-1")
 
 
 if __name__ == "__main__":

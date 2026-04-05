@@ -18,8 +18,8 @@ from server_modules.agent_turn import (
     AgentTurnRequest,
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
-    build_run_start_turn_request,
     resolve_direct_chat_turn_request,
+    resolve_run_start_turn_request,
 )
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
@@ -1167,16 +1167,19 @@ def register_run_routes(app) -> None:
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        req = _stamp_request_owner(body or RunStartRequest(), current_user)
-        run_turn_request = build_run_start_turn_request(req)
+        resolution = resolve_run_start_turn_request(
+            current_user=current_user,
+            body=body,
+            stamp_request_owner_fn=_stamp_request_owner,
+        )
         execution = await execute_agent_turn_request(
-            turn_request=run_turn_request,
+            turn_request=resolution.turn_request,
             current_user=current_user,
             services=TurnExecutionServices(
                 run_execution=_run_execution_services(),
                 direct_chat=_direct_chat_execution_services(),
             ),
-            run_request=req,
+            run_request=resolution.request,
         )
         return execution.get("result")
 

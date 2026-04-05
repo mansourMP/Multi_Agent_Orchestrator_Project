@@ -421,13 +421,13 @@ def bind_agent_turn_request_meta(
     return bound
 
 
-def build_agent_turn_session_context(
+def resolve_agent_turn_session_identity(
     request: Any,
     *,
     workspace_id: str = "",
     session_id: str = "",
     user_id: str = "",
-) -> Dict[str, Any]:
+) -> Dict[str, str]:
     resolved = resolve_agent_turn_request(request)
     if not isinstance(resolved, AgentTurnRequest):
         return {
@@ -438,6 +438,27 @@ def build_agent_turn_session_context(
     return {
         "workspace_id": str(resolved.workspace_id or workspace_id or "default").strip() or "default",
         "thread_id": str(resolved.session_id or session_id or "direct-chat").strip() or "direct-chat",
-        "user_id": str(user_id or "").strip(),
+        "user_id": str(user_id or resolved.actor.id or "").strip(),
+    }
+
+
+def build_agent_turn_session_context(
+    request: Any,
+    *,
+    workspace_id: str = "",
+    session_id: str = "",
+    user_id: str = "",
+) -> Dict[str, Any]:
+    resolved = resolve_agent_turn_request(request)
+    identity = resolve_agent_turn_session_identity(
+        request,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        user_id=user_id,
+    )
+    if not isinstance(resolved, AgentTurnRequest):
+        return identity
+    return {
+        **identity,
         "agent_turn_request": serialize_agent_turn_request(resolved),
     }

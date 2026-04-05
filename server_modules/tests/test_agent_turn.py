@@ -5,6 +5,7 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_agent_turn_session_context,
     build_direct_chat_turn_request,
+    resolve_agent_turn_session_identity,
     build_run_start_turn_request,
     ensure_direct_chat_turn_request,
     resolve_direct_chat_turn_request,
@@ -186,6 +187,27 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(context["workspace_id"], "workspace-1")
         self.assertEqual(context["thread_id"], "thread-1")
         self.assertEqual(context["agent_turn_request"]["message"], "hello")
+
+    def test_resolve_agent_turn_session_identity_prefers_request_fields(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={},
+            workspace_id="workspace-1",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        identity = resolve_agent_turn_session_identity(
+            request,
+            workspace_id="ignored",
+            session_id="ignored",
+            user_id="fallback-user",
+        )
+
+        self.assertEqual(identity["workspace_id"], "workspace-1")
+        self.assertEqual(identity["thread_id"], "thread-1")
+        self.assertEqual(identity["user_id"], "fallback-user")
 
     def test_resolve_direct_chat_turn_request_normalizes_api_inputs(self):
         resolved = resolve_direct_chat_turn_request(

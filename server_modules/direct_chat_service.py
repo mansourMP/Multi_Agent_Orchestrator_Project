@@ -10,6 +10,7 @@ from server_modules.agent_turn import (
     AgentTurnRequest,
     bind_agent_turn_request_meta,
     build_agent_turn_session_context,
+    resolve_agent_turn_session_identity,
     ensure_direct_chat_turn_request,
 )
 
@@ -75,6 +76,11 @@ def direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) 
         or str((current_user or {}).get("auth_type") or "").strip()
         or "anonymous"
     )
+    return direct_chat_actor_key_for_user(owner, workspace_id, thread_id)
+
+
+def direct_chat_actor_key_for_user(user_id: str, workspace_id: str, thread_id: str) -> str:
+    owner = str(user_id or "").strip() or "anonymous"
     return f"{owner}:{str(workspace_id or 'default').strip() or 'default'}:{str(thread_id or 'direct-chat').strip() or 'direct-chat'}"
 
 
@@ -135,14 +141,21 @@ def build_direct_chat_event_producer(
         message=message,
         agent_turn_request=agent_turn_request,
     )
-    normalized_workspace_id = str(turn_request.workspace_id or workspace_id or "default").strip() or "default"
-    normalized_thread_id = str(turn_request.session_id or thread_id or "direct-chat").strip() or "direct-chat"
-    actor_key = direct_chat_actor_key(current_user, normalized_workspace_id, normalized_thread_id)
-    user_id = (
+    fallback_user_id = (
         str((current_user or {}).get("user_id") or "").strip()
         or str((current_user or {}).get("email") or "").strip().lower()
         or str((current_user or {}).get("auth_type") or "").strip()
     )
+    identity = resolve_agent_turn_session_identity(
+        turn_request,
+        workspace_id=workspace_id,
+        session_id=thread_id,
+        user_id=fallback_user_id,
+    )
+    normalized_workspace_id = identity["workspace_id"]
+    normalized_thread_id = identity["thread_id"]
+    user_id = identity["user_id"]
+    actor_key = direct_chat_actor_key_for_user(user_id, normalized_workspace_id, normalized_thread_id)
     direct_session_ctx = build_agent_turn_session_context(
         turn_request,
         workspace_id=normalized_workspace_id,

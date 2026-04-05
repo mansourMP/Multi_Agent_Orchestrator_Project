@@ -1565,6 +1565,59 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Shared Local Execution Creation Builder Extracted
+
+#### Stage
+
+Stage 1 continues. The repeated local-execution creation-service bundle is now assembled in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of being redefined inline in both legacy run modules.
+
+This keeps the shared durable-run policy wiring inside the canonical run service while preserving the historical module-level compatibility names that current callers and tests still patch.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `LegacyLocalExecutionCreationCallbacks`
+  - `build_legacy_local_execution_creation_services()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so its legacy create-run wrapper now builds prepared creation services through the new shared local-execution builder.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so its legacy create-run wrapper now uses the same shared local-execution builder.
+- Preserved the legacy helper aliases in [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) for compatibility with runtime call sites.
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with focused coverage for the new builder.
+
+#### Current Truth
+
+- The canonical run service now owns:
+  - shared legacy preparation wrapper flow
+  - shared legacy request-to-result wrapper flow
+  - shared prepared-result adaptation
+  - shared local-execution creation-service assembly
+  - prepared-run creation
+- The legacy run modules still own their dynamic late-bound callback sources and broader runtime concerns, but less of the duplicated service-bundle wiring.
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still mixes schedule management and runtime history with run lifecycle logic.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still owns retry lineage, parent refresh, and snapshot-orchestration behavior.
+- The durable-run ownership line is clearer, but the legacy modules remain larger than the target architecture allows.
+
+#### Next Required Work
+
+1. Continue extracting genuinely shared run lifecycle behavior into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Keep the module-level compatibility surface stable while shrinking ownership inside the legacy run modules.
+3. Avoid reintroducing new shared creation/policy wiring into the legacy wrappers.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Legacy Run Preparation Wrapper Flow Centralized
 
 #### Stage

@@ -77,6 +77,23 @@ class LegacyRunPreparationServices:
 
 
 @dataclass(slots=True)
+class LegacyLocalExecutionCreationCallbacks:
+    decide_execution_target: Any
+    apply_execution_route_metadata: Any
+    build_doctor_run_gate: Any
+    agent_machine_inherited_owner_user_id: Any
+    compute_tool_policy_precheck: Any
+    resolve_runtime_policy_mode: Any
+    agent_machine_full_trust_enabled: Any
+    begin_run_pending_confirmation: Any
+    create_run: Any
+    local_execution_target: str
+    local_execution_pack_id: str
+    load_created_run: Any = None
+    now_iso: Any = None
+
+
+@dataclass(slots=True)
 class RunPreparationServices:
     engine_registry: Any
     engine_validation_errors: Any
@@ -197,6 +214,36 @@ def build_prepared_run_creation_services(
         create_run=create_run,
         load_created_run=load_created_run,
         now_iso=now_iso,
+    )
+
+
+def build_legacy_local_execution_creation_services(
+    *,
+    callbacks: LegacyLocalExecutionCreationCallbacks,
+) -> PreparedRunCreationServices:
+    return build_prepared_run_creation_services(
+        decide_execution_target=callbacks.decide_execution_target,
+        apply_execution_route_metadata=callbacks.apply_execution_route_metadata,
+        build_doctor_run_gate=callbacks.build_doctor_run_gate,
+        agent_machine_inherited_owner_user_id=callbacks.agent_machine_inherited_owner_user_id,
+        compute_tool_policy_precheck=callbacks.compute_tool_policy_precheck,
+        apply_browser_execution_metadata=apply_browser_execution_metadata,
+        local_execution_block_prompt=local_execution_block_prompt,
+        resolve_runtime_policy_mode=callbacks.resolve_runtime_policy_mode,
+        agent_machine_full_trust_enabled=callbacks.agent_machine_full_trust_enabled,
+        local_execution_requires_start_confirmation=lambda metadata, precheck: local_execution_requires_start_confirmation(
+            metadata,
+            precheck,
+            local_execution_target=callbacks.local_execution_target,
+            local_execution_pack_id=callbacks.local_execution_pack_id,
+        ),
+        mark_local_execution_tools_approved=mark_local_execution_tools_approved,
+        precheck_human_action_labels=precheck_human_action_labels,
+        local_execution_confirmation_prompt=local_execution_confirmation_prompt,
+        begin_run_pending_confirmation=callbacks.begin_run_pending_confirmation,
+        create_run=callbacks.create_run,
+        load_created_run=callbacks.load_created_run,
+        now_iso=callbacks.now_iso,
     )
 
 

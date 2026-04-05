@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
+    build_legacy_local_execution_creation_services,
     build_prepared_run_creation_services,
     build_run_preparation_services,
     build_run_prepared_result_services,
@@ -25,6 +26,7 @@ from server_modules.run_service import (
     RunPreparationServices,
     RunCreationServices,
     RunExecutionServices,
+    LegacyLocalExecutionCreationCallbacks,
     LegacyRunPreparationServices,
     LegacyRunRequestServices,
     RunPreparedResultServices,
@@ -114,6 +116,26 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(prepared["engine"], "orion")
         self.assertEqual(prepared["metadata"]["agent_role"], "builder")
+
+    def test_build_legacy_local_execution_creation_services_uses_shared_local_helpers(self):
+        creation = build_legacy_local_execution_creation_services(
+            callbacks=LegacyLocalExecutionCreationCallbacks(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+                apply_execution_route_metadata=lambda metadata, route: metadata,
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"approval_id": "approval-1"},
+                create_run=lambda **kwargs: "run-1",
+                local_execution_target="local_companion",
+                local_execution_pack_id="local-execution-v1",
+            )
+        )
+
+        self.assertIs(creation.apply_browser_execution_metadata, apply_browser_execution_metadata)
+        self.assertIs(creation.mark_local_execution_tools_approved, mark_local_execution_tools_approved)
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

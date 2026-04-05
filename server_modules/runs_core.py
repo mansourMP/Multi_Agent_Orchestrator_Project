@@ -1153,15 +1153,13 @@ _apply_browser_execution_metadata = run_service.apply_browser_execution_metadata
 
 
 def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_service.RunExecutionServices:
-    return run_service.build_legacy_run_execution_services(
-        callbacks=run_service.LegacyRunExecutionCallbacks(
-            stamp_request_owner=lambda req, current_user: req,
-            prepare_run_start_request=_prepare_run_start_request,
-            create_run_from_request=(
-                (lambda req: _create_run_from_request(req, schedule_id=schedule_id))
-                if schedule_id is not None
-                else (lambda req: _create_run_from_request(req))
-            ),
+    return run_service.build_legacy_run_execution_services_from_values(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=_prepare_run_start_request,
+        create_run_from_request=(
+            (lambda req: _create_run_from_request(req, schedule_id=schedule_id))
+            if schedule_id is not None
+            else (lambda req: _create_run_from_request(req))
         ),
     )
 

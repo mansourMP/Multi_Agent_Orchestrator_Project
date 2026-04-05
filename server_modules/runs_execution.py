@@ -121,12 +121,10 @@ NODE_TERMINAL_STATUSES = {"succeeded", "failed", "skipped"}
 def _workflow_child_run_execution_services() -> RunExecutionServices:
     from server_modules import runs_delegation as _runs_delegation
 
-    return build_legacy_run_execution_services(
-        callbacks=LegacyRunExecutionCallbacks(
-            stamp_request_owner=lambda req, current_user: req,
-            prepare_run_start_request=lambda req: _runs_delegation._prepare_run_start_request(req),
-            create_run_from_request=lambda req: _runs_delegation._create_run_from_request(req),
-        ),
+    return run_service.build_legacy_run_execution_services_from_values(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=lambda req: _runs_delegation._prepare_run_start_request(req),
+        create_run_from_request=lambda req: _runs_delegation._create_run_from_request(req),
     )
 
 

@@ -9,6 +9,7 @@ from server_modules.run_service import (
     apply_browser_execution_metadata,
     build_run_creation_services,
     build_legacy_run_execution_services,
+    build_legacy_run_execution_services_from_values,
     build_run_precheck_result,
     build_run_execution_services,
     build_legacy_local_execution_creation_services,
@@ -197,6 +198,21 @@ class RunServiceTests(unittest.TestCase):
                 prepare_run_start_request=prepare,
                 create_run_from_request=create,
             )
+        )
+
+        self.assertIs(services.stamp_request_owner, owner)
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
+
+    def test_build_legacy_run_execution_services_from_values_wraps_execution_callbacks(self):
+        owner = object()
+        prepare = object()
+        create = object()
+
+        services = build_legacy_run_execution_services_from_values(
+            stamp_request_owner=owner,
+            prepare_run_start_request=prepare,
+            create_run_from_request=create,
         )
 
         self.assertIs(services.stamp_request_owner, owner)

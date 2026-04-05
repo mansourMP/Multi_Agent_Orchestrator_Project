@@ -9,6 +9,7 @@ from scripts.orion_local_worker_llm import (
     provider_has_key,
 )
 from server_modules.provider_profiles import _build_provider_credential_candidates, normalize_auth_mode
+from server_modules import skills_service
 
 
 def credential_auth_mode(
@@ -194,17 +195,21 @@ def resolve_direct_chat_availability(
     runtime_ok = direct_chat_runtime_available_fn()
     provider, credentials = preferred_provider_fn(normalized_workspace_id, requested_provider)
     ai_ready = supports_direct_message_native_chat_fn(provider, credentials)
+    tool_capabilities = skills_service.resolve_workspace_capability_payloads(
+        normalized_workspace_id,
+        resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities_fn,
+    )
     resolved: Dict[str, Any] = {
         "ai_ready": ai_ready,
         "runtime_ok": runtime_ok,
         "connection_mode": "local_companion" if runtime_ok else "byok" if ai_ready else "",
         "provider": provider,
-        "tool_capabilities": resolve_workspace_tool_capabilities_fn(normalized_workspace_id),
+        "tool_capabilities": tool_capabilities,
     }
     if isinstance(availability_override, dict) and availability_override:
         resolved.update(availability_override)
         if "tool_capabilities" not in availability_override:
-            resolved["tool_capabilities"] = resolve_workspace_tool_capabilities_fn(normalized_workspace_id)
+            resolved["tool_capabilities"] = tool_capabilities
     return resolved
 
 

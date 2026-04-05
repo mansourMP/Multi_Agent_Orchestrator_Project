@@ -42,6 +42,7 @@ from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
     build_browser_execution_binding,
 )
+from server_modules.runtime_models import RunStartRequest
 from server_modules.runtime_state_store import (
     delete_chat_stream_sessions_older_than,
     get_chat_stream_state,
@@ -52,6 +53,7 @@ from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_request_service
+from server_modules import runtime_route_bootstrap_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
@@ -484,50 +486,42 @@ _schedule_restored_run_resume = lambda run_id_str, run: runtime_run_resume_servi
 
 def register_run_routes(app) -> None:
     import server as _server
-    from server_modules.autopilot_connectors import handle_telegram_send_message
-    from server_modules.memory_service import delete_memory, workspace_memory_snapshot
-    from server_modules.runtime_models import RunStartRequest
-    from server_modules.workspace_context import (
-        read_workspace_context_files,
-        write_workspace_context_file,
+    deps = runtime_route_bootstrap_service.import_runtime_run_route_dependencies(
+        import_module=__import__,
+        module_globals=globals(),
+        server_module=_server,
     )
 
-    module_globals = globals()
-    for key, value in _server.__dict__.items():
-        if key not in module_globals:
-            module_globals[key] = value
-
-    from server_modules import runs_core as _runs_core
-
     heartbeat_run_callback = runtime_heartbeat_service.build_heartbeat_run_callback(
-        run_start_request_class=RunStartRequest,
-        trigger_pending_heartbeat_schedules=_runs_core.trigger_pending_heartbeat_schedules,
+        run_start_request_class=deps.run_start_request_class,
+        trigger_pending_heartbeat_schedules=deps.trigger_pending_heartbeat_schedules,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
         stamp_request_owner_fn=_stamp_request_owner,
         run_execution_services=_run_execution_services,
     )
     heartbeat_notify_callback = runtime_heartbeat_service.build_heartbeat_notify_callback(
-        handle_telegram_send_message=handle_telegram_send_message,
+        handle_telegram_send_message=deps.handle_telegram_send_message,
     )
 
     global _HEARTBEAT_SCHEDULER
-    _HEARTBEAT_SCHEDULER = runtime_heartbeat_service.ensure_heartbeat_scheduler_started(
-        lock=_HEARTBEAT_SCHEDULER_LOCK,
-        scheduler=_HEARTBEAT_SCHEDULER,
-        scheduler_factory=lambda: HeartbeatScheduler(
+    _HEARTBEAT_SCHEDULER = runtime_route_bootstrap_service.ensure_runtime_run_route_bootstrap(
+        heartbeat_lock=_HEARTBEAT_SCHEDULER_LOCK,
+        heartbeat_scheduler=_HEARTBEAT_SCHEDULER,
+        heartbeat_scheduler_factory=lambda: HeartbeatScheduler(
             interval_seconds=30 * 60,
             workspace_id="default",
             run_callback=heartbeat_run_callback,
             notify_callback=heartbeat_notify_callback,
         ),
+        ensure_heartbeat_scheduler_started=runtime_heartbeat_service.ensure_heartbeat_scheduler_started,
+        load_webhook_triggers=_load_webhook_triggers,
     )
-    _load_webhook_triggers()
 
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         return await runtime_run_entry_service.start_run_response(
-            body or RunStartRequest(),
+            body or deps.run_start_request_class(),
             current_user=current_user,
             execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
@@ -553,7 +547,7 @@ def register_run_routes(app) -> None:
         _refresh_server_exports()
         return runtime_workspace_service.list_workspace_memory_payload(
             workspace_id,
-            workspace_memory_snapshot=workspace_memory_snapshot,
+            workspace_memory_snapshot=deps.workspace_memory_snapshot,
         )
 
     @app.delete("/memory/{workspace_id}/{key}", dependencies=[Depends(require_api_key)])
@@ -562,14 +556,14 @@ def register_run_routes(app) -> None:
         return runtime_workspace_service.delete_workspace_memory_payload(
             workspace_id,
             key,
-            delete_memory=delete_memory,
+            delete_memory=deps.delete_memory,
         )
 
     @app.get("/workspace/context-files", dependencies=[Depends(require_api_key)])
     async def get_workspace_context_files(current_user=Depends(require_api_key)):
         _refresh_server_exports()
         return runtime_workspace_service.workspace_context_files_payload(
-            read_workspace_context_files=read_workspace_context_files,
+            read_workspace_context_files=deps.read_workspace_context_files,
         )
 
     @app.post("/workspace/context-files/{filename}", dependencies=[Depends(require_api_key)])
@@ -582,7 +576,7 @@ def register_run_routes(app) -> None:
         return runtime_workspace_service.update_workspace_context_file_payload(
             filename,
             body,
-            write_workspace_context_file=write_workspace_context_file,
+            write_workspace_context_file=deps.write_workspace_context_file,
         )
 
     @app.get("/heartbeat/status", dependencies=[Depends(require_api_key)])
@@ -632,7 +626,7 @@ def register_run_routes(app) -> None:
             payload=payload,
             current_user=current_user,
             match_webhook_trigger_fn=_match_webhook_trigger,
-            run_start_request_class=RunStartRequest,
+            run_start_request_class=deps.run_start_request_class,
             execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
             run_execution_services=_run_execution_services,
@@ -713,7 +707,7 @@ def register_run_routes(app) -> None:
     async def preview_routing(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
         return runtime_run_entry_service.preview_routing_response(
-            body or RunStartRequest(),
+            body or deps.run_start_request_class(),
             build_run_routing_preview=build_run_routing_preview,
             run_routing_preview_services=_run_routing_preview_services,
         )
@@ -722,7 +716,7 @@ def register_run_routes(app) -> None:
     async def precheck_run(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
         return await runtime_run_entry_service.precheck_run_response(
-            body or RunStartRequest(),
+            body or deps.run_start_request_class(),
             build_run_precheck_result=build_run_precheck_result,
             run_routing_preview_services=_run_routing_preview_services,
         )
@@ -812,7 +806,7 @@ def register_run_routes(app) -> None:
         return runtime_run_replay_service.replay_run_from_run_id(
             str(run_id),
             get_replay_payload=_get_replay_payload,
-            run_start_request_class=RunStartRequest,
+            run_start_request_class=deps.run_start_request_class,
             execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
             run_execution_services=_run_execution_services,

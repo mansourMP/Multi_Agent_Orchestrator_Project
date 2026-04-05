@@ -63,6 +63,7 @@ from server_modules.runtime_state_store import (
     mark_stale_chat_stream_sessions_interrupted,
     upsert_chat_stream_state,
 )
+from server_modules import runtime_usage_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
@@ -194,43 +195,20 @@ def _match_webhook_trigger(workspace_id: str, request_url: str) -> Optional[dict
     return None
 
 
-def _normalize_usage_period(period: Any) -> str:
-    value = str(period or "all").strip().lower()
-    return value if value in {"day", "week", "month", "all"} else "all"
+_normalize_usage_period = runtime_usage_service.normalize_usage_period
 
 
 def _usage_snapshots_for_user(current_user: Any) -> list[dict[str, Any]]:
-    _refresh_server_exports()
-    with RUN_HISTORY_LOCK:
-        archived_items = list(RUN_HISTORY)
-    combined: dict[str, dict[str, Any]] = {}
-    for item in archived_items:
-        if isinstance(item, dict):
-            run_id = str(item.get("run_id") or "").strip()
-            if run_id:
-                combined[run_id] = item
-
-    serialize_snapshot = _late_server_export("_serialize_run_snapshot")
-    for run_id, run in list(runs.items()):
-        if not isinstance(run, dict):
-            continue
-        if not isinstance(run.get("usage_masked"), dict):
-            continue
-        try:
-            snapshot = serialize_snapshot(str(run_id), run)
-        except Exception:
-            continue
-        snapshot_run_id = str(snapshot.get("run_id") or run_id).strip()
-        if snapshot_run_id:
-            combined[snapshot_run_id] = snapshot
-
-    items = list(combined.values())
-    if _current_user_is_privileged(current_user):
-        return items
-    request_user_id = str(current_user.get("user_id") or "").strip()
-    if not request_user_id:
-        raise HTTPException(status_code=401, detail="Authenticated user id is required.")
-    return [item for item in items if _extract_run_owner_user_id(item) == request_user_id]
+    return runtime_usage_service.usage_snapshots_for_user(
+        current_user,
+        refresh_server_exports=_refresh_server_exports,
+        run_history_lock=RUN_HISTORY_LOCK,
+        run_history=RUN_HISTORY,
+        runs=runs,
+        serialize_snapshot=_late_server_export("_serialize_run_snapshot"),
+        current_user_is_privileged=_current_user_is_privileged,
+        extract_run_owner_user_id=_extract_run_owner_user_id,
+    )
 
 
 def _normalize_chat_stream_cursor(value: Any) -> int:

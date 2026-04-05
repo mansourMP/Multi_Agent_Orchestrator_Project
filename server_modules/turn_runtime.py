@@ -35,13 +35,15 @@ async def execute_agent_turn_request(
     chat_body: Optional[dict[str, Any]] = None,
     run_request: Optional[Any] = None,
 ) -> dict[str, Any]:
-    if turn_request.execution_mode == "durable":
-        return await execute_durable_turn_request(
-            turn_request=turn_request,
-            current_user=current_user,
-            services=services.run_execution,
-            base_request=run_request,
-        )
+    durable_execution = await run_service.execute_durable_agent_turn_dispatch(
+        turn_request=turn_request,
+        current_user=current_user,
+        services=services.run_execution,
+        base_request=run_request,
+        execute_durable_turn_request_fn=execute_durable_turn_request,
+    )
+    if durable_execution is not None:
+        return durable_execution
 
     body = dict(chat_body or {})
     return await execute_direct_chat_turn_request(

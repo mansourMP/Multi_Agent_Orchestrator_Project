@@ -681,6 +681,25 @@ def execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
     )
 
 
+async def execute_durable_agent_turn_dispatch(
+    *,
+    turn_request: AgentTurnRequest,
+    current_user: Any,
+    services: RunExecutionServices,
+    base_request: Optional[Any] = None,
+    execute_durable_turn_request_fn: Any = None,
+) -> Optional[dict[str, Any]]:
+    if turn_request.execution_mode != "durable":
+        return None
+    durable_execute = execute_durable_turn_request_fn or execute_durable_turn_request
+    return await durable_execute(
+        turn_request=turn_request,
+        current_user=current_user,
+        services=services,
+        base_request=base_request,
+    )
+
+
 def build_legacy_run_execution_services(
     *,
     callbacks: LegacyRunExecutionCallbacks,

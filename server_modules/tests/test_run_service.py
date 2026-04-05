@@ -58,6 +58,7 @@ from server_modules.run_service import (
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
     create_run_result_from_prepared_request,
+    execute_durable_agent_turn_dispatch,
     execute_delegated_run_request,
     execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
     execute_built_unowned_system_run_start_request_via_turn_runtime,
@@ -1724,6 +1725,42 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-1")
         self.assertEqual(result["status"], "starting")
+
+    def test_execute_durable_agent_turn_dispatch_returns_none_for_non_durable_mode(self):
+        turn_request = type("TurnRequest", (), {"execution_mode": "direct_chat"})()
+
+        result = __import__("asyncio").run(
+            execute_durable_agent_turn_dispatch(
+                turn_request=turn_request,
+                current_user={"user_id": "user-1"},
+                services=RunExecutionServices(
+                    stamp_request_owner=lambda req, current_user: req,
+                    prepare_run_start_request=lambda req: {"metadata": {}},
+                    create_run_from_request=lambda req: {"run_id": "unused"},
+                ),
+            )
+        )
+
+        self.assertIsNone(result)
+
+    def test_execute_durable_agent_turn_dispatch_runs_durable_execution_for_durable_mode(self):
+        turn_request = type("TurnRequest", (), {"execution_mode": "durable"})()
+
+        result = __import__("asyncio").run(
+            execute_durable_agent_turn_dispatch(
+                turn_request=turn_request,
+                current_user={"user_id": "user-1"},
+                services=RunExecutionServices(
+                    stamp_request_owner=lambda req, current_user: req,
+                    prepare_run_start_request=lambda req: {"metadata": {}},
+                    create_run_from_request=lambda req: {"run_id": "unused"},
+                ),
+                base_request={"run": True},
+                execute_durable_turn_request_fn=AsyncMock(return_value={"result": {"run_id": "run-durable"}}),
+            )
+        )
+
+        self.assertEqual(result, {"result": {"run_id": "run-durable"}})
 
     def test_execute_system_run_start_request_via_turn_runtime_uses_system_user(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")

@@ -143,6 +143,41 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(execution["client_request_id"], "req-1")
         self.assertTrue(callable(execution["producer"]))
 
+    def test_execute_agent_turn_request_delegates_durable_branch_through_run_service(self):
+        turn_request = type("TurnRequest", (), {"execution_mode": "durable"})()
+        services = build_turn_execution_services(
+            run_execution=RunExecutionServices(
+                stamp_request_owner=lambda req, current_user: req,
+                prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                create_run_from_request=lambda req: {"run_id": "unused"},
+            ),
+            direct_chat=build_direct_chat_execution_services(
+                chat_stream_key=runtime_runs_api._chat_stream_key,
+                session_manager_enabled=runtime_runs_api._direct_chat_session_manager_enabled,
+                session_manager_factory=runtime_runs_api._direct_chat_session_manager,
+                build_direct_operator_reply=lambda **kwargs: {"reply": "unused"},
+                build_chat_turn_event_stream=lambda **kwargs: iter(()),
+            ),
+        )
+
+        with patch.object(
+            turn_runtime.run_service,
+            "execute_durable_agent_turn_dispatch",
+            new=AsyncMock(return_value={"result": {"run_id": "run-durable"}}),
+        ) as execute_mock:
+            execution = __import__("asyncio").run(
+                execute_agent_turn_request(
+                    turn_request=turn_request,
+                    current_user={"user_id": "user-1"},
+                    services=services,
+                    run_request={"run": True},
+                )
+            )
+
+        self.assertEqual(execution["result"]["run_id"], "run-durable")
+        self.assertIs(execute_mock.await_args.kwargs["turn_request"], turn_request)
+        self.assertEqual(execute_mock.await_args.kwargs["base_request"], {"run": True})
+
     def test_execute_run_start_request_via_turn_runtime_returns_result_payload(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
         services = RunExecutionServices(

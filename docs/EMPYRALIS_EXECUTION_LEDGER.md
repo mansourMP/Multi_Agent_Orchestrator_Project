@@ -1691,6 +1691,61 @@ The chat module still exports the historical wrapper names, but the assembly log
   - `server_modules.tests.test_agent_machine_mode`
   - `server_modules.tests.test_tools_http`
 
+### 2026-04-05 - Direct Chat Callback Builders Moved Behind Callback Facade
+
+#### Stage
+
+Stage 1 continues. The callback-construction blocks for direct-chat generation and runtime-facade assembly no longer live inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+The chat module still exports the same wrapper names, but the callback bundle assembly now crosses a dedicated callback facade boundary.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_callback_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_callback_facade_service.py) to own:
+  - direct-chat generation service construction
+  - direct-chat runtime facade callback construction
+  - the shared callback input contract used by both builders
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so:
+  - `_direct_chat_generation_services()` now delegates through the callback facade
+  - `_direct_chat_runtime_facade_callbacks()` now delegates through the callback facade
+  - the inline callback constructor band is reduced to a single `_direct_chat_callback_facade_inputs()` wrapper
+- Added focused coverage in [server_modules/tests/test_direct_chat_callback_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_callback_facade_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) did not materially shrink in line count in this cut and moved from `2962` to `2963` lines because the extracted constructor band was replaced by one explicit input-bundle wrapper.
+- The ownership reduction is still real: service construction is now centralized in a dedicated callback facade instead of being assembled directly in the chat module.
+- The generation and runtime-facade builders now share one explicit callback input contract, which makes later refactors less error-prone.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much high-level direct-chat coordination, including provider routing, tool selection policy, and handoff planning.
+- The callback input wrapper in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is still large because it preserves the late-bound compatibility surface.
+- The direct-chat path is still not yet reduced to a minimal coordination shell.
+
+#### Next Required Work
+
+1. Continue extracting a higher-level orchestration seam from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), not just constructor bands.
+2. Keep the wrapper names stable so operator-chat tests can still patch the same late-bound entrypoints.
+3. Maintain focused regression coverage around direct-chat generation, runtime assembly, and no-provider fallback after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_callback_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_callback_facade_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_callback_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_callback_facade_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

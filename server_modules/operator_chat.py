@@ -28,6 +28,7 @@ from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_entry_service
+from server_modules import direct_chat_callback_facade_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_runtime_service
@@ -2762,7 +2763,13 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 
 
 def _direct_chat_generation_services() -> direct_chat_generation_service.DirectChatGenerationServices:
-    return direct_chat_generation_service.DirectChatGenerationServices(
+    return direct_chat_callback_facade_service.build_direct_chat_generation_services(
+        _direct_chat_callback_facade_inputs(),
+    )
+
+
+def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs:
+    return direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs(
         thinking_step_payload=_thinking_step_payload,
         build_context_used=_build_context_used,
         build_direct_tool_approval_response=_build_direct_tool_approval_response,
@@ -2780,25 +2787,16 @@ def _direct_chat_generation_services() -> direct_chat_generation_service.DirectC
         direct_chat_error_reply=_direct_chat_error_reply,
         capture_exception=sentry_sdk.capture_exception,
         generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
-    )
-
-
-def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_service.DirectChatRuntimeFacadeCallbacks:
-    return direct_chat_runtime_facade_service.DirectChatRuntimeFacadeCallbacks(
         compact_text=_compact_text,
         safe_positive_int=_safe_positive_int,
         resolve_chat_local_path=_resolve_chat_local_path,
         extract_first_path_reference=_extract_first_path_reference,
         extract_first_url=_extract_first_url,
-        parse_page_state=parse_json_object_loose,
         parse_memory_write=memory_service.parse_no_provider_memory_write,
         parse_memory_read=memory_service.parse_no_provider_memory_read,
         handle_memory_request=memory_service.handle_no_provider_memory_request,
-        parse_tool_name=_parse_tool_name,
-        tool_arguments_payload=_tool_arguments_payload,
         approval_required_for_direct_tool=_approval_required_for_direct_tool,
         agent_machine_full_trust_for_session=_agent_machine_full_trust_for_session,
-        execute_single_direct_tool_call=_execute_single_direct_tool_call,
         direct_chat_session_key=_direct_chat_session_key,
         resolved_chat_iteration_limit=_resolved_chat_iteration_limit,
         session_model_preference=_session_model_preference,
@@ -2818,7 +2816,6 @@ def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_servic
         build_local_direct_chat_tools=_build_local_direct_chat_tools,
         build_builtin_direct_chat_tools=_build_builtin_direct_chat_tools,
         normalize_direct_approved_action=_normalize_direct_approved_action,
-        build_context_used=_build_context_used,
         direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
         with_context_used=_with_context_used,
         connected_provider_tokens=_connected_provider_tokens,
@@ -2829,7 +2826,6 @@ def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_servic
         slash_command_help_text=_slash_command_help_text,
         execute_direct_tool_calls=_execute_direct_tool_calls,
         direct_chat_credentials=_direct_chat_credentials,
-        capture_exception=sentry_sdk.capture_exception,
         tool_gate_response=_tool_gate_response,
         tool_write_action_available=_tool_write_action_available,
         approved_action_to_tool_call=_approved_action_to_tool_call,
@@ -2843,8 +2839,13 @@ def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_servic
         supported_providers=list(SUPPORTED_PROVIDERS),
         build_direct_chat_system_prompt=_build_direct_chat_system_prompt,
         direct_chat_workspace_context_text=_direct_chat_workspace_context_text,
-        direct_chat_generation_services=_direct_chat_generation_services(),
         no_provider_reasoning_required_response=no_provider_service.no_provider_reasoning_required_response,
+    )
+
+
+def _direct_chat_runtime_facade_callbacks() -> direct_chat_runtime_facade_service.DirectChatRuntimeFacadeCallbacks:
+    return direct_chat_callback_facade_service.build_direct_chat_runtime_facade_callbacks(
+        _direct_chat_callback_facade_inputs(),
     )
 
 

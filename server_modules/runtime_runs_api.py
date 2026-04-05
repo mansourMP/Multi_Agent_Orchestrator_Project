@@ -484,30 +484,17 @@ def _direct_chat_execution_services() -> DirectChatExecutionServices:
         build_chat_turn_event_stream=build_chat_turn_event_stream,
     )
 _build_direct_chat_request_meta = _service_build_direct_chat_request_meta
-
-
-def _build_direct_chat_event_producer(
-    *,
-    current_user: Any,
-    body: dict,
-    message: str,
-    workspace_id: str,
-    session_key: str,
-    thread_id: str,
-    client_request_id: str,
-    agent_turn_request: Optional[AgentTurnRequest] = None,
-):
-    return _service_build_direct_chat_event_producer(
-        current_user=current_user,
-        body=body,
-        message=message,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        thread_id=thread_id,
-        client_request_id=client_request_id,
-        services=_direct_chat_execution_services(),
-        agent_turn_request=agent_turn_request,
-    )
+_build_direct_chat_event_producer = lambda *, current_user, body, message, workspace_id, session_key, thread_id, client_request_id, agent_turn_request=None: _service_build_direct_chat_event_producer(
+    current_user=current_user,
+    body=body,
+    message=message,
+    workspace_id=workspace_id,
+    session_key=session_key,
+    thread_id=thread_id,
+    client_request_id=client_request_id,
+    services=_direct_chat_execution_services(),
+    agent_turn_request=agent_turn_request,
+)
 
 
 def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:

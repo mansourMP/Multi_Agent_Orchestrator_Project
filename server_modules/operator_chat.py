@@ -401,188 +401,122 @@ def _local_worker_available(availability: Dict[str, Any]) -> bool:
     return True
 
 
-def _agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
-    return direct_chat_context_service.agent_machine_owner_user_id(session_ctx)
-
-
-def _agent_machine_full_trust_for_session(session_ctx: Optional[Dict[str, Any]]) -> bool:
-    return runtime_config.agent_machine_full_trust_enabled(_agent_machine_owner_user_id(session_ctx))
-
-
-def _direct_chat_runtime_available() -> bool:
-    return direct_chat_entry_policy_service.direct_chat_runtime_available(
-        LOCAL_WORKER_REGISTRY,
-        is_worker_online_fn=_is_worker_online,
-    )
-
-
-def _resolve_direct_chat_availability(
-    workspace_id: str,
-    requested_provider: str = "",
-    availability_override: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return direct_chat_entry_policy_service.resolve_direct_chat_availability(
-        workspace_id,
-        requested_provider,
-        direct_chat_runtime_available_fn=_direct_chat_runtime_available,
-        preferred_provider_fn=_preferred_provider,
-        supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-        resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities,
-        availability_override=availability_override,
-    )
-
-
-def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
-    return direct_chat_entry_policy_service.availability_lines(
-        workspace_id,
-        availability,
-        normalize_tool_capabilities=_normalize_tool_capabilities,
-    )
-
-
-def _connected_system_labels(availability: Dict[str, Any]) -> List[str]:
-    return direct_chat_entry_policy_service.connected_system_labels(
-        availability,
-        normalize_tool_capabilities=_normalize_tool_capabilities,
-    )
-
-
-def _context_tool_capabilities(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return direct_chat_entry_policy_service.context_tool_capabilities(
-        availability,
-        normalize_tool_capabilities=_normalize_tool_capabilities,
-        max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
-        max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
-    )
-
-
-def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
-    return direct_chat_entry_policy_service.normalize_prior_messages(
-        prior_messages,
-        max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
-        max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
-    )
-
-
-def _direct_tool_session_key(workspace_id: str, thread_id: str) -> str:
-    return direct_chat_entry_policy_service.direct_tool_session_key(workspace_id, thread_id)
-
-
-def _direct_chat_session_key(workspace_id: str, thread_id: str) -> str:
-    return direct_chat_entry_policy_service.direct_chat_session_key(workspace_id, thread_id)
-
-
-def _parse_slash_command(message: str) -> Dict[str, str]:
-    return direct_chat_entry_policy_service.parse_slash_command(message)
-
-
-def _session_model_preference(session_key: str) -> Dict[str, Optional[str]]:
-    return direct_chat_entry_policy_service.session_model_preference(
-        session_key,
-        store=_DIRECT_CHAT_MODEL_PREFERENCES,
-    )
-
-
-def _set_session_model_preference(session_key: str, *, provider: Optional[str], model: Optional[str]) -> None:
-    direct_chat_entry_policy_service.set_session_model_preference(
-        session_key,
-        provider=provider,
-        model=model,
-        store=_DIRECT_CHAT_MODEL_PREFERENCES,
-    )
-
-
-def _mark_thread_cleared(session_key: str) -> None:
-    direct_chat_entry_policy_service.mark_thread_cleared(
-        session_key,
-        clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
-    )
-
-
-def _consume_thread_cleared(session_key: str) -> bool:
-    return direct_chat_entry_policy_service.consume_thread_cleared(
-        session_key,
-        clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
-    )
-
-
-def _connected_provider_tokens(workspace_id: str) -> List[str]:
-    return direct_chat_entry_policy_service.connected_provider_tokens(
-        workspace_id,
-        supported_providers=SUPPORTED_PROVIDERS,
-        direct_chat_credentials_fn=_direct_chat_credentials,
-    )
-
-
-def _resolve_provider_for_direct_chat_message(
-    workspace_id: str,
-    requested_provider: str,
-    message: str,
-    *,
-    tools_present: bool,
-) -> tuple[str, Dict[str, Any]]:
-    return direct_chat_entry_policy_service.resolve_provider_for_direct_chat_message(
-        workspace_id,
-        requested_provider,
+_agent_machine_owner_user_id = direct_chat_context_service.agent_machine_owner_user_id
+_agent_machine_full_trust_for_session = lambda session_ctx: runtime_config.agent_machine_full_trust_enabled(
+    _agent_machine_owner_user_id(session_ctx),
+)
+_direct_chat_runtime_available = lambda: direct_chat_entry_policy_service.direct_chat_runtime_available(
+    LOCAL_WORKER_REGISTRY,
+    is_worker_online_fn=_is_worker_online,
+)
+_resolve_direct_chat_availability = lambda workspace_id, requested_provider="", availability_override=None: direct_chat_entry_policy_service.resolve_direct_chat_availability(
+    workspace_id,
+    requested_provider,
+    direct_chat_runtime_available_fn=_direct_chat_runtime_available,
+    preferred_provider_fn=_preferred_provider,
+    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
+    resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities,
+    availability_override=availability_override,
+)
+_availability_lines = lambda workspace_id, availability: direct_chat_entry_policy_service.availability_lines(
+    workspace_id,
+    availability,
+    normalize_tool_capabilities=_normalize_tool_capabilities,
+)
+_connected_system_labels = lambda availability: direct_chat_entry_policy_service.connected_system_labels(
+    availability,
+    normalize_tool_capabilities=_normalize_tool_capabilities,
+)
+_context_tool_capabilities = lambda availability: direct_chat_entry_policy_service.context_tool_capabilities(
+    availability,
+    normalize_tool_capabilities=_normalize_tool_capabilities,
+    max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
+    max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
+)
+_normalize_prior_messages = lambda prior_messages: direct_chat_entry_policy_service.normalize_prior_messages(
+    prior_messages,
+    max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
+    max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
+)
+_direct_tool_session_key = direct_chat_entry_policy_service.direct_tool_session_key
+_direct_chat_session_key = direct_chat_entry_policy_service.direct_chat_session_key
+_parse_slash_command = direct_chat_entry_policy_service.parse_slash_command
+_session_model_preference = lambda session_key: direct_chat_entry_policy_service.session_model_preference(
+    session_key,
+    store=_DIRECT_CHAT_MODEL_PREFERENCES,
+)
+_set_session_model_preference = lambda session_key, *, provider, model: direct_chat_entry_policy_service.set_session_model_preference(
+    session_key,
+    provider=provider,
+    model=model,
+    store=_DIRECT_CHAT_MODEL_PREFERENCES,
+)
+_mark_thread_cleared = lambda session_key: direct_chat_entry_policy_service.mark_thread_cleared(
+    session_key,
+    clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
+)
+_consume_thread_cleared = lambda session_key: direct_chat_entry_policy_service.consume_thread_cleared(
+    session_key,
+    clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
+)
+_connected_provider_tokens = lambda workspace_id: direct_chat_entry_policy_service.connected_provider_tokens(
+    workspace_id,
+    supported_providers=SUPPORTED_PROVIDERS,
+    direct_chat_credentials_fn=_direct_chat_credentials,
+)
+_resolve_provider_for_direct_chat_message = lambda workspace_id, requested_provider, message, *, tools_present: direct_chat_entry_policy_service.resolve_provider_for_direct_chat_message(
+    workspace_id,
+    requested_provider,
+    message,
+    tools_present=tools_present,
+    preferred_provider_fn=_preferred_provider,
+    direct_chat_credentials_fn=_direct_chat_credentials,
+    supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    message_requests_local_file_tool_fn=_message_requests_local_file_tool,
+    message_requests_local_shell_tool_fn=_message_requests_local_shell_tool,
+    message_requests_local_screenshot_tool_fn=_message_requests_local_screenshot_tool,
+    message_requests_local_computer_tool_fn=_message_requests_local_computer_tool,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+)
+_plan_direct_chat_route = lambda *, message, availability, provider, tools: direct_chat_entry_policy_service.plan_direct_chat_route(
+    message=message,
+    availability=availability,
+    provider=provider,
+    tools=tools,
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+    preview_run_response_fn=_preview_run_response,
+    prefer_durable_run_handoff_fn=_prefer_durable_run_handoff,
+    durable_run_preferred_response_fn=_durable_run_preferred_response,
+    message_can_use_direct_connector_tools_fn=lambda message: _message_can_use_direct_connector_tools(
         message,
-        tools_present=tools_present,
-        preferred_provider_fn=_preferred_provider,
-        direct_chat_credentials_fn=_direct_chat_credentials,
-        supports_direct_message_native_chat_fn=_supports_direct_message_native_chat,
-        compact_text_fn=_compact_text,
-        mentions_any_fn=_mentions_any,
-        message_requests_local_file_tool_fn=_message_requests_local_file_tool,
-        message_requests_local_shell_tool_fn=_message_requests_local_shell_tool,
-        message_requests_local_screenshot_tool_fn=_message_requests_local_screenshot_tool,
-        message_requests_local_computer_tool_fn=_message_requests_local_computer_tool,
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-    )
-
-
-def _plan_direct_chat_route(
-    *,
-    message: str,
-    availability: Dict[str, Any],
-    provider: str,
-    tools: List[Dict[str, Any]],
-) -> direct_chat_routing_service.DirectChatRouteDecision:
-    return direct_chat_entry_policy_service.plan_direct_chat_route(
-        message=message,
-        availability=availability,
         provider=provider,
         tools=tools,
-        compact_text_fn=_compact_text,
-        mentions_any_fn=_mentions_any,
-        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-        preview_run_response_fn=_preview_run_response,
-        prefer_durable_run_handoff_fn=_prefer_durable_run_handoff,
-        durable_run_preferred_response_fn=_durable_run_preferred_response,
-        message_can_use_direct_connector_tools_fn=lambda message: _message_can_use_direct_connector_tools(
-            message,
-            provider=provider,
-            tools=tools,
-        ),
-        message_can_use_direct_local_tools_fn=lambda message: _message_can_use_direct_local_tools(
-            message,
-            provider=provider,
-            tools=tools,
-        ),
-        message_can_use_builtin_direct_tools_fn=lambda message: _message_can_use_builtin_direct_tools(
-            message,
-            tools=tools,
-        ),
-        can_auto_start_run_handoff_fn=_can_auto_start_run_handoff,
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        discord_keywords=DISCORD_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-    )
+    ),
+    message_can_use_direct_local_tools_fn=lambda message: _message_can_use_direct_local_tools(
+        message,
+        provider=provider,
+        tools=tools,
+    ),
+    message_can_use_builtin_direct_tools_fn=lambda message: _message_can_use_builtin_direct_tools(
+        message,
+        tools=tools,
+    ),
+    can_auto_start_run_handoff_fn=_can_auto_start_run_handoff,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    discord_keywords=DISCORD_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+)
 
 
 def _active_run_count(workspace_id: str) -> int:
@@ -663,11 +597,10 @@ _question_like = partial(
 )
 
 
-def _mentions_any(compact_message: str, markers: tuple[str, ...]) -> bool:
-    return direct_chat_availability_service.mentions_any(
-        compact_message,
-        markers=markers,
-    )
+_mentions_any = lambda compact_message, markers: direct_chat_availability_service.mentions_any(
+    compact_message,
+    markers=markers,
+)
 
 
 _starts_like_direct_run = partial(
@@ -676,44 +609,34 @@ _starts_like_direct_run = partial(
 )
 
 
-def _is_obvious_telegram_write_request(compact_message: str) -> bool:
-    return direct_chat_availability_service.is_obvious_telegram_write_request(
-        compact_message,
-        question_like_fn=_question_like,
-        mentions_any_fn=_mentions_any,
-        starts_like_direct_run_fn=_starts_like_direct_run,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-    )
-
-
-def _is_obvious_google_write_request(compact_message: str) -> bool:
-    return direct_chat_availability_service.is_obvious_google_write_request(
-        compact_message,
-        question_like_fn=_question_like,
-        starts_like_direct_run_fn=_starts_like_direct_run,
-    )
-
-
-def _is_obvious_smtp_write_request(compact_message: str) -> bool:
-    return direct_chat_availability_service.is_obvious_smtp_write_request(
-        compact_message,
-        question_like_fn=_question_like,
-        mentions_any_fn=_mentions_any,
-        starts_like_direct_run_fn=_starts_like_direct_run,
-        smtp_keywords=SMTP_KEYWORDS,
-    )
-
-
-def _connector_write_preview_allowed(message: str, availability: Dict[str, Any]) -> bool:
-    return direct_chat_availability_service.connector_write_preview_allowed(
-        message,
-        availability,
-        compact_text_fn=_compact_text,
-        is_obvious_telegram_write_request_fn=_is_obvious_telegram_write_request,
-        is_obvious_google_write_request_fn=_is_obvious_google_write_request,
-        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-        tool_runtime_usable_fn=_tool_runtime_usable,
-    )
+_is_obvious_telegram_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_telegram_write_request(
+    compact_message,
+    question_like_fn=_question_like,
+    mentions_any_fn=_mentions_any,
+    starts_like_direct_run_fn=_starts_like_direct_run,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+)
+_is_obvious_google_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_google_write_request(
+    compact_message,
+    question_like_fn=_question_like,
+    starts_like_direct_run_fn=_starts_like_direct_run,
+)
+_is_obvious_smtp_write_request = lambda compact_message: direct_chat_availability_service.is_obvious_smtp_write_request(
+    compact_message,
+    question_like_fn=_question_like,
+    mentions_any_fn=_mentions_any,
+    starts_like_direct_run_fn=_starts_like_direct_run,
+    smtp_keywords=SMTP_KEYWORDS,
+)
+_connector_write_preview_allowed = lambda message, availability: direct_chat_availability_service.connector_write_preview_allowed(
+    message,
+    availability,
+    compact_text_fn=_compact_text,
+    is_obvious_telegram_write_request_fn=_is_obvious_telegram_write_request,
+    is_obvious_google_write_request_fn=_is_obvious_google_write_request,
+    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+    tool_runtime_usable_fn=_tool_runtime_usable,
+)
 
 
 _is_explicit_workflow_request = partial(
@@ -731,50 +654,43 @@ _no_ai_chat_response = partial(
 )
 
 
-def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return direct_chat_availability_service.tool_gate_response(
-        message,
-        availability,
-        compact_text_fn=_compact_text,
-        mentions_any_fn=_mentions_any,
-        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-        tool_connected_fn=_tool_connected,
-        tool_runtime_usable_fn=_tool_runtime_usable,
-        connect_action_fn=_connect_action,
-        google_repair_action_fn=_google_repair_action,
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-    )
-
-
-def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return direct_chat_availability_service.suggest_actions(
-        message,
-        availability,
-        compact_text_fn=_compact_text,
-        mentions_any_fn=_mentions_any,
-        question_like_fn=_question_like,
-        is_explicit_workflow_request_fn=_is_explicit_workflow_request,
-        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
-        tool_runtime_usable_fn=_tool_runtime_usable,
-        workflow_action_fn=_workflow_action,
-        run_action_fn=_run_action,
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-        execution_markers=EXECUTION_MARKERS,
-    )
-
-
-def _heartbeat_pending_tasks_for_suggestions() -> List[str]:
-    return direct_chat_support_binding_service.heartbeat_pending_tasks_for_suggestions(
-        workspace_context_dir_fn=workspace_context_dir,
-    )
+_tool_gate_response = lambda message, availability: direct_chat_availability_service.tool_gate_response(
+    message,
+    availability,
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+    tool_connected_fn=_tool_connected,
+    tool_runtime_usable_fn=_tool_runtime_usable,
+    connect_action_fn=_connect_action,
+    google_repair_action_fn=_google_repair_action,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+)
+_suggest_actions = lambda message, availability: direct_chat_availability_service.suggest_actions(
+    message,
+    availability,
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    question_like_fn=_question_like,
+    is_explicit_workflow_request_fn=_is_explicit_workflow_request,
+    is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+    tool_runtime_usable_fn=_tool_runtime_usable,
+    workflow_action_fn=_workflow_action,
+    run_action_fn=_run_action,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+    execution_markers=EXECUTION_MARKERS,
+)
+_heartbeat_pending_tasks_for_suggestions = lambda: direct_chat_support_binding_service.heartbeat_pending_tasks_for_suggestions(
+    workspace_context_dir_fn=workspace_context_dir,
+)
 
 
 def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
@@ -801,12 +717,11 @@ _build_proactive_suggestions = partial(
 )
 
 
-def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    return direct_chat_routing_service.preview_run_response(
-        message,
-        availability,
-        _direct_chat_routing_policy_callbacks(),
-    )
+_preview_run_response = lambda message, availability: direct_chat_routing_service.preview_run_response(
+    message,
+    availability,
+    _direct_chat_routing_policy_callbacks(),
+)
 
 
 _action_marker_count = partial(
@@ -817,12 +732,11 @@ _action_marker_count = partial(
 _path_like_reference_count = direct_chat_routing_service.path_like_reference_count
 
 
-def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> bool:
-    return direct_chat_routing_service.prefer_durable_run_handoff(
-        message,
-        availability,
-        _direct_chat_routing_policy_callbacks(),
-    )
+_prefer_durable_run_handoff = lambda message, availability: direct_chat_routing_service.prefer_durable_run_handoff(
+    message,
+    availability,
+    _direct_chat_routing_policy_callbacks(),
+)
 
 
 def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.DirectChatRoutingPolicyCallbacks:
@@ -1065,24 +979,15 @@ _titleize_direct_step_token = direct_chat_operator_binding_service.titleize_dire
 _compact_step_detail = direct_chat_operator_binding_service.compact_step_detail
 
 
-def _direct_tool_step_payload(
-    connector_id: str,
-    action_id: str,
-    arguments: Dict[str, Any],
-    *,
-    step_id: str,
-    status: str,
-    detail_override: Optional[str] = None,
-) -> Dict[str, Any]:
-    return direct_tool_execution_service.direct_tool_step_payload(
-        connector_id,
-        action_id,
-        arguments,
-        step_id=step_id,
-        status=status,
-        detail_override=detail_override,
-        callbacks=_direct_tool_execution_callbacks(),
-    )
+_direct_tool_step_payload = lambda connector_id, action_id, arguments, *, step_id, status, detail_override=None: direct_tool_execution_service.direct_tool_step_payload(
+    connector_id,
+    action_id,
+    arguments,
+    step_id=step_id,
+    status=status,
+    detail_override=detail_override,
+    callbacks=_direct_tool_execution_callbacks(),
+)
 
 
 _thinking_step_payload = direct_tool_execution_service.thinking_step_payload
@@ -1122,54 +1027,29 @@ _message_has_obvious_direct_tool_intent = lambda message, tools: direct_tool_run
 _direct_tool_followup_message = direct_tool_execution_service.direct_tool_followup_message
 
 
-def _execute_single_direct_tool_call(
-    *,
-    tool_call: Dict[str, Any],
-    workspace_id: str,
-    thread_id: str,
-    index: int = 1,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    credentials: Optional[Dict[str, Any]] = None,
-    reasoning_effort: str = "",
-    session_ctx: Optional[Dict[str, Any]] = None,
-) -> str:
-    return direct_tool_execution_service.execute_single_direct_tool_call(
-        tool_call=tool_call,
-        workspace_id=workspace_id,
-        thread_id=thread_id,
-        index=index,
-        provider=provider,
-        model=model,
-        credentials=credentials,
-        reasoning_effort=reasoning_effort,
-        session_ctx=session_ctx,
-        callbacks=_direct_tool_execution_callbacks(),
-    )
-
-
-def _execute_direct_tool_calls(
-    *,
-    tool_calls: List[Dict[str, Any]],
-    workspace_id: str,
-    thread_id: str,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    credentials: Optional[Dict[str, Any]] = None,
-    reasoning_effort: str = "",
-    session_ctx: Optional[Dict[str, Any]] = None,
-) -> str:
-    return direct_tool_execution_service.execute_direct_tool_calls(
-        tool_calls=tool_calls,
-        workspace_id=workspace_id,
-        thread_id=thread_id,
-        provider=provider,
-        model=model,
-        credentials=credentials,
-        reasoning_effort=reasoning_effort,
-        session_ctx=session_ctx,
-        execute_single_tool_call=_execute_single_direct_tool_call,
-    )
+_execute_single_direct_tool_call = lambda *, tool_call, workspace_id, thread_id, index=1, provider=None, model=None, credentials=None, reasoning_effort="", session_ctx=None: direct_tool_execution_service.execute_single_direct_tool_call(
+    tool_call=tool_call,
+    workspace_id=workspace_id,
+    thread_id=thread_id,
+    index=index,
+    provider=provider,
+    model=model,
+    credentials=credentials,
+    reasoning_effort=reasoning_effort,
+    session_ctx=session_ctx,
+    callbacks=_direct_tool_execution_callbacks(),
+)
+_execute_direct_tool_calls = lambda *, tool_calls, workspace_id, thread_id, provider=None, model=None, credentials=None, reasoning_effort="", session_ctx=None: direct_tool_execution_service.execute_direct_tool_calls(
+    tool_calls=tool_calls,
+    workspace_id=workspace_id,
+    thread_id=thread_id,
+    provider=provider,
+    model=model,
+    credentials=credentials,
+    reasoning_effort=reasoning_effort,
+    session_ctx=session_ctx,
+    execute_single_tool_call=_execute_single_direct_tool_call,
+)
 
 
 def _approval_required_for_direct_tool(

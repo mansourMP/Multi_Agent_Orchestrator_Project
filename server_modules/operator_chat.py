@@ -291,19 +291,22 @@ _DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
 _MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get"}
 
 
-_compact_text = lambda value: re.sub(r"\s+", " ", str(value or "").strip()).lower()
-
-
-_normalize_tool_capabilities = direct_chat_operator_support_service.normalize_tool_capabilities
-_tool_capability = direct_chat_operator_support_service.tool_capability
-_tool_connected = direct_chat_operator_support_service.tool_connected
-_tool_runtime_usable = direct_chat_operator_support_service.tool_runtime_usable
-_local_worker_available = direct_chat_operator_support_service.local_worker_available
-
-
-_direct_chat_state_bindings = direct_chat_operator_binding_service.build_direct_chat_state_bindings(
+_direct_chat_shell_bindings = direct_chat_operator_binding_service.build_direct_chat_shell_bindings(
     agent_machine_full_trust_enabled_fn=runtime_config.agent_machine_full_trust_enabled,
-    normalize_tool_capabilities_fn=_normalize_tool_capabilities,
+    chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
+    chat_max_iterations_ceiling=CHAT_MAX_ITERATIONS_CEILING,
+    compact_text_fn=lambda value: re.sub(r"\s+", " ", str(value or "").strip()).lower(),
+    direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
+    execution_markers=EXECUTION_MARKERS,
+    question_openers=QUESTION_OPENERS,
+    direct_run_openers=DIRECT_RUN_OPENERS,
+    workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    smtp_keywords=SMTP_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
     max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
     max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
     max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
@@ -318,7 +321,35 @@ _direct_chat_state_bindings = direct_chat_operator_binding_service.build_direct_
     extraction_system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
     save_session_transcript_fn=save_session_transcript,
     system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
+    workspace_context_dir_fn=workspace_context_dir,
+    memory_suggestion_prompts_fn=lambda workspace_id: memory_service.memory_suggestion_prompts(
+        workspace_id,
+        limit=2,
+    ),
+    run_handoff_execution_target_fn=lambda run_id: _run_handoff_execution_target(run_id),
+    direct_chat_run_snapshot_fn=lambda run_id: _direct_chat_run_snapshot(run_id),
+    direct_chat_run_event_to_step_fn=lambda run_id, event: _direct_chat_run_event_to_step(run_id, event),
+    direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: _direct_chat_run_snapshot_to_step(run_id, snapshot),
+    direct_chat_run_final_payload_fn=lambda **kwargs: _direct_chat_run_final_payload(**kwargs),
+    live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
+    poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
+    monotonic_fn=time.monotonic,
+    sleep_fn=time.sleep,
+    parse_json_object_loose_support_fn=parse_json_object_loose,
 )
+
+
+_compact_text = _direct_chat_shell_bindings.compact_text
+
+
+_normalize_tool_capabilities = _direct_chat_shell_bindings.normalize_tool_capabilities
+_tool_capability = _direct_chat_shell_bindings.tool_capability
+_tool_connected = _direct_chat_shell_bindings.tool_connected
+_tool_runtime_usable = _direct_chat_shell_bindings.tool_runtime_usable
+_local_worker_available = _direct_chat_shell_bindings.local_worker_available
+
+
+_direct_chat_state_bindings = _direct_chat_shell_bindings.state_bindings
 _agent_machine_owner_user_id = _direct_chat_state_bindings.agent_machine_owner_user_id
 _agent_machine_full_trust_for_session = _direct_chat_state_bindings.agent_machine_full_trust_for_session
 _availability_lines = _direct_chat_state_bindings.availability_lines
@@ -346,45 +377,12 @@ _build_context_used = _direct_chat_state_bindings.build_context_used
 _with_context_used = _direct_chat_state_bindings.with_context_used
 
 
-_connect_action = direct_chat_availability_service.connect_action
-_open_action = direct_chat_availability_service.open_action
-
-
-_google_repair_action = partial(
-    direct_chat_availability_service.google_repair_action,
-    connect_action_fn=_connect_action,
-)
-
-
-_run_action = direct_chat_availability_service.run_action
-_workflow_action = direct_chat_availability_service.workflow_action
-
-
-_direct_chat_availability_bindings = direct_chat_operator_binding_service.build_direct_chat_availability_bindings(
-    compact_text_fn=_compact_text,
-    normalize_tool_capabilities_fn=lambda availability: _normalize_tool_capabilities(availability),
-    tool_connected_fn=_tool_connected,
-    tool_runtime_usable_fn=_tool_runtime_usable,
-    connect_action_fn=_connect_action,
-    google_repair_action_fn=_google_repair_action,
-    workflow_action_fn=_workflow_action,
-    run_action_fn=_run_action,
-    workspace_context_dir_fn=workspace_context_dir,
-    memory_suggestion_prompts_fn=lambda workspace_id: memory_service.memory_suggestion_prompts(
-        workspace_id,
-        limit=2,
-    ),
-    question_openers=QUESTION_OPENERS,
-    direct_run_openers=DIRECT_RUN_OPENERS,
-    workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
-    execution_markers=EXECUTION_MARKERS,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    smtp_keywords=SMTP_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-)
+_connect_action = _direct_chat_shell_bindings.connect_action
+_open_action = _direct_chat_shell_bindings.open_action
+_google_repair_action = _direct_chat_shell_bindings.google_repair_action
+_run_action = _direct_chat_shell_bindings.run_action
+_workflow_action = _direct_chat_shell_bindings.workflow_action
+_direct_chat_availability_bindings = _direct_chat_shell_bindings.availability_bindings
 _question_like = _direct_chat_availability_bindings.question_like
 _mentions_any = _direct_chat_availability_bindings.mentions_any
 _starts_like_direct_run = _direct_chat_availability_bindings.starts_like_direct_run
@@ -401,28 +399,9 @@ _recent_run_prompts_for_suggestions = _direct_chat_availability_bindings.recent_
 _build_proactive_suggestions = _direct_chat_availability_bindings.build_proactive_suggestions
 
 
-_action_marker_count = partial(
-    direct_chat_routing_service.action_marker_count,
-    execution_markers=EXECUTION_MARKERS,
-)
-
-_path_like_reference_count = direct_chat_routing_service.path_like_reference_count
-
-
-_direct_chat_handoff_bindings = direct_chat_operator_binding_service.build_direct_chat_handoff_bindings(
-    run_action_fn=_run_action,
-    safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
-    open_action_fn=_open_action,
-    build_context_used_fn=_build_context_used,
-    direct_chat_run_snapshot_fn=lambda run_id: _direct_chat_run_snapshot(run_id),
-    direct_chat_run_event_to_step_fn=lambda run_id, event: _direct_chat_run_event_to_step(run_id, event),
-    direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: _direct_chat_run_snapshot_to_step(run_id, snapshot),
-    direct_chat_run_final_payload_fn=lambda **kwargs: _direct_chat_run_final_payload(**kwargs),
-    live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
-    poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
-    monotonic_fn=time.monotonic,
-    sleep_fn=time.sleep,
-)
+_action_marker_count = _direct_chat_shell_bindings.action_marker_count
+_path_like_reference_count = _direct_chat_shell_bindings.path_like_reference_count
+_direct_chat_handoff_bindings = _direct_chat_shell_bindings.handoff_bindings
 _durable_run_preferred_response = _direct_chat_handoff_bindings.durable_run_preferred_response
 _run_handoff_execution_target = _direct_chat_handoff_bindings.run_handoff_execution_target
 _can_auto_start_run_handoff = _direct_chat_handoff_bindings.can_auto_start_run_handoff
@@ -437,18 +416,11 @@ _direct_chat_run_final_payload = _direct_chat_handoff_bindings.direct_chat_run_f
 _stream_direct_chat_run_handoff = _direct_chat_handoff_bindings.stream_direct_chat_run_handoff
 
 
-_provider_supports_direct_tool_calls = direct_chat_tool_catalog_service.provider_supports_direct_tool_calls
-
-
-_build_local_direct_chat_tools = partial(
-    direct_chat_tool_catalog_service.build_local_direct_chat_tools,
-    local_worker_available=_local_worker_available,
-)
-
-
-_build_direct_chat_tools = direct_chat_tool_catalog_service.build_direct_chat_tools
-_build_builtin_direct_chat_tools = direct_chat_tool_catalog_service.build_builtin_direct_chat_tools
-registered_direct_chat_tool_names_for_logging = direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging
+_provider_supports_direct_tool_calls = _direct_chat_shell_bindings.provider_supports_direct_tool_calls
+_build_local_direct_chat_tools = _direct_chat_shell_bindings.build_local_direct_chat_tools
+_build_direct_chat_tools = _direct_chat_shell_bindings.build_direct_chat_tools
+_build_builtin_direct_chat_tools = _direct_chat_shell_bindings.build_builtin_direct_chat_tools
+registered_direct_chat_tool_names_for_logging = _direct_chat_shell_bindings.registered_direct_chat_tool_names_for_logging
 
 
 _direct_chat_tool_routing_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_routing_bindings(
@@ -467,9 +439,7 @@ _message_requests_local_screenshot_tool = _direct_chat_tool_routing_bindings.mes
 _message_requests_local_computer_tool = _direct_chat_tool_routing_bindings.message_requests_local_computer_tool
 _message_can_use_direct_local_tools = _direct_chat_tool_routing_bindings.message_can_use_direct_local_tools
 _message_can_use_builtin_direct_tools = _direct_chat_tool_routing_bindings.message_can_use_builtin_direct_tools
-_direct_chat_tool_support_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_support_bindings(
-    parse_json_object_loose_fn=parse_json_object_loose,
-)
+_direct_chat_tool_support_bindings = _direct_chat_shell_bindings.tool_support_bindings
 _parse_tool_name = _direct_chat_tool_support_bindings.parse_tool_name
 _tool_arguments_payload = _direct_chat_tool_support_bindings.tool_arguments_payload
 _extract_first_email = _direct_chat_tool_support_bindings.extract_first_email

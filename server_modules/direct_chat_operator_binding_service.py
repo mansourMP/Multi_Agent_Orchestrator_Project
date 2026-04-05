@@ -191,6 +191,36 @@ class DirectChatOperatorToolSupportBindings:
     normalize_reasoning_effort: Any
 
 
+@dataclass(slots=True)
+class DirectChatOperatorShellBindings:
+    safe_positive_int: Any
+    resolved_chat_iteration_limit: Any
+    chat_iteration_limit_reply: Any
+    compact_text: Any
+    normalize_tool_capabilities: Any
+    tool_capability: Any
+    tool_connected: Any
+    tool_runtime_usable: Any
+    local_worker_available: Any
+    connect_action: Any
+    open_action: Any
+    google_repair_action: Any
+    run_action: Any
+    workflow_action: Any
+    action_marker_count: Any
+    path_like_reference_count: Any
+    provider_supports_direct_tool_calls: Any
+    build_local_direct_chat_tools: Any
+    build_direct_chat_tools: Any
+    build_builtin_direct_chat_tools: Any
+    registered_direct_chat_tool_names_for_logging: Any
+    state_bindings: DirectChatOperatorStateBindings
+    availability_bindings: DirectChatOperatorAvailabilityBindings
+    handoff_bindings: DirectChatOperatorHandoffBindings
+    tool_support_bindings: DirectChatOperatorToolSupportBindings
+    tool_routing_bindings: Any = None
+
+
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
     if name in namespace:
         value = namespace[name]
@@ -1438,6 +1468,167 @@ def build_direct_chat_state_bindings(
         persist_direct_chat_transcript_best_effort=persist_direct_chat_transcript_best_effort,
         build_context_used=direct_chat_support_binding_service.build_context_used,
         with_context_used=direct_chat_metadata_service.with_context_used,
+    )
+
+
+def build_direct_chat_shell_bindings(
+    *,
+    agent_machine_full_trust_enabled_fn: Any,
+    chat_max_iterations_default: int,
+    chat_max_iterations_ceiling: int,
+    compact_text_fn: Any,
+    direct_chat_compaction_token_limit: int,
+    execution_markers: tuple[str, ...] | list[str],
+    question_openers: tuple[str, ...] | list[str],
+    direct_run_openers: tuple[str, ...] | list[str],
+    workflow_request_markers: tuple[str, ...] | list[str],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    smtp_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+    max_context_tool_actions: int,
+    max_context_tool_capabilities: int,
+    max_direct_chat_prior_message_chars: int,
+    max_direct_chat_prior_messages: int,
+    direct_chat_model_preferences: Dict[str, Dict[str, Optional[str]]],
+    direct_chat_clear_markers: set[str],
+    direct_tool_loop_state: Dict[str, Dict[str, Any]],
+    direct_chat_loop_repeat_limit: int,
+    parse_json_object_loose_fn: Any,
+    generate_reply_fn: Any,
+    extraction_prompt: str,
+    extraction_system_prompt: str,
+    save_session_transcript_fn: Any,
+    system_prefix: str,
+    workspace_context_dir_fn: Any,
+    memory_suggestion_prompts_fn: Any,
+    run_handoff_execution_target_fn: Any,
+    direct_chat_run_snapshot_fn: Any,
+    direct_chat_run_event_to_step_fn: Any,
+    direct_chat_run_snapshot_to_step_fn: Any,
+    direct_chat_run_final_payload_fn: Any,
+    live_window_seconds: float,
+    poll_seconds: float,
+    monotonic_fn: Any,
+    sleep_fn: Any,
+    parse_json_object_loose_support_fn: Any,
+) -> DirectChatOperatorShellBindings:
+    safe_positive_int = direct_chat_entry_policy_service.safe_positive_int
+    resolved_chat_iteration_limit = lambda value=None: direct_chat_entry_policy_service.resolved_chat_iteration_limit(
+        value,
+        default_limit=chat_max_iterations_default,
+        ceiling=chat_max_iterations_ceiling,
+        env_var_name="ORION_MAX_CHAT_ITERATIONS",
+        safe_positive_int_fn=safe_positive_int,
+    )
+    normalize_tool_capabilities = direct_chat_operator_support_service.normalize_tool_capabilities
+    tool_capability = direct_chat_operator_support_service.tool_capability
+    tool_connected = direct_chat_operator_support_service.tool_connected
+    tool_runtime_usable = direct_chat_operator_support_service.tool_runtime_usable
+    local_worker_available = direct_chat_operator_support_service.local_worker_available
+    connect_action = direct_chat_availability_service.connect_action
+    open_action = direct_chat_availability_service.open_action
+    google_repair_action = lambda: direct_chat_availability_service.google_repair_action(
+        connect_action_fn=connect_action,
+    )
+    run_action = direct_chat_availability_service.run_action
+    workflow_action = direct_chat_availability_service.workflow_action
+
+    state_bindings = build_direct_chat_state_bindings(
+        agent_machine_full_trust_enabled_fn=agent_machine_full_trust_enabled_fn,
+        normalize_tool_capabilities_fn=normalize_tool_capabilities,
+        max_context_tool_actions=max_context_tool_actions,
+        max_context_tool_capabilities=max_context_tool_capabilities,
+        max_direct_chat_prior_message_chars=max_direct_chat_prior_message_chars,
+        max_direct_chat_prior_messages=max_direct_chat_prior_messages,
+        direct_chat_model_preferences=direct_chat_model_preferences,
+        direct_chat_clear_markers=direct_chat_clear_markers,
+        direct_tool_loop_state=direct_tool_loop_state,
+        direct_chat_loop_repeat_limit=direct_chat_loop_repeat_limit,
+        parse_json_object_loose_fn=parse_json_object_loose_fn,
+        generate_reply_fn=generate_reply_fn,
+        extraction_prompt=extraction_prompt,
+        extraction_system_prompt=extraction_system_prompt,
+        save_session_transcript_fn=save_session_transcript_fn,
+        system_prefix=system_prefix,
+    )
+    availability_bindings = build_direct_chat_availability_bindings(
+        compact_text_fn=compact_text_fn,
+        normalize_tool_capabilities_fn=normalize_tool_capabilities,
+        tool_connected_fn=tool_connected,
+        tool_runtime_usable_fn=tool_runtime_usable,
+        connect_action_fn=connect_action,
+        google_repair_action_fn=google_repair_action,
+        workflow_action_fn=workflow_action,
+        run_action_fn=run_action,
+        workspace_context_dir_fn=workspace_context_dir_fn,
+        memory_suggestion_prompts_fn=memory_suggestion_prompts_fn,
+        question_openers=question_openers,
+        direct_run_openers=direct_run_openers,
+        workflow_request_markers=workflow_request_markers,
+        execution_markers=execution_markers,
+        google_workspace_keywords=google_workspace_keywords,
+        smtp_keywords=smtp_keywords,
+        telegram_keywords=telegram_keywords,
+        slack_keywords=slack_keywords,
+        dropbox_keywords=dropbox_keywords,
+        s3_keywords=s3_keywords,
+    )
+    handoff_bindings = build_direct_chat_handoff_bindings(
+        run_action_fn=run_action,
+        safe_positive_int_fn=safe_positive_int,
+        open_action_fn=open_action,
+        build_context_used_fn=state_bindings.build_context_used,
+        direct_chat_run_snapshot_fn=direct_chat_run_snapshot_fn,
+        direct_chat_run_event_to_step_fn=direct_chat_run_event_to_step_fn,
+        direct_chat_run_snapshot_to_step_fn=direct_chat_run_snapshot_to_step_fn,
+        direct_chat_run_final_payload_fn=direct_chat_run_final_payload_fn,
+        live_window_seconds=live_window_seconds,
+        poll_seconds=poll_seconds,
+        monotonic_fn=monotonic_fn,
+        sleep_fn=sleep_fn,
+    )
+    action_marker_count = lambda compact: direct_chat_routing_service.action_marker_count(
+        compact,
+        execution_markers=execution_markers,
+    )
+    path_like_reference_count = direct_chat_routing_service.path_like_reference_count
+    tool_support_bindings = build_direct_chat_tool_support_bindings(
+        parse_json_object_loose_fn=parse_json_object_loose_support_fn,
+    )
+
+    return DirectChatOperatorShellBindings(
+        safe_positive_int=safe_positive_int,
+        resolved_chat_iteration_limit=resolved_chat_iteration_limit,
+        chat_iteration_limit_reply=direct_chat_entry_policy_service.chat_iteration_limit_reply,
+        compact_text=compact_text_fn,
+        normalize_tool_capabilities=normalize_tool_capabilities,
+        tool_capability=tool_capability,
+        tool_connected=tool_connected,
+        tool_runtime_usable=tool_runtime_usable,
+        local_worker_available=local_worker_available,
+        connect_action=connect_action,
+        open_action=open_action,
+        google_repair_action=google_repair_action,
+        run_action=run_action,
+        workflow_action=workflow_action,
+        action_marker_count=action_marker_count,
+        path_like_reference_count=path_like_reference_count,
+        provider_supports_direct_tool_calls=direct_chat_tool_catalog_service.provider_supports_direct_tool_calls,
+        build_local_direct_chat_tools=lambda availability: direct_chat_tool_catalog_service.build_local_direct_chat_tools(
+            availability,
+            local_worker_available=local_worker_available,
+        ),
+        build_direct_chat_tools=direct_chat_tool_catalog_service.build_direct_chat_tools,
+        build_builtin_direct_chat_tools=direct_chat_tool_catalog_service.build_builtin_direct_chat_tools,
+        registered_direct_chat_tool_names_for_logging=direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging,
+        state_bindings=state_bindings,
+        availability_bindings=availability_bindings,
+        handoff_bindings=handoff_bindings,
+        tool_support_bindings=tool_support_bindings,
+        tool_routing_bindings=None,
     )
 
 

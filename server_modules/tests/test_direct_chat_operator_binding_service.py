@@ -468,6 +468,58 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertTrue(bindings.agent_machine_full_trust_for_session({"meta": {"owner_user_id": "owner-1"}}))
         self.assertEqual(context_used["workspace"], "default")
 
+    def test_build_direct_chat_shell_bindings_preserves_bootstrap_groups(self) -> None:
+        shell = service.build_direct_chat_shell_bindings(
+            agent_machine_full_trust_enabled_fn=lambda owner_user_id: owner_user_id == "owner-1",
+            chat_max_iterations_default=30,
+            chat_max_iterations_ceiling=100,
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            direct_chat_compaction_token_limit=8000,
+            execution_markers=("run",),
+            question_openers=("what",),
+            direct_run_openers=("summarize",),
+            workflow_request_markers=("workflow",),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            max_context_tool_actions=2,
+            max_context_tool_capabilities=2,
+            max_direct_chat_prior_message_chars=100,
+            max_direct_chat_prior_messages=5,
+            direct_chat_model_preferences={},
+            direct_chat_clear_markers=set(),
+            direct_tool_loop_state={},
+            direct_chat_loop_repeat_limit=2,
+            parse_json_object_loose_fn=lambda value: {},
+            generate_reply_fn=lambda **kwargs: ("", {}, "", ""),
+            extraction_prompt="prompt",
+            extraction_system_prompt="system",
+            save_session_transcript_fn=lambda *args, **kwargs: None,
+            system_prefix="Memory",
+            workspace_context_dir_fn=lambda workspace_id: Path("/tmp"),
+            memory_suggestion_prompts_fn=lambda workspace_id: [],
+            run_handoff_execution_target_fn=lambda run_id: {"run_id": run_id},
+            direct_chat_run_snapshot_fn=lambda run_id: None,
+            direct_chat_run_event_to_step_fn=lambda run_id, event: None,
+            direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: None,
+            direct_chat_run_final_payload_fn=lambda **kwargs: kwargs,
+            live_window_seconds=12.0,
+            poll_seconds=0.25,
+            monotonic_fn=lambda: 1.0,
+            sleep_fn=lambda seconds: None,
+            parse_json_object_loose_support_fn=lambda value: {},
+        )
+
+        self.assertEqual(shell.safe_positive_int("7", 1), 7)
+        self.assertIsNotNone(shell.state_bindings)
+        self.assertIsNotNone(shell.availability_bindings)
+        self.assertIsNotNone(shell.handoff_bindings)
+        self.assertIsNotNone(shell.tool_support_bindings)
+        self.assertTrue(callable(shell.build_local_direct_chat_tools))
+
     def test_build_direct_chat_operator_binding_bundle_preserves_sub_bindings(self) -> None:
         bundle = service.build_direct_chat_operator_binding_bundle(
             namespace=_operator_namespace(),

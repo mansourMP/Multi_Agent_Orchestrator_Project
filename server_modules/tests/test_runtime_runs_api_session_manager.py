@@ -10,6 +10,7 @@ from server_modules import turn_runtime
 from server_modules.turn_runtime import (
     TurnExecutionServices,
     build_turn_execution_services,
+    build_execute_unowned_system_run_start_request_via_turn_runtime,
     execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
     execute_built_unowned_system_run_start_request_via_turn_runtime,
     execute_agent_turn_request,
@@ -324,6 +325,19 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-6")
         execute_built.assert_called_once()
+
+    def test_build_execute_unowned_system_run_start_request_via_turn_runtime_delegates_to_run_service(self):
+        with patch.object(
+            turn_runtime.run_service,
+            "build_execute_unowned_system_run_start_request_via_turn_runtime",
+            return_value="executor",
+        ) as build_mock:
+            executor = build_execute_unowned_system_run_start_request_via_turn_runtime(
+                execute_unowned_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {}
+            )
+
+        self.assertEqual(executor, "executor")
+        build_mock.assert_called_once()
 
 
 if __name__ == "__main__":

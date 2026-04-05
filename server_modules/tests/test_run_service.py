@@ -14,6 +14,7 @@ from server_modules.run_service import (
     build_run_creation_services,
     build_auto_delegation_plan,
     build_delegated_run_execution_services,
+    build_execute_unowned_system_run_start_request_via_turn_runtime,
     build_server_run_creation_services,
     build_legacy_run_execution_services,
     build_legacy_run_execution_services_from_values,
@@ -1875,6 +1876,36 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-6")
         execute_built.assert_called_once()
+
+    def test_build_execute_unowned_system_run_start_request_via_turn_runtime_returns_unowned_executor(self):
+        captured = {}
+        executor = build_execute_unowned_system_run_start_request_via_turn_runtime(
+            execute_unowned_system_run_start_request_via_turn_runtime_fn=lambda request, *, services, current_user=None: captured.update(
+                {
+                    "request": request,
+                    "services": services,
+                    "current_user": current_user,
+                }
+            )
+            or {"run_id": "run-7"}
+        )
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        result = executor(
+            {"run": True},
+            stamp_request_owner_fn=lambda req, current_user: "ignored",
+            services=services,
+            current_user={"user_id": "user-1"},
+        )
+
+        self.assertEqual(result["run_id"], "run-7")
+        self.assertEqual(captured["request"], {"run": True})
+        self.assertIs(captured["services"], services)
+        self.assertEqual(captured["current_user"], {"user_id": "user-1"})
 
     def test_build_auto_delegation_plan_prefers_llm_route(self):
         plan = build_auto_delegation_plan(

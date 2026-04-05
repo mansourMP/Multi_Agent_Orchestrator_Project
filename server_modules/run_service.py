@@ -681,6 +681,26 @@ def execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
     )
 
 
+def build_execute_unowned_system_run_start_request_via_turn_runtime(
+    *,
+    execute_unowned_system_run_start_request_via_turn_runtime_fn: Any = execute_unowned_system_run_start_request_via_turn_runtime,
+) -> Any:
+    def _execute(
+        request: Any,
+        *,
+        stamp_request_owner_fn: Any,
+        services: RunExecutionServices,
+        current_user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return execute_unowned_system_run_start_request_via_turn_runtime_fn(
+            request,
+            services=services,
+            current_user=current_user,
+        )
+
+    return _execute
+
+
 async def execute_durable_agent_turn_dispatch(
     *,
     turn_request: AgentTurnRequest,

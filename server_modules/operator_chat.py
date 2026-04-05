@@ -27,6 +27,7 @@ from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
+from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
@@ -1516,7 +1517,7 @@ def _approval_required_for_direct_tool(
 
 
 def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) -> str:
-    return direct_chat_provider_service.credential_auth_mode(
+    return direct_chat_provider_facade_service.credential_auth_mode(
         provider,
         credentials,
         normalize_auth_mode_fn=normalize_auth_mode,
@@ -1524,7 +1525,7 @@ def _credential_auth_mode(provider: str, credentials: Optional[Dict[str, Any]]) 
 
 
 def _supports_direct_message_native_chat(provider: str, credentials: Optional[Dict[str, Any]]) -> bool:
-    return direct_chat_provider_service.supports_direct_message_native_chat(
+    return direct_chat_provider_facade_service.supports_direct_message_native_chat(
         provider,
         credentials,
         credential_auth_mode_fn=_credential_auth_mode,
@@ -1534,7 +1535,7 @@ def _supports_direct_message_native_chat(provider: str, credentials: Optional[Di
 
 
 def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tuple[str, Dict[str, Any]]:
-    return direct_chat_provider_service.preferred_provider(
+    return direct_chat_provider_facade_service.preferred_provider(
         workspace_id,
         requested_provider,
         supported_providers=SUPPORTED_PROVIDERS,
@@ -1545,18 +1546,18 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
 
 
 def _provider_display_name(provider: str) -> str:
-    return direct_chat_provider_service.provider_display_name(provider)
+    return direct_chat_provider_facade_service.provider_display_name(provider)
 
 
 def _provider_unavailable_response(provider: str) -> Dict[str, Any]:
-    return direct_chat_provider_service.provider_unavailable_response(
+    return direct_chat_provider_facade_service.provider_unavailable_response(
         provider,
-        connect_action=_connect_action,
+        connect_action_fn=_connect_action,
     )
 
 
 def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]:
-    return direct_chat_provider_service.direct_chat_credentials(
+    return direct_chat_provider_facade_service.direct_chat_credentials(
         workspace_id,
         provider,
         build_provider_credential_candidates_fn=_build_provider_credential_candidates,
@@ -1564,18 +1565,16 @@ def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]
 
 
 def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"low", "medium", "high"}:
-        return normalized
-    return None
+    return direct_chat_provider_facade_service.normalize_reasoning_effort(value)
 
 
 def _direct_chat_error_reply(llm_error: str) -> str:
-    detail = str(llm_error or "").strip() or "unknown_error"
-    if detail.startswith("max_tool_iterations_reached:"):
-        _, _, raw_limit = detail.partition(":")
-        return _chat_iteration_limit_reply(_safe_positive_int(raw_limit, CHAT_MAX_ITERATIONS_DEFAULT))
-    return f"Chat failed: {detail}"
+    return direct_chat_provider_facade_service.direct_chat_error_reply(
+        llm_error,
+        chat_iteration_limit_reply_fn=_chat_iteration_limit_reply,
+        safe_positive_int_fn=_safe_positive_int,
+        chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
+    )
 
 
 _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (

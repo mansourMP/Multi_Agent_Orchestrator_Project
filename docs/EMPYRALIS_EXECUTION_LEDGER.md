@@ -2503,6 +2503,73 @@ This cut moves one more assembly band behind a dedicated facade even though it i
   - `server_modules.tests.test_agent_machine_mode`
   - `server_modules.tests.test_tools_http`
 
+### 2026-04-05 - Provider And Error Wrapper Band Moved Behind Provider Facade
+
+#### Stage
+
+Stage 1 continues. The provider/error wrapper band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut removes one more provider-facing assembly strip from the operator shell.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_provider_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_provider_facade_service.py) to own:
+  - provider auth-mode delegation
+  - native-chat capability delegation
+  - preferred-provider delegation
+  - provider-display and unavailable-response delegation
+  - direct-chat credential delegation
+  - reasoning-effort normalization
+  - direct-chat error reply shaping for iteration-limit failures
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new facade:
+  - `_credential_auth_mode()`
+  - `_supports_direct_message_native_chat()`
+  - `_preferred_provider()`
+  - `_provider_display_name()`
+  - `_provider_unavailable_response()`
+  - `_direct_chat_credentials()`
+  - `_normalize_reasoning_effort()`
+  - `_direct_chat_error_reply()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_provider_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_provider_facade_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1788` to `1787` lines in this cut.
+- Provider and error-shaping glue now has a dedicated facade boundary instead of being embedded in the operator shell.
+- The remaining chat module is increasingly concentrated on top-level orchestration and final runtime composition.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns top-level direct-chat orchestration and some provider/tool/runtime assembly glue.
+- The request/runtime orchestration flow still has meaningful weight inside the chat module.
+- The module is structurally cleaner, but it is still not yet the target minimal shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around top-level response/runtime composition.
+2. Keep the operator-chat wrapper names stable so existing tests and callers can still patch the same entrypoints.
+3. Maintain focused regression coverage around provider selection, no-provider flow, direct-tool composition, runtime composition, and top-level orchestration after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_provider_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_provider_facade_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_provider_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_provider_facade_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

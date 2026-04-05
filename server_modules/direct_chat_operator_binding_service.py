@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_tool_catalog_service
+from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_runtime_facade_service
 
 
@@ -24,6 +25,16 @@ class DirectChatOperatorPolicyBindings:
     routing_policy_callbacks: Any
     tool_policy_callbacks: Any
     direct_tool_execution_callbacks: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorToolRuntimeBindings:
+    direct_tool_step_payload: Any
+    no_provider_execution_services: Any
+    build_direct_tool_approval_response: Any
+    message_has_obvious_direct_tool_intent: Any
+    execute_single_direct_tool_call: Any
+    execute_direct_tool_calls: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -394,4 +405,107 @@ def build_direct_chat_policy_bindings(
         routing_policy_callbacks=routing_policy_callbacks,
         tool_policy_callbacks=tool_policy_callbacks,
         direct_tool_execution_callbacks=direct_tool_execution_callbacks,
+    )
+
+
+def build_direct_chat_tool_runtime_bindings(
+    *,
+    direct_chat_runtime_facade_callbacks: Any,
+    direct_tool_execution_callbacks: Any,
+    execute_single_direct_tool_call_fn: Any,
+) -> DirectChatOperatorToolRuntimeBindings:
+    def direct_tool_step_payload(
+        connector_id,
+        action_id,
+        arguments,
+        *,
+        step_id,
+        status,
+        detail_override=None,
+    ):
+        return direct_tool_execution_service.direct_tool_step_payload(
+            connector_id,
+            action_id,
+            arguments,
+            step_id=step_id,
+            status=status,
+            detail_override=detail_override,
+            callbacks=direct_tool_execution_callbacks(),
+        )
+
+    def no_provider_execution_services():
+        return direct_tool_runtime_facade_service.build_no_provider_execution_services(
+            callbacks=direct_chat_runtime_facade_callbacks(),
+        )
+
+    def build_direct_tool_approval_response(*, tool_calls, tool_capabilities, session_ctx=None):
+        return direct_tool_runtime_facade_service.build_direct_tool_approval_response(
+            tool_calls=tool_calls,
+            tool_capabilities=tool_capabilities,
+            session_ctx=session_ctx,
+            callbacks=direct_chat_runtime_facade_callbacks(),
+        )
+
+    def message_has_obvious_direct_tool_intent(message, tools):
+        return direct_tool_runtime_facade_service.message_has_obvious_direct_tool_intent(
+            message,
+            tools,
+            callbacks=direct_chat_runtime_facade_callbacks(),
+        )
+
+    def execute_single_direct_tool_call(
+        *,
+        tool_call,
+        workspace_id,
+        thread_id,
+        index=1,
+        provider=None,
+        model=None,
+        credentials=None,
+        reasoning_effort="",
+        session_ctx=None,
+    ):
+        return direct_tool_execution_service.execute_single_direct_tool_call(
+            tool_call=tool_call,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            index=index,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            callbacks=direct_tool_execution_callbacks(),
+        )
+
+    def execute_direct_tool_calls(
+        *,
+        tool_calls,
+        workspace_id,
+        thread_id,
+        provider=None,
+        model=None,
+        credentials=None,
+        reasoning_effort="",
+        session_ctx=None,
+    ):
+        return direct_tool_execution_service.execute_direct_tool_calls(
+            tool_calls=tool_calls,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            provider=provider,
+            model=model,
+            credentials=credentials,
+            reasoning_effort=reasoning_effort,
+            session_ctx=session_ctx,
+            execute_single_tool_call=execute_single_direct_tool_call_fn,
+        )
+
+    return DirectChatOperatorToolRuntimeBindings(
+        direct_tool_step_payload=direct_tool_step_payload,
+        no_provider_execution_services=no_provider_execution_services,
+        build_direct_tool_approval_response=build_direct_tool_approval_response,
+        message_has_obvious_direct_tool_intent=message_has_obvious_direct_tool_intent,
+        execute_single_direct_tool_call=execute_single_direct_tool_call,
+        execute_direct_tool_calls=execute_direct_tool_calls,
     )

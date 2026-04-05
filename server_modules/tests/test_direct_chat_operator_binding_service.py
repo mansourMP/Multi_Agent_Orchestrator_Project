@@ -194,6 +194,28 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertEqual(tool_callbacks.extract_first_url("value"), "")
         self.assertEqual(execution_callbacks.compact_step_detail("value"), "detail")
 
+    def test_build_direct_chat_tool_runtime_bindings_preserves_late_bound_single_tool_call(self) -> None:
+        calls = []
+
+        def _single_tool_call(**kwargs):
+            calls.append(kwargs)
+            return "ok"
+
+        bindings = service.build_direct_chat_tool_runtime_bindings(
+            direct_chat_runtime_facade_callbacks=lambda: object(),
+            direct_tool_execution_callbacks=lambda: object(),
+            execute_single_direct_tool_call_fn=_single_tool_call,
+        )
+
+        result = bindings.execute_direct_tool_calls(
+            tool_calls=[{"name": "memory_search", "arguments": {}}],
+            workspace_id="default",
+            thread_id="thread-1",
+        )
+
+        self.assertIsInstance(result, str)
+        self.assertTrue(calls)
+
 
 if __name__ == "__main__":
     unittest.main()

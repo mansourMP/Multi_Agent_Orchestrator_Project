@@ -40,7 +40,6 @@ from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_loop_guard_service
-from server_modules import direct_tool_runtime_facade_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -799,65 +798,13 @@ _titleize_direct_step_token = direct_chat_operator_binding_service.titleize_dire
 _compact_step_detail = direct_chat_operator_binding_service.compact_step_detail
 
 
-_direct_tool_step_payload = lambda connector_id, action_id, arguments, *, step_id, status, detail_override=None: direct_tool_execution_service.direct_tool_step_payload(
-    connector_id,
-    action_id,
-    arguments,
-    step_id=step_id,
-    status=status,
-    detail_override=detail_override,
-    callbacks=_direct_tool_execution_callbacks(),
-)
-
-
 _thinking_step_payload = direct_tool_execution_service.thinking_step_payload
 _extract_first_url = direct_tool_execution_service.extract_first_url
 _extract_first_path_reference = direct_tool_execution_service.extract_first_path_reference
 _resolve_chat_local_path = direct_tool_execution_service.resolve_chat_local_path
 
 
-_no_provider_execution_services = lambda: direct_tool_runtime_facade_service.build_no_provider_execution_services(
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
-_build_direct_tool_approval_response = lambda *, tool_calls, tool_capabilities, session_ctx=None: direct_tool_runtime_facade_service.build_direct_tool_approval_response(
-    tool_calls=tool_calls,
-    tool_capabilities=tool_capabilities,
-    session_ctx=session_ctx,
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
-_message_has_obvious_direct_tool_intent = lambda message, tools: direct_tool_runtime_facade_service.message_has_obvious_direct_tool_intent(
-    message,
-    tools,
-    callbacks=_direct_chat_runtime_facade_callbacks(),
-)
-
-
 _direct_tool_followup_message = direct_tool_execution_service.direct_tool_followup_message
-
-
-_execute_single_direct_tool_call = lambda *, tool_call, workspace_id, thread_id, index=1, provider=None, model=None, credentials=None, reasoning_effort="", session_ctx=None: direct_tool_execution_service.execute_single_direct_tool_call(
-    tool_call=tool_call,
-    workspace_id=workspace_id,
-    thread_id=thread_id,
-    index=index,
-    provider=provider,
-    model=model,
-    credentials=credentials,
-    reasoning_effort=reasoning_effort,
-    session_ctx=session_ctx,
-    callbacks=_direct_tool_execution_callbacks(),
-)
-_execute_direct_tool_calls = lambda *, tool_calls, workspace_id, thread_id, provider=None, model=None, credentials=None, reasoning_effort="", session_ctx=None: direct_tool_execution_service.execute_direct_tool_calls(
-    tool_calls=tool_calls,
-    workspace_id=workspace_id,
-    thread_id=thread_id,
-    provider=provider,
-    model=model,
-    credentials=credentials,
-    reasoning_effort=reasoning_effort,
-    session_ctx=session_ctx,
-    execute_single_tool_call=_execute_single_direct_tool_call,
-)
 
 
 _approval_required_for_direct_tool = lambda connector_id, action_id, arguments, tool_capabilities: direct_tool_approval_service.approval_required_for_direct_tool(
@@ -972,6 +919,17 @@ _direct_chat_policy_bindings = direct_chat_operator_binding_service.build_direct
 _direct_chat_routing_policy_callbacks = _direct_chat_policy_bindings.routing_policy_callbacks
 _direct_chat_tool_policy_callbacks = _direct_chat_policy_bindings.tool_policy_callbacks
 _direct_tool_execution_callbacks = _direct_chat_policy_bindings.direct_tool_execution_callbacks
+_direct_chat_tool_runtime_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_runtime_bindings(
+    direct_chat_runtime_facade_callbacks=lambda: _direct_chat_runtime_facade_callbacks(),
+    direct_tool_execution_callbacks=lambda: _direct_tool_execution_callbacks(),
+    execute_single_direct_tool_call_fn=lambda **kwargs: _execute_single_direct_tool_call(**kwargs),
+)
+_direct_tool_step_payload = _direct_chat_tool_runtime_bindings.direct_tool_step_payload
+_no_provider_execution_services = _direct_chat_tool_runtime_bindings.no_provider_execution_services
+_build_direct_tool_approval_response = _direct_chat_tool_runtime_bindings.build_direct_tool_approval_response
+_message_has_obvious_direct_tool_intent = _direct_chat_tool_runtime_bindings.message_has_obvious_direct_tool_intent
+_execute_single_direct_tool_call = _direct_chat_tool_runtime_bindings.execute_single_direct_tool_call
+_execute_direct_tool_calls = _direct_chat_tool_runtime_bindings.execute_direct_tool_calls
 _direct_chat_callback_facade_inputs = _direct_chat_runtime_bindings.callback_facade_inputs
 _direct_chat_generation_services = _direct_chat_runtime_bindings.generation_services
 _direct_chat_runtime_facade_callbacks = _direct_chat_runtime_bindings.runtime_facade_callbacks

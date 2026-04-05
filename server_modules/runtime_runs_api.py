@@ -14,7 +14,6 @@ from server_modules.direct_chat_service import (
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
-from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response
 from server_modules import direct_chat_stream_runtime_service as chat_stream_runtime_service
 from server_modules import direct_chat_stream_state_service as chat_stream_state_service
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
@@ -44,26 +43,15 @@ from server_modules.runtime_state_store import (
     upsert_chat_stream_state,
 )
 from server_modules import runtime_heartbeat_service
-from server_modules import runtime_history_service
 from server_modules import runtime_local_execution_approval_service
-from server_modules import runtime_request_service
 from server_modules import runtime_route_binding_service
 from server_modules import runtime_route_bootstrap_service
 from server_modules import runtime_route_registry_service
-from server_modules import runtime_route_request_handlers_service
-from server_modules import runtime_route_run_handlers_service
 from server_modules import runtime_run_access_service
-from server_modules import runtime_run_approval_service
-from server_modules import runtime_run_control_service
-from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_detail_service
-from server_modules import runtime_run_entry_service
-from server_modules import runtime_run_query_service
-from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
-from server_modules import runtime_workspace_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
@@ -555,21 +543,6 @@ def register_run_routes(app) -> None:
         serialize_run_snapshot=route_bindings.serialize_run_snapshot,
         iter_logs_for_run=iter_logs_for_run,
         get_replay_payload=_get_replay_payload,
-        runtime_workspace_service=runtime_workspace_service,
-        runtime_heartbeat_service=runtime_heartbeat_service,
-        runtime_route_request_handlers_service=runtime_route_request_handlers_service,
-        runtime_route_run_handlers_service=runtime_route_run_handlers_service,
-        runtime_request_service=runtime_request_service,
-        runtime_webhook_trigger_service=runtime_webhook_trigger_service,
-        runtime_run_delegation_service=runtime_run_delegation_service,
-        runtime_run_query_service=runtime_run_query_service,
-        runtime_run_entry_service=runtime_run_entry_service,
-        runtime_run_replay_service=runtime_run_replay_service,
-        runtime_run_approval_service=runtime_run_approval_service,
-        runtime_run_control_service=runtime_run_control_service,
-        runtime_history_service=runtime_history_service,
-        runtime_usage_service=runtime_usage_service,
-        build_direct_chat_stream_response=build_direct_chat_stream_response,
         direct_chat_stream_response_services=_direct_chat_stream_response_services,
         execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,

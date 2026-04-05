@@ -3,6 +3,22 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
+from server_modules.direct_chat_stream_response_service import build_direct_chat_stream_response as _build_direct_chat_stream_response
+from server_modules import runtime_heartbeat_service as _runtime_heartbeat_service
+from server_modules import runtime_history_service as _runtime_history_service
+from server_modules import runtime_request_service as _runtime_request_service
+from server_modules import runtime_route_request_handlers_service as _runtime_route_request_handlers_service
+from server_modules import runtime_route_run_handlers_service as _runtime_route_run_handlers_service
+from server_modules import runtime_run_approval_service as _runtime_run_approval_service
+from server_modules import runtime_run_control_service as _runtime_run_control_service
+from server_modules import runtime_run_delegation_service as _runtime_run_delegation_service
+from server_modules import runtime_run_entry_service as _runtime_run_entry_service
+from server_modules import runtime_run_query_service as _runtime_run_query_service
+from server_modules import runtime_run_replay_service as _runtime_run_replay_service
+from server_modules import runtime_usage_service as _runtime_usage_service
+from server_modules import runtime_webhook_trigger_service as _runtime_webhook_trigger_service
+from server_modules import runtime_workspace_service as _runtime_workspace_service
+
 
 def register_runtime_run_routes(
     app,
@@ -34,21 +50,6 @@ def register_runtime_run_routes(
     serialize_run_snapshot,
     iter_logs_for_run,
     get_replay_payload,
-    runtime_workspace_service,
-    runtime_heartbeat_service,
-    runtime_route_request_handlers_service,
-    runtime_route_run_handlers_service,
-    runtime_request_service,
-    runtime_webhook_trigger_service,
-    runtime_run_delegation_service,
-    runtime_run_query_service,
-    runtime_run_entry_service,
-    runtime_run_replay_service,
-    runtime_run_approval_service,
-    runtime_run_control_service,
-    runtime_history_service,
-    runtime_usage_service,
-    build_direct_chat_stream_response,
     direct_chat_stream_response_services,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
@@ -69,6 +70,21 @@ def register_runtime_run_routes(
     resolve_run_approval_callbacks,
     resume_waiting_run_callbacks,
     enforce_run_owner_access,
+    runtime_workspace_service=_runtime_workspace_service,
+    runtime_heartbeat_service=_runtime_heartbeat_service,
+    runtime_route_request_handlers_service=_runtime_route_request_handlers_service,
+    runtime_route_run_handlers_service=_runtime_route_run_handlers_service,
+    runtime_request_service=_runtime_request_service,
+    runtime_webhook_trigger_service=_runtime_webhook_trigger_service,
+    runtime_run_delegation_service=_runtime_run_delegation_service,
+    runtime_run_query_service=_runtime_run_query_service,
+    runtime_run_entry_service=_runtime_run_entry_service,
+    runtime_run_replay_service=_runtime_run_replay_service,
+    runtime_run_approval_service=_runtime_run_approval_service,
+    runtime_run_control_service=_runtime_run_control_service,
+    runtime_history_service=_runtime_history_service,
+    runtime_usage_service=_runtime_usage_service,
+    build_direct_chat_stream_response=_build_direct_chat_stream_response,
 ) -> None:
     @app.post("/runs/start", dependencies=[depends(require_api_key)])
     async def start_run(

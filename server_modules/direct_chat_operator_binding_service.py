@@ -2038,6 +2038,56 @@ def build_direct_chat_entrypoint_bindings(
     )
 
 
+def build_direct_chat_runtime_export_map(
+    *,
+    binding_bundle: DirectChatOperatorBindingBundle,
+    preview_run_response_fn: Any,
+    prefer_durable_run_handoff_fn: Any,
+) -> Dict[str, Any]:
+    runtime_bindings = binding_bundle.runtime_bindings
+    policy_bindings = binding_bundle.policy_bindings
+    entry_bindings = binding_bundle.entry_bindings
+    tool_runtime_bindings = binding_bundle.tool_runtime_bindings
+    entrypoint_bindings = build_direct_chat_entrypoint_bindings(
+        direct_chat_runtime_services_fn=lambda: runtime_bindings.runtime_services(),
+    )
+    return {
+        "_direct_chat_routing_policy_callbacks": policy_bindings.routing_policy_callbacks,
+        "_direct_chat_tool_policy_callbacks": policy_bindings.tool_policy_callbacks,
+        "_direct_tool_execution_callbacks": policy_bindings.direct_tool_execution_callbacks,
+        "_build_direct_chat_system_prompt": entry_bindings.build_direct_chat_system_prompt,
+        "_direct_chat_runtime_available": entry_bindings.direct_chat_runtime_available,
+        "_resolve_direct_chat_availability": entry_bindings.resolve_direct_chat_availability,
+        "_connected_provider_tokens": entry_bindings.connected_provider_tokens,
+        "_resolve_provider_for_direct_chat_message": entry_bindings.resolve_provider_for_direct_chat_message,
+        "_plan_direct_chat_route": entry_bindings.plan_direct_chat_route,
+        "_credential_auth_mode": entry_bindings.credential_auth_mode,
+        "_supports_direct_message_native_chat": entry_bindings.supports_direct_message_native_chat,
+        "_preferred_provider": entry_bindings.preferred_provider,
+        "_provider_unavailable_response": entry_bindings.provider_unavailable_response,
+        "_direct_chat_credentials": entry_bindings.direct_chat_credentials,
+        "_direct_chat_error_reply": entry_bindings.direct_chat_error_reply,
+        "_direct_tool_step_payload": tool_runtime_bindings.direct_tool_step_payload,
+        "_no_provider_execution_services": tool_runtime_bindings.no_provider_execution_services,
+        "_build_direct_tool_approval_response": tool_runtime_bindings.build_direct_tool_approval_response,
+        "_message_has_obvious_direct_tool_intent": tool_runtime_bindings.message_has_obvious_direct_tool_intent,
+        "_execute_single_direct_tool_call": tool_runtime_bindings.execute_single_direct_tool_call,
+        "_execute_direct_tool_calls": tool_runtime_bindings.execute_direct_tool_calls,
+        "_direct_chat_callback_facade_inputs": runtime_bindings.callback_facade_inputs,
+        "_direct_chat_generation_services": runtime_bindings.generation_services,
+        "_direct_chat_runtime_facade_callbacks": runtime_bindings.runtime_facade_callbacks,
+        "_prepare_direct_chat_request": runtime_bindings.prepare_request,
+        "_direct_chat_response_services": runtime_bindings.response_services,
+        "_direct_chat_runtime_services": runtime_bindings.runtime_services,
+        "_preview_run_response": preview_run_response_fn,
+        "_prefer_durable_run_handoff": prefer_durable_run_handoff_fn,
+        "build_direct_operator_reply": entrypoint_bindings.build_direct_operator_reply,
+        "collect_direct_operator_reply": entrypoint_bindings.collect_direct_operator_reply,
+        "build_chat_turn_event_stream": entrypoint_bindings.build_chat_turn_event_stream,
+        "execute_chat_turn": entrypoint_bindings.execute_chat_turn,
+    }
+
+
 def build_direct_chat_tool_support_bindings(
     *,
     parse_json_object_loose_fn: Any,

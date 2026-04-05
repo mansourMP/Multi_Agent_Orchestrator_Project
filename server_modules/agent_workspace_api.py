@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
 from server_modules.auth import enforce_workspace_access
-from server_modules.run_service import RunExecutionServices, build_system_run_execution_services
+from server_modules.run_service import RunExecutionServices, build_server_system_run_execution_services
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
 from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
 
@@ -30,9 +30,8 @@ def _refresh_server_exports():
 
 
 def _agent_workspace_run_execution_services() -> RunExecutionServices:
-    return build_system_run_execution_services(
-        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-        create_run_from_request=_late_server_export("_create_run_from_request"),
+    return build_server_system_run_execution_services(
+        late_server_export=_late_server_export,
     )
 
 

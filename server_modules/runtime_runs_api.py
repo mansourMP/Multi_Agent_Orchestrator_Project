@@ -459,20 +459,12 @@ def _load_replayable_chat_stream_session(
     )
 
 
-def _chat_stream_request_signature(body: dict) -> str:
-    return _service_direct_chat_request_signature(body)
-
-
-def _chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
-    return _service_direct_chat_stream_key(current_user, body)
-
-
-def _direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:
-    return _service_direct_chat_actor_key(current_user, workspace_id, thread_id)
-
-
-def _direct_chat_session_manager_enabled() -> bool:
-    return _service_direct_chat_session_manager_enabled(globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER"))
+_chat_stream_request_signature = _service_direct_chat_request_signature
+_chat_stream_key = _service_direct_chat_stream_key
+_direct_chat_actor_key = _service_direct_chat_actor_key
+_direct_chat_session_manager_enabled = lambda: _service_direct_chat_session_manager_enabled(
+    globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER")
+)
 
 
 def _direct_chat_session_manager():
@@ -491,23 +483,7 @@ def _direct_chat_execution_services() -> DirectChatExecutionServices:
         build_direct_operator_reply=build_direct_operator_reply,
         build_chat_turn_event_stream=build_chat_turn_event_stream,
     )
-
-
-def _build_direct_chat_request_meta(
-    *,
-    body: dict,
-    workspace_id: str,
-    thread_id: str,
-    client_request_id: str,
-    agent_turn_request: Optional[AgentTurnRequest] = None,
-) -> dict[str, Any]:
-    return _service_build_direct_chat_request_meta(
-        body=body,
-        workspace_id=workspace_id,
-        thread_id=thread_id,
-        client_request_id=client_request_id,
-        agent_turn_request=agent_turn_request,
-    )
+_build_direct_chat_request_meta = _service_build_direct_chat_request_meta
 
 
 def _build_direct_chat_event_producer(

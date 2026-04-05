@@ -43,6 +43,7 @@ from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
 from server_modules import direct_tool_loop_guard_service
+from server_modules import direct_tool_runtime_facade_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -1388,19 +1389,21 @@ def _resolve_chat_local_path(raw_path: str) -> Path:
 
 
 def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectToolExecutionCallbacks:
-    return direct_tool_execution_service.DirectToolExecutionCallbacks(
-        compact_step_detail=_compact_step_detail,
-        titleize_direct_step_token=_titleize_direct_step_token,
-        run_async_tool_call=_run_async_tool_call,
-        parse_tool_name=_parse_tool_name,
-        tool_arguments_payload=_tool_arguments_payload,
+    return direct_tool_runtime_facade_service.build_direct_tool_execution_callbacks(
+        namespace={
+            "compact_step_detail": _compact_step_detail,
+            "titleize_direct_step_token": _titleize_direct_step_token,
+            "run_async_tool_call": _run_async_tool_call,
+            "parse_tool_name": _parse_tool_name,
+            "tool_arguments_payload": _tool_arguments_payload,
+            "safe_positive_int": _safe_positive_int,
+            "normalize_reasoning_effort": _normalize_reasoning_effort,
+            "build_direct_local_tool_config": _build_direct_local_tool_config,
+            "format_direct_local_tool_result": _format_direct_local_tool_result,
+            "build_direct_tool_config": _build_direct_tool_config,
+            "format_direct_tool_result": _format_direct_tool_result,
+        },
         parse_json_object_loose=parse_json_object_loose,
-        safe_positive_int=_safe_positive_int,
-        normalize_reasoning_effort=_normalize_reasoning_effort,
-        build_direct_local_tool_config=_build_direct_local_tool_config,
-        format_direct_local_tool_result=_format_direct_local_tool_result,
-        build_direct_tool_config=_build_direct_tool_config,
-        format_direct_tool_result=_format_direct_tool_result,
         llm_task=llm_task,
         web_search=web_search,
         web_fetch=web_fetch,
@@ -1410,8 +1413,8 @@ def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectTo
 
 
 def _no_provider_execution_services() -> no_provider_service.NoProviderExecutionServices:
-    return direct_chat_runtime_facade_service.build_no_provider_execution_services(
-        _direct_chat_runtime_facade_callbacks(),
+    return direct_tool_runtime_facade_service.build_no_provider_execution_services(
+        callbacks=_direct_chat_runtime_facade_callbacks(),
     )
 
 
@@ -1421,7 +1424,7 @@ def _build_direct_tool_approval_response(
     tool_capabilities: List[Dict[str, Any]],
     session_ctx: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    return direct_chat_runtime_facade_service.build_direct_tool_approval_response(
+    return direct_tool_runtime_facade_service.build_direct_tool_approval_response(
         tool_calls=tool_calls,
         tool_capabilities=tool_capabilities,
         session_ctx=session_ctx,
@@ -1430,10 +1433,10 @@ def _build_direct_tool_approval_response(
 
 
 def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, Any]]) -> bool:
-    return direct_chat_runtime_facade_service.message_has_obvious_direct_tool_intent(
+    return direct_tool_runtime_facade_service.message_has_obvious_direct_tool_intent(
         message,
         tools,
-        _direct_chat_runtime_facade_callbacks(),
+        callbacks=_direct_chat_runtime_facade_callbacks(),
     )
 
 

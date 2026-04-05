@@ -27,6 +27,10 @@ from server_modules.direct_chat_service import (
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
+from server_modules.direct_chat_stream_response_service import (
+    DirectChatStreamResponseServices,
+    build_direct_chat_stream_response,
+)
 from server_modules import direct_chat_stream_runtime_service as chat_stream_runtime_service
 from server_modules import direct_chat_stream_state_service as chat_stream_state_service
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
@@ -366,6 +370,25 @@ def _direct_chat_execution_services():
         build_direct_operator_reply=build_direct_operator_reply,
         build_chat_turn_event_stream=build_chat_turn_event_stream,
     )
+
+
+def _direct_chat_stream_response_services() -> DirectChatStreamResponseServices:
+    return DirectChatStreamResponseServices(
+        resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
+        chat_stream_request_signature=_chat_stream_request_signature,
+        execute_agent_turn_request=execute_agent_turn_request,
+        build_turn_execution_services=build_turn_execution_services,
+        run_execution_services=_run_execution_services,
+        direct_chat_execution_services=_direct_chat_execution_services,
+        get_chat_stream_state=get_chat_stream_state,
+        chat_stream_state_db_path=_chat_stream_state_db_path,
+        get_or_create_chat_stream_session=_get_or_create_chat_stream_session,
+        extract_direct_chat_error_response=_extract_direct_chat_error_response,
+        start_chat_stream_producer=_start_chat_stream_producer,
+        iter_chat_stream_events=_iter_chat_stream_events,
+    )
+
+
 _build_direct_chat_request_meta = _service_build_direct_chat_request_meta
 _build_direct_chat_event_producer = lambda *, current_user, body, message, workspace_id, session_key, thread_id, client_request_id, agent_turn_request=None: _service_build_direct_chat_event_producer(
     current_user=current_user,
@@ -911,70 +934,11 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=400, detail=f"Invalid chat payload: {exc}") from exc
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Invalid chat payload.")
-
-        try:
-            direct_resolution = resolve_direct_chat_turn_request(
-                current_user=current_user,
-                body=body,
-                request_signature_fn=_chat_stream_request_signature,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        direct_turn_request = direct_resolution.turn_request
-        execution = await execute_agent_turn_request(
-            turn_request=direct_turn_request,
+        return await build_direct_chat_stream_response(
             current_user=current_user,
-            services=build_turn_execution_services(
-                run_execution=_run_execution_services(),
-                direct_chat=_direct_chat_execution_services(),
-            ),
-            chat_body=body,
-        )
-        workspace_id = str(execution.get("workspace_id") or direct_resolution.workspace_id or "default").strip() or "default"
-        session_key = str(execution.get("session_key") or "").strip()
-        thread_id = str(execution.get("thread_id") or direct_resolution.thread_id or "direct-chat").strip() or "direct-chat"
-        client_request_id = str(execution.get("client_request_id") or direct_resolution.client_request_id or "").strip()
-        replay_cursor = request.headers.get("last-event-id") or body.get("last_event_id")
-        producer = execution["producer"]
-
-        existing_state = get_chat_stream_state(_chat_stream_state_db_path(), session_key)
-        session = _get_or_create_chat_stream_session(
-            session_key,
-            thread_id=thread_id,
-            request_id=client_request_id,
-            workspace_id=workspace_id,
-        )
-        if not bool(session.get("producer_started")) and not isinstance(existing_state, dict):
-            producer_iter = producer()
-            try:
-                first_event = next(producer_iter)
-            except StopIteration:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": "chat_unavailable", "message": "Chat ended before producing a response."},
-                )
-            immediate_error = _extract_direct_chat_error_response(first_event)
-            if isinstance(immediate_error, dict):
-                return JSONResponse(status_code=409, content=immediate_error)
-
-            def replaying_producer():
-                yield first_event
-                for item in producer_iter:
-                    yield item
-
-            _start_chat_stream_producer(session, replaying_producer)
-        else:
-            _start_chat_stream_producer(session, producer)
-
-        return StreamingResponse(
-            _iter_chat_stream_events(session, replay_cursor),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-store",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+            body=body,
+            last_event_id=request.headers.get("last-event-id") or body.get("last_event_id"),
+            services=_direct_chat_stream_response_services(),
         )
 
     @app.get("/memory/{workspace_id}", dependencies=[Depends(require_api_key)])

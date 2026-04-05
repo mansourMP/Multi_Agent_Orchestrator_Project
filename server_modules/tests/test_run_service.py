@@ -17,6 +17,7 @@ from server_modules.run_service import (
     build_server_run_routing_preview_services,
     build_server_system_run_execution_services,
     build_system_run_execution_services,
+    build_system_run_execution_services_from_namespace,
     build_legacy_local_execution_creation_services,
     build_legacy_orion_preparation_services,
     build_legacy_run_preparation_services,
@@ -30,6 +31,7 @@ from server_modules.run_service import (
     build_runs_core_creation_result,
     build_runs_core_legacy_preparation_services,
     build_runs_core_legacy_request_services,
+    build_runs_core_runtime_request_services_from_namespace,
     build_runs_core_result_services,
     build_runs_delegation_creation_result,
     build_runs_delegation_legacy_preparation_services,
@@ -207,6 +209,35 @@ class RunServiceTests(unittest.TestCase):
         self.assertIs(services.prepare_run_start_request, prepare)
         self.assertIs(services.create_run_from_request, create)
         self.assertIs(services.stamp_request_owner(request, object()), request)
+
+    def test_build_system_run_execution_services_from_namespace_prefers_namespace_callbacks(self):
+        prepare = object()
+        create = object()
+
+        services = build_system_run_execution_services_from_namespace(
+            namespace={
+                "_prepare_run_start_request": prepare,
+                "_create_run_from_request": create,
+            }
+        )
+
+        request = object()
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
+        self.assertIs(services.stamp_request_owner(request, object()), request)
+
+    def test_build_system_run_execution_services_from_namespace_uses_fallbacks(self):
+        prepare = object()
+        create = object()
+
+        services = build_system_run_execution_services_from_namespace(
+            namespace={},
+            prepare_run_start_request_fallback=lambda: prepare,
+            create_run_from_request_fallback=lambda: create,
+        )
+
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
 
     def test_build_server_run_execution_services_uses_server_exports(self):
         owner = object()
@@ -450,6 +481,55 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(creation.compute_tool_policy_precheck({})["blocked_count"], 2)
         self.assertEqual(creation.begin_run_pending_confirmation()["approval_id"], "approval-2")
         self.assertEqual(creation.create_run(), "run-2")
+
+    def test_build_runs_core_runtime_request_services_from_namespace_prefers_namespace_callbacks(self):
+        namespace = {
+            "_compute_tool_policy_precheck": lambda preview_context: {"blocked_count": 3},
+            "_begin_run_pending_confirmation": lambda *args, **kwargs: {"approval_id": "approval-3"},
+            "create_run": lambda **kwargs: "run-3",
+        }
+
+        services = build_runs_core_runtime_request_services_from_namespace(
+            namespace=namespace,
+            prepare_run_start_request=lambda req: {"engine": "orion", "metadata": {}},
+            decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+            apply_execution_route_metadata=lambda metadata, route: metadata,
+            build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+            agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+            resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+            agent_machine_full_trust_enabled=lambda owner_user_id: False,
+            local_execution_target="local_companion",
+            local_execution_pack_id="local-execution-v1",
+            load_created_run=lambda run_id: {"run_id": run_id},
+        )
+
+        creation = services.build_creation_services()
+        self.assertEqual(creation.compute_tool_policy_precheck({})["blocked_count"], 3)
+        self.assertEqual(creation.begin_run_pending_confirmation()["approval_id"], "approval-3")
+        self.assertEqual(creation.create_run(), "run-3")
+        self.assertEqual(creation.load_created_run("run-x")["run_id"], "run-x")
+
+    def test_build_runs_core_runtime_request_services_from_namespace_uses_fallbacks(self):
+        services = build_runs_core_runtime_request_services_from_namespace(
+            namespace={},
+            prepare_run_start_request=lambda req: {"engine": "orion", "metadata": {}},
+            decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+            apply_execution_route_metadata=lambda metadata, route: metadata,
+            build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+            agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+            resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+            agent_machine_full_trust_enabled=lambda owner_user_id: False,
+            local_execution_target="local_companion",
+            local_execution_pack_id="local-execution-v1",
+            compute_tool_policy_precheck_fallback=lambda: (lambda preview_context: {"blocked_count": 4}),
+            begin_run_pending_confirmation_fallback=lambda: (lambda *args, **kwargs: {"approval_id": "approval-4"}),
+            create_run_fallback=lambda: (lambda **kwargs: "run-4"),
+        )
+
+        creation = services.build_creation_services()
+        self.assertEqual(creation.compute_tool_policy_precheck({})["blocked_count"], 4)
+        self.assertEqual(creation.begin_run_pending_confirmation()["approval_id"], "approval-4")
+        self.assertEqual(creation.create_run(), "run-4")
 
     def test_build_runs_core_legacy_preparation_services_preserves_postprocess(self):
         services = build_runs_core_legacy_preparation_services(

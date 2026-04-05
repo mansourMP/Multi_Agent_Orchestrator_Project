@@ -1200,26 +1200,31 @@ def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    from server_modules.runs_execution import _compute_tool_policy_precheck, create_run
-
     return run_service.create_legacy_run_result_from_request(
         req,
         schedule_id=schedule_id,
-        services=run_service.build_runs_core_legacy_request_services(
+        services=run_service.build_runs_core_runtime_request_services_from_namespace(
+            namespace=globals(),
             prepare_run_start_request=_prepare_run_start_request,
             decide_execution_target=decide_execution_target,
             apply_execution_route_metadata=apply_execution_route_metadata,
             build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
             agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
-            compute_tool_policy_precheck=_compute_tool_policy_precheck,
             resolve_runtime_policy_mode=resolve_runtime_policy_mode,
             agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
-            begin_run_pending_confirmation=_begin_run_pending_confirmation,
-            create_run=create_run,
             local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
             local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
             load_created_run=lambda run_id: runs.get(run_id) if isinstance(runs.get(run_id), dict) else {},
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
+            compute_tool_policy_precheck_fallback=lambda: __import__(
+                "server_modules.runs_execution",
+                fromlist=["_compute_tool_policy_precheck"],
+            )._compute_tool_policy_precheck,
+            create_run_fallback=lambda: __import__(
+                "server_modules.runs_execution",
+                fromlist=["create_run"],
+            ).create_run,
+            begin_run_pending_confirmation_fallback=lambda: _begin_run_pending_confirmation,
         ),
     )
 

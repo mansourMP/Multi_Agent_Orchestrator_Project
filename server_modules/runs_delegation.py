@@ -124,9 +124,8 @@ execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system
 
 
 def _delegation_run_execution_services() -> run_service.RunExecutionServices:
-    return run_service.build_system_run_execution_services(
-        prepare_run_start_request=_prepare_run_start_request,
-        create_run_from_request=lambda req: _create_run_from_request(req),
+    return run_service.build_system_run_execution_services_from_namespace(
+        namespace=globals(),
     )
 
 

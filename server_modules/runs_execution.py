@@ -124,9 +124,8 @@ execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system
 def _workflow_child_run_execution_services() -> RunExecutionServices:
     from server_modules import runs_delegation as _runs_delegation
 
-    return run_service.build_system_run_execution_services(
-        prepare_run_start_request=lambda req: _runs_delegation._prepare_run_start_request(req),
-        create_run_from_request=lambda req: _runs_delegation._create_run_from_request(req),
+    return run_service.build_system_run_execution_services_from_namespace(
+        namespace=vars(_runs_delegation),
     )
 
 

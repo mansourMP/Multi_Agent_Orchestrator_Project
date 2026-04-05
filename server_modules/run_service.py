@@ -25,6 +25,8 @@ RUN_STATES = (
     "canceled",
 )
 
+ROUTING_PROVIDER_ORDER: Tuple[str, ...] = ("openai", "anthropic", "gemini", "codex_cli", "ollama")
+
 
 AUTO_DELEGATION_ROLE_RULES: Dict[str, Dict[str, Any]] = {
     "research": {
@@ -76,6 +78,22 @@ AUTO_DELEGATION_ROLE_RULES: Dict[str, Dict[str, Any]] = {
         "reason": "Personal assistance is needed.",
     },
 }
+
+
+def resolve_fastest_routing_context(
+    *,
+    routing_provider_order: Tuple[str, ...],
+    provider_has_key_fn: Callable[[str], bool],
+    resolve_requested_model_fn: Callable[[Dict[str, Any], Dict[str, Any], str], Any],
+) -> Optional[Dict[str, str]]:
+    for provider in routing_provider_order:
+        if not provider_has_key_fn(provider):
+            continue
+        model = str(
+            resolve_requested_model_fn({"provider": provider}, {"provider": provider}, provider)
+        ).strip() or None
+        return {"provider": provider, "model": model or ""}
+    return None
 
 
 @dataclass(slots=True)

@@ -26,7 +26,7 @@ globals().update({key: value for key, value in vars(common).items() if not key.s
 AUTO_RETRY_DELAY_SECONDS = 3.0
 AUTO_RETRY_MAX_RETRIES = 1
 STALE_CHILD_RUN_TIMEOUT_SECONDS = 300
-ROUTING_PROVIDER_ORDER: Tuple[str, ...] = ("openai", "anthropic", "gemini", "codex_cli", "ollama")
+ROUTING_PROVIDER_ORDER = run_service.ROUTING_PROVIDER_ORDER
 _AUTO_RETRY_PENDING: Set[Tuple[str, str]] = set()
 _AUTO_RETRY_ATTEMPTS: Dict[Tuple[str, str], int] = {}
 _AUTO_RETRY_PENDING_LOCK = threading.Lock()
@@ -482,12 +482,11 @@ AUTO_DELEGATION_ROLE_RULES = run_service.AUTO_DELEGATION_ROLE_RULES
 def _fastest_routing_context() -> Optional[Dict[str, str]]:
     from scripts.orion_local_worker_llm import provider_has_key, resolve_requested_model
 
-    for provider in ROUTING_PROVIDER_ORDER:
-        if not provider_has_key(provider):
-            continue
-        model = str(resolve_requested_model({"provider": provider}, {"provider": provider}, provider)).strip() or None
-        return {"provider": provider, "model": model or ""}
-    return None
+    return run_service.resolve_fastest_routing_context(
+        routing_provider_order=ROUTING_PROVIDER_ORDER,
+        provider_has_key_fn=provider_has_key,
+        resolve_requested_model_fn=resolve_requested_model,
+    )
 
 
 def _llm_auto_delegate_role(

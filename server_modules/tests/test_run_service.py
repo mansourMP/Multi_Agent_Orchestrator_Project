@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     AUTO_DELEGATION_ROLE_RULES,
+    ROUTING_PROVIDER_ORDER,
     apply_browser_execution_metadata,
     build_run_creation_services,
     build_auto_delegation_plan,
@@ -85,6 +86,7 @@ from server_modules.run_service import (
     emit_auto_delegation_routing_log,
     iter_known_run_snapshots,
     llm_auto_delegate_role,
+    resolve_fastest_routing_context,
     refresh_parent_delegation_state,
     schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
@@ -1623,6 +1625,24 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(route, {"agent_role": "finance", "reason": "Spreadsheet work fits finance."})
+
+    def test_resolve_fastest_routing_context_returns_first_available_provider(self):
+        context = resolve_fastest_routing_context(
+            routing_provider_order=ROUTING_PROVIDER_ORDER,
+            provider_has_key_fn=lambda provider: provider in {"anthropic", "gemini"},
+            resolve_requested_model_fn=lambda request, metadata, provider: f"{provider}-model",
+        )
+
+        self.assertEqual(context, {"provider": "anthropic", "model": "anthropic-model"})
+
+    def test_resolve_fastest_routing_context_returns_none_without_available_provider(self):
+        context = resolve_fastest_routing_context(
+            routing_provider_order=ROUTING_PROVIDER_ORDER,
+            provider_has_key_fn=lambda provider: False,
+            resolve_requested_model_fn=lambda request, metadata, provider: f"{provider}-model",
+        )
+
+        self.assertIsNone(context)
 
     def test_build_auto_delegation_plan_prefers_llm_route(self):
         plan = build_auto_delegation_plan(

@@ -175,8 +175,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 _safe_positive_int = direct_chat_entry_policy_service.safe_positive_int
-_resolved_chat_iteration_limit = lambda explicit=None: direct_chat_entry_policy_service.resolved_chat_iteration_limit(
-    explicit,
+_resolved_chat_iteration_limit = partial(
+    direct_chat_entry_policy_service.resolved_chat_iteration_limit,
     default_limit=CHAT_MAX_ITERATIONS_DEFAULT,
     ceiling=CHAT_MAX_ITERATIONS_CEILING,
     env_var_name="ORION_MAX_CHAT_ITERATIONS",
@@ -336,45 +336,42 @@ _resolve_direct_chat_availability = lambda workspace_id, requested_provider="", 
     resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities,
     availability_override=availability_override,
 )
-_availability_lines = lambda workspace_id, availability: direct_chat_entry_policy_service.availability_lines(
-    workspace_id,
-    availability,
+_availability_lines = partial(
+    direct_chat_entry_policy_service.availability_lines,
     normalize_tool_capabilities=_normalize_tool_capabilities,
 )
-_connected_system_labels = lambda availability: direct_chat_entry_policy_service.connected_system_labels(
-    availability,
+_connected_system_labels = partial(
+    direct_chat_entry_policy_service.connected_system_labels,
     normalize_tool_capabilities=_normalize_tool_capabilities,
 )
-_context_tool_capabilities = lambda availability: direct_chat_entry_policy_service.context_tool_capabilities(
-    availability,
+_context_tool_capabilities = partial(
+    direct_chat_entry_policy_service.context_tool_capabilities,
     normalize_tool_capabilities=_normalize_tool_capabilities,
     max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
     max_context_tool_capabilities=MAX_CONTEXT_TOOL_CAPABILITIES,
 )
-_normalize_prior_messages = lambda prior_messages: direct_chat_entry_policy_service.normalize_prior_messages(
-    prior_messages,
+_normalize_prior_messages = partial(
+    direct_chat_entry_policy_service.normalize_prior_messages,
     max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
     max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
 )
 _direct_tool_session_key = direct_chat_entry_policy_service.direct_tool_session_key
 _direct_chat_session_key = direct_chat_entry_policy_service.direct_chat_session_key
 _parse_slash_command = direct_chat_entry_policy_service.parse_slash_command
-_session_model_preference = lambda session_key: direct_chat_entry_policy_service.session_model_preference(
-    session_key,
+_session_model_preference = partial(
+    direct_chat_entry_policy_service.session_model_preference,
     store=_DIRECT_CHAT_MODEL_PREFERENCES,
 )
-_set_session_model_preference = lambda session_key, *, provider, model: direct_chat_entry_policy_service.set_session_model_preference(
-    session_key,
-    provider=provider,
-    model=model,
+_set_session_model_preference = partial(
+    direct_chat_entry_policy_service.set_session_model_preference,
     store=_DIRECT_CHAT_MODEL_PREFERENCES,
 )
-_mark_thread_cleared = lambda session_key: direct_chat_entry_policy_service.mark_thread_cleared(
-    session_key,
+_mark_thread_cleared = partial(
+    direct_chat_entry_policy_service.mark_thread_cleared,
     clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
 )
-_consume_thread_cleared = lambda session_key: direct_chat_entry_policy_service.consume_thread_cleared(
-    session_key,
+_consume_thread_cleared = partial(
+    direct_chat_entry_policy_service.consume_thread_cleared,
     clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
 )
 _connected_provider_tokens = lambda workspace_id: direct_chat_entry_policy_service.connected_provider_tokens(

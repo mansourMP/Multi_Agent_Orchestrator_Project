@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -9,10 +8,9 @@ import sentry_sdk
 import sys
 import time
 import importlib.util
-from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 from scripts.orion_local_worker_llm import (
     SUPPORTED_PROVIDERS,
@@ -22,7 +20,6 @@ from scripts.orion_local_worker_llm import (
     parse_json_object_loose,
     provider_has_key,
 )
-from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
@@ -34,16 +31,10 @@ from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_runtime_entry_facade_service
-from server_modules import direct_chat_handoff_service
-from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_routing_service
-from server_modules import direct_chat_entry_service
-from server_modules import direct_chat_callback_facade_service
 from server_modules import direct_chat_context_service
 from server_modules import direct_chat_metadata_service
-from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_facade_service
-from server_modules import direct_chat_runtime_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
@@ -182,22 +173,15 @@ LOCAL_COMPUTER_CONTROL_KEYWORDS = (
 LOGGER = logging.getLogger(__name__)
 
 
-def _safe_positive_int(value: Any, default: int) -> int:
-    return direct_chat_entry_policy_service.safe_positive_int(value, default)
-
-
-def _resolved_chat_iteration_limit(explicit: Any = None) -> int:
-    return direct_chat_entry_policy_service.resolved_chat_iteration_limit(
-        explicit,
-        default_limit=CHAT_MAX_ITERATIONS_DEFAULT,
-        ceiling=CHAT_MAX_ITERATIONS_CEILING,
-        env_var_name="ORION_MAX_CHAT_ITERATIONS",
-        safe_positive_int_fn=_safe_positive_int,
-    )
-
-
-def _chat_iteration_limit_reply(limit: int) -> str:
-    return direct_chat_entry_policy_service.chat_iteration_limit_reply(limit)
+_safe_positive_int = direct_chat_entry_policy_service.safe_positive_int
+_resolved_chat_iteration_limit = lambda explicit=None: direct_chat_entry_policy_service.resolved_chat_iteration_limit(
+    explicit,
+    default_limit=CHAT_MAX_ITERATIONS_DEFAULT,
+    ceiling=CHAT_MAX_ITERATIONS_CEILING,
+    env_var_name="ORION_MAX_CHAT_ITERATIONS",
+    safe_positive_int_fn=_safe_positive_int,
+)
+_chat_iteration_limit_reply = direct_chat_entry_policy_service.chat_iteration_limit_reply
 WEB_LOOKUP_KEYWORDS = (
     "latest",
     "today",
@@ -314,8 +298,7 @@ _DIRECT_CHAT_CLEAR_MARKERS: set[str] = set()
 _MEMORY_NOTEBOOK_TOOL_NAMES = {"memory_search", "memory_get"}
 
 
-def _compact_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+_compact_text = lambda value: re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
 _build_direct_chat_system_prompt = lambda *, workspace_id, availability, tools: direct_chat_prompt_service.build_system_prompt(
@@ -386,13 +369,13 @@ def _tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional
     return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
 
 
-def _local_worker_available(availability: Dict[str, Any]) -> bool:
-    if not isinstance(availability, dict):
-        return False
-    runtime_ok = availability.get("runtime_ok")
-    if isinstance(runtime_ok, bool):
-        return runtime_ok
-    return True
+_local_worker_available = lambda availability: (
+    False
+    if not isinstance(availability, dict)
+    else availability.get("runtime_ok")
+    if isinstance(availability.get("runtime_ok"), bool)
+    else True
+)
 
 
 _agent_machine_owner_user_id = direct_chat_context_service.agent_machine_owner_user_id

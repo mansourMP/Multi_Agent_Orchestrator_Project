@@ -1565,6 +1565,60 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Operator Chat Import And Trivial Wrapper Cleanup
+
+#### Stage
+
+Stage 1 refactor continues. The operator shell is now in a smaller cleanup phase where remaining dead imports and tiny forwarding helpers are being trimmed without changing behavior.
+
+#### Completed Work
+
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) to:
+  - remove now-dead module imports that no longer participate in the compatibility shell
+  - collapse a few trivial forwarding helpers into direct aliases or late-bound lambdas
+  - preserve the legacy `os.environ` patch surface required by the operator-chat tests
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1170` lines to `1153` lines in this cut.
+- This was a shell cleanup cut, not a service-boundary extraction.
+- The module still keeps the same test-visible compatibility namespace expected by the direct-chat and no-provider harnesses.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns nontrivial normalization, tool-capability shaping, callback assembly, and approval glue.
+- The shell is meaningfully smaller, but it is not yet the final thin coordinator envisioned by the canonical architecture.
+- Additional convergence work is still required in `run_service()` and `agent_turn()` beyond the operator shell.
+
+#### Next Required Work
+
+1. Continue reducing the remaining real helper ownership in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+2. Keep preserving late-bound patchability for the offline harness while trimming shell-only code.
+3. Push remaining orchestration into canonical direct-chat, run, and turn services.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_memory_facade_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_direct_chat_support_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Operator Chat Handoff And Runtime Entry Wrappers Collapsed
 
 #### Stage

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from server_modules import skills_service
+
 
 def shell_command_requires_approval(command: str, *, compact_text) -> bool:
     compact = compact_text(command)
@@ -89,11 +91,8 @@ def approval_required_for_direct_tool(
             arguments,
             compact_text=compact_text,
         )
-    for item in tool_capabilities:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id") or "").strip().lower() != normalized_connector_id:
-            continue
-        required_actions = item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else []
-        return normalized_action_id in {str(entry or "").strip() for entry in required_actions}
-    return False
+    return skills_service.availability_capability_requires_approval_for_action(
+        {"tool_capabilities": tool_capabilities},
+        normalized_connector_id,
+        normalized_action_id,
+    )

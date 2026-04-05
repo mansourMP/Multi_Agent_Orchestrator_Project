@@ -41,6 +41,16 @@ class DirectChatToolCatalogServiceTests(unittest.TestCase):
         self.assertTrue(any(item["name"] == "file__read" for item in tools))
         self.assertTrue(any(item["name"] == "computer__click" for item in tools))
 
+    def test_build_direct_chat_tools_uses_normalized_usable_write_actions(self) -> None:
+        tools = service.build_direct_chat_tools(
+            [
+                {"id": " Slack ", "label": "Slack", "runtime_usable": True, "write_actions": [" post_message ", "post_message"]},
+                {"id": "dropbox", "label": "Dropbox", "runtime_usable": False, "write_actions": ["upload_file"]},
+            ]
+        )
+
+        self.assertEqual([item["name"] for item in tools], ["slack__post_message"])
+
     def test_message_can_use_direct_local_tools_detects_file_request(self) -> None:
         allowed = service.message_can_use_direct_local_tools(
             "Open /tmp/demo.txt",

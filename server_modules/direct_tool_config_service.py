@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import skills_service
+
 
 def extract_first_email(text: str) -> str:
     match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", str(text or ""), flags=re.IGNORECASE)
@@ -358,16 +360,11 @@ def tool_write_action_available(
         }
     if normalized_connector_id == "http":
         return normalized_action_id == "request"
-    for item in tool_capabilities:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id") or "").strip().lower() != normalized_connector_id:
-            continue
-        if not bool(item.get("connected")):
-            return False
-        write_actions = item.get("write_actions") if isinstance(item.get("write_actions"), list) else []
-        return normalized_action_id in {str(entry or "").strip() for entry in write_actions}
-    return False
+    return skills_service.availability_capability_supports_write_action(
+        {"tool_capabilities": tool_capabilities},
+        normalized_connector_id,
+        normalized_action_id,
+    )
 
 
 def approved_action_to_tool_call(

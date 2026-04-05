@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence
 
+from server_modules import skills_service
+
 
 @dataclass(frozen=True)
 class DirectChatToolPolicyCallbacks:
@@ -143,14 +145,13 @@ def build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dic
     for cap in tool_capabilities:
         if not isinstance(cap, dict):
             continue
-        if cap.get("runtime_usable") is not True:
+        if skills_service.capability_payload_runtime_usable(cap) is not True:
             continue
         connector_id = str(cap.get("id") or "").strip().lower()
         label = str(cap.get("label") or connector_id).strip() or connector_id
         if not connector_id:
             continue
-        for raw_action in cap.get("write_actions", []):
-            action = str(raw_action or "").strip()
+        for action in skills_service.capability_payload_write_actions(cap):
             if not action:
                 continue
             tool_name = f"{connector_id}__{action}"

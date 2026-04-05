@@ -60,6 +60,42 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertFalse(skills_service.availability_capability_runtime_usable(availability, "browser"))
         self.assertIsNone(skills_service.availability_capability(availability, "missing"))
 
+    def test_capability_action_helpers_normalize_write_and_approval_actions(self) -> None:
+        availability = {
+            "tool_capabilities": [
+                {
+                    "id": " Slack ",
+                    "connected": True,
+                    "write_actions": [" post_message ", "send_dm", "post_message"],
+                    "approval_required_actions": [" send_dm "],
+                },
+            ]
+        }
+
+        self.assertEqual(
+            skills_service.availability_capability_write_actions(availability, "slack"),
+            ["post_message", "send_dm"],
+        )
+        self.assertEqual(
+            skills_service.availability_capability_approval_required_actions(availability, "slack"),
+            ["send_dm"],
+        )
+        self.assertTrue(skills_service.availability_capability_supports_write_action(availability, "slack", "post_message"))
+        self.assertTrue(
+            skills_service.availability_capability_requires_approval_for_action(
+                availability,
+                "slack",
+                "send_dm",
+            )
+        )
+        self.assertFalse(
+            skills_service.availability_capability_supports_write_action(
+                {"tool_capabilities": [{"id": "slack", "connected": False, "write_actions": ["post_message"]}]},
+                "slack",
+                "post_message",
+            )
+        )
+
     def test_connected_and_context_availability_helpers(self) -> None:
         availability = {
             "tool_capabilities": [

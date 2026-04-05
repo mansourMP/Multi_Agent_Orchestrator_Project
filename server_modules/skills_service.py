@@ -116,9 +116,63 @@ def availability_capability_connected(availability: Any, capability_id: str) -> 
 
 def availability_capability_runtime_usable(availability: Any, capability_id: str) -> bool | None:
     item = availability_capability(availability, capability_id)
+    return capability_payload_runtime_usable(item)
+
+
+def capability_payload_connected(item: Any) -> bool:
+    return bool(isinstance(item, dict) and item.get("connected"))
+
+
+def capability_payload_runtime_usable(item: Any) -> bool | None:
     if not isinstance(item, dict):
         return None
     return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
+
+
+def capability_payload_write_actions(item: Any) -> List[str]:
+    if not isinstance(item, dict):
+        return []
+    return _normalize_action_list(item.get("write_actions"))
+
+
+def capability_payload_approval_required_actions(item: Any) -> List[str]:
+    if not isinstance(item, dict):
+        return []
+    return _normalize_action_list(item.get("approval_required_actions"))
+
+
+def capability_payload_supports_write_action(item: Any, action_id: str) -> bool:
+    normalized_action_id = str(action_id or "").strip()
+    if not normalized_action_id:
+        return False
+    return normalized_action_id in set(capability_payload_write_actions(item))
+
+
+def capability_payload_requires_approval_for_action(item: Any, action_id: str) -> bool:
+    normalized_action_id = str(action_id or "").strip()
+    if not normalized_action_id:
+        return False
+    return normalized_action_id in set(capability_payload_approval_required_actions(item))
+
+
+def availability_capability_write_actions(availability: Any, capability_id: str) -> List[str]:
+    item = availability_capability(availability, capability_id)
+    return capability_payload_write_actions(item)
+
+
+def availability_capability_approval_required_actions(availability: Any, capability_id: str) -> List[str]:
+    item = availability_capability(availability, capability_id)
+    return capability_payload_approval_required_actions(item)
+
+
+def availability_capability_supports_write_action(availability: Any, capability_id: str, action_id: str) -> bool:
+    item = availability_capability(availability, capability_id)
+    return capability_payload_connected(item) and capability_payload_supports_write_action(item, action_id)
+
+
+def availability_capability_requires_approval_for_action(availability: Any, capability_id: str, action_id: str) -> bool:
+    item = availability_capability(availability, capability_id)
+    return capability_payload_requires_approval_for_action(item, action_id)
 
 
 def connected_availability_capabilities(availability: Any) -> List[Dict[str, Any]]:

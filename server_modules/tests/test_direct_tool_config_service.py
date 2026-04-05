@@ -21,6 +21,22 @@ class DirectToolConfigServiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             service.build_direct_local_tool_config("computer", "click", {})
 
+    def test_tool_write_action_available_requires_connected_capability_action(self) -> None:
+        self.assertTrue(
+            service.tool_write_action_available(
+                "slack",
+                "post_message",
+                [{"id": " Slack ", "connected": True, "write_actions": [" post_message "]}],
+            )
+        )
+        self.assertFalse(
+            service.tool_write_action_available(
+                "slack",
+                "post_message",
+                [{"id": "slack", "connected": False, "write_actions": ["post_message"]}],
+            )
+        )
+
     def test_approved_action_to_tool_call_maps_http_request_name(self) -> None:
         payload = service.approved_action_to_tool_call(
             {"connector": "http", "action": "request", "input": "{\"url\":\"https://example.com\"}"},

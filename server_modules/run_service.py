@@ -180,12 +180,31 @@ def build_run_routing_preview_services(
     )
 
 
+def build_server_run_routing_preview_services(
+    *,
+    late_server_export: Callable[[str], Any],
+) -> RunRoutingPreviewServices:
+    return build_run_routing_preview_services(
+        prepare_run_start_request=late_server_export("_prepare_run_start_request"),
+        compute_tool_policy_precheck=late_server_export("_compute_tool_policy_precheck"),
+    )
+
+
 def build_run_creation_services(
     *,
     create_run_from_request: Any,
 ) -> RunCreationServices:
     return RunCreationServices(
         create_run_from_request=create_run_from_request,
+    )
+
+
+def build_server_run_creation_services(
+    *,
+    late_server_export: Callable[[str], Any],
+) -> RunCreationServices:
+    return build_run_creation_services(
+        create_run_from_request=late_server_export("_create_run_from_request"),
     )
 
 
@@ -199,6 +218,18 @@ def build_run_execution_services(
         stamp_request_owner=stamp_request_owner,
         prepare_run_start_request=prepare_run_start_request,
         create_run_from_request=create_run_from_request,
+    )
+
+
+def build_server_run_execution_services(
+    *,
+    stamp_request_owner: Any,
+    late_server_export: Callable[[str], Any],
+) -> RunExecutionServices:
+    return build_run_execution_services(
+        stamp_request_owner=stamp_request_owner,
+        prepare_run_start_request=late_server_export("_prepare_run_start_request"),
+        create_run_from_request=late_server_export("_create_run_from_request"),
     )
 
 

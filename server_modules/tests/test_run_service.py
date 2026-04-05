@@ -8,10 +8,13 @@ from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
     build_run_creation_services,
+    build_server_run_creation_services,
     build_legacy_run_execution_services,
     build_legacy_run_execution_services_from_values,
     build_run_precheck_result,
     build_run_execution_services,
+    build_server_run_execution_services,
+    build_server_run_routing_preview_services,
     build_system_run_execution_services,
     build_legacy_local_execution_creation_services,
     build_legacy_orion_preparation_services,
@@ -183,10 +186,36 @@ class RunServiceTests(unittest.TestCase):
         self.assertIs(services.create_run_from_request, create)
         self.assertIs(services.stamp_request_owner(request, object()), request)
 
+    def test_build_server_run_execution_services_uses_server_exports(self):
+        owner = object()
+        prepare = object()
+        create = object()
+
+        services = build_server_run_execution_services(
+            stamp_request_owner=owner,
+            late_server_export=lambda name: {
+                "_prepare_run_start_request": prepare,
+                "_create_run_from_request": create,
+            }[name],
+        )
+
+        self.assertIs(services.stamp_request_owner, owner)
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
+
     def test_build_run_creation_services_preserves_callback(self):
         create = object()
 
         services = build_run_creation_services(create_run_from_request=create)
+
+        self.assertIs(services.create_run_from_request, create)
+
+    def test_build_server_run_creation_services_uses_server_exports(self):
+        create = object()
+
+        services = build_server_run_creation_services(
+            late_server_export=lambda name: {"_create_run_from_request": create}[name]
+        )
 
         self.assertIs(services.create_run_from_request, create)
 
@@ -197,6 +226,20 @@ class RunServiceTests(unittest.TestCase):
         services = build_run_routing_preview_services(
             prepare_run_start_request=prepare,
             compute_tool_policy_precheck=precheck,
+        )
+
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.compute_tool_policy_precheck, precheck)
+
+    def test_build_server_run_routing_preview_services_uses_server_exports(self):
+        prepare = object()
+        precheck = object()
+
+        services = build_server_run_routing_preview_services(
+            late_server_export=lambda name: {
+                "_prepare_run_start_request": prepare,
+                "_compute_tool_policy_precheck": precheck,
+            }[name]
         )
 
         self.assertIs(services.prepare_run_start_request, prepare)

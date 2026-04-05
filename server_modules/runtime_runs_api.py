@@ -22,11 +22,11 @@ from server_modules import direct_chat_stream_state_service as chat_stream_state
 from server_modules import direct_chat_stream_transport_service as chat_stream_transport_service
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import (
-    build_run_creation_services,
-    build_run_execution_services,
     build_run_precheck_result,
-    build_run_routing_preview_services,
     build_run_routing_preview,
+    build_server_run_creation_services,
+    build_server_run_execution_services,
+    build_server_run_routing_preview_services,
     create_run_result_from_request,
 )
 from server_modules.turn_runtime import (
@@ -110,21 +110,19 @@ _heartbeat_scheduler = lambda: runtime_heartbeat_service.heartbeat_scheduler(
 )
 
 
-_run_creation_services = lambda: build_run_creation_services(
-    create_run_from_request=_late_server_export("_create_run_from_request"),
+_run_creation_services = lambda: build_server_run_creation_services(
+    late_server_export=_late_server_export,
 )
 
 
-_run_execution_services = lambda: build_run_execution_services(
+_run_execution_services = lambda: build_server_run_execution_services(
     stamp_request_owner=_stamp_request_owner,
-    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-    create_run_from_request=_late_server_export("_create_run_from_request"),
+    late_server_export=_late_server_export,
 )
 
 
-_run_routing_preview_services = lambda: build_run_routing_preview_services(
-    prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
-    compute_tool_policy_precheck=_late_server_export("_compute_tool_policy_precheck"),
+_run_routing_preview_services = lambda: build_server_run_routing_preview_services(
+    late_server_export=_late_server_export,
 )
 
 

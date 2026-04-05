@@ -1768,6 +1768,69 @@ This cut does not introduce a new subsystem boundary. It is a compatibility-pres
   - `server_modules.tests.test_direct_chat_operator_binding_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Memory, Metadata, And Prompt Support Band Moved Behind Support Binding Service
+
+#### Stage
+
+Stage 1 continues. The memory-persistence, context-metadata, and proactive-suggestion support band no longer lives directly inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut is another ownership reduction rather than a raw line-count win. The shell size stayed effectively flat, but a coherent support cluster now has an explicit binding layer instead of being assembled inline.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_support_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_support_binding_service.py) to own delegation for:
+  - direct-chat memory persistence
+  - transcript persistence
+  - `context_used` payload shaping
+  - heartbeat-task suggestion sourcing
+  - recent-run suggestion sourcing
+  - proactive suggestion assembly
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the support-band wrappers now delegate through the new service.
+- Added focused coverage in [server_modules/tests/test_direct_chat_support_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_support_binding_service.py).
+
+#### Current Truth
+
+- The support band now has an explicit service boundary instead of living directly inside the operator shell.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) remains the compatibility surface for the existing helper names.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) moved from `1556` to `1557` lines in this cut, so this should be understood as ownership cleanup, not size reduction.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns substantial orchestration flow and callback graph composition.
+- Remaining improvements will increasingly need to move true orchestration logic, not just support bands.
+- The restored docs set still needs a later continuity cleanup after the current refactor run settles.
+
+#### Next Required Work
+
+1. Continue targeting dense orchestration logic inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), especially runtime/provider/direct-tool control flow.
+2. Keep preserving the current compatibility surface so direct imports and focused tests remain stable.
+3. Reconcile docs continuity after the code-side refactor sequence stabilizes.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_support_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_support_binding_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_support_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_support_binding_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_support_binding_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_memory_facade_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Keyword-Injected Delegate Band Reduced With Alias And Partial Bindings
 
 #### Stage

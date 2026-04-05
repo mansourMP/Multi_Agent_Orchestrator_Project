@@ -30,6 +30,7 @@ from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_operator_binding_service
+from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_runtime_entry_facade_service
@@ -635,7 +636,7 @@ def _persist_direct_chat_memory_best_effort(
     user_message: str,
     assistant_reply: str,
 ) -> None:
-    direct_chat_memory_facade_service.persist_direct_chat_memory_best_effort(
+    direct_chat_support_binding_service.persist_direct_chat_memory_best_effort(
         workspace_id=workspace_id,
         provider=provider,
         model=model,
@@ -660,7 +661,7 @@ def _persist_direct_chat_transcript_best_effort(
     user_message: str,
     assistant_reply: str,
 ) -> None:
-    direct_chat_memory_facade_service.persist_direct_chat_transcript_best_effort(
+    direct_chat_support_binding_service.persist_direct_chat_transcript_best_effort(
         workspace_id=workspace_id,
         thread_id=thread_id,
         provider=provider,
@@ -688,7 +689,7 @@ def _build_context_used(
     fallback_used: bool = False,
     fallback_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return direct_chat_metadata_service.build_context_used(
+    return direct_chat_support_binding_service.build_context_used(
         workspace_id=workspace_id,
         requested_provider=requested_provider,
         effective_provider=effective_provider,
@@ -838,7 +839,7 @@ def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[st
 
 
 def _heartbeat_pending_tasks_for_suggestions() -> List[str]:
-    return direct_chat_metadata_service.heartbeat_pending_tasks_for_suggestions(
+    return direct_chat_support_binding_service.heartbeat_pending_tasks_for_suggestions(
         workspace_context_dir_fn=workspace_context_dir,
     )
 
@@ -850,14 +851,14 @@ def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
         return []
     with RUN_HISTORY_LOCK:
         history_items = list(RUN_HISTORY)
-    return direct_chat_metadata_service.recent_run_prompts_for_suggestions(
+    return direct_chat_support_binding_service.recent_run_prompts_for_suggestions(
         workspace_id,
         run_history=history_items,
     )
 
 
 def _build_proactive_suggestions(workspace_id: str) -> List[str]:
-    return direct_chat_prompt_service.build_proactive_suggestions(
+    return direct_chat_support_binding_service.build_proactive_suggestions(
         workspace_id,
         heartbeat_tasks=_heartbeat_pending_tasks_for_suggestions,
         recent_run_prompts=_recent_run_prompts_for_suggestions,

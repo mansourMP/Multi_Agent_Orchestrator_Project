@@ -70,6 +70,7 @@ from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_detail_service
+from server_modules import runtime_run_entry_service
 from server_modules import runtime_run_query_service
 from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
@@ -583,14 +584,13 @@ def register_run_routes(app) -> None:
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        request_payload = body or RunStartRequest()
-        result = await execute_run_start_request_via_turn_runtime(
-            request_payload,
+        return await runtime_run_entry_service.start_run_response(
+            body or RunStartRequest(),
             current_user=current_user,
+            execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
-            services=_run_execution_services(),
+            run_execution_services=_run_execution_services,
         )
-        return result
 
     @app.post("/chat/respond", dependencies=[Depends(require_api_key)])
     async def respond_chat(request: Request, current_user=Depends(require_api_key)):
@@ -768,30 +768,20 @@ def register_run_routes(app) -> None:
     @app.post("/routing/preview", dependencies=[Depends(require_api_key)])
     async def preview_routing(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
-        req = body or RunStartRequest()
-        preview = build_run_routing_preview(req, services=_run_routing_preview_services())
-        return {
-            "engine": preview["engine"],
-            "agent_role": preview["metadata"].get("agent_role"),
-            "agent_role_source": preview["metadata"].get("agent_role_source"),
-            "route": preview["route"],
-            "tool_policy_precheck": preview["tool_policy_precheck"],
-        }
+        return runtime_run_entry_service.preview_routing_response(
+            body or RunStartRequest(),
+            build_run_routing_preview=build_run_routing_preview,
+            run_routing_preview_services=_run_routing_preview_services,
+        )
 
     @app.post("/runs/precheck", dependencies=[Depends(require_api_key)])
     async def precheck_run(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
-        req = body or RunStartRequest()
-        preview = await build_run_precheck_result(req, services=_run_routing_preview_services())
-        return {
-            "ok": True,
-            "engine": preview["engine"],
-            "agent_role": preview["metadata"].get("agent_role"),
-            "agent_role_source": preview["metadata"].get("agent_role_source"),
-            "route": preview["route"],
-            "tool_policy_precheck": preview["tool_policy_precheck"],
-            "doctor_preflight": preview["doctor_preflight"],
-        }
+        return await runtime_run_entry_service.precheck_run_response(
+            body or RunStartRequest(),
+            build_run_precheck_result=build_run_precheck_result,
+            run_routing_preview_services=_run_routing_preview_services,
+        )
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
@@ -896,12 +886,15 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}/stream", dependencies=[Depends(require_api_key)])
     async def stream_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        run_id_str = str(run_id)
-        if run_id_str not in runs:
-            raise HTTPException(404, "Run ID not found")
-        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, runs[run_id_str])
-        _enforce_run_owner_access(current_user, snapshot)
-        return EventSourceResponse(iter_logs_for_run(run_id_str))
+        return runtime_run_entry_service.stream_run_response(
+            str(run_id),
+            current_user=current_user,
+            runs=runs,
+            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            event_source_response_class=EventSourceResponse,
+            iter_logs_for_run=iter_logs_for_run,
+        )
 
     @app.post("/runs/{run_id}/decision", dependencies=[Depends(require_api_key)])
     async def submit_run_decision(run_id: uuid.UUID, payload: DecisionPayload, current_user=Depends(require_api_key)):

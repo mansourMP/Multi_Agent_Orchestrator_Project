@@ -1,10 +1,11 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from server_modules import runtime_runs_api
 from server_modules.agent_turn import build_direct_chat_turn_request
 from server_modules.direct_chat_service import DirectChatExecutionServices
 from server_modules.run_service import RunExecutionServices
+from server_modules.runtime_models import RunStartRequest
 from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
 
 
@@ -109,6 +110,42 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         self.assertEqual(execution["thread_id"], "thread-1")
         self.assertEqual(execution["client_request_id"], "req-1")
         self.assertTrue(callable(execution["producer"]))
+
+    def test_execute_run_start_request_via_turn_runtime_returns_result_payload(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+
+        with patch.object(
+            runtime_runs_api,
+            "execute_agent_turn_request",
+            new=AsyncMock(return_value={"result": {"run_id": "run-1", "status": "starting"}}),
+        ):
+            result = __import__("asyncio").run(
+                runtime_runs_api._execute_run_start_request_via_turn_runtime(
+                    request,
+                    current_user={"user_id": "user-1"},
+                )
+            )
+
+        self.assertEqual(result["run_id"], "run-1")
+        self.assertEqual(result["status"], "starting")
+
+    def test_execute_system_run_start_request_via_turn_runtime_uses_system_user(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        captured = {}
+
+        async def _fake_execute(request_payload, *, current_user):
+            captured["current_user"] = dict(current_user or {})
+            return {"run_id": "run-2", "status": "starting"}
+
+        with patch.object(
+            runtime_runs_api,
+            "_execute_run_start_request_via_turn_runtime",
+            side_effect=_fake_execute,
+        ):
+            result = runtime_runs_api._execute_system_run_start_request_via_turn_runtime(request)
+
+        self.assertEqual(result["run_id"], "run-2")
+        self.assertEqual(captured["current_user"]["auth_type"], "api_key")
 
 
 if __name__ == "__main__":

@@ -133,6 +133,47 @@ def _create_run_result(request: RunStartRequest, *, schedule_id: Optional[str] =
     )
 
 
+async def _execute_run_start_request_via_turn_runtime(
+    request: RunStartRequest,
+    *,
+    current_user: Any,
+) -> Dict[str, Any]:
+    resolution = resolve_run_start_turn_request(
+        current_user=current_user,
+        body=request,
+        stamp_request_owner_fn=_stamp_request_owner,
+    )
+    execution = await execute_agent_turn_request(
+        turn_request=resolution.turn_request,
+        current_user=current_user,
+        services=TurnExecutionServices(
+            run_execution=_run_execution_services(),
+            direct_chat=_direct_chat_execution_services(),
+        ),
+        run_request=resolution.request,
+    )
+    result = execution.get("result")
+    return dict(result) if isinstance(result, dict) else {"result": result}
+
+
+def _execute_system_run_start_request_via_turn_runtime(
+    request: RunStartRequest,
+    *,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    system_user = (
+        dict(current_user)
+        if isinstance(current_user, dict)
+        else {"auth_type": "api_key", "user_id": "", "email": ""}
+    )
+    return asyncio.run(
+        _execute_run_start_request_via_turn_runtime(
+            request,
+            current_user=system_user,
+        )
+    )
+
+
 def _load_webhook_triggers() -> None:
     global _WEBHOOK_TRIGGERS_LOADED
     with _WEBHOOK_TRIGGER_LOCK:
@@ -1134,7 +1175,7 @@ def register_run_routes(app) -> None:
                 "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
             },
         )
-        result = _create_run_result(request)
+        result = _execute_system_run_start_request_via_turn_runtime(request)
         return {
             "acted": True,
             **(result if isinstance(result, dict) else {}),
@@ -1167,21 +1208,12 @@ def register_run_routes(app) -> None:
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        resolution = resolve_run_start_turn_request(
+        request_payload = body or RunStartRequest()
+        result = await _execute_run_start_request_via_turn_runtime(
+            request_payload,
             current_user=current_user,
-            body=body,
-            stamp_request_owner_fn=_stamp_request_owner,
         )
-        execution = await execute_agent_turn_request(
-            turn_request=resolution.turn_request,
-            current_user=current_user,
-            services=TurnExecutionServices(
-                run_execution=_run_execution_services(),
-                direct_chat=_direct_chat_execution_services(),
-            ),
-            run_request=resolution.request,
-        )
-        return execution.get("result")
+        return result
 
     @app.post("/chat/respond", dependencies=[Depends(require_api_key)])
     async def respond_chat(request: Request, current_user=Depends(require_api_key)):
@@ -1403,7 +1435,10 @@ def register_run_routes(app) -> None:
                 **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
             },
         )
-        result = _create_run_result(request_payload)
+        result = await _execute_run_start_request_via_turn_runtime(
+            request_payload,
+            current_user=current_user,
+        )
         return {
             "ok": True,
             "run_id": str((result or {}).get("run_id") or "").strip() or None,

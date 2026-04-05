@@ -123,6 +123,8 @@ ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE = _resolve_state_file(
 
 ORION_TELEGRAM_SPACE_STATUS_ENABLED = os.getenv("ORION_TELEGRAM_SPACE_STATUS_ENABLED", "0") == "1"
 ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS = os.getenv("ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS", "0") == "1"
+ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS = float(os.getenv("ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS", "3.0") or 3.0)
+ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES = max(1, int(os.getenv("ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES", "20") or 20))
 ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED = os.getenv("ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED", "0") == "1"
 ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED = os.getenv("ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED", "0") == "1"
 ORION_TELEGRAM_MEDIA_ENABLED = os.getenv("ORION_TELEGRAM_MEDIA_ENABLED", "1") == "1"
@@ -141,6 +143,12 @@ ORION_CHANNEL_DEAD_LETTER_FILE = _resolve_state_file(
 )
 ORION_CHANNEL_DEAD_LETTER_LIMIT = max(50, int(os.getenv("ORION_CHANNEL_DEAD_LETTER_LIMIT", "500") or 500))
 _CHANNEL_DEAD_LETTER_LOCK = threading.Lock()
+ORION_LOCAL_LEASE_SECONDS = max(10, int(os.getenv("ORION_LOCAL_LEASE_SECONDS", "120") or 120))
+ORION_TELEGRAM_AUTOPILOT_STATE_FILE = _resolve_state_file(
+    "ORION_TELEGRAM_AUTOPILOT_STATE_FILE",
+    "channels/telegram/autopilot_state.json",
+    ".orion_telegram_autopilot_state.json",
+)
 ORION_TELEGRAM_PROFILE_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_PROFILE_STATE_FILE",
     "channels/telegram/chat_profiles.json",
@@ -151,6 +159,11 @@ ORION_TELEGRAM_ONBOARDING_STATE_FILE = _resolve_state_file(
     "ORION_TELEGRAM_ONBOARDING_STATE_FILE",
     "channels/telegram/chat_onboarding.json",
     ".orion_telegram_chat_onboarding.json",
+)
+ORION_WHATSAPP_AUTOPILOT_STATE_FILE = _resolve_state_file(
+    "ORION_WHATSAPP_AUTOPILOT_STATE_FILE",
+    "channels/whatsapp/autopilot_state.json",
+    ".orion_whatsapp_autopilot_state.json",
 )
 
 _TELEGRAM_QUICK_GOAL_TEMPLATES: Dict[str, str] = {

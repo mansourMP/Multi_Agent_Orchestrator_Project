@@ -20,7 +20,11 @@ from server_modules.connectors.autopilot_connector_config import (
     EMPYRALIST_WORKFLOW_API_URL,
     ORION_CHANNEL_DEAD_LETTER_FILE,
     ORION_CHANNEL_DEAD_LETTER_LIMIT,
+    ORION_LOCAL_LEASE_SECONDS,
+    ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
+    ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
     ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS,
+    ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
     ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
     ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
     ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED,
@@ -33,8 +37,10 @@ from server_modules.connectors.autopilot_connector_config import (
     ORION_TELEGRAM_ONBOARDING_STATE_FILE,
     ORION_TELEGRAM_PROFILE_STATE_FILE,
     ORION_TELEGRAM_SPACE_STATUS_ENABLED,
+    ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
     PROJECT_ROOT,
 )
+from server_modules.connectors.autopilot_connector_shell_service import AutopilotConnectorShellService
 from server_modules.connectors.autopilot_approval_service import AutopilotApprovalService
 from server_modules.connectors.autopilot_bridge_facade_service import AutopilotBridgeFacadeService
 from server_modules.connectors.autopilot_channel_registry_bridge_service import AutopilotChannelRegistryBridgeService
@@ -85,9 +91,15 @@ _SYNC_SERVER_GLOBALS = (
     "TELEGRAM_AUTOPILOT_STATE",
     "WHATSAPP_AUTOPILOT_STATE",
 )
-_AUTOPILOT_BRIDGE_FACADE_SERVICE: Optional[AutopilotBridgeFacadeService] = None
-_AUTOPILOT_RUNTIME_FACADE_SERVICE: Optional[AutopilotRuntimeFacadeService] = None
-_AUTOPILOT_REGISTRY_FACADE_SERVICE: Optional[AutopilotRegistryFacadeService] = None
+_AUTOPILOT_CONNECTOR_SHELL_SERVICE: Optional[AutopilotConnectorShellService] = None
+
+
+def _autopilot_module_global(name: str, default: Any = None) -> Any:
+    return globals()[name] if name in globals() else default
+
+
+def _autopilot_import_attr(module_name: str, attr_name: str) -> Any:
+    return getattr(__import__(module_name, fromlist=[attr_name]), attr_name)
 
 
 def _autopilot_channel_registry_bridge_service() -> AutopilotChannelRegistryBridgeService:
@@ -118,183 +130,122 @@ def _autopilot_runtime_service_registry() -> AutopilotRuntimeServiceRegistry:
     return _autopilot_registry_facade_service().runtime_service_registry()
 
 
-def _autopilot_registry_facade_service() -> AutopilotRegistryFacadeService:
-    global _AUTOPILOT_REGISTRY_FACADE_SERVICE
-    if _AUTOPILOT_REGISTRY_FACADE_SERVICE is None:
-        _AUTOPILOT_REGISTRY_FACADE_SERVICE = AutopilotRegistryFacadeService(
+def _autopilot_connector_shell_service() -> AutopilotConnectorShellService:
+    global _AUTOPILOT_CONNECTOR_SHELL_SERVICE
+    if _AUTOPILOT_CONNECTOR_SHELL_SERVICE is None:
+        _AUTOPILOT_CONNECTOR_SHELL_SERVICE = AutopilotConnectorShellService(
+            global_namespace=globals(),
+            sync_server_globals=_SYNC_SERVER_GLOBALS,
             project_root=PROJECT_ROOT,
             default_chat_prefix=DEFAULT_CHAT_PREFIX,
-            telegram_default_workspace_id_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID") or "default"),
             telegram_onboarding_enabled=ORION_TELEGRAM_ONBOARDING_ENABLED,
-            telegram_require_prefix_getter=lambda: bool(globals().get("ORION_TELEGRAM_AUTOPILOT_REQUIRE_PREFIX", False)),
-            telegram_prefix_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_PREFIX") or ""),
             telegram_space_status_enabled=ORION_TELEGRAM_SPACE_STATUS_ENABLED,
             telegram_media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
             telegram_max_updates=ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES,
             telegram_poll_seconds=ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS,
-            telegram_run_timeout_seconds_getter=lambda: int(globals().get("ORION_TELEGRAM_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
-            telegram_max_reply_chars_getter=lambda: int(globals().get("ORION_TELEGRAM_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
-            telegram_send_ack_getter=lambda: bool(globals().get("ORION_TELEGRAM_AUTOPILOT_SEND_ACK")),
-            telegram_enabled_getter=lambda: bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ENABLED", False)),
-            telegram_default_profile_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_PROFILE") or ""),
             telegram_guided_automation_setup_enabled=ORION_TELEGRAM_GUIDED_AUTOMATION_SETUP_ENABLED,
-            telegram_trust_mode_value_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_TRUST_MODE") or ""),
-            telegram_execution_target_value_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_EXECUTION_TARGET") or ""),
-            whatsapp_enabled_getter=lambda: bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
-            whatsapp_default_profile_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_PROFILE") or ""),
-            whatsapp_require_prefix_getter=lambda: bool(globals().get("ORION_WHATSAPP_AUTOPILOT_REQUIRE_PREFIX", False)),
-            whatsapp_prefix_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_PREFIX") or ""),
-            whatsapp_run_timeout_seconds_getter=lambda: int(globals().get("ORION_WHATSAPP_AUTOPILOT_RUN_TIMEOUT_SECONDS") or 180),
-            whatsapp_max_reply_chars_getter=lambda: int(globals().get("ORION_WHATSAPP_AUTOPILOT_MAX_REPLY_CHARS") or 1200),
-            whatsapp_send_ack_getter=lambda: bool(globals().get("ORION_WHATSAPP_AUTOPILOT_SEND_ACK")),
-            whatsapp_trust_mode_value_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_TRUST_MODE") or ""),
-            whatsapp_execution_target_value_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_EXECUTION_TARGET") or ""),
-            telegram_state_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_STATE") or {},
-            telegram_lock_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_LOCK") or threading.Lock(),
-            telegram_state_file=ORION_TELEGRAM_AUTOPILOT_STATE_FILE,
-            whatsapp_state_getter=lambda: globals().get("WHATSAPP_AUTOPILOT_STATE") or {},
-            whatsapp_lock_getter=lambda: globals().get("WHATSAPP_AUTOPILOT_LOCK") or threading.Lock(),
-            whatsapp_state_file=ORION_WHATSAPP_AUTOPILOT_STATE_FILE,
-            read_json=_safe_read_json,
-            write_json=_safe_write_json,
-            utc_now_iso=_utc_now_iso,
-            normalize_workspace_id=_normalize_workspace_id_fallback,
-            load_vault=load_vault,
-            workspace_visible=_workspace_visible,
-            telegram_thread_alive=lambda: bool(
-                (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else globals().get("TELEGRAM_AUTOPILOT_THREAD"))
-                and (getattr(_server, "TELEGRAM_AUTOPILOT_THREAD", None) if _server is not None else globals().get("TELEGRAM_AUTOPILOT_THREAD")).is_alive()
-            ),
-            telegram_allow_from_value=lambda: os.getenv("ORION_TELEGRAM_AUTOPILOT_ALLOW_FROM", ""),
-            get_updates_process_lock=_telegram_get_updates_process_lock,
-            mark_telegram_started=_mark_telegram_autopilot_started,
-            resolve_vault_credential=resolve_vault_credential,
-            safe_path_token=_telegram_safe_path_token,
-            runs_get=lambda run_id: runs.get(run_id) if isinstance(runs, dict) else None,
-            telegram_space_question_via_mcp=telegram_space_question_via_mcp,
-            helper_profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
-            helper_onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
-            helper_camera_setup_state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
-            helper_media_dir=ORION_TELEGRAM_MEDIA_DIR,
-            helper_media_enabled=ORION_TELEGRAM_MEDIA_ENABLED,
-            helper_media_max_items=ORION_TELEGRAM_MEDIA_MAX_ITEMS,
-            helper_media_max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
-            helper_media_include_in_goal=ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL,
-            helper_quick_goal_templates=_TELEGRAM_QUICK_GOAL_TEMPLATES,
-            helper_menu_goal_templates=_TELEGRAM_MENU_GOAL_TEMPLATES,
-            support_workflow_api_url=EMPYRALIST_WORKFLOW_API_URL,
-            support_runtime_url=EMPYRALIST_RUNTIME_URL,
-            support_web_url=EMPYRALIST_WEB_URL,
-            telegram_profile_catalog_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_PROFILE_CATALOG") or {},
-            whatsapp_profile_catalog_getter=lambda: globals().get("WHATSAPP_AUTOPILOT_PROFILE_CATALOG") or {},
-            support_installed_skills_enabled=ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED,
-            support_error_category_hints=_AUTOPILOT_ERROR_CATEGORY_HINTS,
-            support_engine_validation_errors_getter=lambda: globals().get("ORION_ENGINE_VALIDATION_ERRORS") or [],
-            env_get=lambda key, default="": os.getenv(key, default),
-            init_runtime=_init,
-            runtime_telegram_engine_getter=lambda: (
-                str(globals().get("ORION_TELEGRAM_AUTOPILOT_ENGINE") or "")
-                if str(globals().get("ORION_TELEGRAM_AUTOPILOT_ENGINE") or "") in ENGINE_REGISTRY
-                else "orion"
-            ),
-            runtime_whatsapp_engine_getter=lambda: (
-                str(globals().get("ORION_WHATSAPP_AUTOPILOT_ENGINE") or "")
-                if str(globals().get("ORION_WHATSAPP_AUTOPILOT_ENGINE") or "") in ENGINE_REGISTRY
-                else "orion"
-            ),
-            runtime_telegram_show_buttons=ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS,
-            runtime_local_lease_seconds=ORION_LOCAL_LEASE_SECONDS,
-            runtime_non_retryable_run_error_hints=_AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS,
-            runtime_builtin_skills_limit_builder=lambda scope_key, limit: _autopilot_skill_service().runtime_active_skills(scope_key, limit=limit),
-            normalize_agent_role=lambda value: str((globals().get("normalize_agent_role") or (lambda item: item))(value) or "").strip().lower(),
-            allow_any_chat_getter=lambda: bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ALLOW_ANY_CHAT", False)),
-            http_json_request=lambda *args, **kwargs: http_json_request(*args, **kwargs),
+            telegram_media_enabled=ORION_TELEGRAM_MEDIA_ENABLED,
+            telegram_media_dir=ORION_TELEGRAM_MEDIA_DIR,
+            telegram_media_max_bytes=ORION_TELEGRAM_MEDIA_MAX_BYTES,
+            telegram_media_include_in_goal=ORION_TELEGRAM_MEDIA_INCLUDE_IN_GOAL,
+            telegram_camera_setup_state_file=ORION_TELEGRAM_CAMERA_SETUP_STATE_FILE,
+            telegram_profile_state_file=ORION_TELEGRAM_PROFILE_STATE_FILE,
+            telegram_onboarding_state_file=ORION_TELEGRAM_ONBOARDING_STATE_FILE,
+            quick_goal_templates=_TELEGRAM_QUICK_GOAL_TEMPLATES,
+            menu_goal_templates=_TELEGRAM_MENU_GOAL_TEMPLATES,
+            workflow_api_url=EMPYRALIST_WORKFLOW_API_URL,
+            runtime_url=EMPYRALIST_RUNTIME_URL,
+            web_url=EMPYRALIST_WEB_URL,
+            installed_skills_enabled=ORION_TELEGRAM_INSTALLED_SKILLS_ENABLED,
+            error_category_hints=_AUTOPILOT_ERROR_CATEGORY_HINTS,
+            non_retryable_run_error_hints=_AUTOPILOT_NON_RETRYABLE_RUN_ERROR_HINTS,
+            dead_letter_lock=_CHANNEL_DEAD_LETTER_LOCK,
+            dead_letter_file=ORION_CHANNEL_DEAD_LETTER_FILE,
+            dead_letter_limit=ORION_CHANNEL_DEAD_LETTER_LIMIT,
+            local_lease_seconds=ORION_LOCAL_LEASE_SECONDS,
+            telegram_show_buttons=ORION_TELEGRAM_AUTOPILOT_SHOW_BUTTONS,
             telegram_profile_fields=_TELEGRAM_PROFILE_FIELDS,
-            normalize_trust_mode=normalize_trust_mode,
-            normalize_execution_target=normalize_execution_target,
-            decide_execution_target=decide_execution_target,
-            apply_execution_route_metadata=apply_execution_route_metadata,
-            create_run=lambda **kwargs: create_run(**kwargs),
-            inherit_owner_user_id=lambda owner_user_id=None: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_inherited_owner_user_id(owner_user_id),
-            agent_machine_full_trust_enabled=lambda owner_user_id: __import__("server_modules.runtime_config", fromlist=["x"]).agent_machine_full_trust_enabled(owner_user_id),
-            run_history=RUN_HISTORY,
-            run_history_lock=RUN_HISTORY_LOCK,
-            runtime_metrics=RUNTIME_METRICS,
-            metrics_lock=METRICS_LOCK,
-            utc_now=_utc_now,
-            parse_utc_ts=_parse_utc_ts,
-            worker_online_helper=lambda record, now=None: bool((globals().get("_is_worker_online") or (lambda *_args, **_kwargs: False))(record, now)),
-            local_queue_lock=LOCAL_QUEUE_LOCK,
-            local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
-            local_claimed_runs=LOCAL_CLAIMED_RUNS,
-            local_worker_registry=LOCAL_WORKER_REGISTRY,
-            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
-            bool_from_any=lambda value, default=False: _telegram_connector_support_service().bool_from_any(value, default),
-            local_companion_snapshot=lambda: _autopilot_runtime_support_service().local_companion_snapshot(),
-            current_runtime_metrics=lambda: _autopilot_runtime_support_service().current_runtime_metrics(),
-            latest_runtime_run_summary=lambda: _autopilot_runtime_support_service().latest_runtime_run_summary(),
-            list_vault_connectors=lambda workspace_id: list_vault_connectors(workspace_id),
-            list_recent_connector_messages=lambda credentials, limit: list_recent_connector_messages(credentials, limit=limit),
-            query_active_installed_skills=lambda **kwargs: query_active_installed_skills(**kwargs),
-            runtime_builtin_skills_getter=lambda: globals().get("RUNTIME_BUILTIN_SKILLS"),
-            runtime_skills_snapshot_getter=lambda: globals().get("_runtime_skills_snapshot"),
-            bridge_facade_getter=_autopilot_bridge_facade_service,
+            run_history=_autopilot_module_global("RUN_HISTORY", {}),
+            run_history_lock=_autopilot_module_global("RUN_HISTORY_LOCK", threading.Lock()),
+            runtime_metrics=_autopilot_module_global("RUNTIME_METRICS", {}),
+            metrics_lock=_autopilot_module_global("METRICS_LOCK", threading.Lock()),
+            local_queue_lock=_autopilot_module_global("LOCAL_QUEUE_LOCK", threading.Lock()),
+            local_pending_run_ids=_autopilot_module_global("LOCAL_PENDING_RUN_IDS", set()),
+            local_claimed_runs=_autopilot_module_global("LOCAL_CLAIMED_RUNS", {}),
+            local_worker_registry=_autopilot_module_global("LOCAL_WORKER_REGISTRY", {}),
+            server_getter=lambda: _server,
+            server_setter=lambda value: globals().__setitem__("_server", value),
+            import_server=lambda: __import__("server", fromlist=["*"]),
+            read_json=lambda path, default: (
+                _autopilot_module_global("_safe_read_json")
+                or _autopilot_import_attr("server_modules.runtime_common", "_safe_read_json")
+            )(path, default),
+            write_json=lambda path, payload: (
+                _autopilot_module_global("_safe_write_json")
+                or _autopilot_import_attr("server_modules.runtime_common", "_safe_write_json")
+            )(path, payload),
+            utc_now_iso=lambda: (
+                _autopilot_module_global("_utc_now_iso")
+                or _autopilot_import_attr("server_modules.runtime_common", "_utc_now_iso")
+            )(),
+            normalize_workspace_id=_normalize_workspace_id_fallback,
+            load_vault=lambda: (
+                _autopilot_module_global("load_vault")
+                or _autopilot_import_attr("server_modules.vault_store", "load_vault")
+            )(),
+            workspace_visible=lambda workspace_id, requested_workspace_id: (
+                _autopilot_module_global("_workspace_visible")
+                or _autopilot_import_attr("server_modules.runtime_common", "_workspace_visible")
+            )(workspace_id, requested_workspace_id),
+            get_updates_process_lock=_telegram_get_updates_process_lock,
+            resolve_vault_credential=lambda credential_id, workspace_id=None: (
+                _autopilot_module_global("resolve_vault_credential")
+                or _autopilot_import_attr("server_modules.vault_helpers", "resolve_vault_credential")
+            )(credential_id, workspace_id),
+            http_json_request=lambda *args, **kwargs: (
+                _autopilot_module_global("http_json_request")
+                or _autopilot_import_attr("server_modules.runtime_common", "http_json_request")
+            )(*args, **kwargs),
+            safe_path_token_impl=telegram_safe_path_token,
+            telegram_space_question_via_mcp=telegram_space_question_via_mcp,
+            utc_now=lambda: (
+                _autopilot_module_global("_utc_now")
+                or _autopilot_import_attr("server_modules.runtime_common", "_utc_now")
+            )(),
+            parse_utc_ts=lambda value: (
+                _autopilot_module_global("_parse_utc_ts")
+                or _autopilot_import_attr("server_modules.runtime_common", "_parse_utc_ts")
+            )(value),
+            create_run=lambda **kwargs: (
+                _autopilot_module_global("create_run")
+                or _autopilot_import_attr("server_modules.runs_execution", "create_run")
+            )(**kwargs),
+            decide_execution_target=lambda metadata: (
+                _autopilot_module_global("decide_execution_target")
+                or _autopilot_import_attr("server_modules.runtime_policy", "decide_execution_target")
+            )(metadata),
+            apply_execution_route_metadata=lambda metadata, route: (
+                _autopilot_module_global("apply_execution_route_metadata")
+                or _autopilot_import_attr("server_modules.runtime_policy", "apply_execution_route_metadata")
+            )(metadata, route),
+            normalize_trust_mode=lambda value: (
+                _autopilot_module_global("normalize_trust_mode")
+                or _autopilot_import_attr("server_modules.runtime_policy", "normalize_trust_mode")
+            )(value),
+            normalize_execution_target=lambda value: (
+                _autopilot_module_global("normalize_execution_target")
+                or _autopilot_import_attr("server_modules.runtime_policy", "normalize_execution_target")
+            )(value),
         )
-    return _AUTOPILOT_REGISTRY_FACADE_SERVICE
+    return _AUTOPILOT_CONNECTOR_SHELL_SERVICE
+
+
+def _autopilot_registry_facade_service() -> AutopilotRegistryFacadeService:
+    return _autopilot_connector_shell_service().registry_facade_service()
 
 
 def _autopilot_bridge_facade_service() -> AutopilotBridgeFacadeService:
-    global _AUTOPILOT_BRIDGE_FACADE_SERVICE
-    if _AUTOPILOT_BRIDGE_FACADE_SERVICE is None:
-        _AUTOPILOT_BRIDGE_FACADE_SERVICE = AutopilotBridgeFacadeService(
-            normalize_workspace_id=lambda value: _normalize_workspace_id_fallback(value),
-            append_channel_event=lambda **kwargs: globals().get("_append_channel_event")(**kwargs),
-            utc_now_iso=lambda: _utc_now_iso(),
-            truncate_one_line=lambda text, limit: _autopilot_channel_support_service().truncate_one_line(text, limit),
-            json_safe=lambda value: (globals().get("_json_safe") or (lambda item: item))(value),
-            dead_letter_lock=_CHANNEL_DEAD_LETTER_LOCK,
-            read_dead_letter_json=lambda path, default: _safe_read_json(path, default),
-            write_dead_letter_json=lambda path, payload: _safe_write_json(path, payload),
-            dead_letter_file=ORION_CHANNEL_DEAD_LETTER_FILE,
-            dead_letter_limit=ORION_CHANNEL_DEAD_LETTER_LIMIT,
-            collapse_whitespace=lambda text: re.sub(r"\s+", " ", str(text or "").strip().lower()),
-            telegram_workspace_id=ORION_TELEGRAM_AUTOPILOT_WORKSPACE_ID,
-            whatsapp_workspace_id=ORION_WHATSAPP_AUTOPILOT_WORKSPACE_ID,
-            telegram_service_registry=_telegram_service_registry,
-            whatsapp_service_registry=_whatsapp_service_registry,
-            autopilot_profile_service=_autopilot_profile_service,
-            init_runtime=_init,
-            telegram_terminal_service=lambda: _telegram_terminal_service(),
-            telegram_enabled_getter=lambda: bool(globals().get("ORION_TELEGRAM_AUTOPILOT_ENABLED", False)),
-            telegram_default_profile_getter=lambda: str(globals().get("ORION_TELEGRAM_AUTOPILOT_PROFILE") or ""),
-            telegram_catalog_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_PROFILE_CATALOG") or {},
-            whatsapp_enabled_getter=lambda: bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
-            whatsapp_default_profile_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_PROFILE") or ""),
-            whatsapp_catalog_getter=lambda: globals().get("WHATSAPP_AUTOPILOT_PROFILE_CATALOG") or {},
-            telegram_state_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_STATE") or {},
-            telegram_lock_getter=lambda: globals().get("TELEGRAM_AUTOPILOT_LOCK") or threading.Lock(),
-            safe_path_token=lambda value: telegram_safe_path_token(value),
-            build_goal_with_profile=lambda goal, profile_data: _telegram_helper_registry().profile_service().build_goal_with_profile(
-                goal,
-                profile_data,
-            ),
-            workspace_connector_context=lambda goal, workspace_id, current_connector_id: _telegram_connector_context_service().workspace_connector_context(
-                goal,
-                workspace_id,
-                current_connector_id,
-            ),
-            extract_message=lambda update: _telegram_helper_registry().media_service().extract_message(update),
-            build_goal_with_attachments=lambda goal, attachments: _telegram_helper_registry().media_service().build_goal_with_attachments(
-                goal,
-                attachments,
-            ),
-            route_message=lambda raw_text, profile: _telegram_helper_registry().routing_service().route_message(raw_text, profile),
-            parse_form_urlencoded=lambda raw: _whatsapp_service_registry().whatsapp_webhook_service().parse_form_urlencoded(raw),
-            forbidden_response=lambda content: Response(status_code=403, content=content),
-            webhook_enabled_getter=lambda: bool(globals().get("ORION_WHATSAPP_AUTOPILOT_ENABLED", False)),
-            configured_webhook_secret_getter=lambda: str(globals().get("ORION_WHATSAPP_AUTOPILOT_WEBHOOK_SECRET") or ""),
-        )
-    return _AUTOPILOT_BRIDGE_FACADE_SERVICE
+    return _autopilot_connector_shell_service().bridge_facade_service()
 
 
 def _autopilot_shared_service_registry() -> AutopilotSharedServiceRegistry:
@@ -403,20 +354,7 @@ def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
 
 
 def _autopilot_runtime_facade_service() -> AutopilotRuntimeFacadeService:
-    global _AUTOPILOT_RUNTIME_FACADE_SERVICE
-    if _AUTOPILOT_RUNTIME_FACADE_SERVICE is None:
-        _AUTOPILOT_RUNTIME_FACADE_SERVICE = AutopilotRuntimeFacadeService(
-            global_namespace=globals(),
-            sync_server_globals=_SYNC_SERVER_GLOBALS,
-            server_getter=lambda: _server,
-            server_setter=lambda value: globals().__setitem__("_server", value),
-            import_server=lambda: __import__("server", fromlist=["*"]),
-            state_bridge_service=_autopilot_state_bridge_service,
-            event_bridge_service=_autopilot_event_bridge_service,
-            terminal_bridge_service=_autopilot_terminal_bridge_service,
-            webhook_bridge_service=_whatsapp_webhook_bridge_service,
-        )
-    return _AUTOPILOT_RUNTIME_FACADE_SERVICE
+    return _autopilot_connector_shell_service().runtime_facade_service()
 
 def _load_telegram_autopilot_state() -> None:
     _autopilot_runtime_facade_service().load_telegram_autopilot_state()

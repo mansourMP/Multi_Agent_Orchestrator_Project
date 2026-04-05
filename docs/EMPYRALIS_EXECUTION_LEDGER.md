@@ -1565,6 +1565,74 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
+
+#### Stage
+
+Stage 1 continues. The remaining top-level constructor graph in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) no longer assembles registry, bridge, and runtime facades inline.
+
+This cut keeps the old compatibility exports in place, but the module now crosses a single shell-service boundary before it builds the façade stack.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_connector_shell_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_shell_service.py) to own:
+  - lazy shell construction for registry, bridge, and runtime facades
+  - the shared top-level dependency bundle for the remaining connector shell
+  - late-bound access paths needed by direct-import and patched test harnesses
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so:
+  - `_autopilot_registry_facade_service()`
+  - `_autopilot_bridge_facade_service()`
+  - `_autopilot_runtime_facade_service()`
+  now delegate through `_autopilot_connector_shell_service()` instead of assembling those facades inline
+- Completed the extracted config surface in [server_modules/connectors/autopilot_connector_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_config.py) by adding the missing connector-owned runtime/path constants required by the shell boundary:
+  - `ORION_LOCAL_LEASE_SECONDS`
+  - `ORION_TELEGRAM_AUTOPILOT_POLL_SECONDS`
+  - `ORION_TELEGRAM_AUTOPILOT_MAX_UPDATES`
+  - `ORION_TELEGRAM_AUTOPILOT_STATE_FILE`
+  - `ORION_WHATSAPP_AUTOPILOT_STATE_FILE`
+- Added focused shell coverage in:
+  - [server_modules/tests/test_autopilot_connector_shell_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_shell_service.py)
+- Expanded config export coverage in:
+  - [server_modules/tests/test_autopilot_connector_config_exports.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_config_exports.py)
+
+#### Current Truth
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is now down to `528` lines from `590` before this cut.
+- The connector module is still a compatibility shell, but it no longer owns the full remaining façade-construction cluster inline.
+- Direct-import compatibility is preserved after the extraction:
+  - machine-mode tests still patch module-level run functions after `_init()`
+  - throttled event recording still works when `_init()` is stubbed out
+  - stripped test harnesses no longer fail on missing runtime-injected globals during shell construction
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns a large compatibility-export surface and remains thicker than the target architecture wants.
+- The shell service currently carries a broad dependency bundle because the monolith still exports many historical entrypoints.
+- The top-level module still mixes compatibility wrappers with the remaining exported runtime/channel access points.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) by removing more compatibility-export ownership, not just constructor ownership.
+2. Decide whether the remaining public wrapper band should be grouped behind one additional façade/service or reduced directly into channel-specific exports.
+3. Keep preserving late-bound compatibility for patched tests and direct-import harnesses as more of the shell is removed.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_connector_config.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_config.py)
+  - [server_modules/connectors/autopilot_connector_shell_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_connector_shell_service.py)
+  - [server_modules/tests/test_autopilot_connector_config_exports.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_config_exports.py)
+  - [server_modules/tests/test_autopilot_connector_shell_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_connector_shell_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_autopilot_connector_shell_service`
+  - `server_modules.tests.test_autopilot_connector_config_exports`
+  - `server_modules.tests.test_autopilot_registry_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+
 ### 2026-04-05 - Top-Level Telegram And WhatsApp Registry Wiring Moved Behind Channel Registry Bridge
 
 #### Stage

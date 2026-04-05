@@ -23,6 +23,7 @@ from scripts.orion_local_worker_llm import (
 )
 from server_modules import direct_chat_provider_service
 from scripts.orion_local_worker_utils import build_operator_system_prompt
+from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_handoff_service
 from server_modules import direct_chat_generation_service
@@ -738,274 +739,143 @@ def _with_context_used(payload: Dict[str, Any], context_used: Dict[str, Any]) ->
 
 
 def _connect_action(label: str, href: str) -> Dict[str, Any]:
-    return {
-        "id": f"connect:{href}",
-        "kind": "connect",
-        "label": label,
-        "href": href,
-        "variant": "primary",
-    }
+    return direct_chat_availability_service.connect_action(label, href)
 
 
 def _open_action(label: str, href: str, *, variant: str = "primary") -> Dict[str, Any]:
-    return {
-        "id": f"open:{href}",
-        "kind": "open",
-        "label": label,
-        "href": href,
-        "variant": variant,
-    }
+    return direct_chat_availability_service.open_action(label, href, variant=variant)
 
 
 def _google_repair_action() -> Dict[str, Any]:
-    return _connect_action("Reconnect Google Workspace", "/credentials?connector=google_workspace")
+    return direct_chat_availability_service.google_repair_action(
+        connect_action_fn=_connect_action,
+    )
 
 
 def _run_action(message: str) -> Dict[str, Any]:
-    return {
-        "id": "run:this",
-        "kind": "run",
-        "label": "Run this",
-        "goal": str(message or "").strip(),
-        "variant": "primary",
-    }
+    return direct_chat_availability_service.run_action(message)
 
 
 def _workflow_action(message: str) -> Dict[str, Any]:
-    return {
-        "id": "workflow:create",
-        "kind": "workflow",
-        "label": "Turn into workflow",
-        "goal": str(message or "").strip(),
-        "href": "/builder/new",
-        "variant": "secondary",
-    }
+    return direct_chat_availability_service.workflow_action(message)
 
 
 def _question_like(compact_message: str) -> bool:
-    return compact_message.startswith(tuple(f"{token} " for token in QUESTION_OPENERS))
+    return direct_chat_availability_service.question_like(
+        compact_message,
+        question_openers=QUESTION_OPENERS,
+    )
 
 
 def _mentions_any(compact_message: str, markers: tuple[str, ...]) -> bool:
-    return any(marker in compact_message for marker in markers)
+    return direct_chat_availability_service.mentions_any(
+        compact_message,
+        markers=markers,
+    )
 
 
 def _starts_like_direct_run(compact_message: str) -> bool:
-    return compact_message.startswith(tuple(f"{token} " for token in DIRECT_RUN_OPENERS))
+    return direct_chat_availability_service.starts_like_direct_run(
+        compact_message,
+        direct_run_openers=DIRECT_RUN_OPENERS,
+    )
 
 
 def _is_obvious_telegram_write_request(compact_message: str) -> bool:
-    if not compact_message or _question_like(compact_message):
-        return False
-    return _mentions_any(compact_message, TELEGRAM_KEYWORDS) and _starts_like_direct_run(compact_message)
+    return direct_chat_availability_service.is_obvious_telegram_write_request(
+        compact_message,
+        question_like_fn=_question_like,
+        mentions_any_fn=_mentions_any,
+        starts_like_direct_run_fn=_starts_like_direct_run,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+    )
 
 
 def _is_obvious_google_write_request(compact_message: str) -> bool:
-    if not compact_message or _question_like(compact_message):
-        return False
-    if "send an email" in compact_message or "draft an email" in compact_message:
-        return True
-    if "send email" in compact_message or "draft email" in compact_message:
-        return True
-    if "calendar event" in compact_message and _starts_like_direct_run(compact_message):
-        return True
-    if "meeting invite" in compact_message and _starts_like_direct_run(compact_message):
-        return True
-    return False
+    return direct_chat_availability_service.is_obvious_google_write_request(
+        compact_message,
+        question_like_fn=_question_like,
+        starts_like_direct_run_fn=_starts_like_direct_run,
+    )
 
 
 def _is_obvious_smtp_write_request(compact_message: str) -> bool:
-    if not compact_message or _question_like(compact_message):
-        return False
-    if "send an email" in compact_message or "send email" in compact_message:
-        return True
-    return _mentions_any(compact_message, SMTP_KEYWORDS) and _starts_like_direct_run(compact_message)
+    return direct_chat_availability_service.is_obvious_smtp_write_request(
+        compact_message,
+        question_like_fn=_question_like,
+        mentions_any_fn=_mentions_any,
+        starts_like_direct_run_fn=_starts_like_direct_run,
+        smtp_keywords=SMTP_KEYWORDS,
+    )
 
 
 def _connector_write_preview_allowed(message: str, availability: Dict[str, Any]) -> bool:
-    compact = _compact_text(message)
-    if _is_obvious_telegram_write_request(compact):
-        return _tool_runtime_usable(availability, "telegram_bot") is True
-    if _is_obvious_google_write_request(compact):
-        return (
-            _tool_runtime_usable(availability, "google_workspace") is True
-            or (_is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "smtp") is True)
-        )
-    return False
+    return direct_chat_availability_service.connector_write_preview_allowed(
+        message,
+        availability,
+        compact_text_fn=_compact_text,
+        is_obvious_telegram_write_request_fn=_is_obvious_telegram_write_request,
+        is_obvious_google_write_request_fn=_is_obvious_google_write_request,
+        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+        tool_runtime_usable_fn=_tool_runtime_usable,
+    )
 
 
 def _is_explicit_workflow_request(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact:
-        return False
-    return _mentions_any(compact, WORKFLOW_REQUEST_MARKERS)
+    return direct_chat_availability_service.is_explicit_workflow_request(
+        message,
+        compact_text_fn=_compact_text,
+        mentions_any_fn=_mentions_any,
+        workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
+    )
 
 
 def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
-    capabilities = _normalize_tool_capabilities(availability)
-    connected_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected")]
-    usable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("runtime_usable") is True]
-    unavailable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is False]
-    unverified_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected") and item.get("runtime_usable") is None]
-    connected_line = ", ".join(connected_labels) if connected_labels else "none"
-    usable_line = ", ".join(usable_labels) if usable_labels else "none verified"
-    unavailable_line = ", ".join(unavailable_labels) if unavailable_labels else "none"
-    unverified_line = ", ".join(unverified_labels) if unverified_labels else "none"
-    reply = (
-        "AI chat is not available right now because the workspace AI account is not ready. "
-        f"Connected here right now: {connected_line}. "
-        f"Usable now: {usable_line}. "
-        f"Unavailable now: {unavailable_line}. "
-        f"Not verified: {unverified_line}. "
-        "Connect the workspace AI account to use normal chat and reasoning."
+    return direct_chat_availability_service.no_ai_chat_response(
+        availability,
+        normalize_tool_capabilities_fn=_normalize_tool_capabilities,
+        connect_action_fn=_connect_action,
     )
-    return {
-        "reply": reply,
-        "actions": [_connect_action("Connect", "/connect-ai")],
-        "mode": "connect",
-    }
 
 
 def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    compact = _compact_text(message)
-    if _is_obvious_smtp_write_request(compact) and not _tool_connected(availability, "google_workspace") and not _tool_connected(availability, "smtp"):
-        return {
-            "reply": "No email connector is connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=smtp")],
-            "mode": "connect",
-        }
-    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True and _tool_runtime_usable(availability, "smtp") is False:
-        return {
-            "reply": "An email connector is connected here, but it is not usable right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True and _tool_runtime_usable(availability, "smtp") is not True and _tool_connected(availability, "smtp"):
-        return {
-            "reply": "SMTP is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and not _tool_connected(availability, "google_workspace"):
-        return {
-            "reply": "Google Workspace is not connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=google_workspace")],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is False:
-        return {
-            "reply": "Google Workspace is connected here, but is not usable right now.",
-            "actions": [_google_repair_action()],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and not _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "google_workspace") is not True:
-        return {
-            "reply": "Google Workspace is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, TELEGRAM_KEYWORDS) and not _tool_connected(availability, "telegram_bot"):
-        return {
-            "reply": "Telegram is not connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=telegram_bot")],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, TELEGRAM_KEYWORDS) and _tool_runtime_usable(availability, "telegram_bot") is False:
-        return {
-            "reply": "Telegram is connected here, but is not usable right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, TELEGRAM_KEYWORDS) and _tool_runtime_usable(availability, "telegram_bot") is not True:
-        return {
-            "reply": "Telegram is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, SLACK_KEYWORDS) and not _tool_connected(availability, "slack"):
-        return {
-            "reply": "Slack is not connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=slack")],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is False:
-        return {
-            "reply": "Slack is connected here, but is not usable right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is not True:
-        return {
-            "reply": "Slack is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, DROPBOX_KEYWORDS) and not _tool_connected(availability, "dropbox"):
-        return {
-            "reply": "Dropbox is not connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=dropbox")],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is False:
-        return {
-            "reply": "Dropbox is connected here, but is not usable right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is not True:
-        return {
-            "reply": "Dropbox is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, S3_KEYWORDS) and not _tool_connected(availability, "s3"):
-        return {
-            "reply": "Amazon S3 is not connected in this workspace.",
-            "actions": [_connect_action("Connect", "/credentials?connector=s3")],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is False:
-        return {
-            "reply": "Amazon S3 is connected here, but is not usable right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is not True:
-        return {
-            "reply": "Amazon S3 is connected here, but its capability state is not verified right now.",
-            "actions": [],
-            "mode": "connect",
-        }
-    return None
+    return direct_chat_availability_service.tool_gate_response(
+        message,
+        availability,
+        compact_text_fn=_compact_text,
+        mentions_any_fn=_mentions_any,
+        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+        tool_connected_fn=_tool_connected,
+        tool_runtime_usable_fn=_tool_runtime_usable,
+        connect_action_fn=_connect_action,
+        google_repair_action_fn=_google_repair_action,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+    )
 
 
 def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    compact = _compact_text(message)
-    actions: List[Dict[str, Any]] = []
-    if _is_explicit_workflow_request(message):
-        actions.append(_workflow_action(message))
-        return actions
-    if _is_obvious_smtp_write_request(compact) and _tool_runtime_usable(availability, "smtp") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS) and _tool_runtime_usable(availability, "google_workspace") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, TELEGRAM_KEYWORDS) and _tool_runtime_usable(availability, "telegram_bot") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, SLACK_KEYWORDS) and _tool_runtime_usable(availability, "slack") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, DROPBOX_KEYWORDS) and _tool_runtime_usable(availability, "dropbox") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, S3_KEYWORDS) and _tool_runtime_usable(availability, "s3") is True:
-        actions.append(_run_action(message))
-        return actions
-    if _mentions_any(compact, EXECUTION_MARKERS) and not _question_like(compact):
-        actions.append(_run_action(message))
-    return actions
+    return direct_chat_availability_service.suggest_actions(
+        message,
+        availability,
+        compact_text_fn=_compact_text,
+        mentions_any_fn=_mentions_any,
+        question_like_fn=_question_like,
+        is_explicit_workflow_request_fn=_is_explicit_workflow_request,
+        is_obvious_smtp_write_request_fn=_is_obvious_smtp_write_request,
+        tool_runtime_usable_fn=_tool_runtime_usable,
+        workflow_action_fn=_workflow_action,
+        run_action_fn=_run_action,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+        execution_markers=EXECUTION_MARKERS,
+    )
 
 
 def _heartbeat_pending_tasks_for_suggestions() -> List[str]:

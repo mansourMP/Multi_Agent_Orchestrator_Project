@@ -2035,6 +2035,84 @@ This cut removes another chunk of operator-owned state and formatting logic from
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Availability Gates, Action Builders, and Suggestion Policy Moved Behind Availability Service
+
+#### Stage
+
+Stage 1 continues. The connector/action preview policy band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut removes another meaningful block of response-shaping logic from the chat runtime shell.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_availability_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_availability_service.py) to own:
+  - connect/open/run/workflow action payload builders
+  - question-like and marker matching helpers
+  - obvious Telegram, Google Workspace, and SMTP write-request detection
+  - connector write-preview gating
+  - explicit workflow-request detection
+  - no-AI availability response shaping
+  - connector/tool gate response shaping
+  - proactive action suggestion policy
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new service:
+  - `_connect_action()`
+  - `_open_action()`
+  - `_google_repair_action()`
+  - `_run_action()`
+  - `_workflow_action()`
+  - `_question_like()`
+  - `_mentions_any()`
+  - `_starts_like_direct_run()`
+  - `_is_obvious_telegram_write_request()`
+  - `_is_obvious_google_write_request()`
+  - `_is_obvious_smtp_write_request()`
+  - `_connector_write_preview_allowed()`
+  - `_is_explicit_workflow_request()`
+  - `_no_ai_chat_response()`
+  - `_tool_gate_response()`
+  - `_suggest_actions()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_availability_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_availability_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1962` to `1832` lines in this cut.
+- Availability gating and action suggestion behavior now has a dedicated service boundary instead of being embedded in the chat runtime module.
+- The remaining chat module is increasingly concentrated on orchestration, provider selection, and handoff/runtime wiring.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns high-level direct-chat orchestration and run-handoff composition.
+- The provider-selection and top-level response entry flow still have meaningful orchestration weight inside the chat module.
+- The module is much thinner than before, but it is still not yet the target minimal shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around run handoff or top-level request preparation.
+2. Keep the operator-chat wrapper names stable so existing tests and callers can still patch the same entrypoints.
+3. Maintain focused regression coverage around availability gating, routing, direct tools, entry preparation, and runtime handoff after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_availability_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_availability_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_availability_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_availability_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_availability_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_direct_chat_tool_catalog_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_direct_chat_context_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

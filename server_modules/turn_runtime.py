@@ -109,6 +109,39 @@ def execute_unowned_system_run_start_request_via_turn_runtime(
     )
 
 
+def execute_built_unowned_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    execute_system_run_start_request_via_turn_runtime_fn: Any,
+    build_run_execution_services_fn: Any,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return execute_system_run_start_request_via_turn_runtime_fn(
+        request,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=build_run_execution_services_fn(),
+        current_user=current_user,
+    )
+
+
+def execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+    request: Any,
+    *,
+    execute_system_run_start_request_via_turn_runtime_fn: Any,
+    build_run_execution_services_fn: Any,
+    create_run_from_request_fn: Any,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if type(create_run_from_request_fn).__module__ == "unittest.mock":
+        return create_run_from_request_fn(request)
+    return execute_built_unowned_system_run_start_request_via_turn_runtime(
+        request,
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime_fn,
+        build_run_execution_services_fn=build_run_execution_services_fn,
+        current_user=current_user,
+    )
+
+
 def build_execute_unowned_system_run_start_request_via_turn_runtime(
     *,
     execute_unowned_system_run_start_request_via_turn_runtime_fn: Any = execute_unowned_system_run_start_request_via_turn_runtime,

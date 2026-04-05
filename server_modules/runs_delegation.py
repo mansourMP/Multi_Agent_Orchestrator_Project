@@ -14,7 +14,10 @@ from server_modules.runs_output import (
     _serialize_run_snapshot,
     _upsert_run_history_snapshot,
 )
-from server_modules.turn_runtime import build_execute_unowned_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import (
+    build_execute_unowned_system_run_start_request_via_turn_runtime,
+    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
+)
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -130,14 +133,11 @@ def _delegation_run_execution_services() -> run_service.RunExecutionServices:
 
 
 def _execute_delegated_run_request(req: RunStartRequest) -> Dict[str, Any]:
-    # Preserve legacy test/runtime patch points that replace the create wrapper
-    # directly, while using the canonical turn-runtime path for normal execution.
-    if type(_create_run_from_request).__module__ == "unittest.mock":
-        return _create_run_from_request(req)
-    return execute_system_run_start_request_via_turn_runtime(
+    return execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
         req,
-        stamp_request_owner_fn=lambda req, current_user: req,
-        services=_delegation_run_execution_services(),
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
+        build_run_execution_services_fn=_delegation_run_execution_services,
+        create_run_from_request_fn=_create_run_from_request,
     )
 
 

@@ -11,7 +11,10 @@ from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules import run_service as run_service
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
-from server_modules.turn_runtime import build_execute_unowned_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import (
+    build_execute_unowned_system_run_start_request_via_turn_runtime,
+    execute_built_unowned_system_run_start_request_via_turn_runtime,
+)
 from server_modules.runs_history import (
     _append_approval_audit,
     _approval_correlation_id,
@@ -1166,10 +1169,10 @@ def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_s
 
 
 def _execute_scheduled_run_request(req: RunStartRequest, *, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    return execute_system_run_start_request_via_turn_runtime(
+    return execute_built_unowned_system_run_start_request_via_turn_runtime(
         req,
-        stamp_request_owner_fn=lambda req, current_user: req,
-        services=_schedule_run_execution_services(schedule_id),
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
+        build_run_execution_services_fn=lambda: _schedule_run_execution_services(schedule_id),
     )
 
 

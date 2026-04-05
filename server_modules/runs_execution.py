@@ -106,7 +106,10 @@ from server_modules.runs_core import set_run_status, emit_log
 from server_modules.external_write_safety import execute_external_write_once, stable_value_fingerprint
 from server_modules.file_mount_security import assert_file_mount_access
 from server_modules.runtime_policy import browser_automation_plan_hash
-from server_modules.turn_runtime import build_execute_unowned_system_run_start_request_via_turn_runtime
+from server_modules.turn_runtime import (
+    build_execute_unowned_system_run_start_request_via_turn_runtime,
+    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
+)
 from server_modules.url_security import assert_safe_outbound_url
 from scripts.orion_local_worker_utils import build_operator_system_prompt
 
@@ -132,14 +135,11 @@ def _workflow_child_run_execution_services() -> RunExecutionServices:
 def _execute_workflow_child_run_request(request: Any) -> Dict[str, Any]:
     from server_modules import runs_delegation as _runs_delegation
 
-    # Preserve legacy test/runtime patch points that replace the create wrapper
-    # directly, while using the canonical turn-runtime path for normal execution.
-    if type(_runs_delegation._create_run_from_request).__module__ == "unittest.mock":
-        return _runs_delegation._create_run_from_request(request)
-    return execute_system_run_start_request_via_turn_runtime(
+    return execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
         request,
-        stamp_request_owner_fn=lambda req, current_user: req,
-        services=_workflow_child_run_execution_services(),
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
+        build_run_execution_services_fn=_workflow_child_run_execution_services,
+        create_run_from_request_fn=_runs_delegation._create_run_from_request,
     )
 
 

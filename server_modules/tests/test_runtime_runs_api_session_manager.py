@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from server_modules import runtime_runs_api
 from server_modules.agent_turn import build_direct_chat_turn_request
@@ -10,6 +10,8 @@ from server_modules import turn_runtime
 from server_modules.turn_runtime import (
     TurnExecutionServices,
     build_turn_execution_services,
+    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
+    execute_built_unowned_system_run_start_request_via_turn_runtime,
     execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
@@ -218,6 +220,75 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
 
         self.assertEqual(result["run_id"], "run-3")
         self.assertIs(captured["stamped"], original)
+
+    def test_execute_built_unowned_system_run_start_request_via_turn_runtime_builds_services(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+        captured = {}
+
+        def _fake_execute(request_payload, *, stamp_request_owner_fn, services, **kwargs):
+            captured["stamped"] = stamp_request_owner_fn("req", {"user_id": "ignored"})
+            captured["services"] = services
+            return {"run_id": "run-4", "status": "starting"}
+
+        result = execute_built_unowned_system_run_start_request_via_turn_runtime(
+            request,
+            execute_system_run_start_request_via_turn_runtime_fn=_fake_execute,
+            build_run_execution_services_fn=lambda: built_services,
+        )
+
+        self.assertEqual(result["run_id"], "run-4")
+        self.assertEqual(captured["stamped"], "req")
+        self.assertIs(captured["services"], built_services)
+
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_bypasses_mocked_create(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        create_run = Mock(return_value={"run_id": "run-5", "status": "starting"})
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        with patch(
+            "server_modules.turn_runtime.execute_built_unowned_system_run_start_request_via_turn_runtime"
+        ) as execute_built:
+            result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+                request,
+                execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
+                build_run_execution_services_fn=lambda: built_services,
+                create_run_from_request_fn=create_run,
+            )
+
+        self.assertEqual(result["run_id"], "run-5")
+        create_run.assert_called_once_with(request)
+        execute_built.assert_not_called()
+
+    def test_execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_uses_runtime_when_not_mocked(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        built_services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+
+        with patch(
+            "server_modules.turn_runtime.execute_built_unowned_system_run_start_request_via_turn_runtime",
+            return_value={"run_id": "run-6", "status": "starting"},
+        ) as execute_built:
+            result = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+                request,
+                execute_system_run_start_request_via_turn_runtime_fn=lambda *args, **kwargs: {"run_id": "unexpected"},
+                build_run_execution_services_fn=lambda: built_services,
+                create_run_from_request_fn=lambda req: {"run_id": "unused"},
+            )
+
+        self.assertEqual(result["run_id"], "run-6")
+        execute_built.assert_called_once()
 
 
 if __name__ == "__main__":

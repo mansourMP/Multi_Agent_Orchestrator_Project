@@ -55,6 +55,7 @@ from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_request_service
 from server_modules import runtime_route_request_handlers_service
 from server_modules import runtime_route_bootstrap_service
+from server_modules import runtime_route_run_handlers_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
@@ -516,9 +517,11 @@ def register_run_routes(app) -> None:
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        return await runtime_run_entry_service.start_run_response(
-            body or deps.run_start_request_class(),
+        return await runtime_route_run_handlers_service.start_run_route_response(
+            body,
             current_user=current_user,
+            run_start_request_class=deps.run_start_request_class,
+            start_run_response_fn=runtime_run_entry_service.start_run_response,
             execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
             run_execution_services=_run_execution_services,
@@ -620,13 +623,13 @@ def register_run_routes(app) -> None:
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        if ORION_SINGLE_AGENT_MODE:
-            raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        return runtime_run_delegation_service.delegate_run_children(
-            str(run_id),
+        return runtime_route_run_handlers_service.delegate_run_route_response(
+            run_id,
             body=body,
             current_user=current_user,
-            **runtime_run_delegation_service.build_delegate_run_children_callbacks(
+            single_agent_mode=ORION_SINGLE_AGENT_MODE,
+            delegate_run_children_fn=runtime_run_delegation_service.delegate_run_children,
+            callbacks=runtime_run_delegation_service.build_delegate_run_children_callbacks(
                 lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 normalize_agent_role=normalize_agent_role,
@@ -642,13 +645,14 @@ def register_run_routes(app) -> None:
     @app.post("/runs/{run_id}/delegate/auto", dependencies=[Depends(require_api_key)])
     async def auto_delegate_run(run_id: uuid.UUID, body: Optional[RunAutoDelegationRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        if ORION_SINGLE_AGENT_MODE:
-            raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        return runtime_run_delegation_service.auto_delegate_run_children(
-            str(run_id),
-            request_payload=body or RunAutoDelegationRequest(),
+        return runtime_route_run_handlers_service.auto_delegate_run_route_response(
+            run_id,
+            body=body,
             current_user=current_user,
-            **runtime_run_delegation_service.build_auto_delegate_run_children_callbacks(
+            single_agent_mode=ORION_SINGLE_AGENT_MODE,
+            request_payload_class=RunAutoDelegationRequest,
+            auto_delegate_run_children_fn=runtime_run_delegation_service.auto_delegate_run_children,
+            callbacks=runtime_run_delegation_service.build_auto_delegate_run_children_callbacks(
                 lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 normalize_agent_role=normalize_agent_role,
@@ -666,13 +670,14 @@ def register_run_routes(app) -> None:
     @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[Depends(require_api_key)])
     async def retry_failed_delegation_runs(run_id: uuid.UUID, body: Optional[RunDelegationRetryRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        if ORION_SINGLE_AGENT_MODE:
-            raise HTTPException(status_code=400, detail="Single-agent mode is enabled. Delegation is disabled.")
-        return runtime_run_delegation_service.retry_failed_delegation_runs(
-            str(run_id),
-            request_payload=body or RunDelegationRetryRequest(),
+        return runtime_route_run_handlers_service.retry_failed_delegation_runs_route_response(
+            run_id,
+            body=body,
             current_user=current_user,
-            **runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
+            single_agent_mode=ORION_SINGLE_AGENT_MODE,
+            request_payload_class=RunDelegationRetryRequest,
+            retry_failed_delegation_runs_fn=runtime_run_delegation_service.retry_failed_delegation_runs,
+            callbacks=runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
                 lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 normalize_agent_role=normalize_agent_role,
@@ -691,8 +696,10 @@ def register_run_routes(app) -> None:
     @app.post("/routing/preview", dependencies=[Depends(require_api_key)])
     async def preview_routing(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
-        return runtime_run_entry_service.preview_routing_response(
-            body or deps.run_start_request_class(),
+        return runtime_route_run_handlers_service.preview_routing_route_response(
+            body,
+            run_start_request_class=deps.run_start_request_class,
+            preview_routing_response_fn=runtime_run_entry_service.preview_routing_response,
             build_run_routing_preview=build_run_routing_preview,
             run_routing_preview_services=_run_routing_preview_services,
         )
@@ -700,8 +707,10 @@ def register_run_routes(app) -> None:
     @app.post("/runs/precheck", dependencies=[Depends(require_api_key)])
     async def precheck_run(body: Optional[RunStartRequest] = None):
         _refresh_server_exports()
-        return await runtime_run_entry_service.precheck_run_response(
-            body or deps.run_start_request_class(),
+        return await runtime_route_run_handlers_service.precheck_run_route_response(
+            body,
+            run_start_request_class=deps.run_start_request_class,
+            precheck_run_response_fn=runtime_run_entry_service.precheck_run_response,
             build_run_precheck_result=build_run_precheck_result,
             run_routing_preview_services=_run_routing_preview_services,
         )
@@ -782,16 +791,18 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def get_run_replay(run_id: uuid.UUID):
         _refresh_server_exports()
-        return runtime_run_replay_service.replay_item_response_for_run(
-            str(run_id),
+        return runtime_route_run_handlers_service.get_run_replay_route_response(
+            run_id,
+            replay_item_response_for_run=runtime_run_replay_service.replay_item_response_for_run,
             get_replay_payload=_get_replay_payload,
         )
 
     @app.post("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def replay_run(run_id: uuid.UUID):
         _refresh_server_exports()
-        return runtime_run_replay_service.replay_run_from_run_id(
-            str(run_id),
+        return runtime_route_run_handlers_service.replay_run_route_response(
+            run_id,
+            replay_run_from_run_id_fn=runtime_run_replay_service.replay_run_from_run_id,
             get_replay_payload=_get_replay_payload,
             run_start_request_class=deps.run_start_request_class,
             execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
@@ -802,9 +813,10 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}/stream", dependencies=[Depends(require_api_key)])
     async def stream_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        return runtime_run_entry_service.stream_run_response(
-            str(run_id),
+        return runtime_route_run_handlers_service.stream_run_route_response(
+            run_id,
             current_user=current_user,
+            stream_run_response_fn=runtime_run_entry_service.stream_run_response,
             runs=runs,
             serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
             enforce_run_owner_access=_enforce_run_owner_access,
@@ -815,14 +827,14 @@ def register_run_routes(app) -> None:
     @app.post("/runs/{run_id}/decision", dependencies=[Depends(require_api_key)])
     async def submit_run_decision(run_id: uuid.UUID, payload: DecisionPayload, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        payload.validate_fields()
         run_id_str = str(run_id)
-        return runtime_run_approval_service.submit_run_decision(
-            run_id_str,
-            run=runs.get(run_id_str),
+        return runtime_route_run_handlers_service.submit_run_decision_route_response(
+            run_id,
             payload=payload,
             current_user=current_user,
-            **runtime_run_approval_service.build_submit_run_decision_callbacks(
+            submit_run_decision_fn=runtime_run_approval_service.submit_run_decision,
+            run=runs.get(run_id_str),
+            callbacks=runtime_run_approval_service.build_submit_run_decision_callbacks(
                 serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 get_pending_confirmation=_get_pending_confirmation,
@@ -835,15 +847,15 @@ def register_run_routes(app) -> None:
     @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[Depends(require_api_key)])
     async def resolve_run_approval(run_id: uuid.UUID, approval_id: str, payload: ApprovalResolvePayload, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        payload.validate_fields()
         run_id_str = str(run_id)
-        return runtime_run_approval_service.resolve_run_approval(
-            run_id_str,
+        return runtime_route_run_handlers_service.resolve_run_approval_route_response(
+            run_id,
             approval_id,
-            run=runs.get(run_id_str),
             payload=payload,
             current_user=current_user,
-            **runtime_run_approval_service.build_resolve_run_approval_callbacks(
+            resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
+            run=runs.get(run_id_str),
+            callbacks=runtime_run_approval_service.build_resolve_run_approval_callbacks(
                 serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 get_pending_confirmation=_get_pending_confirmation,
@@ -864,11 +876,12 @@ def register_run_routes(app) -> None:
     async def resume_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         run_id_str = str(run_id)
-        return runtime_run_control_service.resume_waiting_run(
-            run_id_str,
-            run=runs.get(run_id_str),
+        return runtime_route_run_handlers_service.resume_run_route_response(
+            run_id,
             current_user=current_user,
-            **runtime_run_control_service.build_resume_waiting_run_callbacks(
+            resume_waiting_run_fn=runtime_run_control_service.resume_waiting_run,
+            run=runs.get(run_id_str),
+            callbacks=runtime_run_control_service.build_resume_waiting_run_callbacks(
                 serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
                 enforce_run_owner_access=_enforce_run_owner_access,
                 get_pending_confirmation=_get_pending_confirmation,

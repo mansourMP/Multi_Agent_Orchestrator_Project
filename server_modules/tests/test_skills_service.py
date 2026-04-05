@@ -60,6 +60,46 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertFalse(skills_service.availability_capability_runtime_usable(availability, "browser"))
         self.assertIsNone(skills_service.availability_capability(availability, "missing"))
 
+    def test_connected_and_context_availability_helpers(self) -> None:
+        availability = {
+            "tool_capabilities": [
+                {
+                    "id": "slack",
+                    "label": "Slack",
+                    "connected": True,
+                    "runtime_usable": True,
+                    "read_actions": ["history.read", "channels.read"],
+                    "write_actions": ["post_message", "send_dm"],
+                    "approval_required_actions": ["post_message"],
+                },
+                {
+                    "id": "telegram",
+                    "label": "Telegram",
+                    "connected": True,
+                    "runtime_usable": None,
+                },
+                {
+                    "id": "dropbox",
+                    "label": "Dropbox",
+                    "connected": True,
+                    "runtime_usable": False,
+                },
+                {"id": "github", "label": "GitHub", "connected": False},
+            ]
+        }
+
+        self.assertEqual(skills_service.connected_availability_labels(availability), ["Slack", "Telegram", "Dropbox"])
+        self.assertEqual(skills_service.unavailable_connected_availability_labels(availability), ["Dropbox"])
+        self.assertEqual(skills_service.unverified_connected_availability_labels(availability), ["Telegram"])
+        context_payload = skills_service.context_availability_capabilities(
+            availability,
+            max_context_tool_actions=1,
+            max_context_tool_capabilities=2,
+        )
+        self.assertEqual(len(context_payload), 2)
+        self.assertEqual(context_payload[0]["read_actions"], ["history.read"])
+        self.assertEqual(context_payload[0]["write_actions"], ["post_message"])
+
 
 if __name__ == "__main__":
     unittest.main()

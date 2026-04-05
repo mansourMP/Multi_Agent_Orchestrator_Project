@@ -4,6 +4,39 @@ from server_modules import direct_chat_context_service as service
 
 
 class DirectChatContextServiceTests(unittest.TestCase):
+    def test_availability_helpers_use_connected_runtime_buckets(self) -> None:
+        availability = {
+            "ai_ready": True,
+            "tool_capabilities": [
+                {"id": "slack", "label": "Slack", "connected": True, "runtime_usable": True},
+                {"id": "telegram", "label": "Telegram", "connected": True, "runtime_usable": False},
+                {"id": "gmail", "label": "Google Workspace", "connected": True, "runtime_usable": None},
+                {"id": "github", "label": "GitHub", "connected": False},
+            ],
+        }
+
+        lines = service.availability_lines(
+            "default",
+            availability,
+            normalize_tool_capabilities=lambda payload: payload.get("tool_capabilities") or [],
+        )
+        connected = service.connected_system_labels(
+            availability,
+            normalize_tool_capabilities=lambda payload: payload.get("tool_capabilities") or [],
+        )
+        context_caps = service.context_tool_capabilities(
+            availability,
+            normalize_tool_capabilities=lambda payload: payload.get("tool_capabilities") or [],
+            max_context_tool_actions=2,
+            max_context_tool_capabilities=2,
+        )
+
+        self.assertIn("Connected systems: Slack, Telegram, Google Workspace", lines[2])
+        self.assertIn("Unavailable now: Telegram", lines[3])
+        self.assertIn("Not verified: Google Workspace", lines[4])
+        self.assertEqual(connected, ["Slack", "Telegram", "Google Workspace"])
+        self.assertEqual(len(context_caps), 2)
+
     def test_session_model_preference_round_trip(self) -> None:
         store = {}
 

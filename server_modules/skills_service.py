@@ -113,6 +113,59 @@ def availability_capability_runtime_usable(availability: Any, capability_id: str
     return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
 
 
+def connected_availability_capabilities(availability: Any) -> List[Dict[str, Any]]:
+    return [
+        item
+        for item in normalize_availability_capability_payloads(availability)
+        if item.get("connected")
+    ]
+
+
+def connected_availability_labels(availability: Any) -> List[str]:
+    return [str(item.get("label") or "").strip() for item in connected_availability_capabilities(availability)]
+
+
+def unavailable_connected_availability_labels(availability: Any) -> List[str]:
+    return [
+        str(item.get("label") or "").strip()
+        for item in connected_availability_capabilities(availability)
+        if item.get("runtime_usable") is False
+    ]
+
+
+def unverified_connected_availability_labels(availability: Any) -> List[str]:
+    return [
+        str(item.get("label") or "").strip()
+        for item in connected_availability_capabilities(availability)
+        if item.get("runtime_usable") is None
+    ]
+
+
+def context_availability_capabilities(
+    availability: Any,
+    *,
+    max_context_tool_actions: int,
+    max_context_tool_capabilities: int,
+) -> List[Dict[str, Any]]:
+    trimmed: List[Dict[str, Any]] = []
+    for item in connected_availability_capabilities(availability):
+        trimmed.append(
+            {
+                "id": item.get("id"),
+                "label": item.get("label"),
+                "connected": True,
+                "authenticated": item.get("authenticated") if isinstance(item.get("authenticated"), bool) else None,
+                "runtime_usable": item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None,
+                "read_actions": (item.get("read_actions") or [])[:max_context_tool_actions],
+                "write_actions": (item.get("write_actions") or [])[:max_context_tool_actions],
+                "approval_required_actions": (item.get("approval_required_actions") or [])[:max_context_tool_actions],
+            }
+        )
+        if len(trimmed) >= max_context_tool_capabilities:
+            break
+    return trimmed
+
+
 def resolve_workspace_capability_payloads(
     workspace_id: str,
     *,

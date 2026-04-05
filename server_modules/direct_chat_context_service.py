@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Set
 
+from server_modules import skills_service
+
 
 def agent_machine_owner_user_id(session_ctx: Optional[Dict[str, Any]]) -> str:
     context = session_ctx if isinstance(session_ctx, dict) else {}
@@ -22,9 +24,10 @@ def availability_lines(
 ) -> List[str]:
     ai_ready = bool(availability.get("ai_ready"))
     tools = normalize_tool_capabilities(availability)
-    connected_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected")]
-    unavailable_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected") and item.get("runtime_usable") is False]
-    unverified_labels = [str(item.get("label") or "").strip() for item in tools if item.get("connected") and item.get("runtime_usable") is None]
+    normalized_availability = {"tool_capabilities": tools}
+    connected_labels = skills_service.connected_availability_labels(normalized_availability)
+    unavailable_labels = skills_service.unavailable_connected_availability_labels(normalized_availability)
+    unverified_labels = skills_service.unverified_connected_availability_labels(normalized_availability)
     return [
         f"Workspace: {workspace_id or 'default'}",
         f"AI account: {'ready' if ai_ready else 'not ready'}",
@@ -39,7 +42,9 @@ def connected_system_labels(
     *,
     normalize_tool_capabilities: Any,
 ) -> List[str]:
-    return [str(item.get("label") or "").strip() for item in normalize_tool_capabilities(availability) if item.get("connected")]
+    return skills_service.connected_availability_labels(
+        {"tool_capabilities": normalize_tool_capabilities(availability)}
+    )
 
 
 def context_tool_capabilities(
@@ -49,25 +54,11 @@ def context_tool_capabilities(
     max_context_tool_actions: int,
     max_context_tool_capabilities: int,
 ) -> List[Dict[str, Any]]:
-    trimmed: List[Dict[str, Any]] = []
-    for item in normalize_tool_capabilities(availability):
-        if not item.get("connected"):
-            continue
-        trimmed.append(
-            {
-                "id": item.get("id"),
-                "label": item.get("label"),
-                "connected": True,
-                "authenticated": item.get("authenticated") if isinstance(item.get("authenticated"), bool) else None,
-                "runtime_usable": item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None,
-                "read_actions": (item.get("read_actions") or [])[:max_context_tool_actions],
-                "write_actions": (item.get("write_actions") or [])[:max_context_tool_actions],
-                "approval_required_actions": (item.get("approval_required_actions") or [])[:max_context_tool_actions],
-            }
-        )
-        if len(trimmed) >= max_context_tool_capabilities:
-            break
-    return trimmed
+    return skills_service.context_availability_capabilities(
+        {"tool_capabilities": normalize_tool_capabilities(availability)},
+        max_context_tool_actions=max_context_tool_actions,
+        max_context_tool_capabilities=max_context_tool_capabilities,
+    )
 
 
 def normalize_prior_messages(

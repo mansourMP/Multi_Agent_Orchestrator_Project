@@ -65,6 +65,7 @@ from server_modules.runtime_state_store import (
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_run_access_service
+from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_replay_service
@@ -1335,146 +1336,44 @@ def register_run_routes(app) -> None:
         _refresh_server_exports()
         payload.validate_fields()
         run_id_str = str(run_id)
-        if run_id_str in runs:
-            run = runs[run_id_str]
-            snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
-            _enforce_run_owner_access(current_user, snapshot)
-            pending = _get_pending_confirmation(run)
-            approval_id = str(pending.get("approval_id") or "").strip() if isinstance(pending, dict) else ""
-            correlation_id = str(pending.get("correlation_id") or "").strip() if isinstance(pending, dict) else ""
-            context = run.get("context")
-            metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-            if approval_id and (
-                bool(metadata.get("local_execution_waiting_confirmation"))
-                or bool(metadata.get("local_execution_waiting_approval"))
-            ):
-                return _resolve_local_execution_start_approval(
-                    run_id_str,
-                    run,
-                    approval_id,
-                    str(payload.decision or "").strip().lower(),
-                    str(payload.note or ""),
-                )
-            if approval_id:
-                _append_approval_audit(
-                    approval_id=approval_id,
-                    stage="decision_submitted",
-                    decision=str(payload.decision or "").strip().lower(),
-                    actor="user",
-                    source="runs_decision_api",
-                    run_id=run_id_str,
-                    note=str(payload.note or ""),
-                    correlation_id=correlation_id or _approval_correlation_id(approval_id, run_id=run_id_str),
-                    metadata={"scope": "once", "reusable": False},
-                )
-                run["input_queue"].put({"approval_id": approval_id, "decision": payload.decision, "note": payload.note})
-                return {
-                    "status": "ok",
-                    "approval_id": approval_id,
-                    "correlation_id": correlation_id or None,
-                    "scope": "once",
-                    "reusable": False,
-                    "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
-                }
-            run["input_queue"].put(payload.decision)
-            return {"status": "ok", "approval_id": None}
-        raise HTTPException(404, "Run ID not found")
+        return runtime_run_approval_service.submit_run_decision(
+            run_id_str,
+            run=runs.get(run_id_str),
+            payload=payload,
+            current_user=current_user,
+            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            get_pending_confirmation=_get_pending_confirmation,
+            approval_correlation_id=_approval_correlation_id,
+            append_approval_audit=_append_approval_audit,
+            resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+        )
 
     @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[Depends(require_api_key)])
     async def resolve_run_approval(run_id: uuid.UUID, approval_id: str, payload: ApprovalResolvePayload, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         payload.validate_fields()
         run_id_str = str(run_id)
-        run = runs.get(run_id_str)
-        if not isinstance(run, dict):
-            raise HTTPException(status_code=404, detail="Run ID not found")
-        snapshot = _late_server_export("_serialize_run_snapshot")(run_id_str, run)
-        _enforce_run_owner_access(current_user, snapshot)
-        pending = _get_pending_confirmation(run)
-        if not isinstance(pending, dict):
-            raise HTTPException(status_code=409, detail="No pending confirmation for this run.")
-        expected = str(pending.get("approval_id") or "").strip()
-        if expected != approval_id:
-            raise HTTPException(status_code=409, detail="approval_id does not match pending confirmation.")
-        decision_text = str(payload.decision or "").strip().lower()
-        context = run.get("context")
-        metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-        if bool(metadata.get("local_execution_waiting_confirmation")) or bool(metadata.get("local_execution_waiting_approval")):
-            return _resolve_local_execution_start_approval(
-                run_id_str,
-                run,
-                approval_id,
-                decision_text,
-                str(payload.note or ""),
-            )
-        approve_tokens = {"proceed", "approve", "yes", "y", "continue", "ok"}
-        reject_tokens = {"hold", "reject", "no", "n", "abort", "stop", "cancel"}
-        escalate_tokens = {"escalate", "escalated"}
-        approved = decision_text in approve_tokens
-        escalated = decision_text in escalate_tokens
-        rejected = decision_text in reject_tokens or (not approved and not escalated)
-        correlation_id = str(pending.get("correlation_id") or "").strip() or _approval_correlation_id(approval_id, run_id=run_id_str)
-        expires_at = _parse_utc_ts(pending.get("expires_at"))
-        if expires_at is not None and _utc_now() > expires_at:
-            pending["status"] = "expired"
-            pending["expired_at"] = _utc_now_iso()
-            _set_pending_confirmation(run, pending)
-            raise HTTPException(status_code=409, detail="Confirmation request has already expired.")
-        run["input_queue"].put(
-            {
-                "approval_id": approval_id,
-                "decision": payload.decision,
-                "note": payload.note,
-            }
+        return runtime_run_approval_service.resolve_run_approval(
+            run_id_str,
+            approval_id,
+            run=runs.get(run_id_str),
+            payload=payload,
+            current_user=current_user,
+            serialize_run_snapshot=_late_server_export("_serialize_run_snapshot"),
+            enforce_run_owner_access=_enforce_run_owner_access,
+            get_pending_confirmation=_get_pending_confirmation,
+            set_pending_confirmation=_set_pending_confirmation,
+            parse_utc_ts=_parse_utc_ts,
+            utc_now=_utc_now,
+            utc_now_iso=_utc_now_iso,
+            approval_correlation_id=_approval_correlation_id,
+            append_approval_audit=_append_approval_audit,
+            resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+            run_thread_is_alive=_run_thread_is_alive,
+            emit_log=emit_log,
+            schedule_restored_run_resume=_schedule_restored_run_resume,
         )
-        _append_approval_audit(
-            approval_id=approval_id,
-            stage="decision_submitted",
-            decision=("approved" if approved else "escalated" if escalated else "rejected"),
-            actor="user",
-            source="runs_approval_api",
-            run_id=run_id_str,
-            note=str(payload.note or ""),
-            correlation_id=correlation_id,
-            metadata={
-                "raw_decision": decision_text,
-                "approved": bool(approved),
-                "rejected": bool(rejected),
-                "escalated": bool(escalated),
-                "scope": "once",
-                "reusable": False,
-            },
-        )
-        if not _run_thread_is_alive(run) and str(run.get("status") or "").strip().lower() == "waiting_for_input":
-            pending["status"] = "resolved"
-            pending["resolved_at"] = _utc_now_iso()
-            pending["decision"] = decision_text
-            pending["note"] = str(payload.note or "")
-            _set_pending_confirmation(run, pending)
-            emit_log(
-                run["logs"],
-                "info" if approved else "warn",
-                "Confirmation recorded. Restored run is resuming.",
-                event="approval_resume_scheduled",
-                data={
-                    "approval_id": approval_id,
-                    "correlation_id": correlation_id,
-                    "decision": decision_text,
-                    "scope": "once",
-                    "reusable": False,
-                },
-            )
-            _schedule_restored_run_resume(run_id_str, run)
-        return {
-            "status": "ok",
-            "run_id": run_id_str,
-            "approval_id": approval_id,
-            "correlation_id": correlation_id,
-            "decision_kind": ("approved" if approved else "escalated" if escalated else "rejected"),
-            "scope": "once",
-            "reusable": False,
-            "consequence": "This confirmation applies only to this pending step in this run. Later runs or later confirmation points will ask again.",
-        }
 
     @app.post("/runs/{run_id}/resume", dependencies=[Depends(require_api_key)])
     async def resume_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):

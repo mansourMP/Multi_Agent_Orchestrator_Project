@@ -1644,6 +1644,75 @@ This cut is a real shell reduction. It still does not make the chat shell thin, 
   - `server_modules.tests.test_direct_chat_callback_facade_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Callback And Tool Policy Wiring Moved Behind Operator Binding Service
+
+#### Stage
+
+Stage 1 continues. The bottom-of-file callback assembly and tool/routing policy binding cluster no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is the largest operator-chat reduction in the current direct-chat pass. It removes a dense cluster of wiring code while preserving late-bound compatibility for tests that patch module-level helpers.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_operator_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_operator_binding_service.py) to own:
+  - direct-chat tool-name parsing and argument normalization
+  - approved-action normalization
+  - direct-step title/detail shaping
+  - direct-tool execution callback assembly
+  - routing policy callback assembly
+  - tool policy callback assembly
+  - direct-chat callback facade input assembly using late-bound module namespace lookup
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these helpers now delegate through the new binding service:
+  - `_direct_chat_routing_policy_callbacks()`
+  - `_direct_chat_tool_policy_callbacks()`
+  - `_parse_tool_name()`
+  - `_tool_arguments_payload()`
+  - `_normalize_direct_approved_action()`
+  - `_titleize_direct_step_token()`
+  - `_compact_step_detail()`
+  - `_direct_tool_execution_callbacks()`
+  - `_direct_chat_callback_facade_inputs()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_operator_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_operator_binding_service.py) for the late-bound underscored namespace behavior that the operator shell still relies on.
+
+#### Current Truth
+
+- The callback and policy wiring cluster now has an explicit service boundary instead of being assembled directly inside the operator shell.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) remains the compatibility surface for the historical helper names and still resolves callbacks at runtime.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1784` to `1667` lines in this cut.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns higher-level orchestration flow and some remaining provider/tool/runtime coordination logic.
+- The restored docs set is still behind the full recent execution trail and should be reconciled in a later docs cleanup pass.
+- The chat shell is now materially smaller, but it is still not yet the thin coordinator required by the architecture target.
+
+#### Next Required Work
+
+1. Continue targeting dense orchestration logic inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) rather than isolated wrapper helpers.
+2. Reconcile the restored docs history after the code-side refactor band stabilizes.
+3. Keep preserving late-bound operator-module patch behavior as more callback wiring moves out of the shell.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_operator_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_operator_binding_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_operator_binding_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_operator_binding_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Top-Level Runtime Entry Wiring Moved Behind Runtime Entry Facade
 
 #### Stage

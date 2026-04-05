@@ -28,6 +28,7 @@ from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_entry_policy_service
+from server_modules import direct_chat_operator_binding_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_runtime_entry_facade_service
@@ -922,17 +923,8 @@ def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> b
 
 
 def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.DirectChatRoutingPolicyCallbacks:
-    return direct_chat_routing_service.DirectChatRoutingPolicyCallbacks(
-        compact_text=_compact_text,
-        mentions_any=_mentions_any,
-        question_like=_question_like,
-        is_explicit_workflow_request=_is_explicit_workflow_request,
-        starts_like_direct_run=_starts_like_direct_run,
-        workflow_action=_workflow_action,
-        run_action=_run_action,
-        message_requests_local_file_tool=_message_requests_local_file_tool,
-        message_requests_local_shell_tool=_message_requests_local_shell_tool,
-        message_requests_local_screenshot_tool=_message_requests_local_screenshot_tool,
+    return direct_chat_operator_binding_service.build_direct_chat_routing_policy_callbacks(
+        namespace=globals(),
         complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
         complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
         execution_markers=EXECUTION_MARKERS,
@@ -1087,14 +1079,8 @@ def _provider_supports_direct_tool_calls(provider: str) -> bool:
 
 
 def _direct_chat_tool_policy_callbacks() -> direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks:
-    return direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks(
-        compact_text=_compact_text,
-        question_like=_question_like,
-        mentions_any=_mentions_any,
-        extract_first_path_reference=_extract_first_path_reference,
-        extract_first_url=_extract_first_url,
-        provider_supports_direct_tool_calls=_provider_supports_direct_tool_calls,
-        is_obvious_smtp_write_request=_is_obvious_smtp_write_request,
+    return direct_chat_operator_binding_service.build_direct_chat_tool_policy_callbacks(
+        namespace=globals(),
         google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
         smtp_keywords=SMTP_KEYWORDS,
         telegram_keywords=TELEGRAM_KEYWORDS,
@@ -1227,30 +1213,14 @@ def _message_can_use_builtin_direct_tools(
 
 
 def _parse_tool_name(tool_name: str) -> tuple[str, str]:
-    token = str(tool_name or "").strip()
-    if token == "http_request":
-        return "http", "request"
-    if token == "generate_image":
-        return "image", "generate"
-    if token == "memory_search":
-        return "memory", "search"
-    if token == "memory_get":
-        return "memory", "get"
-    if "__" not in token:
-        raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
-    connector_id, action_id = token.split("__", 1)
-    connector_id = connector_id.strip().lower()
-    action_id = action_id.strip()
-    if not connector_id or not action_id:
-        raise RuntimeError(f"Unsupported direct chat tool '{token}'.")
-    return connector_id, action_id
+    return direct_chat_operator_binding_service.parse_tool_name(tool_name)
 
 
 def _tool_arguments_payload(arguments: Any) -> Dict[str, Any]:
-    if isinstance(arguments, dict):
-        return dict(arguments)
-    parsed = parse_json_object_loose(str(arguments or ""))
-    return dict(parsed) if isinstance(parsed, dict) else {}
+    return direct_chat_operator_binding_service.tool_arguments_payload(
+        arguments,
+        parse_json_object_loose_fn=parse_json_object_loose,
+    )
 
 
 def _extract_first_email(text: str) -> str:
@@ -1303,18 +1273,7 @@ def _tool_write_action_available(
 
 
 def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
-    if not isinstance(value, dict):
-        return None
-    connector_id = str(value.get("connector") or "").strip().lower()
-    action_id = str(value.get("action") or "").strip()
-    tool_input = str(value.get("input") or "").strip()
-    if not connector_id or not action_id or not tool_input:
-        return None
-    return {
-        "connector": connector_id,
-        "action": action_id,
-        "input": tool_input,
-    }
+    return direct_chat_operator_binding_service.normalize_direct_approved_action(value)
 
 
 def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
@@ -1337,17 +1296,11 @@ def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
 
 
 def _titleize_direct_step_token(value: str) -> str:
-    words = [part for part in str(value or "").strip().replace("-", "_").split("_") if part]
-    return " ".join(word.capitalize() for word in words)
+    return direct_chat_operator_binding_service.titleize_direct_step_token(value)
 
 
 def _compact_step_detail(value: Any, limit: int = 120) -> Optional[str]:
-    normalized = " ".join(str(value or "").split()).strip()
-    if not normalized:
-        return None
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: limit - 1].rstrip()}…"
+    return direct_chat_operator_binding_service.compact_step_detail(value, limit=limit)
 
 
 def _direct_tool_step_payload(
@@ -1387,20 +1340,8 @@ def _resolve_chat_local_path(raw_path: str) -> Path:
 
 
 def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectToolExecutionCallbacks:
-    return direct_tool_runtime_facade_service.build_direct_tool_execution_callbacks(
-        namespace={
-            "compact_step_detail": _compact_step_detail,
-            "titleize_direct_step_token": _titleize_direct_step_token,
-            "run_async_tool_call": _run_async_tool_call,
-            "parse_tool_name": _parse_tool_name,
-            "tool_arguments_payload": _tool_arguments_payload,
-            "safe_positive_int": _safe_positive_int,
-            "normalize_reasoning_effort": _normalize_reasoning_effort,
-            "build_direct_local_tool_config": _build_direct_local_tool_config,
-            "format_direct_local_tool_result": _format_direct_local_tool_result,
-            "build_direct_tool_config": _build_direct_tool_config,
-            "format_direct_tool_result": _format_direct_tool_result,
-        },
+    return direct_chat_operator_binding_service.build_direct_tool_execution_callbacks(
+        namespace=globals(),
         parse_json_object_loose=parse_json_object_loose,
         llm_task=llm_task,
         web_search=web_search,
@@ -1588,66 +1529,8 @@ def _direct_chat_generation_services() -> direct_chat_generation_service.DirectC
 
 
 def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs:
-    return direct_chat_composition_service.build_direct_chat_callback_facade_inputs(
-        namespace={
-            "thinking_step_payload": _thinking_step_payload,
-            "build_context_used": _build_context_used,
-            "build_direct_tool_approval_response": _build_direct_tool_approval_response,
-            "parse_tool_name": _parse_tool_name,
-            "tool_arguments_payload": _tool_arguments_payload,
-            "direct_tool_step_payload": _direct_tool_step_payload,
-            "execute_single_direct_tool_call": _execute_single_direct_tool_call,
-            "direct_tool_followup_message": _direct_tool_followup_message,
-            "suggest_actions": _suggest_actions,
-            "clear_direct_tool_loop_state": _clear_direct_tool_loop_state,
-            "persist_direct_chat_memory_best_effort": _persist_direct_chat_memory_best_effort,
-            "persist_direct_chat_transcript_best_effort": _persist_direct_chat_transcript_best_effort,
-            "record_direct_tool_signature": _record_direct_tool_signature,
-            "direct_chat_error_reply": _direct_chat_error_reply,
-            "compact_text": _compact_text,
-            "safe_positive_int": _safe_positive_int,
-            "resolve_chat_local_path": _resolve_chat_local_path,
-            "extract_first_path_reference": _extract_first_path_reference,
-            "extract_first_url": _extract_first_url,
-            "approval_required_for_direct_tool": _approval_required_for_direct_tool,
-            "agent_machine_full_trust_for_session": _agent_machine_full_trust_for_session,
-            "direct_chat_session_key": _direct_chat_session_key,
-            "resolved_chat_iteration_limit": _resolved_chat_iteration_limit,
-            "session_model_preference": _session_model_preference,
-            "normalize_reasoning_effort": _normalize_reasoning_effort,
-            "parse_slash_command": _parse_slash_command,
-            "set_session_model_preference": _set_session_model_preference,
-            "mark_thread_cleared": _mark_thread_cleared,
-            "normalize_prior_messages": _normalize_prior_messages,
-            "consume_thread_cleared": _consume_thread_cleared,
-            "build_proactive_suggestions": _build_proactive_suggestions,
-            "direct_tool_session_key": _direct_tool_session_key,
-            "resolve_direct_chat_availability": _resolve_direct_chat_availability,
-            "connected_system_labels": _connected_system_labels,
-            "context_tool_capabilities": _context_tool_capabilities,
-            "build_direct_chat_tools": _build_direct_chat_tools,
-            "build_local_direct_chat_tools": _build_local_direct_chat_tools,
-            "build_builtin_direct_chat_tools": _build_builtin_direct_chat_tools,
-            "normalize_direct_approved_action": _normalize_direct_approved_action,
-            "with_context_used": _with_context_used,
-            "connected_provider_tokens": _connected_provider_tokens,
-            "active_run_count": _active_run_count,
-            "slash_command_help_text": _slash_command_help_text,
-            "execute_direct_tool_calls": _execute_direct_tool_calls,
-            "direct_chat_credentials": _direct_chat_credentials,
-            "tool_gate_response": _tool_gate_response,
-            "tool_write_action_available": _tool_write_action_available,
-            "approved_action_to_tool_call": _approved_action_to_tool_call,
-            "resolve_provider_for_direct_chat_message": _resolve_provider_for_direct_chat_message,
-            "plan_direct_chat_route": _plan_direct_chat_route,
-            "start_direct_chat_run_handoff": _start_direct_chat_run_handoff,
-            "direct_chat_run_handoff_reply": _direct_chat_run_handoff_reply,
-            "stream_direct_chat_run_handoff": _stream_direct_chat_run_handoff,
-            "direct_chat_run_handoff_failure_payload": _direct_chat_run_handoff_failure_payload,
-            "supports_direct_message_native_chat": _supports_direct_message_native_chat,
-            "build_direct_chat_system_prompt": _build_direct_chat_system_prompt,
-            "direct_chat_workspace_context_text": _direct_chat_workspace_context_text,
-        },
+    return direct_chat_operator_binding_service.build_direct_chat_callback_facade_inputs(
+        namespace=globals(),
         parse_page_state=parse_json_object_loose,
         capture_exception=sentry_sdk.capture_exception,
         generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,

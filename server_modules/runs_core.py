@@ -1159,12 +1159,10 @@ execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system
 
 
 def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_service.RunExecutionServices:
-    return run_service.build_system_run_execution_services(
+    return run_service.build_schedule_system_run_execution_services(
         prepare_run_start_request=_prepare_run_start_request,
-        create_run_from_request=run_service.build_schedule_bound_create_run_from_request(
-            _create_run_from_request,
-            schedule_id=schedule_id,
-        ),
+        create_run_from_request=_create_run_from_request,
+        schedule_id=schedule_id,
     )
 
 

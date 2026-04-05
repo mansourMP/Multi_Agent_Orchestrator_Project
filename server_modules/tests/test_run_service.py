@@ -16,8 +16,10 @@ from server_modules.run_service import (
     build_server_run_execution_services,
     build_server_run_routing_preview_services,
     build_server_system_run_execution_services,
+    build_schedule_system_run_execution_services,
     build_system_run_execution_services,
     build_system_run_execution_services_from_namespace,
+    build_namespace_delegated_system_run_execution_services,
     build_legacy_local_execution_creation_services,
     build_legacy_orion_preparation_services,
     build_legacy_run_preparation_services,
@@ -241,6 +243,33 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertIs(services.prepare_run_start_request, prepare)
         self.assertIs(services.create_run_from_request, create)
+
+    def test_build_schedule_system_run_execution_services_binds_schedule_id(self):
+        services = build_schedule_system_run_execution_services(
+            prepare_run_start_request=lambda req: {"metadata": {}},
+            create_run_from_request=lambda req, schedule_id=None: {"run_id": "run-1", "schedule_id": schedule_id},
+            schedule_id="sched-7",
+        )
+
+        result = services.create_run_from_request(object())
+
+        self.assertEqual(result["schedule_id"], "sched-7")
+
+    def test_build_namespace_delegated_system_run_execution_services_uses_namespace_callbacks(self):
+        prepare = object()
+        create = object()
+
+        services = build_namespace_delegated_system_run_execution_services(
+            namespace={
+                "_prepare_run_start_request": prepare,
+                "_create_run_from_request": create,
+            }
+        )
+
+        request = object()
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
+        self.assertIs(services.stamp_request_owner(request, object()), request)
 
     def test_build_server_run_execution_services_uses_server_exports(self):
         owner = object()

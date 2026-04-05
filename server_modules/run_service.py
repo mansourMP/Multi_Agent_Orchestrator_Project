@@ -277,6 +277,30 @@ def build_server_system_run_execution_services(
     )
 
 
+def build_schedule_system_run_execution_services(
+    *,
+    prepare_run_start_request: Any,
+    create_run_from_request: Callable[..., Any],
+    schedule_id: Optional[str] = None,
+) -> RunExecutionServices:
+    return build_system_run_execution_services(
+        prepare_run_start_request=prepare_run_start_request,
+        create_run_from_request=build_schedule_bound_create_run_from_request(
+            create_run_from_request,
+            schedule_id=schedule_id,
+        ),
+    )
+
+
+def build_namespace_delegated_system_run_execution_services(
+    *,
+    namespace: Dict[str, Any],
+) -> RunExecutionServices:
+    return build_system_run_execution_services_from_namespace(
+        namespace=namespace,
+    )
+
+
 def build_legacy_run_execution_services(
     *,
     callbacks: LegacyRunExecutionCallbacks,

@@ -29,6 +29,7 @@ from server_modules.direct_chat_service import (
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
     direct_chat_stream_key as _service_direct_chat_stream_key,
 )
+from server_modules import direct_chat_stream_state_service as chat_stream_state_service
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import (
     RunCreationServices,
@@ -265,37 +266,24 @@ def _configured_direct_chat_worker_count() -> int:
 
 
 def ensure_single_worker_direct_chat_stream_runtime() -> None:
-    worker_count = _configured_direct_chat_worker_count()
-    if worker_count <= 1:
-        return
-    raise RuntimeError(
-        "Direct chat streaming requires a single runtime worker because _CHAT_STREAM_SESSIONS "
-        "is process-local and not safe for multi-worker deployment."
+    return chat_stream_state_service.ensure_single_worker_runtime(
+        configured_worker_count=_configured_direct_chat_worker_count(),
     )
 
 
 def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> None:
-    ensure_single_worker_direct_chat_stream_runtime()
-    reference = float(now_ts or time.time())
-    db_path = _chat_stream_state_db_path()
-    interrupted = mark_stale_chat_stream_sessions_interrupted(
-        db_path,
-        stale_before_ts=reference - _CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
-        error_text="Chat stream was interrupted while the runtime was unavailable.",
+    return chat_stream_state_service.initialize_runtime_state(
+        now_ts=now_ts,
+        ensure_single_worker_runtime_fn=ensure_single_worker_direct_chat_stream_runtime,
+        db_path=_chat_stream_state_db_path(),
+        stale_after_seconds=_CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
+        ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
+        mark_stale_sessions_interrupted=mark_stale_chat_stream_sessions_interrupted,
+        delete_sessions_older_than=delete_chat_stream_sessions_older_than,
+        metrics_inc=_chat_stream_metrics_inc,
+        session_manager_enabled=_direct_chat_session_manager_enabled,
+        session_manager_factory=_direct_chat_session_manager,
     )
-    if interrupted:
-        _chat_stream_metrics_inc("chat_stream_interrupted", interrupted)
-    deleted = delete_chat_stream_sessions_older_than(
-        db_path,
-        older_than_ts=reference - _CHAT_STREAM_STATE_TTL_SECONDS,
-    )
-    if deleted:
-        _chat_stream_metrics_inc("chat_stream_state_cleanup_sessions", deleted)
-    if _direct_chat_session_manager_enabled():
-        try:
-            _direct_chat_session_manager().interrupt_stale_sessions(now_ts=reference)
-        except Exception:
-            return
 
 
 def _default_chat_stream_session(
@@ -305,77 +293,31 @@ def _default_chat_stream_session(
     request_id: str,
     workspace_id: str,
 ) -> dict[str, Any]:
-    now_ts = time.time()
-    return {
-        "key": key,
-        "thread_id": thread_id,
-        "request_id": request_id,
-        "workspace_id": workspace_id,
-        "condition": threading.Condition(),
-        "events": [],
-        "next_event_id": 1,
-        "producer_started": False,
-        "completed": False,
-        "last_accessed_at": now_ts,
-        "created_at": _chat_stream_now_iso(),
-        "status": "active",
-        "last_event_seq": 0,
-        "partial_text": "",
-        "final_payload": {},
-        "error_text": "",
-        "metadata": {},
-    }
+    return chat_stream_state_service.default_chat_stream_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+        now_ts=time.time(),
+        now_iso=_chat_stream_now_iso,
+    )
 
 
 def _persist_chat_stream_session_state(session: dict[str, Any]) -> None:
-    upsert_chat_stream_state(
-        _chat_stream_state_db_path(),
-        {
-            "session_id": str(session.get("key") or "").strip(),
-            "thread_id": str(session.get("thread_id") or "").strip(),
-            "request_id": str(session.get("request_id") or "").strip(),
-            "workspace_id": str(session.get("workspace_id") or "").strip(),
-            "status": str(session.get("status") or "active").strip() or "active",
-            "created_at": str(session.get("created_at") or "").strip() or _chat_stream_now_iso(),
-            "updated_at": _chat_stream_now_iso(),
-            "last_event_seq": int(session.get("last_event_seq") or 0),
-            "partial_text": str(session.get("partial_text") or ""),
-            "final_payload": session.get("final_payload") if isinstance(session.get("final_payload"), dict) else {},
-            "error_text": str(session.get("error_text") or "").strip(),
-            "metadata": session.get("metadata") if isinstance(session.get("metadata"), dict) else {},
-        },
+    return chat_stream_state_service.persist_chat_stream_session_state(
+        session,
+        db_path=_chat_stream_state_db_path(),
+        now_iso=_chat_stream_now_iso,
+        upsert_state=upsert_chat_stream_state,
     )
 
 
 def _chat_stream_interrupted_final_payload(partial_text: str, error_text: str) -> dict[str, Any]:
-    detail = str(error_text or "").strip() or "Chat stream was interrupted while the runtime was unavailable."
-    partial = str(partial_text or "").strip()
-    reply = f"{partial}\n\n{detail}" if partial else detail
-    return {
-        "reply": reply,
-        "actions": [],
-        "mode": "answer",
-        "error": detail,
-    }
+    return chat_stream_state_service.chat_stream_interrupted_final_payload(partial_text, error_text)
 
 
 def _chat_stream_replay_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    status = str(state.get("status") or "").strip().lower()
-    if status == "completed":
-        final_payload = state.get("final_payload")
-        if isinstance(final_payload, dict) and final_payload:
-            return final_payload
-        fallback_reply = str(state.get("partial_text") or "").strip() or "Chat completed."
-        return {
-            "reply": fallback_reply,
-            "actions": [],
-            "mode": "answer",
-            "error": "",
-        }
-    return _chat_stream_interrupted_final_payload(
-        str(state.get("partial_text") or ""),
-        str(state.get("error_text") or ""),
-    )
+    return chat_stream_state_service.chat_stream_replay_payload_from_state(state)
 
 
 def _build_chat_stream_replay_session(
@@ -386,34 +328,15 @@ def _build_chat_stream_replay_session(
     workspace_id: str,
     state: dict[str, Any],
 ) -> dict[str, Any]:
-    session = _default_chat_stream_session(
+    return chat_stream_state_service.build_chat_stream_replay_session(
         key,
         thread_id=thread_id,
         request_id=request_id,
         workspace_id=workspace_id,
-    )
-    seq = max(1, int(state.get("last_event_seq") or 1))
-    payload = _chat_stream_replay_payload_from_state(state)
-    session.update(
-        {
-            "producer_started": True,
-            "completed": True,
-            "next_event_id": seq + 1,
-            "events": [
-                {
-                    "id": str(seq),
-                    "seq": seq,
-                    "event": "final",
-                    "payload": payload,
-                }
-            ],
-            "last_event_seq": seq,
-            "partial_text": str(state.get("partial_text") or ""),
-            "status": str(state.get("status") or "completed").strip() or "completed",
-            "final_payload": payload,
-            "error_text": str(state.get("error_text") or "").strip(),
-            "created_at": str(state.get("created_at") or "").strip() or _chat_stream_now_iso(),
-        }
+        state=state,
+        default_session_factory=_default_chat_stream_session,
+        replay_payload_from_state=_chat_stream_replay_payload_from_state,
+        now_iso=_chat_stream_now_iso,
     )
     return session
 
@@ -425,37 +348,18 @@ def _load_replayable_chat_stream_session(
     request_id: str,
     workspace_id: str,
 ) -> Optional[dict[str, Any]]:
-    state = get_chat_stream_state(_chat_stream_state_db_path(), key)
-    if not isinstance(state, dict):
-        return None
-    status = str(state.get("status") or "").strip().lower()
-    if status == "active":
-        state["status"] = "interrupted"
-        state["error_text"] = (
-            str(state.get("error_text") or "").strip()
-            or "Chat stream was interrupted because the live producer is no longer running."
-        )
-        state["updated_at"] = _chat_stream_now_iso()
-        state["last_event_seq"] = max(1, int(state.get("last_event_seq") or 0) + 1)
-        state["final_payload"] = _chat_stream_interrupted_final_payload(
-            str(state.get("partial_text") or ""),
-            str(state.get("error_text") or ""),
-        )
-        upsert_chat_stream_state(_chat_stream_state_db_path(), state)
-        _chat_stream_metrics_inc("chat_stream_interrupted", 1)
-        status = "interrupted"
-    if status not in {"completed", "interrupted", "error"}:
-        return None
-    if status == "completed":
-        _chat_stream_metrics_inc("chat_stream_replayed_completed", 1)
-    else:
-        _chat_stream_metrics_inc("chat_stream_replayed_interrupted", 1)
-    return _build_chat_stream_replay_session(
+    return chat_stream_state_service.load_replayable_chat_stream_session(
         key,
         thread_id=thread_id,
         request_id=request_id,
         workspace_id=workspace_id,
-        state=state,
+        db_path=_chat_stream_state_db_path(),
+        get_state=get_chat_stream_state,
+        upsert_state=upsert_chat_stream_state,
+        metrics_inc=_chat_stream_metrics_inc,
+        now_iso=_chat_stream_now_iso,
+        interrupted_final_payload=_chat_stream_interrupted_final_payload,
+        build_replay_session=_build_chat_stream_replay_session,
     )
 
 
@@ -498,14 +402,11 @@ _build_direct_chat_event_producer = lambda *, current_user, body, message, works
 
 
 def _prune_chat_stream_sessions_locked(now_ts: Optional[float] = None) -> None:
-    reference = float(now_ts or time.time())
-    stale_keys = [
-        key
-        for key, session in _CHAT_STREAM_SESSIONS.items()
-        if reference - float(session.get("last_accessed_at") or reference) > _CHAT_STREAM_TTL_SECONDS
-    ]
-    for key in stale_keys:
-        _CHAT_STREAM_SESSIONS.pop(key, None)
+    return chat_stream_state_service.prune_chat_stream_sessions_locked(
+        _CHAT_STREAM_SESSIONS,
+        ttl_seconds=_CHAT_STREAM_TTL_SECONDS,
+        now_ts=now_ts,
+    )
 
 
 def _get_or_create_chat_stream_session(
@@ -516,33 +417,20 @@ def _get_or_create_chat_stream_session(
     workspace_id: str,
 ) -> dict[str, Any]:
     with _CHAT_STREAM_LOCK:
-        _prune_chat_stream_sessions_locked()
-        delete_chat_stream_sessions_older_than(
-            _chat_stream_state_db_path(),
-            older_than_ts=time.time() - _CHAT_STREAM_STATE_TTL_SECONDS,
-        )
-        session = _CHAT_STREAM_SESSIONS.get(key)
-        if isinstance(session, dict):
-            session["last_accessed_at"] = time.time()
-            return session
-        replay_session = _load_replayable_chat_stream_session(
-            key,
+        return chat_stream_state_service.get_or_create_chat_stream_session(
+            _CHAT_STREAM_SESSIONS,
+            key=key,
             thread_id=thread_id,
             request_id=request_id,
             workspace_id=workspace_id,
+            prune_sessions_locked=lambda: _prune_chat_stream_sessions_locked(),
+            delete_sessions_older_than=delete_chat_stream_sessions_older_than,
+            db_path=_chat_stream_state_db_path(),
+            state_ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
+            load_replayable_session=_load_replayable_chat_stream_session,
+            default_session_factory=_default_chat_stream_session,
+            persist_session_state=_persist_chat_stream_session_state,
         )
-        if isinstance(replay_session, dict):
-            _CHAT_STREAM_SESSIONS[key] = replay_session
-            return replay_session
-        session = _default_chat_stream_session(
-            key,
-            thread_id=thread_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-        )
-        _CHAT_STREAM_SESSIONS[key] = session
-        _persist_chat_stream_session_state(session)
-        return session
 
 
 def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
@@ -557,52 +445,20 @@ def _chat_stream_payload(raw_event: dict[str, Any]) -> tuple[Optional[str], Opti
 
 
 def _append_chat_stream_event(session: dict[str, Any], event_name: str, payload: dict[str, Any]) -> None:
-    condition = session.get("condition")
-    if not isinstance(condition, threading.Condition):
-        return
-    with condition:
-        next_event_id = int(session.get("next_event_id") or 1)
-        record = {
-            "id": str(next_event_id),
-            "seq": next_event_id,
-            "event": event_name,
-            "payload": payload,
-        }
-        session["next_event_id"] = next_event_id + 1
-        events = session.get("events") if isinstance(session.get("events"), list) else []
-        events.append(record)
-        if len(events) > _CHAT_STREAM_BUFFER_LIMIT:
-            del events[:-_CHAT_STREAM_BUFFER_LIMIT]
-        session["events"] = events
-        session["last_accessed_at"] = time.time()
-        session["last_event_seq"] = next_event_id
-        if event_name == "chunk":
-            session["partial_text"] = str(session.get("partial_text") or "") + str(payload.get("delta") or "")
-        if event_name == "final":
-            session["final_payload"] = dict(payload)
-            session["completed"] = True
-            if str(payload.get("error") or "").strip():
-                session["status"] = "error"
-                session["error_text"] = str(payload.get("error") or "").strip()
-            else:
-                session["status"] = "completed"
-                if not str(session.get("partial_text") or "").strip():
-                    session["partial_text"] = str(payload.get("reply") or "")
-        condition.notify_all()
-    _persist_chat_stream_session_state(session)
+    return chat_stream_state_service.append_chat_stream_event(
+        session,
+        event_name=event_name,
+        payload=payload,
+        buffer_limit=_CHAT_STREAM_BUFFER_LIMIT,
+        persist_session_state=_persist_chat_stream_session_state,
+    )
 
 
 def _complete_chat_stream_session(session: dict[str, Any]) -> None:
-    condition = session.get("condition")
-    if not isinstance(condition, threading.Condition):
-        return
-    with condition:
-        session["completed"] = True
-        session["last_accessed_at"] = time.time()
-        if str(session.get("status") or "active").strip() == "active":
-            session["status"] = "completed"
-        condition.notify_all()
-    _persist_chat_stream_session_state(session)
+    return chat_stream_state_service.complete_chat_stream_session(
+        session,
+        persist_session_state=_persist_chat_stream_session_state,
+    )
 
 
 def _chat_stream_error_payload(message: str) -> dict[str, Any]:

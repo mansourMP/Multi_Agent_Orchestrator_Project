@@ -84,6 +84,75 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(services.run_execution_services(), "run")
         self.assertEqual(services.direct_chat_execution_services(), "chat")
 
+    def test_build_default_chat_stream_session_factory_uses_state_service_defaults(self):
+        factory = runtime_service.build_default_chat_stream_session_factory(
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+        )
+
+        session = factory(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+
+        self.assertEqual(session["key"], "session-1")
+        self.assertEqual(session["thread_id"], "thread-1")
+        self.assertEqual(session["created_at"], "2026-04-05T00:00:00Z")
+
+    def test_build_persist_chat_stream_session_state_binds_db_path_and_upsert(self):
+        calls = []
+        persist = runtime_service.build_persist_chat_stream_session_state(
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+            upsert_state=lambda db_path, payload: calls.append((db_path, payload)),
+        )
+
+        persist(
+            {
+                "key": "session-1",
+                "thread_id": "thread-1",
+                "request_id": "req-1",
+                "workspace_id": "default",
+                "status": "active",
+                "created_at": "2026-04-05T00:00:00Z",
+            }
+        )
+
+        self.assertEqual(calls[0][0], Path("/tmp/state.db"))
+        self.assertEqual(calls[0][1]["session_id"], "session-1")
+
+    def test_build_replayable_chat_stream_session_loader_replays_completed_state(self):
+        loader = runtime_service.build_replayable_chat_stream_session_loader(
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            get_state=lambda db_path, key: {
+                "status": "completed",
+                "last_event_seq": 3,
+                "final_payload": {"reply": "Done"},
+            },
+            upsert_state=lambda db_path, payload: None,
+            metrics_inc=lambda key, amount: None,
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+            interrupted_final_payload=lambda partial_text, error_text: {"reply": "Interrupted"},
+            build_replay_session=lambda key, *, thread_id, request_id, workspace_id, state: {
+                "key": key,
+                "thread_id": thread_id,
+                "request_id": request_id,
+                "workspace_id": workspace_id,
+                "state": state,
+            },
+        )
+
+        session = loader(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+
+        self.assertEqual(session["key"], "session-1")
+        self.assertEqual(session["state"]["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

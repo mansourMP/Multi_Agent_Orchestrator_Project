@@ -1,7 +1,6 @@
 from __future__ import annotations
 import sentry_sdk
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -235,68 +234,43 @@ def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> N
     )
 
 
-_default_chat_stream_session = lambda key, *, thread_id, request_id, workspace_id: chat_stream_state_service.default_chat_stream_session(
-    key,
-    thread_id=thread_id,
-    request_id=request_id,
-    workspace_id=workspace_id,
-    now_ts=time.time(),
+_default_chat_stream_session = chat_stream_runtime_service.build_default_chat_stream_session_factory(
     now_iso=_chat_stream_now_iso,
 )
 
 
-_persist_chat_stream_session_state = lambda session: chat_stream_state_service.persist_chat_stream_session_state(
-    session,
-    db_path=_chat_stream_state_db_path(),
+_persist_chat_stream_session_state = lambda session: chat_stream_runtime_service.build_persist_chat_stream_session_state(
+    chat_stream_state_db_path=_chat_stream_state_db_path,
     now_iso=_chat_stream_now_iso,
     upsert_state=upsert_chat_stream_state,
-)
+)(session)
 
 
 _chat_stream_interrupted_final_payload = chat_stream_state_service.chat_stream_interrupted_final_payload
 _chat_stream_replay_payload_from_state = chat_stream_state_service.chat_stream_replay_payload_from_state
 
 
-def _build_chat_stream_replay_session(
-    key: str,
-    *,
-    thread_id: str,
-    request_id: str,
-    workspace_id: str,
-    state: dict[str, Any],
-) -> dict[str, Any]:
-    return chat_stream_state_service.build_chat_stream_replay_session(
-        key,
-        thread_id=thread_id,
-        request_id=request_id,
-        workspace_id=workspace_id,
-        state=state,
-        default_session_factory=_default_chat_stream_session,
-        replay_payload_from_state=_chat_stream_replay_payload_from_state,
-        now_iso=_chat_stream_now_iso,
-    )
+_build_chat_stream_replay_session = chat_stream_runtime_service.build_chat_stream_replay_session_factory(
+    default_session_factory=_default_chat_stream_session,
+    replay_payload_from_state=_chat_stream_replay_payload_from_state,
+    now_iso=_chat_stream_now_iso,
+)
 
 
-def _load_replayable_chat_stream_session(
-    key: str,
-    *,
-    thread_id: str,
-    request_id: str,
-    workspace_id: str,
-) -> Optional[dict[str, Any]]:
-    return chat_stream_state_service.load_replayable_chat_stream_session(
-        key,
-        thread_id=thread_id,
-        request_id=request_id,
-        workspace_id=workspace_id,
-        db_path=_chat_stream_state_db_path(),
-        get_state=get_chat_stream_state,
-        upsert_state=upsert_chat_stream_state,
-        metrics_inc=_chat_stream_metrics_inc,
-        now_iso=_chat_stream_now_iso,
-        interrupted_final_payload=_chat_stream_interrupted_final_payload,
-        build_replay_session=_build_chat_stream_replay_session,
-    )
+_load_replayable_chat_stream_session = lambda key, *, thread_id, request_id, workspace_id: chat_stream_runtime_service.build_replayable_chat_stream_session_loader(
+    chat_stream_state_db_path=_chat_stream_state_db_path,
+    get_state=get_chat_stream_state,
+    upsert_state=upsert_chat_stream_state,
+    metrics_inc=_chat_stream_metrics_inc,
+    now_iso=_chat_stream_now_iso,
+    interrupted_final_payload=_chat_stream_interrupted_final_payload,
+    build_replay_session=_build_chat_stream_replay_session,
+)(
+    key,
+    thread_id=thread_id,
+    request_id=request_id,
+    workspace_id=workspace_id,
+)
 
 
 _chat_stream_request_signature = _service_direct_chat_request_signature

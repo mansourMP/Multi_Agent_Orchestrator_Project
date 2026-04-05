@@ -74,6 +74,77 @@ def initialize_chat_stream_runtime_state(
     )
 
 
+def build_default_chat_stream_session_factory(
+    *,
+    now_iso: Callable[[], str],
+) -> Callable[..., dict[str, Any]]:
+    return lambda key, *, thread_id, request_id, workspace_id: state_service.default_chat_stream_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+        now_ts=None,
+        now_iso=now_iso,
+    )
+
+
+def build_persist_chat_stream_session_state(
+    *,
+    chat_stream_state_db_path: Callable[[], Any],
+    now_iso: Callable[[], str],
+    upsert_state: Callable[[Any, dict[str, Any]], None],
+) -> Callable[[dict[str, Any]], None]:
+    return lambda session: state_service.persist_chat_stream_session_state(
+        session,
+        db_path=chat_stream_state_db_path(),
+        now_iso=now_iso,
+        upsert_state=upsert_state,
+    )
+
+
+def build_chat_stream_replay_session_factory(
+    *,
+    default_session_factory: Callable[..., dict[str, Any]],
+    replay_payload_from_state: Callable[[dict[str, Any]], dict[str, Any]],
+    now_iso: Callable[[], str],
+) -> Callable[..., dict[str, Any]]:
+    return lambda key, *, thread_id, request_id, workspace_id, state: state_service.build_chat_stream_replay_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+        state=state,
+        default_session_factory=default_session_factory,
+        replay_payload_from_state=replay_payload_from_state,
+        now_iso=now_iso,
+    )
+
+
+def build_replayable_chat_stream_session_loader(
+    *,
+    chat_stream_state_db_path: Callable[[], Any],
+    get_state: Callable[[Any, str], Optional[dict[str, Any]]],
+    upsert_state: Callable[[Any, dict[str, Any]], None],
+    metrics_inc: Callable[[str, float], None],
+    now_iso: Callable[[], str],
+    interrupted_final_payload: Callable[[str, str], dict[str, Any]],
+    build_replay_session: Callable[..., dict[str, Any]],
+) -> Callable[..., Optional[dict[str, Any]]]:
+    return lambda key, *, thread_id, request_id, workspace_id: state_service.load_replayable_chat_stream_session(
+        key,
+        thread_id=thread_id,
+        request_id=request_id,
+        workspace_id=workspace_id,
+        db_path=chat_stream_state_db_path(),
+        get_state=get_state,
+        upsert_state=upsert_state,
+        metrics_inc=metrics_inc,
+        now_iso=now_iso,
+        interrupted_final_payload=interrupted_final_payload,
+        build_replay_session=build_replay_session,
+    )
+
+
 def build_direct_chat_execution_services(
     *,
     builder: Callable[..., Any],

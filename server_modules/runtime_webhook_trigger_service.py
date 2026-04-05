@@ -4,6 +4,8 @@ import fnmatch
 import time
 from typing import Any, Callable, Optional
 
+from fastapi import HTTPException
+
 
 def load_webhook_triggers(
     triggers: dict[str, dict[str, Any]],
@@ -90,4 +92,83 @@ def build_webhook_trigger(
         "metadata": metadata if isinstance(metadata, dict) else {},
         "enabled": bool(enabled),
         "created_at": float(now_ts or time.time()),
+    }
+
+
+def register_webhook_trigger_payload(
+    body: Any,
+    *,
+    uuid_factory: Callable[[], Any],
+    build_webhook_trigger_fn: Callable[..., dict[str, Any]],
+    triggers: dict[str, dict[str, Any]],
+    lock: Any,
+    persist_webhook_triggers_locked: Callable[[], None],
+) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid webhook trigger payload.")
+    workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
+    url_pattern = str(body.get("url_pattern") or "").strip()
+    workflow_id = str(body.get("workflow_id") or "").strip()
+    if not url_pattern:
+        raise HTTPException(status_code=400, detail="url_pattern is required.")
+    if not workflow_id:
+        raise HTTPException(status_code=400, detail="workflow_id is required.")
+    trigger_id = str(uuid_factory()).strip()
+    trigger = build_webhook_trigger_fn(
+        trigger_id=trigger_id,
+        workspace_id=workspace_id,
+        url_pattern=url_pattern,
+        workflow_id=workflow_id,
+        user_goal=body.get("user_goal"),
+        metadata=body.get("metadata"),
+        enabled=body.get("enabled", True),
+    )
+    with lock:
+        triggers[trigger_id] = trigger
+        persist_webhook_triggers_locked()
+    return {"ok": True, **trigger}
+
+
+async def ingest_webhook_payload(
+    *,
+    workspace_id: str,
+    request_url: str,
+    payload: Any,
+    current_user: Any,
+    match_webhook_trigger_fn: Callable[[str, str], Optional[dict[str, Any]]],
+    run_start_request_class: Callable[..., Any],
+    execute_run_start_request_via_turn_runtime: Callable[..., Any],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+) -> dict[str, Any]:
+    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
+    matched_trigger = match_webhook_trigger_fn(normalized_workspace_id, request_url)
+    if not isinstance(matched_trigger, dict):
+        raise HTTPException(status_code=404, detail="No webhook trigger matched this request.")
+    workflow_id = str(matched_trigger.get("workflow_id") or "").strip()
+    user_goal = str(matched_trigger.get("user_goal") or "").strip() or f"Handle webhook event for workflow '{workflow_id}'."
+    request_payload = run_start_request_class(
+        engine="orion",
+        workflow_id=workflow_id or None,
+        workspace_id=normalized_workspace_id,
+        user_goal=user_goal,
+        metadata={
+            "source": "webhook",
+            "webhook_trigger_id": str(matched_trigger.get("id") or "").strip() or None,
+            "webhook_url_pattern": str(matched_trigger.get("url_pattern") or "").strip(),
+            "webhook_request_url": str(request_url),
+            "webhook_payload": payload,
+            **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
+        },
+    )
+    result = await execute_run_start_request_via_turn_runtime(
+        request_payload,
+        current_user=current_user,
+        stamp_request_owner_fn=stamp_request_owner_fn,
+        services=run_execution_services(),
+    )
+    return {
+        "ok": True,
+        "run_id": str((result or {}).get("run_id") or "").strip() or None,
+        "trigger_id": str(matched_trigger.get("id") or "").strip() or None,
     }

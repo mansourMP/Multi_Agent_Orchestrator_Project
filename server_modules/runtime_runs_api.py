@@ -736,68 +736,33 @@ def register_run_routes(app) -> None:
             body = await request.json()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid webhook trigger payload: {exc}") from exc
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Invalid webhook trigger payload.")
-        workspace_id = str(body.get("workspace_id") or "default").strip() or "default"
-        url_pattern = str(body.get("url_pattern") or "").strip()
-        workflow_id = str(body.get("workflow_id") or "").strip()
-        if not url_pattern:
-            raise HTTPException(status_code=400, detail="url_pattern is required.")
-        if not workflow_id:
-            raise HTTPException(status_code=400, detail="workflow_id is required.")
-        trigger_id = str(uuid.uuid4())
-        trigger = runtime_webhook_trigger_service.build_webhook_trigger(
-            trigger_id=trigger_id,
-            workspace_id=workspace_id,
-            url_pattern=url_pattern,
-            workflow_id=workflow_id,
-            user_goal=body.get("user_goal"),
-            metadata=body.get("metadata"),
-            enabled=body.get("enabled", True),
+        return runtime_webhook_trigger_service.register_webhook_trigger_payload(
+            body,
+            uuid_factory=uuid.uuid4,
+            build_webhook_trigger_fn=runtime_webhook_trigger_service.build_webhook_trigger,
+            triggers=_WEBHOOK_TRIGGERS,
+            lock=_WEBHOOK_TRIGGER_LOCK,
+            persist_webhook_triggers_locked=_persist_webhook_triggers_locked,
         )
-        with _WEBHOOK_TRIGGER_LOCK:
-            _WEBHOOK_TRIGGERS[trigger_id] = trigger
-            _persist_webhook_triggers_locked()
-        return {"ok": True, **trigger}
 
     @app.post("/webhooks/ingest/{workspace_id}", dependencies=[Depends(require_api_key)])
     async def ingest_webhook(workspace_id: str, request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
         try:
             payload = await request.json()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid webhook payload: {exc}") from exc
-        matched_trigger = _match_webhook_trigger(normalized_workspace_id, str(request.url))
-        if not isinstance(matched_trigger, dict):
-            raise HTTPException(status_code=404, detail="No webhook trigger matched this request.")
-        workflow_id = str(matched_trigger.get("workflow_id") or "").strip()
-        user_goal = str(matched_trigger.get("user_goal") or "").strip() or f"Handle webhook event for workflow '{workflow_id}'."
-        request_payload = RunStartRequest(
-            engine="orion",
-            workflow_id=workflow_id or None,
-            workspace_id=normalized_workspace_id,
-            user_goal=user_goal,
-            metadata={
-                "source": "webhook",
-                "webhook_trigger_id": str(matched_trigger.get("id") or "").strip() or None,
-                "webhook_url_pattern": str(matched_trigger.get("url_pattern") or "").strip(),
-                "webhook_request_url": str(request.url),
-                "webhook_payload": payload,
-                **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
-            },
-        )
-        result = await execute_run_start_request_via_turn_runtime(
-            request_payload,
+        return await runtime_webhook_trigger_service.ingest_webhook_payload(
+            workspace_id=workspace_id,
+            request_url=str(request.url),
+            payload=payload,
             current_user=current_user,
+            match_webhook_trigger_fn=_match_webhook_trigger,
+            run_start_request_class=RunStartRequest,
+            execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
             stamp_request_owner_fn=_stamp_request_owner,
-            services=_run_execution_services(),
+            run_execution_services=_run_execution_services,
         )
-        return {
-            "ok": True,
-            "run_id": str((result or {}).get("run_id") or "").strip() or None,
-            "trigger_id": str(matched_trigger.get("id") or "").strip() or None,
-        }
 
     @app.post("/runs/{run_id}/delegate", dependencies=[Depends(require_api_key)])
     async def delegate_run(run_id: uuid.UUID, body: RunDelegationRequest, current_user=Depends(require_api_key)):

@@ -4,6 +4,9 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from fastapi import Depends, Request
+from sse_starlette.sse import EventSourceResponse
+
 from server_modules.agent_turn import resolve_direct_chat_turn_request
 from server_modules.direct_chat_service import (
     build_direct_chat_execution_services,
@@ -44,9 +47,7 @@ from server_modules.runtime_state_store import (
 )
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_local_execution_approval_service
-from server_modules import runtime_route_binding_service
-from server_modules import runtime_route_bootstrap_service
-from server_modules import runtime_route_registry_service
+from server_modules import runtime_route_registration_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_resume_service
@@ -440,98 +441,30 @@ _schedule_restored_run_resume = lambda run_id_str, run: runtime_run_resume_servi
 def register_run_routes(app) -> None:
     import server as _server
 
-    deps = runtime_route_bootstrap_service.import_runtime_run_route_dependencies(
+    global _HEARTBEAT_SCHEDULER
+    _HEARTBEAT_SCHEDULER = runtime_route_registration_service.register_runtime_run_routes_from_api(
+        app,
         import_module=__import__,
         module_globals=globals(),
         server_module=_server,
-    )
-
-    bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
-        run_start_request_class=deps.run_start_request_class,
-        trigger_pending_heartbeat_schedules=deps.trigger_pending_heartbeat_schedules,
-        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-        stamp_request_owner_fn=_stamp_request_owner,
-        run_execution_services=_run_execution_services,
-        handle_telegram_send_message=deps.handle_telegram_send_message,
-        build_heartbeat_run_callback=runtime_heartbeat_service.build_heartbeat_run_callback,
-        build_heartbeat_notify_callback=runtime_heartbeat_service.build_heartbeat_notify_callback,
-    )
-
-    global _HEARTBEAT_SCHEDULER
-    _HEARTBEAT_SCHEDULER = runtime_route_bootstrap_service.ensure_runtime_run_route_bootstrap(
         heartbeat_lock=_HEARTBEAT_SCHEDULER_LOCK,
         heartbeat_scheduler=_HEARTBEAT_SCHEDULER,
-        heartbeat_scheduler_factory=lambda: HeartbeatScheduler(
-            interval_seconds=30 * 60,
-            workspace_id="default",
-            run_callback=bootstrap_callbacks.heartbeat_run_callback,
-            notify_callback=bootstrap_callbacks.heartbeat_notify_callback,
-        ),
-        ensure_heartbeat_scheduler_started=runtime_heartbeat_service.ensure_heartbeat_scheduler_started,
+        heartbeat_scheduler_refresher=lambda scheduler: scheduler,
         load_webhook_triggers=_load_webhook_triggers,
-    )
-    route_bindings = runtime_route_binding_service.build_runtime_route_bindings(
-        late_server_export=_late_server_export,
-        enforce_run_owner_access=_enforce_run_owner_access,
-        normalize_agent_role=normalize_agent_role,
-        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-        stamp_request_owner_fn=_stamp_request_owner,
-        run_execution_services=_run_execution_services,
-        can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
-        limited_run_context_view=_limited_run_context_view,
-        limited_result_data_view_fn=_limited_result_data_view,
-        get_pending_confirmation_fn=_get_pending_confirmation,
-        build_archived_run_detail_response=runtime_run_detail_service.build_archived_run_detail_response,
-        build_live_run_detail_response=runtime_run_detail_service.build_live_run_detail_response,
-        refresh_server_exports=_refresh_server_exports,
-        run_history_lock=RUN_HISTORY_LOCK,
-        run_history=RUN_HISTORY,
-        history_item_matches=_history_item_matches,
-        current_user_is_privileged=_current_user_is_privileged,
-        extract_run_owner_user_id=_extract_run_owner_user_id,
-        summarize_history_item=_summarize_history_item,
-        parse_utc_ts=_parse_utc_ts,
-        build_retry_child_payload=_build_retry_child_payload,
-        approval_correlation_id=_approval_correlation_id,
-        append_approval_audit=_append_approval_audit,
-        resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
-        set_pending_confirmation=_set_pending_confirmation,
-        utc_now=_utc_now,
-        utc_now_iso=_utc_now_iso,
-        run_thread_is_alive=_run_thread_is_alive,
-        emit_log=emit_log,
-        schedule_restored_run_resume=_schedule_restored_run_resume,
-    )
-
-    runtime_route_registry_service.register_runtime_run_routes(
-        app,
         depends=Depends,
         request_class=Request,
         event_source_response_class=EventSourceResponse,
-        require_api_key=require_api_key,
-        require_admin_api_key=require_admin_api_key,
+        require_api_key=_server.require_api_key,
+        require_admin_api_key=_server.require_admin_api_key,
         refresh_server_exports=_refresh_server_exports,
-        heartbeat_scheduler=_heartbeat_scheduler,
-        load_webhook_triggers=_load_webhook_triggers,
-        persist_webhook_triggers_locked=_persist_webhook_triggers_locked,
         match_webhook_trigger_fn=_match_webhook_trigger,
         webhook_triggers=_WEBHOOK_TRIGGERS,
         webhook_trigger_lock=_WEBHOOK_TRIGGER_LOCK,
-        run_start_request_class=deps.run_start_request_class,
-        run_delegation_request_class=RunDelegationRequest,
-        run_auto_delegation_request_class=RunAutoDelegationRequest,
-        run_delegation_retry_request_class=RunDelegationRetryRequest,
-        decision_payload_class=DecisionPayload,
-        approval_resolve_payload_class=ApprovalResolvePayload,
-        workspace_memory_snapshot=deps.workspace_memory_snapshot,
-        delete_memory=deps.delete_memory,
-        read_workspace_context_files=deps.read_workspace_context_files,
-        write_workspace_context_file=deps.write_workspace_context_file,
-        single_agent_mode=ORION_SINGLE_AGENT_MODE,
-        runs=runs,
-        serialize_run_snapshot=route_bindings.serialize_run_snapshot,
-        iter_logs_for_run=iter_logs_for_run,
-        get_replay_payload=_get_replay_payload,
+        persist_webhook_triggers_locked=_persist_webhook_triggers_locked,
+        single_agent_mode=_server.ORION_SINGLE_AGENT_MODE,
+        runs=_server.runs,
+        iter_logs_for_run=_server.iter_logs_for_run,
+        get_replay_payload=_server._get_replay_payload,
         direct_chat_stream_response_services=_direct_chat_stream_response_services,
         execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
@@ -540,16 +473,27 @@ def register_run_routes(app) -> None:
         build_run_routing_preview=build_run_routing_preview,
         build_run_precheck_result=build_run_precheck_result,
         run_routing_preview_services=_run_routing_preview_services,
-        delegate_run_children_callbacks=route_bindings.delegate_run_children_callbacks,
-        auto_delegate_run_children_callbacks=route_bindings.auto_delegate_run_children_callbacks,
-        retry_failed_delegation_callbacks=route_bindings.retry_failed_delegation_callbacks,
-        run_detail_callbacks=route_bindings.run_detail_callbacks,
-        runs_history_callbacks=route_bindings.runs_history_callbacks,
         usage_snapshots_for_user_fn=_usage_snapshots_for_user,
         aggregate_usage_summary_fn=aggregate_usage_summary,
         list_usage_runs_fn=list_usage_runs,
-        submit_run_decision_callbacks=route_bindings.submit_run_decision_callbacks,
-        resolve_run_approval_callbacks=route_bindings.resolve_run_approval_callbacks,
-        resume_waiting_run_callbacks=route_bindings.resume_waiting_run_callbacks,
         enforce_run_owner_access=_enforce_run_owner_access,
+        current_user_is_privileged=_current_user_is_privileged,
+        extract_run_owner_user_id=_extract_run_owner_user_id,
+        summarize_history_item=_server._summarize_history_item,
+        normalize_agent_role=_server.normalize_agent_role,
+        can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
+        limited_run_context_view=_limited_run_context_view,
+        limited_result_data_view_fn=_limited_result_data_view,
+        get_pending_confirmation_fn=_server._get_pending_confirmation,
+        parse_utc_ts=_server._parse_utc_ts,
+        build_retry_child_payload=_server._build_retry_child_payload,
+        approval_correlation_id=_server._approval_correlation_id,
+        append_approval_audit=_server._append_approval_audit,
+        resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
+        set_pending_confirmation=_server._set_pending_confirmation,
+        utc_now=_utc_now,
+        utc_now_iso=_utc_now_iso,
+        run_thread_is_alive=_run_thread_is_alive,
+        emit_log=_server.emit_log,
+        schedule_restored_run_resume=_schedule_restored_run_resume,
     )

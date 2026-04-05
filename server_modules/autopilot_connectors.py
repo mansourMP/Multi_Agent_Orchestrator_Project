@@ -20,6 +20,7 @@ from server_modules.connectors.autopilot_run_entry_service import AutopilotRunEn
 from server_modules.connectors.autopilot_runtime_support_service import AutopilotRuntimeSupportService
 from server_modules.connectors.autopilot_shared_service_registry import AutopilotSharedServiceRegistry
 from server_modules.connectors.autopilot_profile_service import AutopilotProfileService
+from server_modules.connectors.autopilot_runtime_facade_service import AutopilotRuntimeFacadeService
 from server_modules.connectors.autopilot_runtime_registry_bridge_service import AutopilotRuntimeRegistryBridgeService
 from server_modules.connectors.autopilot_runtime_service_registry import AutopilotRuntimeServiceRegistry
 from server_modules.connectors.autopilot_support_service_registry import AutopilotSupportServiceRegistry
@@ -226,6 +227,7 @@ DEFAULT_CHAT_PREFIX = "/empyralis"
 _AUTOPILOT_CHANNEL_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotChannelRegistryBridgeService] = None
 _AUTOPILOT_BRIDGE_REGISTRY_SERVICE: Optional[AutopilotBridgeRegistryService] = None
 _AUTOPILOT_RUNTIME_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotRuntimeRegistryBridgeService] = None
+_AUTOPILOT_RUNTIME_FACADE_SERVICE: Optional[AutopilotRuntimeFacadeService] = None
 _AUTOPILOT_SUPPORT_REGISTRY_BRIDGE_SERVICE: Optional[AutopilotSupportRegistryBridgeService] = None
 _AUTOPILOT_PROFILE_SERVICE: Optional[AutopilotProfileService] = None
 _RUNTIME_STATUS_SERVICE: Optional[RuntimeStatusService] = None
@@ -671,47 +673,55 @@ def _telegram_compatibility_bridge_service() -> TelegramCompatibilityBridgeServi
 def _whatsapp_webhook_bridge_service() -> WhatsAppWebhookBridgeService:
     return _autopilot_shared_service_registry() and _AUTOPILOT_BRIDGE_REGISTRY_SERVICE.webhook_bridge_service()
 
+
+def _autopilot_runtime_facade_service() -> AutopilotRuntimeFacadeService:
+    global _AUTOPILOT_RUNTIME_FACADE_SERVICE
+    if _AUTOPILOT_RUNTIME_FACADE_SERVICE is None:
+        _AUTOPILOT_RUNTIME_FACADE_SERVICE = AutopilotRuntimeFacadeService(
+            global_namespace=globals(),
+            sync_server_globals=_SYNC_SERVER_GLOBALS,
+            server_getter=lambda: _server,
+            server_setter=lambda value: globals().__setitem__("_server", value),
+            import_server=lambda: __import__("server", fromlist=["*"]),
+            state_bridge_service=_autopilot_state_bridge_service,
+            event_bridge_service=_autopilot_event_bridge_service,
+            terminal_bridge_service=_autopilot_terminal_bridge_service,
+            webhook_bridge_service=_whatsapp_webhook_bridge_service,
+        )
+    return _AUTOPILOT_RUNTIME_FACADE_SERVICE
+
 def _load_telegram_autopilot_state() -> None:
-    _autopilot_state_bridge_service().load_telegram_autopilot_state()
+    _autopilot_runtime_facade_service().load_telegram_autopilot_state()
 
 
 def _load_whatsapp_autopilot_state() -> None:
-    _autopilot_state_bridge_service().load_whatsapp_autopilot_state()
+    _autopilot_runtime_facade_service().load_whatsapp_autopilot_state()
 
 
 def _telegram_autopilot_snapshot() -> Dict[str, Any]:
-    return _autopilot_state_bridge_service().telegram_autopilot_snapshot()
+    return _autopilot_runtime_facade_service().telegram_autopilot_snapshot()
 
 
 def _whatsapp_autopilot_snapshot() -> Dict[str, Any]:
-    return _autopilot_state_bridge_service().whatsapp_autopilot_snapshot()
+    return _autopilot_runtime_facade_service().whatsapp_autopilot_snapshot()
 
 
 def _whatsapp_autopilot_activate() -> None:
-    _autopilot_state_bridge_service().whatsapp_autopilot_activate()
+    _autopilot_runtime_facade_service().whatsapp_autopilot_activate()
 
 def _telegram_increment_processed_updates() -> None:
-    _autopilot_state_bridge_service().telegram_increment_processed_updates()
+    _autopilot_runtime_facade_service().telegram_increment_processed_updates()
 
 
 def _telegram_set_connectors_seen(count: int) -> None:
-    _autopilot_state_bridge_service().telegram_set_connectors_seen(count)
+    _autopilot_runtime_facade_service().telegram_set_connectors_seen(count)
 
 
 def _mark_telegram_autopilot_started(started_at: str) -> None:
-    _autopilot_state_bridge_service().mark_telegram_autopilot_started(started_at)
+    _autopilot_runtime_facade_service().mark_telegram_autopilot_started(started_at)
 
 def _init():
-    global _server
-    if _server is None:
-        import server as _s
-        _server = _s
-        for k, v in vars(_s).items():
-            if not k.startswith("__") and k not in globals():
-                globals()[k] = v
-    for k in _SYNC_SERVER_GLOBALS:
-        if hasattr(_server, k):
-            globals()[k] = getattr(_server, k)
+    _autopilot_runtime_facade_service().init_runtime()
 
 def _record_channel_event(
     channel: str,
@@ -727,20 +737,7 @@ def _record_channel_event(
     action: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    return _autopilot_event_bridge_service().record_channel_event(
-        channel=channel,
-        direction=direction,
-        event_type=event_type,
-        text=text,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        session_id=session_id,
-        message_id=message_id,
-        parent_id=parent_id,
-        run_id=run_id,
-        action=action,
-        metadata=metadata,
-    )
+    return _autopilot_runtime_facade_service().record_channel_event(**locals())
 
 
 def _append_channel_dead_letter(
@@ -759,21 +756,7 @@ def _append_channel_dead_letter(
     source_event_id: str = "",
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    _autopilot_event_bridge_service().append_channel_dead_letter(
-        channel=channel,
-        direction=direction,
-        event_type=event_type,
-        reason=reason,
-        text=text,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        run_id=run_id,
-        action=action,
-        connector_id=connector_id,
-        trace_id=trace_id,
-        source_event_id=source_event_id,
-        metadata=metadata,
-    )
+    _autopilot_runtime_facade_service().append_channel_dead_letter(**locals())
 
 
 def _record_channel_event_throttled(
@@ -792,22 +775,9 @@ def _record_channel_event_throttled(
     metadata: Optional[Dict[str, Any]] = None,
     dedupe_seconds: float = 30.0,
 ) -> bool:
-    return _autopilot_event_bridge_service().record_channel_event_throttled(
-        channel=channel,
-        direction=direction,
-        event_type=event_type,
-        text=text,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        session_id=session_id,
-        message_id=message_id,
-        parent_id=parent_id,
-        run_id=run_id,
-        action=action,
-        metadata=metadata,
-        dedupe_seconds=dedupe_seconds,
-        record_event_func=_record_channel_event,
-    )
+    kwargs = dict(locals())
+    kwargs["record_event_func"] = _record_channel_event
+    return _autopilot_runtime_facade_service().record_channel_event_throttled(**kwargs)
 
 
 def _telegram_menu_service() -> TelegramMenuService:
@@ -852,12 +822,7 @@ async def handle_telegram_send_message(
     session_key: Optional[str] = None,
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return await _autopilot_terminal_bridge_service().handle_telegram_send_message(
-        text=text,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        chat_id=chat_id,
-    )
+    return await _autopilot_runtime_facade_service().handle_telegram_send_message(**locals())
 
 
 async def handle_telegram_autopilot_test_message(
@@ -869,20 +834,12 @@ async def handle_telegram_autopilot_test_message(
     sender_id: Optional[str] = None,
     timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
-    return await _autopilot_terminal_bridge_service().handle_telegram_autopilot_test_message(
-        text=text,
-        workspace_id=workspace_id,
-        session_key=session_key,
-        chat_id=chat_id,
-        connector_id=connector_id,
-        sender_id=sender_id,
-        timeout_seconds=timeout_seconds,
-    )
+    return await _autopilot_runtime_facade_service().handle_telegram_autopilot_test_message(**locals())
 
 
 # --- COPIED ENDPOINTS ---
 async def handle_whatsapp_twilio_webhook(request: Request):
-    return _whatsapp_webhook_bridge_service().handle_webhook(
+    return await _autopilot_runtime_facade_service().handle_whatsapp_webhook(
         raw_body=await request.body(),
         query_secret=str(request.query_params.get("secret") or ""),
         header_secret=str(request.headers.get("x-orion-webhook-secret") or ""),
@@ -890,16 +847,16 @@ async def handle_whatsapp_twilio_webhook(request: Request):
 
 
 def _run_telegram_autopilot_forever():
-    _autopilot_terminal_bridge_service().run_telegram_autopilot_forever()
+    _autopilot_runtime_facade_service().run_telegram_autopilot_forever()
 
 
 async def handle_telegram_autopilot_status():
-    return await _autopilot_terminal_bridge_service().telegram_status_payload()
+    return await _autopilot_runtime_facade_service().telegram_status_payload()
 
 
 async def handle_whatsapp_autopilot_status():
-    return await _autopilot_terminal_bridge_service().whatsapp_status_payload()
+    return await _autopilot_runtime_facade_service().whatsapp_status_payload()
 
 
 async def handle_list_autopilot_profiles():
-    return await _autopilot_terminal_bridge_service().autopilot_profiles_payload()
+    return await _autopilot_runtime_facade_service().autopilot_profiles_payload()

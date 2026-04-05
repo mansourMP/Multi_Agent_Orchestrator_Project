@@ -218,6 +218,73 @@ This does not finish the Telegram poll loop yet. The loop still sequences update
 - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still owns the top-level Telegram poll sequencing loop.
 - Sender allowlist enforcement still lives in the poll loop even though denied-sender handling is already service-owned.
 - The remaining loop still coordinates action dispatch and processed-update bookkeeping inline.
+
+### 2026-04-05 - Runtime Init, State, and Export Façade Moved Behind Runtime Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The remaining runtime-facing helper band in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) no longer owns the runtime import sync logic or the full init/state/event/export delegation block inline.
+
+This is still not the final connector cutover. The module remains the compatibility surface for historical imports, but another stateful ownership band has been reduced to service-backed wrappers.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_facade_service.py).
+- Added focused coverage in [server_modules/tests/test_autopilot_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_facade_service.py).
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so these historical helpers now delegate through the new runtime façade service:
+  - `_init()`
+  - `_load_telegram_autopilot_state()`
+  - `_load_whatsapp_autopilot_state()`
+  - `_telegram_autopilot_snapshot()`
+  - `_whatsapp_autopilot_snapshot()`
+  - `_whatsapp_autopilot_activate()`
+  - `_telegram_increment_processed_updates()`
+  - `_telegram_set_connectors_seen()`
+  - `_mark_telegram_autopilot_started()`
+  - `_record_channel_event()`
+  - `_append_channel_dead_letter()`
+  - `_record_channel_event_throttled()`
+  - `handle_telegram_send_message()`
+  - `handle_telegram_autopilot_test_message()`
+  - `handle_whatsapp_twilio_webhook()`
+  - `_run_telegram_autopilot_forever()`
+  - `handle_telegram_autopilot_status()`
+  - `handle_whatsapp_autopilot_status()`
+  - `handle_list_autopilot_profiles()`
+- Tightened the remaining wrappers in [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) to use direct façade delegation instead of repeating large keyword-forwarding blocks.
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) from `905` lines to `862` lines in this cut.
+
+#### Current Truth
+
+- The connector module is now more clearly a compatibility/export shell instead of owning runtime initialization details inline.
+- Runtime server import/sync behavior is preserved, including selective synchronization of `TELEGRAM_AUTOPILOT_THREAD`, `TELEGRAM_AUTOPILOT_STATE`, and `WHATSAPP_AUTOPILOT_STATE`.
+- Event dedupe compatibility is preserved because `_record_channel_event_throttled()` still passes the late-bound `_record_channel_event` wrapper into the underlying event service.
+- Runtime status, Telegram terminal actions, and WhatsApp webhook entrypoints still keep their historical import names, but now route through the shared runtime façade service.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) is smaller, but it still owns the top-level compatibility layer for channel/runtime helpers.
+- The module still contains registry singletons and compatibility wrappers that should continue converging toward thinner adapter-only responsibilities.
+- The broader canonical architecture work remains unfinished outside this connector cut; this entry only covers the remaining runtime façade band.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) toward a pure compatibility shell with minimal singleton wiring.
+2. Identify the next remaining ownership cluster in the connector surface and move it behind a dedicated service without breaking direct-import test paths.
+3. Keep verifying late-bound behavior explicitly anywhere tests patch `server_modules.autopilot_connectors` globals after import.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_runtime_facade_service.py)
+  - [server_modules/tests/test_autopilot_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_runtime_facade_service.py)
+- Focused repo-venv tests passed:
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_autopilot_terminal_bridge_service`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+- Result: `23 passed`
 - The broader connector monolith still contains other channel behavior outside the Telegram slices already extracted.
 
 #### Next Required Work

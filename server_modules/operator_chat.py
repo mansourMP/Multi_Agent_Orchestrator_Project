@@ -42,6 +42,7 @@ from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
+from server_modules import direct_tool_loop_guard_service
 from server_modules import memory_service
 from server_modules import no_provider_service
 from server_modules import runtime_config as runtime_config
@@ -595,34 +596,29 @@ def _slash_command_help_text() -> str:
 
 
 def _tool_call_signature(tool_call: Dict[str, Any]) -> str:
-    name = str(tool_call.get("name") or "").strip()
-    argument_payload = _tool_arguments_payload(tool_call.get("arguments"))
-    if "__" in name:
-        connector_id, _action_id = _parse_tool_name(name)
-        if connector_id in {"file", "shell", "screenshot", "computer"} and isinstance(argument_payload.get("input"), str):
-            nested_input = parse_json_object_loose(str(argument_payload.get("input") or ""))
-            if isinstance(nested_input, dict):
-                argument_payload = nested_input
-    try:
-        normalized_payload = json.dumps(argument_payload, sort_keys=True, ensure_ascii=False)
-    except Exception:
-        normalized_payload = str(argument_payload)
-    return f"{name}:{normalized_payload}"
+    return direct_tool_loop_guard_service.tool_call_signature(
+        tool_call,
+        tool_arguments_payload_fn=_tool_arguments_payload,
+        parse_tool_name_fn=_parse_tool_name,
+        parse_json_object_loose_fn=parse_json_object_loose,
+    )
 
 
 def _record_direct_tool_signature(session_key: str, tool_call: Dict[str, Any]) -> bool:
-    signature = _tool_call_signature(tool_call)
-    state = _DIRECT_TOOL_LOOP_STATE.get(session_key) or {"signature": "", "count": 0}
-    if state.get("signature") == signature:
-        state["count"] = int(state.get("count") or 0) + 1
-    else:
-        state = {"signature": signature, "count": 1}
-    _DIRECT_TOOL_LOOP_STATE[session_key] = state
-    return int(state.get("count") or 0) >= DIRECT_CHAT_LOOP_REPEAT_LIMIT
+    return direct_tool_loop_guard_service.record_direct_tool_signature(
+        session_key,
+        tool_call,
+        loop_state=_DIRECT_TOOL_LOOP_STATE,
+        repeat_limit=DIRECT_CHAT_LOOP_REPEAT_LIMIT,
+        tool_call_signature_fn=_tool_call_signature,
+    )
 
 
 def _clear_direct_tool_loop_state(session_key: str) -> None:
-    _DIRECT_TOOL_LOOP_STATE.pop(session_key, None)
+    direct_tool_loop_guard_service.clear_direct_tool_loop_state(
+        session_key,
+        loop_state=_DIRECT_TOOL_LOOP_STATE,
+    )
 
 
 def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:

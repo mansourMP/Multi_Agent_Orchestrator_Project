@@ -2383,6 +2383,65 @@ This cut moves persistence and memory-wrapper glue behind a dedicated facade eve
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct-Tool Loop State Moved Behind Loop Guard Service
+
+#### Stage
+
+Stage 1 continues. The direct-tool loop-signature and repeat-guard band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut removes one more stateful helper strip from the operator shell.
+
+#### Completed Work
+
+- Added [server_modules/direct_tool_loop_guard_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_loop_guard_service.py) to own:
+  - direct-tool call signature normalization
+  - nested local/computer input normalization for loop signatures
+  - repeated tool-call detection against mutable loop state
+  - loop-state clearing
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new service:
+  - `_tool_call_signature()`
+  - `_record_direct_tool_signature()`
+  - `_clear_direct_tool_loop_state()`
+- Added focused coverage in [server_modules/tests/test_direct_tool_loop_guard_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_loop_guard_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1789` to `1785` lines in this cut.
+- Direct-tool repeat detection now has a dedicated service boundary instead of being embedded in the operator shell.
+- The remaining chat module is increasingly concentrated on orchestration and provider/runtime composition.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns top-level direct-chat orchestration and some provider/tool/runtime assembly glue.
+- The provider-selection and request/runtime orchestration flow still have meaningful weight inside the chat module.
+- The module is structurally cleaner, but it is still not yet the target minimal shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around provider/runtime composition or response/error shaping.
+2. Keep the operator-chat wrapper names stable so existing tests and callers can still patch the same entrypoints.
+3. Maintain focused regression coverage around direct-tool looping, composition, runtime flow, and top-level orchestration after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_tool_loop_guard_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_loop_guard_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_tool_loop_guard_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_loop_guard_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_tool_loop_guard_service`
+  - `server_modules.tests.test_direct_tool_execution_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

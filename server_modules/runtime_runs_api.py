@@ -70,6 +70,7 @@ from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
 from server_modules import runtime_run_delegation_service
 from server_modules import runtime_run_detail_service
+from server_modules import runtime_run_query_service
 from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
@@ -903,59 +904,25 @@ def register_run_routes(app) -> None:
             redact_sensitive,
         )
         from server_modules.runtime_memory import _trim_memory_trace
-        run_id_str = str(run_id)
-        include_sensitive = _can_view_sensitive_run_payload(current_user)
-        run = runs.get(run_id_str)
-        archived = False
-
-        if run is None:
-            try:
-                snapshot = _get_replay_payload(run_id_str)
-            except HTTPException:
-                raise HTTPException(404, "Run ID not found")
-            _enforce_run_owner_access(current_user, snapshot)
-
-            context = snapshot.get("context") if isinstance(snapshot.get("context"), dict) else {}
-            metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-            parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
-            delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
-            safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-            return runtime_run_detail_service.build_archived_run_detail_response(
-                run_id=run_id_str,
-                snapshot=snapshot,
-                metadata=metadata,
-                include_sensitive=include_sensitive,
-                safe_context=safe_context,
-                parent_run=parent_run,
-                child_runs=child_runs,
-                delegation_summary=delegation_summary,
-                connector_binding=_late_server_export("_resolve_run_connector_binding")(snapshot),
-                limited_result_data_view_fn=_limited_result_data_view,
-                limited_node_states_view_fn=_limited_node_states_view,
-            )
-
-        context = run.get("context", {})
-        metadata = context.get("metadata") if isinstance(context, dict) and isinstance(context.get("metadata"), dict) else {}
-        snapshot = _serialize_run_snapshot(run_id_str, run)
-        _enforce_run_owner_access(current_user, snapshot)
-        parent_run, child_runs = _late_server_export("_find_run_relationships")(run_id_str, snapshot)
-        delegation_summary = _late_server_export("_build_delegation_summary")(snapshot, child_runs)
-        safe_context = redact_sensitive(context) if include_sensitive else _limited_run_context_view(context)
-        return runtime_run_detail_service.build_live_run_detail_response(
-            run_id=run_id_str,
-            run=run,
-            snapshot=snapshot,
-            metadata=metadata,
-            include_sensitive=include_sensitive,
-            safe_context=safe_context,
-            parent_run=parent_run,
-            child_runs=child_runs,
-            delegation_summary=delegation_summary,
-            connector_binding=_late_server_export("_resolve_run_connector_binding")(snapshot),
+        return runtime_run_query_service.build_run_detail_response(
+            str(run_id),
+            current_user=current_user,
+            runs=runs,
+            get_replay_payload=_get_replay_payload,
+            serialize_run_snapshot=_serialize_run_snapshot,
+            enforce_run_owner_access=_enforce_run_owner_access,
+            can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
+            limited_run_context_view=_limited_run_context_view,
+            build_delegation_summary=_build_delegation_summary,
+            find_run_relationships=_find_run_relationships,
+            resolve_run_connector_binding=_resolve_run_connector_binding,
+            redact_sensitive=redact_sensitive,
             limited_result_data_view_fn=_limited_result_data_view,
             limited_node_states_view_fn=_limited_node_states_view,
             trim_memory_trace_fn=_trim_memory_trace,
             get_pending_confirmation_fn=_get_pending_confirmation,
+            build_archived_run_detail_response=runtime_run_detail_service.build_archived_run_detail_response,
+            build_live_run_detail_response=runtime_run_detail_service.build_live_run_detail_response,
         )
 
     @app.get("/history/runs", dependencies=[Depends(require_api_key)])

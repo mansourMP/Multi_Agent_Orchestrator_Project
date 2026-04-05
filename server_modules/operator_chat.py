@@ -27,6 +27,7 @@ from server_modules import direct_chat_availability_service
 from server_modules import direct_chat_composition_service
 from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
+from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_runtime_entry_facade_service
@@ -179,26 +180,21 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _safe_positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except Exception:
-        return int(default)
-    return parsed if parsed > 0 else int(default)
+    return direct_chat_entry_policy_service.safe_positive_int(value, default)
 
 
 def _resolved_chat_iteration_limit(explicit: Any = None) -> int:
-    configured = _safe_positive_int(
+    return direct_chat_entry_policy_service.resolved_chat_iteration_limit(
         explicit,
-        _safe_positive_int(os.getenv("ORION_MAX_CHAT_ITERATIONS", CHAT_MAX_ITERATIONS_DEFAULT), CHAT_MAX_ITERATIONS_DEFAULT),
+        default_limit=CHAT_MAX_ITERATIONS_DEFAULT,
+        ceiling=CHAT_MAX_ITERATIONS_CEILING,
+        env_var_name="ORION_MAX_CHAT_ITERATIONS",
+        safe_positive_int_fn=_safe_positive_int,
     )
-    return max(1, min(configured, CHAT_MAX_ITERATIONS_CEILING))
 
 
 def _chat_iteration_limit_reply(limit: int) -> str:
-    return (
-        f"Reached maximum steps ({limit}). "
-        "To continue, start a new run or increase ORION_MAX_CHAT_ITERATIONS."
-    )
+    return direct_chat_entry_policy_service.chat_iteration_limit_reply(limit)
 WEB_LOOKUP_KEYWORDS = (
     "latest",
     "today",
@@ -411,7 +407,7 @@ def _agent_machine_full_trust_for_session(session_ctx: Optional[Dict[str, Any]])
 
 
 def _direct_chat_runtime_available() -> bool:
-    return direct_chat_provider_service.direct_chat_runtime_available(
+    return direct_chat_entry_policy_service.direct_chat_runtime_available(
         LOCAL_WORKER_REGISTRY,
         is_worker_online_fn=_is_worker_online,
     )
@@ -422,7 +418,7 @@ def _resolve_direct_chat_availability(
     requested_provider: str = "",
     availability_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return direct_chat_provider_service.resolve_direct_chat_availability(
+    return direct_chat_entry_policy_service.resolve_direct_chat_availability(
         workspace_id,
         requested_provider,
         direct_chat_runtime_available_fn=_direct_chat_runtime_available,
@@ -434,7 +430,7 @@ def _resolve_direct_chat_availability(
 
 
 def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List[str]:
-    return direct_chat_context_service.availability_lines(
+    return direct_chat_entry_policy_service.availability_lines(
         workspace_id,
         availability,
         normalize_tool_capabilities=_normalize_tool_capabilities,
@@ -442,14 +438,14 @@ def _availability_lines(workspace_id: str, availability: Dict[str, Any]) -> List
 
 
 def _connected_system_labels(availability: Dict[str, Any]) -> List[str]:
-    return direct_chat_context_service.connected_system_labels(
+    return direct_chat_entry_policy_service.connected_system_labels(
         availability,
         normalize_tool_capabilities=_normalize_tool_capabilities,
     )
 
 
 def _context_tool_capabilities(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return direct_chat_context_service.context_tool_capabilities(
+    return direct_chat_entry_policy_service.context_tool_capabilities(
         availability,
         normalize_tool_capabilities=_normalize_tool_capabilities,
         max_context_tool_actions=MAX_CONTEXT_TOOL_ACTIONS,
@@ -458,7 +454,7 @@ def _context_tool_capabilities(availability: Dict[str, Any]) -> List[Dict[str, A
 
 
 def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
-    return direct_chat_context_service.normalize_prior_messages(
+    return direct_chat_entry_policy_service.normalize_prior_messages(
         prior_messages,
         max_direct_chat_prior_message_chars=MAX_DIRECT_CHAT_PRIOR_MESSAGE_CHARS,
         max_direct_chat_prior_messages=MAX_DIRECT_CHAT_PRIOR_MESSAGES,
@@ -466,26 +462,26 @@ def _normalize_prior_messages(prior_messages: Any) -> List[Dict[str, str]]:
 
 
 def _direct_tool_session_key(workspace_id: str, thread_id: str) -> str:
-    return direct_chat_context_service.direct_tool_session_key(workspace_id, thread_id)
+    return direct_chat_entry_policy_service.direct_tool_session_key(workspace_id, thread_id)
 
 
 def _direct_chat_session_key(workspace_id: str, thread_id: str) -> str:
-    return direct_chat_context_service.direct_chat_session_key(workspace_id, thread_id)
+    return direct_chat_entry_policy_service.direct_chat_session_key(workspace_id, thread_id)
 
 
 def _parse_slash_command(message: str) -> Dict[str, str]:
-    return direct_chat_context_service.parse_slash_command(message)
+    return direct_chat_entry_policy_service.parse_slash_command(message)
 
 
 def _session_model_preference(session_key: str) -> Dict[str, Optional[str]]:
-    return direct_chat_context_service.session_model_preference(
+    return direct_chat_entry_policy_service.session_model_preference(
         session_key,
         store=_DIRECT_CHAT_MODEL_PREFERENCES,
     )
 
 
 def _set_session_model_preference(session_key: str, *, provider: Optional[str], model: Optional[str]) -> None:
-    direct_chat_context_service.set_session_model_preference(
+    direct_chat_entry_policy_service.set_session_model_preference(
         session_key,
         provider=provider,
         model=model,
@@ -494,21 +490,21 @@ def _set_session_model_preference(session_key: str, *, provider: Optional[str], 
 
 
 def _mark_thread_cleared(session_key: str) -> None:
-    direct_chat_context_service.mark_thread_cleared(
+    direct_chat_entry_policy_service.mark_thread_cleared(
         session_key,
         clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
     )
 
 
 def _consume_thread_cleared(session_key: str) -> bool:
-    return direct_chat_context_service.consume_thread_cleared(
+    return direct_chat_entry_policy_service.consume_thread_cleared(
         session_key,
         clear_markers=_DIRECT_CHAT_CLEAR_MARKERS,
     )
 
 
 def _connected_provider_tokens(workspace_id: str) -> List[str]:
-    return direct_chat_provider_service.connected_provider_tokens(
+    return direct_chat_entry_policy_service.connected_provider_tokens(
         workspace_id,
         supported_providers=SUPPORTED_PROVIDERS,
         direct_chat_credentials_fn=_direct_chat_credentials,
@@ -522,7 +518,7 @@ def _resolve_provider_for_direct_chat_message(
     *,
     tools_present: bool,
 ) -> tuple[str, Dict[str, Any]]:
-    return direct_chat_provider_service.resolve_provider_for_direct_chat_message(
+    return direct_chat_entry_policy_service.resolve_provider_for_direct_chat_message(
         workspace_id,
         requested_provider,
         message,
@@ -551,7 +547,7 @@ def _plan_direct_chat_route(
     provider: str,
     tools: List[Dict[str, Any]],
 ) -> direct_chat_routing_service.DirectChatRouteDecision:
-    return direct_chat_routing_service.plan_direct_chat_route(
+    return direct_chat_entry_policy_service.plan_direct_chat_route(
         message=message,
         availability=availability,
         provider=provider,
@@ -591,11 +587,11 @@ def _active_run_count(workspace_id: str) -> int:
         from server_modules.shared import runs as live_runs
     except Exception:
         return 0
-    return direct_chat_context_service.active_run_count(workspace_id, live_runs=live_runs)
+    return direct_chat_entry_policy_service.active_run_count(workspace_id, live_runs=live_runs)
 
 
 def _slash_command_help_text() -> str:
-    return direct_chat_context_service.slash_command_help_text()
+    return direct_chat_entry_policy_service.slash_command_help_text()
 
 
 def _tool_call_signature(tool_call: Dict[str, Any]) -> str:

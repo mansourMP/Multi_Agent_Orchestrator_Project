@@ -1565,6 +1565,85 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Chat Entry Policy Band Moved Behind Entry Policy Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat entry/context/provider-routing helper band no longer lives directly in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut is a real shell reduction. It still does not make the chat shell thin, but it removes a denser block than the recent facade-only extractions.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_entry_policy_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_entry_policy_service.py) to own the delegation layer for:
+  - chat-iteration limit parsing and reply text
+  - direct-chat availability resolution
+  - context/session helpers
+  - provider selection for direct chat
+  - route planning delegation
+  - active-run counting and slash-command help delegation
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the following wrappers now delegate through the new service:
+  - `_safe_positive_int()`
+  - `_resolved_chat_iteration_limit()`
+  - `_chat_iteration_limit_reply()`
+  - `_direct_chat_runtime_available()`
+  - `_resolve_direct_chat_availability()`
+  - `_availability_lines()`
+  - `_connected_system_labels()`
+  - `_context_tool_capabilities()`
+  - `_normalize_prior_messages()`
+  - `_direct_tool_session_key()`
+  - `_direct_chat_session_key()`
+  - `_parse_slash_command()`
+  - `_session_model_preference()`
+  - `_set_session_model_preference()`
+  - `_mark_thread_cleared()`
+  - `_consume_thread_cleared()`
+  - `_connected_provider_tokens()`
+  - `_resolve_provider_for_direct_chat_message()`
+  - `_plan_direct_chat_route()`
+  - `_active_run_count()`
+  - `_slash_command_help_text()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_entry_policy_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_entry_policy_service.py).
+
+#### Current Truth
+
+- The entry-policy band now has an explicit service boundary instead of living inline inside the operator shell.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) remains the compatibility surface for the historical helper names.
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1788` to `1784` lines in this cut.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns a large amount of direct-chat orchestration and callback wiring.
+- The restored docs tree is currently lagging behind the most recent pushed ledger history, so the repo still needs a later cleanup pass to reconcile document continuity.
+- The chat shell is more modular now, but it is still not yet reduced to a thin coordinator over one canonical runtime graph.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by targeting another dense orchestration cluster rather than only wrapper bands.
+2. Reconcile the restored docs history with the latest execution trail after the code refactor path is stable again.
+3. Keep preserving late-bound compatibility so existing operator-chat tests and direct imports do not regress.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_entry_policy_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_entry_policy_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_entry_policy_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_entry_policy_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Top-Level Runtime Entry Wiring Moved Behind Runtime Entry Facade
 
 #### Stage

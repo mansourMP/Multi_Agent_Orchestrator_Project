@@ -7,6 +7,28 @@ from server_modules import runtime_local_execution_approval_service
 
 
 class RuntimeLocalExecutionApprovalServiceTests(unittest.TestCase):
+    def test_build_local_execution_approval_callbacks_preserves_entries(self):
+        callbacks = runtime_local_execution_approval_service.build_local_execution_approval_callbacks(
+            get_pending_confirmation=lambda run: None,
+            approval_correlation_id=lambda approval_id, run_id=None: "corr-1",
+            parse_utc_ts=lambda value: None,
+            utc_now=lambda: None,
+            utc_now_iso=lambda: "2026-04-05T00:00:00Z",
+            set_pending_confirmation=lambda run, pending: None,
+            emit_log=lambda *args, **kwargs: None,
+            append_approval_audit=lambda **kwargs: None,
+            browser_plan_hash_from_inputs=lambda inputs: "",
+            clear_pending_confirmation=lambda run: None,
+            set_run_status=lambda run_id, status: None,
+            mark_local_execution_tools_approved=lambda metadata: None,
+            build_browser_execution_binding=lambda root_dir, plan_hash, profile: {},
+            root_dir="/tmp/root",
+            enqueue_local_companion_run=lambda run_id, **kwargs: None,
+        )
+
+        self.assertIn("approval_correlation_id", callbacks)
+        self.assertIn("enqueue_local_companion_run", callbacks)
+
     def test_approved_local_execution_queues_local_companion_run(self):
         run = {
             "logs": queue.Queue(),

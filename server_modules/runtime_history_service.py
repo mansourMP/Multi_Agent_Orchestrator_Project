@@ -5,6 +5,29 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 
+def build_runs_history_callbacks(
+    *,
+    refresh_server_exports: Callable[[], Any],
+    run_history_lock: Any,
+    run_history: list[Any],
+    history_item_matches: Callable[[Any, Any, Any, Any], bool],
+    current_user_is_privileged: Callable[[Any], bool],
+    extract_run_owner_user_id: Callable[[Any], str],
+    normalize_run_id_token: Callable[[Any], str | None],
+    summarize_history_item: Callable[[Any], dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "refresh_server_exports": refresh_server_exports,
+        "run_history_lock": run_history_lock,
+        "run_history": run_history,
+        "history_item_matches": history_item_matches,
+        "current_user_is_privileged": current_user_is_privileged,
+        "extract_run_owner_user_id": extract_run_owner_user_id,
+        "normalize_run_id_token": normalize_run_id_token,
+        "summarize_history_item": summarize_history_item,
+    }
+
+
 def build_runs_history_payload(
     *,
     limit: int,

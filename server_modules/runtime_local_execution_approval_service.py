@@ -5,6 +5,43 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 
+def build_local_execution_approval_callbacks(
+    *,
+    get_pending_confirmation: Callable[[dict[str, Any]], Any],
+    approval_correlation_id: Callable[..., str],
+    parse_utc_ts: Callable[[Any], Any],
+    utc_now: Callable[[], Any],
+    utc_now_iso: Callable[[], str],
+    set_pending_confirmation: Callable[[dict[str, Any], dict[str, Any]], None],
+    emit_log: Callable[..., None],
+    append_approval_audit: Callable[..., None],
+    browser_plan_hash_from_inputs: Callable[[Any], str],
+    clear_pending_confirmation: Callable[[dict[str, Any]], None],
+    set_run_status: Callable[[str, str], None],
+    mark_local_execution_tools_approved: Callable[[dict[str, Any]], None],
+    build_browser_execution_binding: Callable[[str, str, str], Any],
+    root_dir: str,
+    enqueue_local_companion_run: Callable[..., None],
+) -> dict[str, Any]:
+    return {
+        "get_pending_confirmation": get_pending_confirmation,
+        "approval_correlation_id": approval_correlation_id,
+        "parse_utc_ts": parse_utc_ts,
+        "utc_now": utc_now,
+        "utc_now_iso": utc_now_iso,
+        "set_pending_confirmation": set_pending_confirmation,
+        "emit_log": emit_log,
+        "append_approval_audit": append_approval_audit,
+        "browser_plan_hash_from_inputs": browser_plan_hash_from_inputs,
+        "clear_pending_confirmation": clear_pending_confirmation,
+        "set_run_status": set_run_status,
+        "mark_local_execution_tools_approved": mark_local_execution_tools_approved,
+        "build_browser_execution_binding": build_browser_execution_binding,
+        "root_dir": root_dir,
+        "enqueue_local_companion_run": enqueue_local_companion_run,
+    }
+
+
 def resolve_local_execution_start_approval(
     run_id: str,
     run: dict[str, Any],

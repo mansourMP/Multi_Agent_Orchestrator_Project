@@ -438,34 +438,29 @@ _enforce_run_owner_access = lambda current_user, payload: runtime_run_access_ser
 _stamp_request_owner = runtime_run_access_service.stamp_request_owner
 
 
-def _resolve_local_execution_start_approval(
-    run_id_str: str,
-    run: dict,
-    approval_id: str,
-    decision_text: str,
-    note: str = "",
-) -> dict:
-    return runtime_local_execution_approval_service.resolve_local_execution_start_approval(
+_resolve_local_execution_start_approval = lambda run_id_str, run, approval_id, decision_text, note="": runtime_local_execution_approval_service.resolve_local_execution_start_approval(
         run_id_str,
         run,
         approval_id,
         decision_text,
         note=note,
-        get_pending_confirmation=_get_pending_confirmation,
-        approval_correlation_id=_approval_correlation_id,
-        parse_utc_ts=_parse_utc_ts,
-        utc_now=_utc_now,
-        utc_now_iso=_utc_now_iso,
-        set_pending_confirmation=_set_pending_confirmation,
-        emit_log=emit_log,
-        append_approval_audit=_append_approval_audit,
-        browser_plan_hash_from_inputs=browser_automation_plan_hash_from_pack_inputs,
-        clear_pending_confirmation=_clear_pending_confirmation,
-        set_run_status=set_run_status,
-        mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
-        build_browser_execution_binding=build_browser_execution_binding,
-        root_dir=_late_server_export("ROOT_DIR"),
-        enqueue_local_companion_run=_enqueue_local_companion_run,
+        **runtime_local_execution_approval_service.build_local_execution_approval_callbacks(
+            get_pending_confirmation=_get_pending_confirmation,
+            approval_correlation_id=_approval_correlation_id,
+            parse_utc_ts=_parse_utc_ts,
+            utc_now=_utc_now,
+            utc_now_iso=_utc_now_iso,
+            set_pending_confirmation=_set_pending_confirmation,
+            emit_log=emit_log,
+            append_approval_audit=_append_approval_audit,
+            browser_plan_hash_from_inputs=browser_automation_plan_hash_from_pack_inputs,
+            clear_pending_confirmation=_clear_pending_confirmation,
+            set_run_status=set_run_status,
+            mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
+            build_browser_execution_binding=build_browser_execution_binding,
+            root_dir=_late_server_export("ROOT_DIR"),
+            enqueue_local_companion_run=_enqueue_local_companion_run,
+        ),
     )
 
 
@@ -744,14 +739,16 @@ def register_run_routes(app) -> None:
             status=status,
             pack_id=pack_id,
             current_user=current_user,
-            refresh_server_exports=_refresh_server_exports,
-            run_history_lock=RUN_HISTORY_LOCK,
-            run_history=RUN_HISTORY,
-            history_item_matches=_history_item_matches,
-            current_user_is_privileged=_current_user_is_privileged,
-            extract_run_owner_user_id=_extract_run_owner_user_id,
-            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-            summarize_history_item=_summarize_history_item,
+            **runtime_history_service.build_runs_history_callbacks(
+                refresh_server_exports=_refresh_server_exports,
+                run_history_lock=RUN_HISTORY_LOCK,
+                run_history=RUN_HISTORY,
+                history_item_matches=_history_item_matches,
+                current_user_is_privileged=_current_user_is_privileged,
+                extract_run_owner_user_id=_extract_run_owner_user_id,
+                normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+                summarize_history_item=_summarize_history_item,
+            ),
         )
 
     @app.get("/usage/summary", dependencies=[Depends(require_api_key)])

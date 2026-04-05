@@ -7,6 +7,21 @@ from server_modules import runtime_history_service
 
 
 class RuntimeHistoryServiceTests(unittest.TestCase):
+    def test_build_runs_history_callbacks_preserves_entries(self):
+        callbacks = runtime_history_service.build_runs_history_callbacks(
+            refresh_server_exports=lambda: None,
+            run_history_lock=threading.Lock(),
+            run_history=[],
+            history_item_matches=lambda item, workspace_id, status, pack_id: True,
+            current_user_is_privileged=lambda current_user: False,
+            extract_run_owner_user_id=lambda item: "",
+            normalize_run_id_token=lambda value: str(value).strip() or None,
+            summarize_history_item=lambda item: {"run_id": item.get("run_id")},
+        )
+
+        self.assertIn("run_history_lock", callbacks)
+        self.assertIn("summarize_history_item", callbacks)
+
     def test_build_runs_history_payload_filters_and_counts_children(self):
         payload = runtime_history_service.build_runs_history_payload(
             limit=10,

@@ -62,6 +62,21 @@ class RuntimeRouteBootstrapServiceTests(unittest.TestCase):
         self.assertTrue(callable(deps.handle_telegram_send_message))
         self.assertTrue(callable(deps.trigger_pending_heartbeat_schedules))
 
+    def test_build_runtime_run_route_bootstrap_callbacks_builds_both_callbacks(self):
+        bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
+            run_start_request_class=object(),
+            trigger_pending_heartbeat_schedules=lambda: {"started": []},
+            execute_system_run_start_request_via_turn_runtime=lambda *args, **kwargs: {},
+            stamp_request_owner_fn=lambda *args, **kwargs: None,
+            run_execution_services=lambda: "services",
+            build_heartbeat_run_callback=lambda **kwargs: ("run", kwargs),
+            handle_telegram_send_message=lambda *args, **kwargs: None,
+            build_heartbeat_notify_callback=lambda **kwargs: ("notify", kwargs),
+        )
+
+        self.assertEqual(bootstrap_callbacks.heartbeat_run_callback[0], "run")
+        self.assertEqual(bootstrap_callbacks.heartbeat_notify_callback[0], "notify")
+
     def test_ensure_runtime_run_route_bootstrap_starts_scheduler_and_loads_webhooks(self):
         created = []
         loaded = []

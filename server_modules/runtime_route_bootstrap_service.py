@@ -15,6 +15,12 @@ class RuntimeRunRouteDependencies:
     trigger_pending_heartbeat_schedules: Callable[[], Any]
 
 
+@dataclass(frozen=True)
+class RuntimeRunRouteBootstrapCallbacks:
+    heartbeat_run_callback: Callable[..., Any]
+    heartbeat_notify_callback: Callable[..., Any]
+
+
 def import_runtime_run_route_dependencies(
     *,
     import_module: Callable[..., Any],
@@ -53,6 +59,31 @@ def import_runtime_run_route_dependencies(
         read_workspace_context_files=workspace_context.read_workspace_context_files,
         write_workspace_context_file=workspace_context.write_workspace_context_file,
         trigger_pending_heartbeat_schedules=runs_core.trigger_pending_heartbeat_schedules,
+    )
+
+
+def build_runtime_run_route_bootstrap_callbacks(
+    *,
+    run_start_request_class: Any,
+    trigger_pending_heartbeat_schedules: Callable[[], Any],
+    execute_system_run_start_request_via_turn_runtime: Callable[..., Any],
+    stamp_request_owner_fn: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    build_heartbeat_run_callback: Callable[..., Any],
+    handle_telegram_send_message: Callable[..., Any],
+    build_heartbeat_notify_callback: Callable[..., Any],
+) -> RuntimeRunRouteBootstrapCallbacks:
+    return RuntimeRunRouteBootstrapCallbacks(
+        heartbeat_run_callback=build_heartbeat_run_callback(
+            run_start_request_class=run_start_request_class,
+            trigger_pending_heartbeat_schedules=trigger_pending_heartbeat_schedules,
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=stamp_request_owner_fn,
+            run_execution_services=run_execution_services,
+        ),
+        heartbeat_notify_callback=build_heartbeat_notify_callback(
+            handle_telegram_send_message=handle_telegram_send_message,
+        ),
     )
 
 

@@ -469,15 +469,15 @@ def register_run_routes(app) -> None:
         server_module=_server,
     )
 
-    heartbeat_run_callback = runtime_heartbeat_service.build_heartbeat_run_callback(
+    bootstrap_callbacks = runtime_route_bootstrap_service.build_runtime_run_route_bootstrap_callbacks(
         run_start_request_class=deps.run_start_request_class,
         trigger_pending_heartbeat_schedules=deps.trigger_pending_heartbeat_schedules,
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
         stamp_request_owner_fn=_stamp_request_owner,
         run_execution_services=_run_execution_services,
-    )
-    heartbeat_notify_callback = runtime_heartbeat_service.build_heartbeat_notify_callback(
         handle_telegram_send_message=deps.handle_telegram_send_message,
+        build_heartbeat_run_callback=runtime_heartbeat_service.build_heartbeat_run_callback,
+        build_heartbeat_notify_callback=runtime_heartbeat_service.build_heartbeat_notify_callback,
     )
 
     global _HEARTBEAT_SCHEDULER
@@ -487,8 +487,8 @@ def register_run_routes(app) -> None:
         heartbeat_scheduler_factory=lambda: HeartbeatScheduler(
             interval_seconds=30 * 60,
             workspace_id="default",
-            run_callback=heartbeat_run_callback,
-            notify_callback=heartbeat_notify_callback,
+            run_callback=bootstrap_callbacks.heartbeat_run_callback,
+            notify_callback=bootstrap_callbacks.heartbeat_notify_callback,
         ),
         ensure_heartbeat_scheduler_started=runtime_heartbeat_service.ensure_heartbeat_scheduler_started,
         load_webhook_triggers=_load_webhook_triggers,

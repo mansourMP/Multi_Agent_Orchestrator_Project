@@ -318,20 +318,14 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
-def _build_direct_chat_system_prompt(
-    *,
-    workspace_id: str,
-    availability: Dict[str, Any],
-    tools: List[Dict[str, Any]],
-) -> Optional[str]:
-    return direct_chat_prompt_service.build_system_prompt(
-        workspace_id=workspace_id,
-        availability=availability,
-        tools=tools,
-        availability_lines=_availability_lines,
-        build_operator_system_prompt=build_operator_system_prompt,
-        memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
-    )
+_build_direct_chat_system_prompt = lambda *, workspace_id, availability, tools: direct_chat_prompt_service.build_system_prompt(
+    workspace_id=workspace_id,
+    availability=availability,
+    tools=tools,
+    availability_lines=_availability_lines,
+    build_operator_system_prompt=build_operator_system_prompt,
+    memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
+)
 
 
 def _normalize_tool_capabilities(availability: Any) -> List[Dict[str, Any]]:
@@ -527,8 +521,7 @@ def _active_run_count(workspace_id: str) -> int:
     return direct_chat_entry_policy_service.active_run_count(workspace_id, live_runs=live_runs)
 
 
-def _slash_command_help_text() -> str:
-    return direct_chat_entry_policy_service.slash_command_help_text()
+_slash_command_help_text = direct_chat_entry_policy_service.slash_command_help_text
 
 
 _tool_call_signature = partial(
@@ -739,18 +732,17 @@ _prefer_durable_run_handoff = lambda message, availability: direct_chat_routing_
 )
 
 
-def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.DirectChatRoutingPolicyCallbacks:
-    return direct_chat_operator_binding_service.build_direct_chat_routing_policy_callbacks(
-        namespace=globals(),
-        complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
-        complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
-        execution_markers=EXECUTION_MARKERS,
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-    )
+_direct_chat_routing_policy_callbacks = lambda: direct_chat_operator_binding_service.build_direct_chat_routing_policy_callbacks(
+    namespace=globals(),
+    complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
+    complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
+    execution_markers=EXECUTION_MARKERS,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+)
 
 
 _durable_run_preferred_response = partial(
@@ -788,95 +780,66 @@ _direct_chat_run_event_to_step = direct_chat_handoff_facade_service.direct_chat_
 _direct_chat_run_snapshot_to_step = direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step
 
 
-def _direct_chat_run_final_payload(
-    *,
-    run_id: str,
-    run: Optional[Dict[str, Any]],
-    snapshot: Dict[str, Any],
-    requested_workspace_id: str,
-    requested_provider: str,
-    requested_model: str,
-    reasoning_effort: Optional[str],
-    connected_systems: List[str],
-    tool_capabilities: List[Dict[str, Any]],
-    fallback_reason: Optional[str],
-    reply_override: Optional[str] = None,
-    continuing: bool = False,
-) -> Dict[str, Any]:
-    return direct_chat_handoff_facade_service.direct_chat_run_final_payload(
-        run_id=run_id,
-        run=run,
-        snapshot=snapshot,
-        requested_workspace_id=requested_workspace_id,
-        requested_provider=requested_provider,
-        requested_model=requested_model,
-        reasoning_effort=reasoning_effort,
-        connected_systems=connected_systems,
-        tool_capabilities=tool_capabilities,
-        fallback_reason=fallback_reason,
-        reply_override=reply_override,
-        continuing=continuing,
-        build_context_used_fn=_build_context_used,
-        open_action_fn=_open_action,
-    )
-
-
-def _stream_direct_chat_run_handoff(
-    *,
-    started_run: Dict[str, Any],
-    requested_workspace_id: str,
-    requested_provider: str,
-    requested_model: str,
-    reasoning_effort: Optional[str],
-    connected_systems: List[str],
-    tool_capabilities: List[Dict[str, Any]],
-    fallback_reason: Optional[str],
-) -> Iterator[Dict[str, Any]]:
-    yield from direct_chat_handoff_facade_service.stream_direct_chat_run_handoff(
-        started_run=started_run,
-        requested_workspace_id=requested_workspace_id,
-        requested_provider=requested_provider,
-        requested_model=requested_model,
-        reasoning_effort=reasoning_effort,
-        connected_systems=connected_systems,
-        tool_capabilities=tool_capabilities,
-        fallback_reason=fallback_reason,
-        direct_chat_run_snapshot_fn=_direct_chat_run_snapshot,
-        direct_chat_run_event_to_step_fn=_direct_chat_run_event_to_step,
-        direct_chat_run_snapshot_to_step_fn=_direct_chat_run_snapshot_to_step,
-        direct_chat_run_final_payload_fn=_direct_chat_run_final_payload,
-        open_action_fn=_open_action,
-        build_context_used_fn=_build_context_used,
-        live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
-        poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
-        monotonic_fn=time.monotonic,
-        sleep_fn=time.sleep,
-    )
+_direct_chat_run_final_payload = lambda *, run_id, run, snapshot, requested_workspace_id, requested_provider, requested_model, reasoning_effort, connected_systems, tool_capabilities, fallback_reason, reply_override=None, continuing=False: direct_chat_handoff_facade_service.direct_chat_run_final_payload(
+    run_id=run_id,
+    run=run,
+    snapshot=snapshot,
+    requested_workspace_id=requested_workspace_id,
+    requested_provider=requested_provider,
+    requested_model=requested_model,
+    reasoning_effort=reasoning_effort,
+    connected_systems=connected_systems,
+    tool_capabilities=tool_capabilities,
+    fallback_reason=fallback_reason,
+    reply_override=reply_override,
+    continuing=continuing,
+    build_context_used_fn=_build_context_used,
+    open_action_fn=_open_action,
+)
+_stream_direct_chat_run_handoff = lambda *, started_run, requested_workspace_id, requested_provider, requested_model, reasoning_effort, connected_systems, tool_capabilities, fallback_reason: direct_chat_handoff_facade_service.stream_direct_chat_run_handoff(
+    started_run=started_run,
+    requested_workspace_id=requested_workspace_id,
+    requested_provider=requested_provider,
+    requested_model=requested_model,
+    reasoning_effort=reasoning_effort,
+    connected_systems=connected_systems,
+    tool_capabilities=tool_capabilities,
+    fallback_reason=fallback_reason,
+    direct_chat_run_snapshot_fn=_direct_chat_run_snapshot,
+    direct_chat_run_event_to_step_fn=_direct_chat_run_event_to_step,
+    direct_chat_run_snapshot_to_step_fn=_direct_chat_run_snapshot_to_step,
+    direct_chat_run_final_payload_fn=_direct_chat_run_final_payload,
+    open_action_fn=_open_action,
+    build_context_used_fn=_build_context_used,
+    live_window_seconds=DIRECT_CHAT_RUN_HANDOFF_LIVE_WINDOW_SECONDS,
+    poll_seconds=DIRECT_CHAT_RUN_HANDOFF_POLL_SECONDS,
+    monotonic_fn=time.monotonic,
+    sleep_fn=time.sleep,
+)
 
 
 _provider_supports_direct_tool_calls = direct_chat_tool_catalog_service.provider_supports_direct_tool_calls
 
 
-def _direct_chat_tool_policy_callbacks() -> direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks:
-    return direct_chat_operator_binding_service.build_direct_chat_tool_policy_callbacks(
-        namespace=globals(),
-        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-        smtp_keywords=SMTP_KEYWORDS,
-        telegram_keywords=TELEGRAM_KEYWORDS,
-        slack_keywords=SLACK_KEYWORDS,
-        discord_keywords=DISCORD_KEYWORDS,
-        dropbox_keywords=DROPBOX_KEYWORDS,
-        s3_keywords=S3_KEYWORDS,
-        browser_keywords=BROWSER_KEYWORDS,
-        local_file_keywords=LOCAL_FILE_KEYWORDS,
-        local_shell_keywords=LOCAL_SHELL_KEYWORDS,
-        local_screenshot_keywords=LOCAL_SCREENSHOT_KEYWORDS,
-        local_computer_control_keywords=LOCAL_COMPUTER_CONTROL_KEYWORDS,
-        web_lookup_keywords=WEB_LOOKUP_KEYWORDS,
-        http_request_keywords=HTTP_REQUEST_KEYWORDS,
-        image_generation_keywords=IMAGE_GENERATION_KEYWORDS,
-        llm_task_keywords=LLM_TASK_KEYWORDS,
-    )
+_direct_chat_tool_policy_callbacks = lambda: direct_chat_operator_binding_service.build_direct_chat_tool_policy_callbacks(
+    namespace=globals(),
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    smtp_keywords=SMTP_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    discord_keywords=DISCORD_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+    browser_keywords=BROWSER_KEYWORDS,
+    local_file_keywords=LOCAL_FILE_KEYWORDS,
+    local_shell_keywords=LOCAL_SHELL_KEYWORDS,
+    local_screenshot_keywords=LOCAL_SCREENSHOT_KEYWORDS,
+    local_computer_control_keywords=LOCAL_COMPUTER_CONTROL_KEYWORDS,
+    web_lookup_keywords=WEB_LOOKUP_KEYWORDS,
+    http_request_keywords=HTTP_REQUEST_KEYWORDS,
+    image_generation_keywords=IMAGE_GENERATION_KEYWORDS,
+    llm_task_keywords=LLM_TASK_KEYWORDS,
+)
 
 
 _build_local_direct_chat_tools = partial(
@@ -1126,23 +1089,22 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 )
 
 
-def _direct_chat_callback_facade_inputs() -> direct_chat_callback_facade_service.DirectChatCallbackFacadeInputs:
-    return direct_chat_operator_binding_service.build_direct_chat_callback_facade_inputs(
-        namespace=globals(),
-        parse_page_state=parse_json_object_loose,
-        capture_exception=sentry_sdk.capture_exception,
-        generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
-        parse_memory_write=memory_service.parse_no_provider_memory_write,
-        parse_memory_read=memory_service.parse_no_provider_memory_read,
-        handle_memory_request=memory_service.handle_no_provider_memory_request,
-        compact_conversation_history=compact_conversation_history,
-        direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
-        list_memory_entries=list_memory_entries,
-        get_memory=get_memory,
-        delete_memory=delete_memory,
-        no_provider_reasoning_required_response=no_provider_service.no_provider_reasoning_required_response,
-        supported_providers=list(SUPPORTED_PROVIDERS),
-    )
+_direct_chat_callback_facade_inputs = lambda: direct_chat_operator_binding_service.build_direct_chat_callback_facade_inputs(
+    namespace=globals(),
+    parse_page_state=parse_json_object_loose,
+    capture_exception=sentry_sdk.capture_exception,
+    generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
+    parse_memory_write=memory_service.parse_no_provider_memory_write,
+    parse_memory_read=memory_service.parse_no_provider_memory_read,
+    handle_memory_request=memory_service.handle_no_provider_memory_request,
+    compact_conversation_history=compact_conversation_history,
+    direct_chat_compaction_token_limit=DIRECT_CHAT_COMPACTION_TOKEN_LIMIT,
+    list_memory_entries=list_memory_entries,
+    get_memory=get_memory,
+    delete_memory=delete_memory,
+    no_provider_reasoning_required_response=no_provider_service.no_provider_reasoning_required_response,
+    supported_providers=list(SUPPORTED_PROVIDERS),
+)
 
 
 _direct_chat_generation_services = lambda: direct_chat_composition_service.build_direct_chat_generation_services(
@@ -1174,71 +1136,35 @@ _direct_chat_runtime_services = lambda: direct_chat_composition_service.build_di
 )
 
 
-def build_direct_operator_reply(
-    *,
-    message: str,
-    workspace_id: str,
-    requested_model: str,
-    requested_provider: str,
-    thread_id: str = "",
-    prior_messages: Optional[List[Dict[str, Any]]] = None,
-    reasoning_effort: str = "",
-    availability: Optional[Dict[str, Any]] = None,
-    approved_action: Optional[Dict[str, Any]] = None,
-    max_iterations: Optional[int] = None,
-    session_ctx: Optional[Dict[str, Any]] = None,
-    agent_turn_request: Optional[Any] = None,
-) -> Iterator[Dict[str, Any]]:
-    yield from direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
-        services=_direct_chat_runtime_services(),
-        message=message,
-        workspace_id=workspace_id,
-        requested_model=requested_model,
-        requested_provider=requested_provider,
-        thread_id=thread_id,
-        prior_messages=prior_messages,
-        reasoning_effort=reasoning_effort,
-        availability=availability,
-        approved_action=approved_action,
-        max_iterations=max_iterations,
-        session_ctx=session_ctx,
-        agent_turn_request=agent_turn_request,
-    )
-
-
-def collect_direct_operator_reply(
-    **kwargs: Any,
-) -> Dict[str, Any]:
-    return direct_chat_runtime_entry_facade_service.collect_direct_operator_reply(
-        services=_direct_chat_runtime_services(),
-        **kwargs,
-    )
-
-
-def build_chat_turn_event_stream(
-    *,
-    session_ctx: Optional[Dict[str, Any]],
-    message: str,
-    request_meta: Optional[Dict[str, Any]] = None,
-) -> Iterator[Dict[str, Any]]:
-    return direct_chat_runtime_entry_facade_service.build_chat_turn_event_stream(
-        services=_direct_chat_runtime_services(),
-        session_ctx=session_ctx,
-        message=message,
-        request_meta=request_meta,
-    )
-
-
-def execute_chat_turn(
-    session_ctx: Optional[Dict[str, Any]],
-    message: str,
-    stream_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
-    request_meta: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return direct_chat_runtime_entry_facade_service.execute_chat_turn(
-        services=_direct_chat_runtime_services(),
-        session_ctx=session_ctx,
-        message=message,
-        stream_sink=stream_sink,
-        request_meta=request_meta,
-    )
+build_direct_operator_reply = lambda *, message, workspace_id, requested_model, requested_provider, thread_id="", prior_messages=None, reasoning_effort="", availability=None, approved_action=None, max_iterations=None, session_ctx=None, agent_turn_request=None: direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
+    services=_direct_chat_runtime_services(),
+    message=message,
+    workspace_id=workspace_id,
+    requested_model=requested_model,
+    requested_provider=requested_provider,
+    thread_id=thread_id,
+    prior_messages=prior_messages,
+    reasoning_effort=reasoning_effort,
+    availability=availability,
+    approved_action=approved_action,
+    max_iterations=max_iterations,
+    session_ctx=session_ctx,
+    agent_turn_request=agent_turn_request,
+)
+collect_direct_operator_reply = lambda **kwargs: direct_chat_runtime_entry_facade_service.collect_direct_operator_reply(
+    services=_direct_chat_runtime_services(),
+    **kwargs,
+)
+build_chat_turn_event_stream = lambda *, session_ctx, message, request_meta=None: direct_chat_runtime_entry_facade_service.build_chat_turn_event_stream(
+    services=_direct_chat_runtime_services(),
+    session_ctx=session_ctx,
+    message=message,
+    request_meta=request_meta,
+)
+execute_chat_turn = lambda session_ctx, message, stream_sink=None, request_meta=None: direct_chat_runtime_entry_facade_service.execute_chat_turn(
+    services=_direct_chat_runtime_services(),
+    session_ctx=session_ctx,
+    message=message,
+    stream_sink=stream_sink,
+    request_meta=request_meta,
+)

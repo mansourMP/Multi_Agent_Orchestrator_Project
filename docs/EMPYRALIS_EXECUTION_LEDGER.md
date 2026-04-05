@@ -1831,6 +1831,67 @@ This cut is another ownership reduction rather than a raw line-count win. The sh
   - `server_modules.tests.test_direct_chat_operator_binding_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Fixed-Dependency Direct Chat Wrapper Band Reduced With Late-Bound Partial Bindings
+
+#### Stage
+
+Stage 1 continues. Another large wrapper strip in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) was collapsed using direct aliases and late-bound `partial(...)` bindings.
+
+This is a meaningful shell reduction. The change keeps the same helper names, but removes a large amount of repeated forwarding code where the only purpose was injecting fixed dependencies.
+
+#### Completed Work
+
+- Replaced another direct-chat helper band in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with aliases or `partial(...)` bindings for:
+  - memory persistence support wrappers
+  - context payload shaping wrapper
+  - proactive suggestion wrapper
+  - handoff start wrapper
+  - direct-tool config and approval conversion wrappers
+  - provider-unavailable and direct-chat error wrappers
+  - title/detail helper wrappers
+- Used late-bound lambdas where patch-sensitive helper references still needed to stay dynamic in tests.
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1557` to `1462` lines in this cut.
+- The historical helper names remain available on the module.
+- The behavior stayed stable across the focused operator/direct-chat test slice.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns core orchestration and runtime composition logic.
+- Future reductions will need to target real orchestration flow, not just delegate strips.
+- The documentation continuity cleanup still remains for later.
+
+#### Next Required Work
+
+1. Target the next dense orchestration cluster in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), especially runtime/provider/direct-tool flow assembly.
+2. Keep preserving patchable helper behavior where the test harness depends on module-level names.
+3. Reconcile docs continuity after the refactor sequence stabilizes.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_memory_facade_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_direct_chat_support_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Keyword-Injected Delegate Band Reduced With Alias And Partial Bindings
 
 #### Stage

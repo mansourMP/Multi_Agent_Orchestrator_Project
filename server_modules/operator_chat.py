@@ -625,85 +625,19 @@ _direct_chat_workspace_context_text = direct_chat_memory_facade_service.direct_c
 _build_direct_chat_daily_log_summary = direct_chat_memory_facade_service.build_direct_chat_daily_log_summary
 
 
-def _persist_direct_chat_memory_best_effort(
-    *,
-    workspace_id: str,
-    provider: Optional[str],
-    model: Optional[str],
-    credentials: Optional[Dict[str, Any]],
-    reasoning_effort: str,
-    prior_messages: List[Dict[str, str]],
-    user_message: str,
-    assistant_reply: str,
-) -> None:
-    direct_chat_support_binding_service.persist_direct_chat_memory_best_effort(
-        workspace_id=workspace_id,
-        provider=provider,
-        model=model,
-        credentials=credentials,
-        reasoning_effort=reasoning_effort,
-        prior_messages=prior_messages,
-        user_message=user_message,
-        assistant_reply=assistant_reply,
-        generate_reply=generate_chat_reply_with_provider_fallback,
-        extraction_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
-        extraction_system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
-    )
+_persist_direct_chat_memory_best_effort = partial(
+    direct_chat_support_binding_service.persist_direct_chat_memory_best_effort,
+    generate_reply=generate_chat_reply_with_provider_fallback,
+    extraction_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_PROMPT,
+    extraction_system_prompt=_DIRECT_CHAT_MEMORY_EXTRACTION_SYSTEM_PROMPT,
+)
 
+_persist_direct_chat_transcript_best_effort = partial(
+    direct_chat_support_binding_service.persist_direct_chat_transcript_best_effort,
+    save_session_transcript_fn=save_session_transcript,
+)
 
-def _persist_direct_chat_transcript_best_effort(
-    *,
-    workspace_id: str,
-    thread_id: str,
-    provider: Optional[str],
-    model: Optional[str],
-    messages: List[Dict[str, str]],
-    user_message: str,
-    assistant_reply: str,
-) -> None:
-    direct_chat_support_binding_service.persist_direct_chat_transcript_best_effort(
-        workspace_id=workspace_id,
-        thread_id=thread_id,
-        provider=provider,
-        model=model,
-        messages=messages,
-        user_message=user_message,
-        assistant_reply=assistant_reply,
-        save_session_transcript_fn=save_session_transcript,
-    )
-
-
-def _build_context_used(
-    *,
-    workspace_id: str,
-    requested_provider: str,
-    effective_provider: Optional[str],
-    requested_model: str,
-    effective_model: Optional[str],
-    reasoning_effort: Optional[str],
-    connected_systems: List[str],
-    tool_capabilities: List[Dict[str, Any]],
-    prior_messages_used: bool,
-    history_mode: str,
-    run_created: bool,
-    fallback_used: bool = False,
-    fallback_reason: Optional[str] = None,
-) -> Dict[str, Any]:
-    return direct_chat_support_binding_service.build_context_used(
-        workspace_id=workspace_id,
-        requested_provider=requested_provider,
-        effective_provider=effective_provider,
-        requested_model=requested_model,
-        effective_model=effective_model,
-        reasoning_effort=reasoning_effort,
-        connected_systems=connected_systems,
-        tool_capabilities=tool_capabilities,
-        prior_messages_used=prior_messages_used,
-        history_mode=history_mode,
-        run_created=run_created,
-        fallback_used=fallback_used,
-        fallback_reason=fallback_reason,
-    )
+_build_context_used = direct_chat_support_binding_service.build_context_used
 
 
 _with_context_used = direct_chat_metadata_service.with_context_used
@@ -790,12 +724,11 @@ _is_explicit_workflow_request = partial(
 )
 
 
-def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
-    return direct_chat_availability_service.no_ai_chat_response(
-        availability,
-        normalize_tool_capabilities_fn=_normalize_tool_capabilities,
-        connect_action_fn=_connect_action,
-    )
+_no_ai_chat_response = partial(
+    direct_chat_availability_service.no_ai_chat_response,
+    normalize_tool_capabilities_fn=lambda availability: _normalize_tool_capabilities(availability),
+    connect_action_fn=lambda label, href: _connect_action(label, href),
+)
 
 
 def _tool_gate_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -857,16 +790,15 @@ def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
     )
 
 
-def _build_proactive_suggestions(workspace_id: str) -> List[str]:
-    return direct_chat_support_binding_service.build_proactive_suggestions(
+_build_proactive_suggestions = partial(
+    direct_chat_support_binding_service.build_proactive_suggestions,
+    heartbeat_tasks=lambda: _heartbeat_pending_tasks_for_suggestions(),
+    recent_run_prompts=lambda workspace_id: _recent_run_prompts_for_suggestions(workspace_id),
+    memory_suggestion_prompts=lambda workspace_id: memory_service.memory_suggestion_prompts(
         workspace_id,
-        heartbeat_tasks=_heartbeat_pending_tasks_for_suggestions,
-        recent_run_prompts=_recent_run_prompts_for_suggestions,
-        memory_suggestion_prompts=lambda target_workspace_id: memory_service.memory_suggestion_prompts(
-            target_workspace_id,
-            limit=2,
-        ),
-    )
+        limit=2,
+    ),
+)
 
 
 def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -921,26 +853,10 @@ _direct_chat_run_handoff_failure_payload = partial(
 )
 
 
-def _start_direct_chat_run_handoff(
-    *,
-    message: str,
-    workspace_id: str,
-    requested_provider: str,
-    requested_model: str,
-    thread_id: str,
-    availability: Dict[str, Any],
-    max_iterations: Optional[int] = None,
-) -> Dict[str, Any]:
-    return direct_chat_handoff_facade_service.start_direct_chat_run_handoff(
-        message=message,
-        workspace_id=workspace_id,
-        requested_provider=requested_provider,
-        requested_model=requested_model,
-        thread_id=thread_id,
-        availability=availability,
-        max_iterations=max_iterations,
-        safe_positive_int_fn=_safe_positive_int,
-    )
+_start_direct_chat_run_handoff = partial(
+    direct_chat_handoff_facade_service.start_direct_chat_run_handoff,
+    safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
+)
 
 
 _direct_chat_run_handoff_reply = partial(
@@ -1170,13 +1086,10 @@ _extract_body_text = direct_tool_config_service.extract_body_text
 _first_non_empty_line = direct_tool_config_service.first_non_empty_line
 
 
-def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str) -> Dict[str, Any]:
-    return direct_tool_config_service.build_direct_tool_config(
-        connector_id,
-        action_id,
-        tool_input,
-        parse_json_object_loose=parse_json_object_loose,
-    )
+_build_direct_tool_config = partial(
+    direct_tool_config_service.build_direct_tool_config,
+    parse_json_object_loose=parse_json_object_loose,
+)
 
 
 _build_direct_local_tool_config = direct_tool_config_service.build_direct_local_tool_config
@@ -1185,15 +1098,13 @@ _build_direct_local_tool_config = direct_tool_config_service.build_direct_local_
 _tool_write_action_available = direct_tool_config_service.tool_write_action_available
 
 
-def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
-    return direct_chat_operator_binding_service.normalize_direct_approved_action(value)
+_normalize_direct_approved_action = direct_chat_operator_binding_service.normalize_direct_approved_action
 
 
-def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, Any]:
-    return direct_tool_config_service.approved_action_to_tool_call(
-        approved_action,
-        parse_json_object_loose=parse_json_object_loose,
-    )
+_approved_action_to_tool_call = partial(
+    direct_tool_config_service.approved_action_to_tool_call,
+    parse_json_object_loose=parse_json_object_loose,
+)
 
 
 _run_async_tool_call = direct_tool_config_service.run_async_tool_call
@@ -1201,12 +1112,8 @@ _format_direct_tool_result = direct_tool_config_service.format_direct_tool_resul
 _format_direct_local_tool_result = direct_tool_config_service.format_direct_local_tool_result
 
 
-def _titleize_direct_step_token(value: str) -> str:
-    return direct_chat_operator_binding_service.titleize_direct_step_token(value)
-
-
-def _compact_step_detail(value: Any, limit: int = 120) -> Optional[str]:
-    return direct_chat_operator_binding_service.compact_step_detail(value, limit=limit)
+_titleize_direct_step_token = direct_chat_operator_binding_service.titleize_direct_step_token
+_compact_step_detail = direct_chat_operator_binding_service.compact_step_detail
 
 
 def _direct_tool_step_payload(
@@ -1378,11 +1285,10 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
 _provider_display_name = direct_chat_provider_facade_service.provider_display_name
 
 
-def _provider_unavailable_response(provider: str) -> Dict[str, Any]:
-    return direct_chat_provider_facade_service.provider_unavailable_response(
-        provider,
-        connect_action_fn=_connect_action,
-    )
+_provider_unavailable_response = partial(
+    direct_chat_provider_facade_service.provider_unavailable_response,
+    connect_action_fn=lambda label, href: _connect_action(label, href),
+)
 
 
 def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]:
@@ -1396,13 +1302,12 @@ def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]
 _normalize_reasoning_effort = direct_chat_provider_facade_service.normalize_reasoning_effort
 
 
-def _direct_chat_error_reply(llm_error: str) -> str:
-    return direct_chat_provider_facade_service.direct_chat_error_reply(
-        llm_error,
-        chat_iteration_limit_reply_fn=_chat_iteration_limit_reply,
-        safe_positive_int_fn=_safe_positive_int,
-        chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
-    )
+_direct_chat_error_reply = partial(
+    direct_chat_provider_facade_service.direct_chat_error_reply,
+    chat_iteration_limit_reply_fn=lambda limit: _chat_iteration_limit_reply(limit),
+    safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
+    chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
+)
 
 
 _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (

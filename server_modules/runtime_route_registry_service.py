@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import uuid
+from typing import Any, Optional
+
+
+def register_runtime_run_routes(
+    app,
+    *,
+    depends: Any,
+    request_class: Any,
+    event_source_response_class: Any,
+    require_api_key: Any,
+    require_admin_api_key: Any,
+    refresh_server_exports,
+    heartbeat_scheduler,
+    load_webhook_triggers,
+    persist_webhook_triggers_locked,
+    match_webhook_trigger_fn,
+    webhook_triggers,
+    webhook_trigger_lock,
+    run_start_request_class: Any,
+    run_delegation_request_class: Any,
+    run_auto_delegation_request_class: Any,
+    run_delegation_retry_request_class: Any,
+    decision_payload_class: Any,
+    approval_resolve_payload_class: Any,
+    workspace_memory_snapshot,
+    delete_memory,
+    read_workspace_context_files,
+    write_workspace_context_file,
+    single_agent_mode: bool,
+    runs: dict[str, Any],
+    serialize_run_snapshot,
+    iter_logs_for_run,
+    get_replay_payload,
+    runtime_workspace_service,
+    runtime_heartbeat_service,
+    runtime_route_request_handlers_service,
+    runtime_route_run_handlers_service,
+    runtime_request_service,
+    runtime_webhook_trigger_service,
+    runtime_run_delegation_service,
+    runtime_run_query_service,
+    runtime_run_entry_service,
+    runtime_run_replay_service,
+    runtime_run_approval_service,
+    runtime_run_control_service,
+    runtime_history_service,
+    runtime_usage_service,
+    build_direct_chat_stream_response,
+    direct_chat_stream_response_services,
+    execute_run_start_request_via_turn_runtime,
+    execute_system_run_start_request_via_turn_runtime,
+    stamp_request_owner_fn,
+    run_execution_services,
+    build_run_routing_preview,
+    build_run_precheck_result,
+    run_routing_preview_services,
+    delegate_run_children_callbacks,
+    auto_delegate_run_children_callbacks,
+    retry_failed_delegation_callbacks,
+    run_detail_callbacks,
+    runs_history_callbacks,
+    usage_snapshots_for_user_fn,
+    aggregate_usage_summary_fn,
+    list_usage_runs_fn,
+    submit_run_decision_callbacks,
+    resolve_run_approval_callbacks,
+    resume_waiting_run_callbacks,
+    enforce_run_owner_access,
+) -> None:
+    @app.post("/runs/start", dependencies=[depends(require_api_key)])
+    async def start_run(
+        body: Optional[run_start_request_class] = None,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return await runtime_route_run_handlers_service.start_run_route_response(
+            body,
+            current_user=current_user,
+            run_start_request_class=run_start_request_class,
+            start_run_response_fn=runtime_run_entry_service.start_run_response,
+            execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=stamp_request_owner_fn,
+            run_execution_services=run_execution_services,
+        )
+
+    @app.post("/chat/respond", dependencies=[depends(require_api_key)])
+    async def respond_chat(
+        request: request_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return await runtime_route_request_handlers_service.respond_chat_response(
+            request=request,
+            current_user=current_user,
+            read_json_object_payload=runtime_request_service.read_json_object_payload,
+            require_authenticated_user=runtime_request_service.require_authenticated_user,
+            build_direct_chat_stream_response=build_direct_chat_stream_response,
+            direct_chat_stream_response_services=direct_chat_stream_response_services,
+        )
+
+    @app.get("/memory/{workspace_id}", dependencies=[depends(require_api_key)])
+    async def list_workspace_memory(
+        workspace_id: str,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_workspace_service.list_workspace_memory_payload(
+            workspace_id,
+            workspace_memory_snapshot=workspace_memory_snapshot,
+        )
+
+    @app.delete("/memory/{workspace_id}/{key}", dependencies=[depends(require_api_key)])
+    async def delete_workspace_memory(
+        workspace_id: str,
+        key: str,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_workspace_service.delete_workspace_memory_payload(
+            workspace_id,
+            key,
+            delete_memory=delete_memory,
+        )
+
+    @app.get("/workspace/context-files", dependencies=[depends(require_api_key)])
+    async def get_workspace_context_files(current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_workspace_service.workspace_context_files_payload(
+            read_workspace_context_files=read_workspace_context_files,
+        )
+
+    @app.post("/workspace/context-files/{filename}", dependencies=[depends(require_api_key)])
+    async def update_workspace_context_file(
+        filename: str,
+        request: request_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return await runtime_route_request_handlers_service.update_workspace_context_file_response(
+            filename,
+            request=request,
+            read_json_payload=runtime_request_service.read_json_payload,
+            update_workspace_context_file_payload=runtime_workspace_service.update_workspace_context_file_payload,
+            write_workspace_context_file=write_workspace_context_file,
+        )
+
+    @app.get("/heartbeat/status", dependencies=[depends(require_api_key)])
+    async def get_heartbeat_status(current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_heartbeat_service.heartbeat_status_payload(
+            scheduler=heartbeat_scheduler(),
+        )
+
+    @app.post("/heartbeat/trigger", dependencies=[depends(require_api_key)])
+    async def trigger_heartbeat(current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_route_request_handlers_service.trigger_heartbeat_response(
+            heartbeat_scheduler=heartbeat_scheduler,
+            trigger_heartbeat_payload=runtime_heartbeat_service.trigger_heartbeat_payload,
+        )
+
+    @app.post("/webhooks/register", dependencies=[depends(require_api_key)])
+    async def register_webhook_trigger(
+        request: request_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return await runtime_route_request_handlers_service.register_webhook_trigger_response(
+            request=request,
+            load_webhook_triggers=load_webhook_triggers,
+            read_json_payload=runtime_request_service.read_json_payload,
+            register_webhook_trigger_payload=runtime_webhook_trigger_service.register_webhook_trigger_payload,
+            uuid_factory=uuid.uuid4,
+            build_webhook_trigger_fn=runtime_webhook_trigger_service.build_webhook_trigger,
+            triggers=webhook_triggers,
+            lock=webhook_trigger_lock,
+            persist_webhook_triggers_locked=persist_webhook_triggers_locked,
+        )
+
+    @app.post("/webhooks/ingest/{workspace_id}", dependencies=[depends(require_api_key)])
+    async def ingest_webhook(
+        workspace_id: str,
+        request: request_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return await runtime_route_request_handlers_service.ingest_webhook_response(
+            workspace_id,
+            request=request,
+            current_user=current_user,
+            read_json_payload=runtime_request_service.read_json_payload,
+            ingest_webhook_payload=runtime_webhook_trigger_service.ingest_webhook_payload,
+            match_webhook_trigger_fn=match_webhook_trigger_fn,
+            run_start_request_class=run_start_request_class,
+            execute_run_start_request_via_turn_runtime=execute_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=stamp_request_owner_fn,
+            run_execution_services=run_execution_services,
+        )
+
+    @app.post("/runs/{run_id}/delegate", dependencies=[depends(require_api_key)])
+    async def delegate_run(
+        run_id: uuid.UUID,
+        body: run_delegation_request_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.delegate_run_route_response(
+            run_id,
+            body=body,
+            current_user=current_user,
+            single_agent_mode=single_agent_mode,
+            delegate_run_children_fn=runtime_run_delegation_service.delegate_run_children,
+            callbacks=delegate_run_children_callbacks,
+        )
+
+    @app.post("/runs/{run_id}/delegate/auto", dependencies=[depends(require_api_key)])
+    async def auto_delegate_run(
+        run_id: uuid.UUID,
+        body: Optional[run_auto_delegation_request_class] = None,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.auto_delegate_run_route_response(
+            run_id,
+            body=body,
+            current_user=current_user,
+            single_agent_mode=single_agent_mode,
+            request_payload_class=run_auto_delegation_request_class,
+            auto_delegate_run_children_fn=runtime_run_delegation_service.auto_delegate_run_children,
+            callbacks=auto_delegate_run_children_callbacks,
+        )
+
+    @app.post("/runs/{run_id}/delegate/retry-failed", dependencies=[depends(require_api_key)])
+    async def retry_failed_delegation_runs(
+        run_id: uuid.UUID,
+        body: Optional[run_delegation_retry_request_class] = None,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.retry_failed_delegation_runs_route_response(
+            run_id,
+            body=body,
+            current_user=current_user,
+            single_agent_mode=single_agent_mode,
+            request_payload_class=run_delegation_retry_request_class,
+            retry_failed_delegation_runs_fn=runtime_run_delegation_service.retry_failed_delegation_runs,
+            callbacks=retry_failed_delegation_callbacks,
+        )
+
+    @app.post("/routing/preview", dependencies=[depends(require_api_key)])
+    async def preview_routing(body: Optional[run_start_request_class] = None):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.preview_routing_route_response(
+            body,
+            run_start_request_class=run_start_request_class,
+            preview_routing_response_fn=runtime_run_entry_service.preview_routing_response,
+            build_run_routing_preview=build_run_routing_preview,
+            run_routing_preview_services=run_routing_preview_services,
+        )
+
+    @app.post("/runs/precheck", dependencies=[depends(require_api_key)])
+    async def precheck_run(body: Optional[run_start_request_class] = None):
+        refresh_server_exports()
+        return await runtime_route_run_handlers_service.precheck_run_route_response(
+            body,
+            run_start_request_class=run_start_request_class,
+            precheck_run_response_fn=runtime_run_entry_service.precheck_run_response,
+            build_run_precheck_result=build_run_precheck_result,
+            run_routing_preview_services=run_routing_preview_services,
+        )
+
+    @app.get("/runs/{run_id}")
+    async def get_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_run_query_service.build_run_detail_response(
+            str(run_id),
+            current_user=current_user,
+            runs=runs,
+            **run_detail_callbacks,
+        )
+
+    @app.get("/history/runs", dependencies=[depends(require_api_key)])
+    async def get_runs_history(
+        limit: int = 30,
+        workspace_id: Optional[str] = None,
+        status: Optional[str] = None,
+        pack_id: Optional[str] = None,
+        current_user=depends(require_api_key),
+    ):
+        return runtime_history_service.build_runs_history_payload(
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            pack_id=pack_id,
+            current_user=current_user,
+            **runs_history_callbacks,
+        )
+
+    @app.get("/usage/summary", dependencies=[depends(require_api_key)])
+    async def get_usage_summary(period: str = "all", current_user=depends(require_api_key)):
+        return runtime_usage_service.usage_summary_payload(
+            period=period,
+            current_user=current_user,
+            usage_snapshots_for_user_fn=usage_snapshots_for_user_fn,
+            aggregate_usage_summary_fn=aggregate_usage_summary_fn,
+        )
+
+    @app.get("/usage/runs", dependencies=[depends(require_api_key)])
+    async def get_usage_runs(
+        limit: int = 50,
+        offset: int = 0,
+        period: str = "all",
+        current_user=depends(require_api_key),
+    ):
+        return runtime_usage_service.usage_runs_payload(
+            limit=limit,
+            offset=offset,
+            period=period,
+            current_user=current_user,
+            usage_snapshots_for_user_fn=usage_snapshots_for_user_fn,
+            list_usage_runs_fn=list_usage_runs_fn,
+        )
+
+    @app.get("/runs/{run_id}/replay", dependencies=[depends(require_admin_api_key)])
+    async def get_run_replay(run_id: uuid.UUID):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.get_run_replay_route_response(
+            run_id,
+            replay_item_response_for_run=runtime_run_replay_service.replay_item_response_for_run,
+            get_replay_payload=get_replay_payload,
+        )
+
+    @app.post("/runs/{run_id}/replay", dependencies=[depends(require_admin_api_key)])
+    async def replay_run(run_id: uuid.UUID):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.replay_run_route_response(
+            run_id,
+            replay_run_from_run_id_fn=runtime_run_replay_service.replay_run_from_run_id,
+            get_replay_payload=get_replay_payload,
+            run_start_request_class=run_start_request_class,
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=stamp_request_owner_fn,
+            run_execution_services=run_execution_services,
+        )
+
+    @app.get("/runs/{run_id}/stream", dependencies=[depends(require_api_key)])
+    async def stream_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.stream_run_route_response(
+            run_id,
+            current_user=current_user,
+            stream_run_response_fn=runtime_run_entry_service.stream_run_response,
+            runs=runs,
+            serialize_run_snapshot=serialize_run_snapshot,
+            enforce_run_owner_access=enforce_run_owner_access,
+            event_source_response_class=event_source_response_class,
+            iter_logs_for_run=iter_logs_for_run,
+        )
+
+    @app.post("/runs/{run_id}/decision", dependencies=[depends(require_api_key)])
+    async def submit_run_decision(
+        run_id: uuid.UUID,
+        payload: decision_payload_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.submit_run_decision_route_response(
+            run_id,
+            payload=payload,
+            current_user=current_user,
+            submit_run_decision_fn=runtime_run_approval_service.submit_run_decision,
+            run=runs.get(str(run_id)),
+            callbacks=submit_run_decision_callbacks,
+        )
+
+    @app.post("/runs/{run_id}/approvals/{approval_id}/resolve", dependencies=[depends(require_api_key)])
+    async def resolve_run_approval(
+        run_id: uuid.UUID,
+        approval_id: str,
+        payload: approval_resolve_payload_class,
+        current_user=depends(require_api_key),
+    ):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.resolve_run_approval_route_response(
+            run_id,
+            approval_id,
+            payload=payload,
+            current_user=current_user,
+            resolve_run_approval_fn=runtime_run_approval_service.resolve_run_approval,
+            run=runs.get(str(run_id)),
+            callbacks=resolve_run_approval_callbacks,
+        )
+
+    @app.post("/runs/{run_id}/resume", dependencies=[depends(require_api_key)])
+    async def resume_run(run_id: uuid.UUID, current_user=depends(require_api_key)):
+        refresh_server_exports()
+        return runtime_route_run_handlers_service.resume_run_route_response(
+            run_id,
+            current_user=current_user,
+            resume_waiting_run_fn=runtime_run_control_service.resume_waiting_run,
+            run=runs.get(str(run_id)),
+            callbacks=resume_waiting_run_callbacks,
+        )

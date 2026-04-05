@@ -32,6 +32,7 @@ from server_modules import direct_chat_callback_facade_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_runtime_service
+from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
@@ -1365,484 +1366,75 @@ def _stream_direct_chat_run_handoff(
 
 
 def _provider_supports_direct_tool_calls(provider: str) -> bool:
-    return str(provider or "").strip().lower() == "codex_cli"
+    return direct_chat_tool_catalog_service.provider_supports_direct_tool_calls(provider)
+
+
+def _direct_chat_tool_policy_callbacks() -> direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks:
+    return direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks(
+        compact_text=_compact_text,
+        question_like=_question_like,
+        mentions_any=_mentions_any,
+        extract_first_path_reference=_extract_first_path_reference,
+        extract_first_url=_extract_first_url,
+        provider_supports_direct_tool_calls=_provider_supports_direct_tool_calls,
+        is_obvious_smtp_write_request=_is_obvious_smtp_write_request,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        smtp_keywords=SMTP_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        discord_keywords=DISCORD_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+        browser_keywords=BROWSER_KEYWORDS,
+        local_file_keywords=LOCAL_FILE_KEYWORDS,
+        local_shell_keywords=LOCAL_SHELL_KEYWORDS,
+        local_screenshot_keywords=LOCAL_SCREENSHOT_KEYWORDS,
+        local_computer_control_keywords=LOCAL_COMPUTER_CONTROL_KEYWORDS,
+        web_lookup_keywords=WEB_LOOKUP_KEYWORDS,
+        http_request_keywords=HTTP_REQUEST_KEYWORDS,
+        image_generation_keywords=IMAGE_GENERATION_KEYWORDS,
+        llm_task_keywords=LLM_TASK_KEYWORDS,
+    )
 
 
 def _build_local_direct_chat_tools(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if not _local_worker_available(availability):
-        return []
-    return [
-        {
-            "name": "file__read",
-            "description": "Read a file from the local machine",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to read"}
-                },
-                "required": ["path"],
-            },
-        },
-        {
-            "name": "file__write",
-            "description": "Write content to a file on the local machine",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-        {
-            "name": "shell__exec",
-            "description": "Execute a shell command on the local machine",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to run"}
-                },
-                "required": ["command"],
-            },
-        },
-        {
-            "name": "screenshot__capture",
-            "description": "Take a screenshot of the current screen",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-        {
-            "name": "computer__ocr",
-            "description": "Read visible text from the screen using OCR",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "region": {
-                        "type": "object",
-                        "properties": {
-                            "x": {"type": "integer"},
-                            "y": {"type": "integer"},
-                            "width": {"type": "integer"},
-                            "height": {"type": "integer"},
-                        },
-                    },
-                },
-            },
-        },
-        {
-            "name": "computer__click",
-            "description": "Click on the screen by coordinates or visible text",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                    "text": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "computer__type",
-            "description": "Type text into the active application",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                },
-                "required": ["text"],
-            },
-        },
-        {
-            "name": "computer__applescript",
-            "description": "Run AppleScript on macOS",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "script": {"type": "string"},
-                },
-                "required": ["script"],
-            },
-        },
-        {
-            "name": "computer__clipboard_read",
-            "description": "Read the current system clipboard",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        {
-            "name": "computer__clipboard_write",
-            "description": "Write text to the system clipboard",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                },
-                "required": ["text"],
-            },
-        },
-        {
-            "name": "computer__notify",
-            "description": "Send a system notification",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "message": {"type": "string"},
-                },
-                "required": ["title", "message"],
-            },
-        },
-        {
-            "name": "computer__list_apps",
-            "description": "List running applications and processes",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        {
-            "name": "computer__launch_app",
-            "description": "Launch an application by name or path",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name_or_path": {"type": "string"},
-                },
-                "required": ["name_or_path"],
-            },
-        },
-        {
-            "name": "computer__speak",
-            "description": "Speak text aloud using the local system voice",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"},
-                    "voice": {"type": "string"},
-                },
-                "required": ["text"],
-            },
-        },
-    ]
+    return direct_chat_tool_catalog_service.build_local_direct_chat_tools(
+        availability,
+        local_worker_available=_local_worker_available,
+    )
 
 
 def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    tools: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for cap in tool_capabilities:
-        if not isinstance(cap, dict):
-            continue
-        if cap.get("runtime_usable") is not True:
-            continue
-        connector_id = str(cap.get("id") or "").strip().lower()
-        label = str(cap.get("label") or connector_id).strip() or connector_id
-        if not connector_id:
-            continue
-        for raw_action in cap.get("write_actions", []):
-            action = str(raw_action or "").strip()
-            if not action:
-                continue
-            tool_name = f"{connector_id}__{action}"
-            if tool_name in seen:
-                continue
-            seen.add(tool_name)
-            tools.append(
-                {
-                    "name": tool_name,
-                    "description": f"Execute {action} on {label}",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "input": {
-                                "type": "string",
-                                "description": "The input for this action",
-                            }
-                        },
-                        "required": ["input"],
-                    },
-                }
-            )
-    return tools
+    return direct_chat_tool_catalog_service.build_direct_chat_tools(tool_capabilities)
 
 
 def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
-    return [
-        {
-            "name": "memory_search",
-            "description": (
-                "Mandatory recall step before answering about prior work, decisions, dates, people, "
-                "preferences, or todos. Search MEMORY.md and memory/*.md and return matching snippets "
-                "with paths and line numbers."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The memory query to search for."},
-                    "max_results": {"type": "integer", "description": "Optional maximum number of snippets to return."},
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "memory_get",
-            "description": (
-                "Read a small excerpt from MEMORY.md or memory/*.md after memory_search identifies the file and lines."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative notebook path such as MEMORY.md or memory/2026-04-02.md."},
-                    "from": {"type": "integer", "description": "Starting line number (1-based)."},
-                    "lines": {"type": "integer", "description": "Maximum number of lines to read."},
-                },
-                "required": ["path"],
-            },
-        },
-        {
-            "name": "web__search",
-            "description": "Search the web and return the top 5 results with titles, URLs, and snippets.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query to run."},
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "web__fetch",
-            "description": "Fetch a webpage and extract readable text from it.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch."},
-                },
-                "required": ["url"],
-            },
-        },
-        {
-            "name": "llm__task",
-            "description": "Run a focused sub-task with no tools. Optionally require JSON output with a schema.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "The sub-task prompt."},
-                    "schema": {"type": "object", "description": "Optional JSON schema for the required output."},
-                },
-                "required": ["prompt"],
-            },
-        },
-        {
-            "name": "http_request",
-            "description": "Make a generic HTTP request and return status, headers, and body.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
-                    "url": {"type": "string", "description": "The target URL."},
-                    "headers": {"type": "object", "description": "Optional request headers."},
-                    "body": {"description": "Optional request body as a string or JSON object."},
-                    "params": {"type": "object", "description": "Optional query parameters."},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds."},
-                    "auth_type": {"type": "string", "enum": ["none", "bearer", "basic"]},
-                    "auth_value": {"type": "string", "description": "Token or user:pass credentials."},
-                },
-                "required": ["method", "url"],
-            },
-        },
-        {
-            "name": "generate_image",
-            "description": "Generate one or more images from a prompt and save them locally.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {"type": "string", "description": "The image prompt."},
-                    "model": {"type": "string", "enum": ["dall-e-3", "dall-e-2", "stable-diffusion"]},
-                    "size": {"type": "string", "enum": ["256x256", "512x512", "1024x1024"]},
-                    "quality": {"type": "string", "enum": ["standard", "hd"]},
-                    "n": {"type": "integer", "minimum": 1, "maximum": 4},
-                    "save_to": {"type": "string", "description": "Optional local output path or directory."},
-                },
-                "required": ["prompt"],
-            },
-        },
-        {
-            "name": "browser__navigate",
-            "description": "Open a URL in the backend browser engine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to open."},
-                },
-                "required": ["url"],
-            },
-        },
-        {
-            "name": "browser__screenshot",
-            "description": "Capture a screenshot from the backend browser engine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "selector": {"type": "string", "description": "Optional CSS/XPath/text selector."},
-                },
-            },
-        },
-        {
-            "name": "browser__observe",
-            "description": "Return the current browser page state plus a screenshot for vision-style reasoning.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        {
-            "name": "browser__click",
-            "description": "Click an element in the backend browser engine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "selector": {"type": "string", "description": "CSS, XPath, or visible text selector."},
-                },
-                "required": ["selector"],
-            },
-        },
-        {
-            "name": "browser__fill",
-            "description": "Fill an input in the backend browser engine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "selector": {"type": "string"},
-                    "value": {"type": "string"},
-                },
-                "required": ["selector", "value"],
-            },
-        },
-        {
-            "name": "browser__extract_text",
-            "description": "Extract readable text from the current page or a selected element.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "selector": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "browser__get_page_state",
-            "description": "Return the current page title, URL, text preview, and interactive elements.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        {
-            "name": "browser__execute_js",
-            "description": "Execute JavaScript in the active browser tab.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "script": {"type": "string"},
-                },
-                "required": ["script"],
-            },
-        },
-        {
-            "name": "browser__new_tab",
-            "description": "Open a new browser tab.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "browser__switch_tab",
-            "description": "Switch to another browser tab.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tab_id": {"type": "integer"},
-                },
-                "required": ["tab_id"],
-            },
-        },
-        {
-            "name": "browser__download_file",
-            "description": "Download a file through the backend browser engine.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
-                    "save_path": {"type": "string"},
-                },
-                "required": ["url"],
-            },
-        },
-        {
-            "name": "browser__start_intercept",
-            "description": "Start capturing browser network responses matching a URL pattern.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url_pattern": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "browser__stop_intercept",
-            "description": "Stop browser network interception and return the captured responses.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-        {
-            "name": "browser__pdf",
-            "description": "Print the current browser page to PDF.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "output_path": {"type": "string"},
-                },
-            },
-        },
-    ]
+    return direct_chat_tool_catalog_service.build_builtin_direct_chat_tools()
 
 
 def registered_direct_chat_tool_names_for_logging() -> List[str]:
-    tool_names = {
-        str(item.get("name") or "").strip()
-        for item in (
-            _build_builtin_direct_chat_tools()
-            + _build_local_direct_chat_tools({"runtime_ok": True})
-        )
-        if isinstance(item, dict) and str(item.get("name") or "").strip()
-    }
-    return sorted(tool_names)
+    return direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging()
 
 
 def _message_requests_http_request_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    if bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
-        return True
-    return _mentions_any(compact, HTTP_REQUEST_KEYWORDS)
+    return direct_chat_tool_catalog_service.message_requests_http_request_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_requests_image_generation_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    return _mentions_any(compact, IMAGE_GENERATION_KEYWORDS)
+    return direct_chat_tool_catalog_service.message_requests_image_generation_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_requests_browser_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    if _extract_first_path_reference(message) and any(
-        token in compact for token in ("read", "open", "show", "what's in", "whats in", "count", "how many")
-    ):
-        return False
-    if _extract_first_url(message) and (
-        _mentions_any(compact, BROWSER_KEYWORDS)
-        or any(token in compact for token in ("go to", "open", "title", "heading"))
-    ):
-        return True
-    return _mentions_any(compact, BROWSER_KEYWORDS)
+    return direct_chat_tool_catalog_service.message_requests_browser_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_can_use_direct_connector_tools(
@@ -1851,76 +1443,44 @@ def _message_can_use_direct_connector_tools(
     provider: str,
     tools: List[Dict[str, Any]],
 ) -> bool:
-    if not _provider_supports_direct_tool_calls(provider) or not tools:
-        return False
-    compact = _compact_text(message)
-    if _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS):
-        if any(str(item.get("name") or "").startswith("google_workspace__") for item in tools):
-            return True
-        if _is_obvious_smtp_write_request(compact):
-            return any(str(item.get("name") or "").startswith("smtp__") for item in tools)
-        return False
-    if _mentions_any(compact, SMTP_KEYWORDS) or _is_obvious_smtp_write_request(compact):
-        return any(str(item.get("name") or "").startswith("smtp__") for item in tools)
-    if _mentions_any(compact, TELEGRAM_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("telegram_bot__") for item in tools)
-    if _mentions_any(compact, SLACK_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("slack__") for item in tools)
-    if _mentions_any(compact, DISCORD_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("discord_bot__") for item in tools)
-    if _mentions_any(compact, DROPBOX_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("dropbox__") for item in tools)
-    if _mentions_any(compact, S3_KEYWORDS):
-        return any(str(item.get("name") or "").startswith("s3__") for item in tools)
-    return False
-
-
-def _looks_like_local_path_request(compact_message: str) -> bool:
-    if not compact_message:
-        return False
-    return bool(
-        re.search(
-            r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])",
-            compact_message,
-            flags=re.IGNORECASE,
-        )
+    return direct_chat_tool_catalog_service.message_can_use_direct_connector_tools(
+        message,
+        provider=provider,
+        tools=tools,
+        callbacks=_direct_chat_tool_policy_callbacks(),
     )
 
 
+def _looks_like_local_path_request(compact_message: str) -> bool:
+    return direct_chat_tool_catalog_service.looks_like_local_path_request(compact_message)
+
+
 def _message_requests_local_file_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    if _mentions_any(compact, LOCAL_FILE_KEYWORDS):
-        return True
-    return _looks_like_local_path_request(compact) and any(
-        token in compact for token in ("read", "open", "write", "save", "append", "delete")
+    return direct_chat_tool_catalog_service.message_requests_local_file_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
     )
 
 
 def _message_requests_local_shell_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    if _mentions_any(compact, LOCAL_SHELL_KEYWORDS):
-        return True
-    return bool(re.search(r"`[^`]+`", str(message or ""))) and any(
-        token in compact for token in ("run", "exec", "execute", "shell", "terminal", "command")
+    return direct_chat_tool_catalog_service.message_requests_local_shell_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
     )
 
 
 def _message_requests_local_screenshot_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    return _mentions_any(compact, LOCAL_SCREENSHOT_KEYWORDS)
+    return direct_chat_tool_catalog_service.message_requests_local_screenshot_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_requests_local_computer_tool(message: str) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    return _mentions_any(compact, LOCAL_COMPUTER_CONTROL_KEYWORDS)
+    return direct_chat_tool_catalog_service.message_requests_local_computer_tool(
+        message,
+        _direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_can_use_direct_local_tools(
@@ -1929,18 +1489,12 @@ def _message_can_use_direct_local_tools(
     provider: str,
     tools: List[Dict[str, Any]],
 ) -> bool:
-    if not _provider_supports_direct_tool_calls(provider) or not tools:
-        return False
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    if _message_requests_local_file_tool(message) and {"file__read", "file__write"} & tool_names:
-        return True
-    if _message_requests_local_shell_tool(message) and "shell__exec" in tool_names:
-        return True
-    if _message_requests_local_screenshot_tool(message) and "screenshot__capture" in tool_names:
-        return True
-    if _message_requests_local_computer_tool(message) and any(name.startswith("computer__") for name in tool_names):
-        return True
-    return False
+    return direct_chat_tool_catalog_service.message_can_use_direct_local_tools(
+        message,
+        provider=provider,
+        tools=tools,
+        callbacks=_direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _message_can_use_builtin_direct_tools(
@@ -1948,22 +1502,11 @@ def _message_can_use_builtin_direct_tools(
     *,
     tools: List[Dict[str, Any]],
 ) -> bool:
-    compact = _compact_text(message)
-    if not compact or not tools:
-        return False
-    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-    if {"web__search", "web__fetch"} & tool_names:
-        if _mentions_any(compact, WEB_LOOKUP_KEYWORDS) or bool(re.search(r"https?://", str(message or ""), flags=re.IGNORECASE)):
-            return True
-    if "http_request" in tool_names and _message_requests_http_request_tool(message):
-        return True
-    if "generate_image" in tool_names and _message_requests_image_generation_tool(message):
-        return True
-    if any(name.startswith("browser__") for name in tool_names) and _message_requests_browser_tool(message):
-        return True
-    if "llm__task" in tool_names and _mentions_any(compact, LLM_TASK_KEYWORDS):
-        return True
-    return False
+    return direct_chat_tool_catalog_service.message_can_use_builtin_direct_tools(
+        message,
+        tools=tools,
+        callbacks=_direct_chat_tool_policy_callbacks(),
+    )
 
 
 def _parse_tool_name(tool_name: str) -> tuple[str, str]:

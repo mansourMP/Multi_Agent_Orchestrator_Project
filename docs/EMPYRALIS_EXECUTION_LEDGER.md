@@ -1815,6 +1815,83 @@ This cut materially reduced the chat module instead of only moving constructor b
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Chat Tool Catalog And Message Policy Moved Behind Catalog Service
+
+#### Stage
+
+Stage 1 continues. The direct-chat tool catalog builders and direct-tool message-policy band no longer live inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This is another implementation-heavy extraction, not just a constructor move.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_tool_catalog_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_tool_catalog_service.py) to own:
+  - provider support checks for direct tool calls
+  - local tool schema catalog construction
+  - connector tool schema catalog construction
+  - builtin direct tool schema catalog construction
+  - direct-chat tool-name logging catalog
+  - direct-tool message-intent and eligibility checks for:
+    - builtin tools
+    - connector tools
+    - local machine tools
+  - local-path request detection
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the new service:
+  - `_provider_supports_direct_tool_calls()`
+  - `_build_local_direct_chat_tools()`
+  - `_build_direct_chat_tools()`
+  - `_build_builtin_direct_chat_tools()`
+  - `registered_direct_chat_tool_names_for_logging()`
+  - `_message_requests_http_request_tool()`
+  - `_message_requests_image_generation_tool()`
+  - `_message_requests_browser_tool()`
+  - `_message_can_use_direct_connector_tools()`
+  - `_looks_like_local_path_request()`
+  - `_message_requests_local_file_tool()`
+  - `_message_requests_local_shell_tool()`
+  - `_message_requests_local_screenshot_tool()`
+  - `_message_requests_local_computer_tool()`
+  - `_message_can_use_direct_local_tools()`
+  - `_message_can_use_builtin_direct_tools()`
+- Added focused coverage in [server_modules/tests/test_direct_chat_tool_catalog_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_tool_catalog_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `2522` to `2065` lines in this cut.
+- The direct-tool eligibility and tool-schema ownership is now concentrated in a dedicated service instead of being mixed into the chat runtime module.
+- This is another real shell reduction toward the target architecture.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns higher-level direct-chat coordination and handoff policy.
+- The module still contains substantial run-handoff logic and chat-entry control flow that should eventually cross clearer service boundaries.
+- The direct-chat path is thinner than before, but it is still not yet a minimal orchestration shell.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another implementation-heavy orchestration seam, likely around run handoff or direct-chat route planning.
+2. Keep operator-chat wrapper names stable so existing tests and callers still patch the same late-bound entrypoints.
+3. Maintain focused regression coverage around tool eligibility, direct-tool execution, no-provider fallback, and runtime routing after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_tool_catalog_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_tool_catalog_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_tool_catalog_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_tool_catalog_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_tool_catalog_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

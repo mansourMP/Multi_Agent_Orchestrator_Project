@@ -100,6 +100,23 @@ class SkillsServiceTests(unittest.TestCase):
         self.assertEqual(context_payload[0]["read_actions"], ["history.read"])
         self.assertEqual(context_payload[0]["write_actions"], ["post_message"])
 
+    def test_availability_label_summary_groups_connected_states(self) -> None:
+        availability = {
+            "tool_capabilities": [
+                {"id": "slack", "label": "Slack", "connected": True, "runtime_usable": True},
+                {"id": "telegram", "label": "Telegram", "connected": True, "runtime_usable": False},
+                {"id": "gmail", "label": "Google Workspace", "connected": True, "runtime_usable": None},
+                {"id": "github", "label": "GitHub", "connected": False},
+            ]
+        }
+
+        summary = skills_service.availability_label_summary(availability)
+
+        self.assertEqual(summary["connected"], ["Slack", "Telegram", "Google Workspace"])
+        self.assertEqual(summary["usable"], ["Slack"])
+        self.assertEqual(summary["unavailable"], ["Telegram"])
+        self.assertEqual(summary["unverified"], ["Google Workspace"])
+
 
 if __name__ == "__main__":
     unittest.main()

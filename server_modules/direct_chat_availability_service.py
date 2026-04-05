@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
+from server_modules import skills_service
+
 
 def connect_action(label: str, href: str) -> Dict[str, Any]:
     return {
@@ -153,23 +155,13 @@ def no_ai_chat_response(
     normalize_tool_capabilities_fn: Callable[[Any], List[Dict[str, Any]]],
     connect_action_fn: Callable[[str, str], Dict[str, Any]],
 ) -> Dict[str, Any]:
-    capabilities = normalize_tool_capabilities_fn(availability)
-    connected_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("connected")]
-    usable_labels = [str(item.get("label") or "").strip() for item in capabilities if item.get("runtime_usable") is True]
-    unavailable_labels = [
-        str(item.get("label") or "").strip()
-        for item in capabilities
-        if item.get("connected") and item.get("runtime_usable") is False
-    ]
-    unverified_labels = [
-        str(item.get("label") or "").strip()
-        for item in capabilities
-        if item.get("connected") and item.get("runtime_usable") is None
-    ]
-    connected_line = ", ".join(connected_labels) if connected_labels else "none"
-    usable_line = ", ".join(usable_labels) if usable_labels else "none verified"
-    unavailable_line = ", ".join(unavailable_labels) if unavailable_labels else "none"
-    unverified_line = ", ".join(unverified_labels) if unverified_labels else "none"
+    labels = skills_service.availability_label_summary(
+        {"tool_capabilities": normalize_tool_capabilities_fn(availability)}
+    )
+    connected_line = ", ".join(labels["connected"]) if labels["connected"] else "none"
+    usable_line = ", ".join(labels["usable"]) if labels["usable"] else "none verified"
+    unavailable_line = ", ".join(labels["unavailable"]) if labels["unavailable"] else "none"
+    unverified_line = ", ".join(labels["unverified"]) if labels["unverified"] else "none"
     reply = (
         "AI chat is not available right now because the workspace AI account is not ready. "
         f"Connected here right now: {connected_line}. "

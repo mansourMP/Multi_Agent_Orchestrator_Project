@@ -23,17 +23,15 @@ def availability_lines(
     normalize_tool_capabilities: Any,
 ) -> List[str]:
     ai_ready = bool(availability.get("ai_ready"))
-    tools = normalize_tool_capabilities(availability)
-    normalized_availability = {"tool_capabilities": tools}
-    connected_labels = skills_service.connected_availability_labels(normalized_availability)
-    unavailable_labels = skills_service.unavailable_connected_availability_labels(normalized_availability)
-    unverified_labels = skills_service.unverified_connected_availability_labels(normalized_availability)
+    labels = skills_service.availability_label_summary(
+        {"tool_capabilities": normalize_tool_capabilities(availability)}
+    )
     return [
         f"Workspace: {workspace_id or 'default'}",
         f"AI account: {'ready' if ai_ready else 'not ready'}",
-        f"Connected systems: {', '.join(connected_labels) if connected_labels else 'none'}",
-        f"Unavailable now: {', '.join(unavailable_labels) if unavailable_labels else 'none'}",
-        f"Not verified: {', '.join(unverified_labels) if unverified_labels else 'none'}",
+        f"Connected systems: {', '.join(labels['connected']) if labels['connected'] else 'none'}",
+        f"Unavailable now: {', '.join(labels['unavailable']) if labels['unavailable'] else 'none'}",
+        f"Not verified: {', '.join(labels['unverified']) if labels['unverified'] else 'none'}",
     ]
 
 

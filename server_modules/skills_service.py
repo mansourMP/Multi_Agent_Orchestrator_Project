@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List
 
 
@@ -35,10 +36,17 @@ def _normalize_action_list(value: Any) -> List[str]:
     return normalized
 
 
+def _normalize_capability_id(value: Any) -> str:
+    token = re.sub(r"[^a-z0-9_. -]+", " ", str(value or "").strip().lower())
+    return re.sub(r"\s+", "_", token).strip("_")
+
+
 def capability_descriptor_from_payload(item: Any) -> CapabilityDescriptor | None:
     if not isinstance(item, dict):
         return None
-    capability_id = str(item.get("id") or item.get("capability_id") or "").strip().lower()
+    capability_id = _normalize_capability_id(
+        item.get("id") or item.get("capability_id") or item.get("label")
+    )
     if not capability_id:
         return None
     approval_actions = _normalize_action_list(item.get("approval_required_actions"))
@@ -164,6 +172,23 @@ def context_availability_capabilities(
         if len(trimmed) >= max_context_tool_capabilities:
             break
     return trimmed
+
+
+def availability_label_summary(availability: Any) -> Dict[str, List[str]]:
+    connected_labels = connected_availability_labels(availability)
+    unavailable_labels = unavailable_connected_availability_labels(availability)
+    unverified_labels = unverified_connected_availability_labels(availability)
+    usable_labels = [
+        str(item.get("label") or "").strip()
+        for item in connected_availability_capabilities(availability)
+        if item.get("runtime_usable") is True
+    ]
+    return {
+        "connected": connected_labels,
+        "usable": usable_labels,
+        "unavailable": unavailable_labels,
+        "unverified": unverified_labels,
+    }
 
 
 def resolve_workspace_capability_payloads(

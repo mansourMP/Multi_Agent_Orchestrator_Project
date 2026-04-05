@@ -1629,6 +1629,68 @@ The chat module still exports the historical helper names for compatibility, but
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Chat Runtime Assembly Moved Behind Runtime Facade
+
+#### Stage
+
+Stage 1 continues. The no-provider execution bundle and the direct-chat response/runtime assembly no longer live inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+The chat module still exports the historical wrapper names, but the assembly logic now crosses a dedicated runtime facade boundary.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_facade_service.py) to own:
+  - no-provider execution service construction
+  - direct-tool approval response shaping through the no-provider bundle
+  - obvious direct-tool intent detection
+  - direct-chat request preparation delegation
+  - direct-chat response service assembly
+  - direct-chat runtime service assembly
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the runtime facade:
+  - `_no_provider_execution_services()`
+  - `_build_direct_tool_approval_response()`
+  - `_message_has_obvious_direct_tool_intent()`
+  - `_prepare_direct_chat_request()`
+  - `_direct_chat_response_services()`
+  - `_direct_chat_runtime_services()`
+- Preserved the operator-chat wrapper surface so late-bound patches and existing callers still resolve through the same names.
+- Added focused coverage in [server_modules/tests/test_direct_chat_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_facade_service.py).
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `2964` to `2962` lines in this cut. The line count reduction is small because the constructor band was replaced by a callback factory that keeps compatibility and late binding intact.
+- The actual ownership reduction is still real: the direct-chat runtime composition now has a dedicated assembly seam instead of being built inline in the chat module.
+- The runtime and no-provider bundles now share one explicit callback contract, which makes the next extraction cuts less risky.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns too much high-level coordination, especially provider routing, prompt assembly, and direct-chat entry logic.
+- The callback factory in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) is still large because it is preserving the historical late-bound composition surface.
+- The direct-chat orchestration path is still not yet reduced to a thin coordination shell around separated services.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration seam, not just callback assembly.
+2. Keep the operator-chat wrappers stable while moving more of the direct-chat coordination path behind dedicated services.
+3. Maintain focused regression coverage around no-provider fallback, approval shaping, and direct-chat runtime flow after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_runtime_facade_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_runtime_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_runtime_facade_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_tools_http`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

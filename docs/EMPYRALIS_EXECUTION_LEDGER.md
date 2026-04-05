@@ -1713,6 +1713,61 @@ This is the largest operator-chat reduction in the current direct-chat pass. It 
   - `server_modules.tests.test_direct_chat_runtime_facade_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Pure Delegate Wrapper Band Collapsed Into Direct Aliases
+
+#### Stage
+
+Stage 1 continues. Another low-risk shell cleanup pass removed a large band of pure delegate wrappers from [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut does not introduce a new subsystem boundary. It is a compatibility-preserving shell reduction that collapses identical pass-through helpers into direct aliases.
+
+#### Completed Work
+
+- Replaced the pure one-hop wrappers in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with direct callable aliases for:
+  - action helpers
+  - tool-catalog passthroughs
+  - direct-tool config passthroughs
+  - direct-tool execution passthroughs
+  - provider display and reasoning normalization passthroughs
+- Kept the higher-value injected wrappers in place where runtime callback binding or late-bound behavior is still required.
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1667` to `1600` lines in this cleanup pass.
+- The affected helper names still exist on the module and remain directly importable.
+- The runtime behavior remains the same; this is a structural cleanup rather than a behavior change.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns significant orchestration logic and callback assembly.
+- The docs set still needs a later continuity pass because the restored history and the current refactor trail are not yet fully reconciled.
+- The direct-chat shell is smaller, but still not yet reduced to the final thin coordinator target.
+
+#### Next Required Work
+
+1. Continue extracting dense orchestration logic rather than only continuing alias cleanups.
+2. Keep protecting module-level import compatibility while reducing the remaining shell surface.
+3. Reconcile document continuity once the current code refactor sequence settles.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Top-Level Runtime Entry Wiring Moved Behind Runtime Entry Facade
 
 #### Stage

@@ -727,12 +727,8 @@ def _with_context_used(payload: Dict[str, Any], context_used: Dict[str, Any]) ->
     return direct_chat_metadata_service.with_context_used(payload, context_used)
 
 
-def _connect_action(label: str, href: str) -> Dict[str, Any]:
-    return direct_chat_availability_service.connect_action(label, href)
-
-
-def _open_action(label: str, href: str, *, variant: str = "primary") -> Dict[str, Any]:
-    return direct_chat_availability_service.open_action(label, href, variant=variant)
+_connect_action = direct_chat_availability_service.connect_action
+_open_action = direct_chat_availability_service.open_action
 
 
 def _google_repair_action() -> Dict[str, Any]:
@@ -741,12 +737,8 @@ def _google_repair_action() -> Dict[str, Any]:
     )
 
 
-def _run_action(message: str) -> Dict[str, Any]:
-    return direct_chat_availability_service.run_action(message)
-
-
-def _workflow_action(message: str) -> Dict[str, Any]:
-    return direct_chat_availability_service.workflow_action(message)
+_run_action = direct_chat_availability_service.run_action
+_workflow_action = direct_chat_availability_service.workflow_action
 
 
 def _question_like(compact_message: str) -> bool:
@@ -1074,8 +1066,7 @@ def _stream_direct_chat_run_handoff(
     )
 
 
-def _provider_supports_direct_tool_calls(provider: str) -> bool:
-    return direct_chat_tool_catalog_service.provider_supports_direct_tool_calls(provider)
+_provider_supports_direct_tool_calls = direct_chat_tool_catalog_service.provider_supports_direct_tool_calls
 
 
 def _direct_chat_tool_policy_callbacks() -> direct_chat_tool_catalog_service.DirectChatToolPolicyCallbacks:
@@ -1107,16 +1098,9 @@ def _build_local_direct_chat_tools(availability: Dict[str, Any]) -> List[Dict[st
     )
 
 
-def _build_direct_chat_tools(tool_capabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return direct_chat_tool_catalog_service.build_direct_chat_tools(tool_capabilities)
-
-
-def _build_builtin_direct_chat_tools() -> List[Dict[str, Any]]:
-    return direct_chat_tool_catalog_service.build_builtin_direct_chat_tools()
-
-
-def registered_direct_chat_tool_names_for_logging() -> List[str]:
-    return direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging()
+_build_direct_chat_tools = direct_chat_tool_catalog_service.build_direct_chat_tools
+_build_builtin_direct_chat_tools = direct_chat_tool_catalog_service.build_builtin_direct_chat_tools
+registered_direct_chat_tool_names_for_logging = direct_chat_tool_catalog_service.registered_direct_chat_tool_names_for_logging
 
 
 def _message_requests_http_request_tool(message: str) -> bool:
@@ -1223,20 +1207,10 @@ def _tool_arguments_payload(arguments: Any) -> Dict[str, Any]:
     )
 
 
-def _extract_first_email(text: str) -> str:
-    return direct_tool_config_service.extract_first_email(text)
-
-
-def _extract_subject_text(text: str) -> str:
-    return direct_tool_config_service.extract_subject_text(text)
-
-
-def _extract_body_text(text: str) -> str:
-    return direct_tool_config_service.extract_body_text(text)
-
-
-def _first_non_empty_line(text: str) -> str:
-    return direct_tool_config_service.first_non_empty_line(text)
+_extract_first_email = direct_tool_config_service.extract_first_email
+_extract_subject_text = direct_tool_config_service.extract_subject_text
+_extract_body_text = direct_tool_config_service.extract_body_text
+_first_non_empty_line = direct_tool_config_service.first_non_empty_line
 
 
 def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str) -> Dict[str, Any]:
@@ -1248,28 +1222,10 @@ def _build_direct_tool_config(connector_id: str, action_id: str, tool_input: str
     )
 
 
-def _build_direct_local_tool_config(
-    connector_id: str,
-    action_id: str,
-    arguments: Dict[str, Any],
-) -> tuple[str, Dict[str, Any]]:
-    return direct_tool_config_service.build_direct_local_tool_config(
-        connector_id,
-        action_id,
-        arguments,
-    )
+_build_direct_local_tool_config = direct_tool_config_service.build_direct_local_tool_config
 
 
-def _tool_write_action_available(
-    connector_id: str,
-    action_id: str,
-    tool_capabilities: List[Dict[str, Any]],
-) -> bool:
-    return direct_tool_config_service.tool_write_action_available(
-        connector_id,
-        action_id,
-        tool_capabilities,
-    )
+_tool_write_action_available = direct_tool_config_service.tool_write_action_available
 
 
 def _normalize_direct_approved_action(value: Any) -> Optional[Dict[str, str]]:
@@ -1283,16 +1239,9 @@ def _approved_action_to_tool_call(approved_action: Dict[str, str]) -> Dict[str, 
     )
 
 
-def _run_async_tool_call(coro: Any) -> Any:
-    return direct_tool_config_service.run_async_tool_call(coro)
-
-
-def _format_direct_tool_result(result: Dict[str, Any]) -> str:
-    return direct_tool_config_service.format_direct_tool_result(result)
-
-
-def _format_direct_local_tool_result(result: Dict[str, Any]) -> str:
-    return direct_tool_config_service.format_direct_local_tool_result(result)
+_run_async_tool_call = direct_tool_config_service.run_async_tool_call
+_format_direct_tool_result = direct_tool_config_service.format_direct_tool_result
+_format_direct_local_tool_result = direct_tool_config_service.format_direct_local_tool_result
 
 
 def _titleize_direct_step_token(value: str) -> str:
@@ -1323,20 +1272,10 @@ def _direct_tool_step_payload(
     )
 
 
-def _thinking_step_payload(iteration: int, status: str, detail: Optional[str] = None) -> Dict[str, Any]:
-    return direct_tool_execution_service.thinking_step_payload(iteration, status, detail)
-
-
-def _extract_first_url(value: str) -> str:
-    return direct_tool_execution_service.extract_first_url(value)
-
-
-def _extract_first_path_reference(value: str) -> str:
-    return direct_tool_execution_service.extract_first_path_reference(value)
-
-
-def _resolve_chat_local_path(raw_path: str) -> Path:
-    return direct_tool_execution_service.resolve_chat_local_path(raw_path)
+_thinking_step_payload = direct_tool_execution_service.thinking_step_payload
+_extract_first_url = direct_tool_execution_service.extract_first_url
+_extract_first_path_reference = direct_tool_execution_service.extract_first_path_reference
+_resolve_chat_local_path = direct_tool_execution_service.resolve_chat_local_path
 
 
 def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectToolExecutionCallbacks:
@@ -1379,11 +1318,7 @@ def _message_has_obvious_direct_tool_intent(message: str, tools: List[Dict[str, 
     )
 
 
-def _direct_tool_followup_message(tool_name: str, result_text: str) -> str:
-    return direct_tool_execution_service.direct_tool_followup_message(
-        tool_name,
-        result_text,
-    )
+_direct_tool_followup_message = direct_tool_execution_service.direct_tool_followup_message
 
 
 def _execute_single_direct_tool_call(
@@ -1483,8 +1418,7 @@ def _preferred_provider(workspace_id: str, requested_provider: str = "") -> tupl
     )
 
 
-def _provider_display_name(provider: str) -> str:
-    return direct_chat_provider_facade_service.provider_display_name(provider)
+_provider_display_name = direct_chat_provider_facade_service.provider_display_name
 
 
 def _provider_unavailable_response(provider: str) -> Dict[str, Any]:
@@ -1502,8 +1436,7 @@ def _direct_chat_credentials(workspace_id: str, provider: str) -> Dict[str, Any]
     )
 
 
-def _normalize_reasoning_effort(value: str = "") -> Optional[str]:
-    return direct_chat_provider_facade_service.normalize_reasoning_effort(value)
+_normalize_reasoning_effort = direct_chat_provider_facade_service.normalize_reasoning_effort
 
 
 def _direct_chat_error_reply(llm_error: str) -> str:

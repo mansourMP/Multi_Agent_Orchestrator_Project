@@ -62,6 +62,7 @@ from server_modules.runtime_state_store import (
     mark_stale_chat_stream_sessions_interrupted,
     upsert_chat_stream_state,
 )
+from server_modules import runtime_heartbeat_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
@@ -116,8 +117,10 @@ def _chat_stream_metrics_inc(key: str, amount: float = 1) -> None:
 
 
 def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
-    with _HEARTBEAT_SCHEDULER_LOCK:
-        return _HEARTBEAT_SCHEDULER
+    return runtime_heartbeat_service.heartbeat_scheduler(
+        lock=_HEARTBEAT_SCHEDULER_LOCK,
+        scheduler=_HEARTBEAT_SCHEDULER,
+    )
 
 
 def _run_creation_services() -> RunCreationServices:
@@ -860,15 +863,16 @@ def register_run_routes(app) -> None:
             return
 
     global _HEARTBEAT_SCHEDULER
-    with _HEARTBEAT_SCHEDULER_LOCK:
-        if _HEARTBEAT_SCHEDULER is None:
-            _HEARTBEAT_SCHEDULER = HeartbeatScheduler(
-                interval_seconds=30 * 60,
-                workspace_id="default",
-                run_callback=_start_heartbeat_run,
-                notify_callback=_heartbeat_notify,
-            )
-            _HEARTBEAT_SCHEDULER.start()
+    _HEARTBEAT_SCHEDULER = runtime_heartbeat_service.ensure_heartbeat_scheduler_started(
+        lock=_HEARTBEAT_SCHEDULER_LOCK,
+        scheduler=_HEARTBEAT_SCHEDULER,
+        scheduler_factory=lambda: HeartbeatScheduler(
+            interval_seconds=30 * 60,
+            workspace_id="default",
+            run_callback=_start_heartbeat_run,
+            notify_callback=_heartbeat_notify,
+        ),
+    )
     _load_webhook_triggers()
 
     @app.post("/runs/start", dependencies=[Depends(require_api_key)])
@@ -962,27 +966,19 @@ def register_run_routes(app) -> None:
     @app.get("/heartbeat/status", dependencies=[Depends(require_api_key)])
     async def get_heartbeat_status(current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        scheduler = _heartbeat_scheduler()
-        if scheduler is None:
-            return {
-                "ok": False,
-                "detail": "Heartbeat scheduler is not configured.",
-            }
-        return {
-            "ok": True,
-            **scheduler.status(),
-        }
+        return runtime_heartbeat_service.heartbeat_status_payload(
+            scheduler=_heartbeat_scheduler(),
+        )
 
     @app.post("/heartbeat/trigger", dependencies=[Depends(require_api_key)])
     async def trigger_heartbeat(current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        scheduler = _heartbeat_scheduler()
-        if scheduler is None:
+        try:
+            return runtime_heartbeat_service.trigger_heartbeat_payload(
+                scheduler=_heartbeat_scheduler(),
+            )
+        except RuntimeError as exc:
             raise HTTPException(status_code=503, detail="Heartbeat scheduler is not configured.")
-        return {
-            "ok": True,
-            **scheduler.trigger_now(),
-        }
 
     @app.post("/webhooks/register", dependencies=[Depends(require_api_key)])
     async def register_webhook_trigger(request: Request, current_user=Depends(require_api_key)):

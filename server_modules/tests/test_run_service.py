@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
+    build_run_creation_services,
     build_legacy_run_execution_services,
     build_run_precheck_result,
     build_run_execution_services,
@@ -18,6 +19,7 @@ from server_modules.run_service import (
     build_run_preview_context,
     build_run_preparation_services,
     build_run_prepared_result_services,
+    build_run_routing_preview_services,
     build_run_routing_preview,
     build_runs_core_creation_result,
     build_runs_core_result_services,
@@ -164,6 +166,25 @@ class RunServiceTests(unittest.TestCase):
         self.assertIs(services.stamp_request_owner, owner)
         self.assertIs(services.prepare_run_start_request, prepare)
         self.assertIs(services.create_run_from_request, create)
+
+    def test_build_run_creation_services_preserves_callback(self):
+        create = object()
+
+        services = build_run_creation_services(create_run_from_request=create)
+
+        self.assertIs(services.create_run_from_request, create)
+
+    def test_build_run_routing_preview_services_preserves_callbacks(self):
+        prepare = object()
+        precheck = object()
+
+        services = build_run_routing_preview_services(
+            prepare_run_start_request=prepare,
+            compute_tool_policy_precheck=precheck,
+        )
+
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.compute_tool_policy_precheck, precheck)
 
     def test_build_legacy_run_execution_services_wraps_execution_callbacks(self):
         owner = object()

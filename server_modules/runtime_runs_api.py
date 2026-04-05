@@ -32,8 +32,10 @@ from server_modules.run_service import (
     RunCreationServices,
     RunExecutionServices,
     RunRoutingPreviewServices,
+    build_run_creation_services,
     build_run_execution_services,
     build_run_precheck_result,
+    build_run_routing_preview_services,
     build_run_routing_preview,
     create_run_result_from_request,
 )
@@ -110,7 +112,7 @@ def _heartbeat_scheduler() -> Optional[HeartbeatScheduler]:
 
 
 def _run_creation_services() -> RunCreationServices:
-    return RunCreationServices(
+    return build_run_creation_services(
         create_run_from_request=_late_server_export("_create_run_from_request"),
     )
 
@@ -124,7 +126,7 @@ def _run_execution_services() -> RunExecutionServices:
 
 
 def _run_routing_preview_services() -> RunRoutingPreviewServices:
-    return RunRoutingPreviewServices(
+    return build_run_routing_preview_services(
         prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
         compute_tool_policy_precheck=_late_server_export("_compute_tool_policy_precheck"),
     )

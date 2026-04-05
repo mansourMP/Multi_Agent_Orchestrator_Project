@@ -810,6 +810,80 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertTrue(callable(export_map["collect_direct_operator_reply"]))
         self.assertTrue(callable(export_map["build_direct_operator_reply"]))
 
+    def test_build_direct_chat_shell_export_map_exposes_shell_aliases(self) -> None:
+        shell = service.build_direct_chat_shell_bindings(
+            agent_machine_full_trust_enabled_fn=lambda owner_user_id: owner_user_id == "owner-1",
+            chat_max_iterations_default=30,
+            chat_max_iterations_ceiling=100,
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            direct_chat_compaction_token_limit=8000,
+            execution_markers=("run",),
+            question_openers=("what",),
+            direct_run_openers=("summarize",),
+            workflow_request_markers=("workflow",),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            max_context_tool_actions=2,
+            max_context_tool_capabilities=2,
+            max_direct_chat_prior_message_chars=100,
+            max_direct_chat_prior_messages=5,
+            direct_chat_model_preferences={},
+            direct_chat_clear_markers=set(),
+            direct_tool_loop_state={},
+            direct_chat_loop_repeat_limit=2,
+            parse_json_object_loose_fn=lambda value: {},
+            generate_reply_fn=lambda **kwargs: ("", {}, "", ""),
+            extraction_prompt="prompt",
+            extraction_system_prompt="system",
+            save_session_transcript_fn=lambda *args, **kwargs: None,
+            system_prefix="Memory",
+            workspace_context_dir_fn=lambda workspace_id: Path("/tmp"),
+            memory_suggestion_prompts_fn=lambda workspace_id: [],
+            run_handoff_execution_target_fn=lambda run_id: {"run_id": run_id},
+            direct_chat_run_snapshot_fn=lambda run_id: None,
+            direct_chat_run_event_to_step_fn=lambda run_id, event: None,
+            direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: None,
+            direct_chat_run_final_payload_fn=lambda **kwargs: kwargs,
+            live_window_seconds=12.0,
+            poll_seconds=0.25,
+            monotonic_fn=lambda: 1.0,
+            sleep_fn=lambda seconds: None,
+            parse_json_object_loose_support_fn=lambda value: {},
+            direct_chat_tool_policy_callbacks_fn=lambda: service.DirectChatToolPolicyCallbacks(
+                extract_first_url=lambda value: "",
+                extract_first_path_reference=lambda value: "",
+                message_requests_http_request_tool=lambda compact: False,
+                message_requests_image_generation_tool=lambda compact: False,
+                message_requests_browser_tool=lambda compact: False,
+                message_requests_local_file_tool=lambda compact: False,
+                message_requests_local_shell_tool=lambda compact: False,
+                message_requests_local_screenshot_tool=lambda compact: False,
+                message_requests_local_computer_tool=lambda compact: False,
+                approval_required_for_direct_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
+            ),
+            direct_chat_routing_policy_callbacks_fn=lambda: service.DirectChatRoutingPolicyCallbacks(
+                compact_text=lambda value: str(value or "").strip().lower(),
+                question_like=lambda compact: compact.startswith("what "),
+                mentions_any=lambda compact, markers: False,
+                starts_like_direct_run=lambda compact: compact.startswith("run "),
+                is_obvious_smtp_write_request=lambda compact: False,
+                is_explicit_workflow_request=lambda compact: False,
+            ),
+        )
+
+        export_map = service.build_direct_chat_shell_export_map(shell_bindings=shell)
+
+        self.assertIn("_compact_text", export_map)
+        self.assertIn("_direct_chat_state_bindings", export_map)
+        self.assertIn("_direct_chat_tool_routing_bindings", export_map)
+        self.assertIn("_direct_chat_tool_support_bindings", export_map)
+        self.assertIn("_provider_display_name", export_map)
+        self.assertTrue(callable(export_map["_tool_gate_response"]))
+
     def test_build_direct_chat_tool_support_bindings_preserves_config_and_support_helpers(self) -> None:
         bindings = service.build_direct_chat_tool_support_bindings(
             parse_json_object_loose_fn=lambda value: {"url": "https://example.com"} if value else {},

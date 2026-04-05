@@ -22,6 +22,7 @@ from server_modules.agent_turn import (
 )
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
+    build_direct_chat_execution_services,
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
     build_direct_chat_request_meta as _service_build_direct_chat_request_meta,
     direct_chat_actor_key as _service_direct_chat_actor_key,
@@ -41,6 +42,7 @@ from server_modules.run_service import (
 )
 from server_modules.turn_runtime import (
     TurnExecutionServices,
+    build_turn_execution_services,
     execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
@@ -501,7 +503,7 @@ def _direct_chat_session_manager():
 def _direct_chat_execution_services() -> DirectChatExecutionServices:
     from server_modules.operator_chat import build_chat_turn_event_stream, build_direct_operator_reply
 
-    return DirectChatExecutionServices(
+    return build_direct_chat_execution_services(
         chat_stream_key=_chat_stream_key,
         session_manager_enabled=_direct_chat_session_manager_enabled,
         session_manager_factory=_direct_chat_session_manager,
@@ -1211,7 +1213,7 @@ def register_run_routes(app) -> None:
         execution = await execute_agent_turn_request(
             turn_request=direct_turn_request,
             current_user=current_user,
-            services=TurnExecutionServices(
+            services=build_turn_execution_services(
                 run_execution=_run_execution_services(),
                 direct_chat=_direct_chat_execution_services(),
             ),

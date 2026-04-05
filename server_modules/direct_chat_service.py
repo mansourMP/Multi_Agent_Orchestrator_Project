@@ -21,6 +21,23 @@ class DirectChatExecutionServices:
     build_chat_turn_event_stream: Callable[..., Any]
 
 
+def build_direct_chat_execution_services(
+    *,
+    chat_stream_key: Callable[[Any, dict], tuple[str, str, str]],
+    session_manager_enabled: Callable[[], bool],
+    session_manager_factory: Callable[[], Any],
+    build_direct_operator_reply: Callable[..., Any],
+    build_chat_turn_event_stream: Callable[..., Any],
+) -> DirectChatExecutionServices:
+    return DirectChatExecutionServices(
+        chat_stream_key=chat_stream_key,
+        session_manager_enabled=session_manager_enabled,
+        session_manager_factory=session_manager_factory,
+        build_direct_operator_reply=build_direct_operator_reply,
+        build_chat_turn_event_stream=build_chat_turn_event_stream,
+    )
+
+
 def direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:
     owner = (
         str((current_user or {}).get("user_id") or "").strip()

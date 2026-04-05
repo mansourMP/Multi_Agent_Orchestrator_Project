@@ -15,6 +15,17 @@ class TurnExecutionServices:
     direct_chat: DirectChatExecutionServices
 
 
+def build_turn_execution_services(
+    *,
+    run_execution: RunExecutionServices,
+    direct_chat: DirectChatExecutionServices,
+) -> TurnExecutionServices:
+    return TurnExecutionServices(
+        run_execution=run_execution,
+        direct_chat=direct_chat,
+    )
+
+
 async def execute_agent_turn_request(
     *,
     turn_request: AgentTurnRequest,

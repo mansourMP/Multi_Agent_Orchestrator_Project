@@ -3,12 +3,13 @@ from unittest.mock import AsyncMock, patch
 
 from server_modules import runtime_runs_api
 from server_modules.agent_turn import build_direct_chat_turn_request
-from server_modules.direct_chat_service import DirectChatExecutionServices
+from server_modules.direct_chat_service import DirectChatExecutionServices, build_direct_chat_execution_services
 from server_modules.run_service import RunExecutionServices
 from server_modules.runtime_models import RunStartRequest
 from server_modules import turn_runtime
 from server_modules.turn_runtime import (
     TurnExecutionServices,
+    build_turn_execution_services,
     execute_agent_turn_request,
     execute_run_start_request_via_turn_runtime,
     execute_system_run_start_request_via_turn_runtime,
@@ -38,6 +39,28 @@ class _DummyManager:
 
 
 class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
+    def test_builder_helpers_preserve_turn_runtime_callbacks(self):
+        run_execution = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
+        direct_chat = build_direct_chat_execution_services(
+            chat_stream_key=runtime_runs_api._chat_stream_key,
+            session_manager_enabled=runtime_runs_api._direct_chat_session_manager_enabled,
+            session_manager_factory=runtime_runs_api._direct_chat_session_manager,
+            build_direct_operator_reply=lambda **kwargs: {"reply": "unused"},
+            build_chat_turn_event_stream=lambda **kwargs: iter(()),
+        )
+
+        services = build_turn_execution_services(
+            run_execution=run_execution,
+            direct_chat=direct_chat,
+        )
+
+        self.assertIs(services.run_execution, run_execution)
+        self.assertIs(services.direct_chat, direct_chat)
+
     def test_runtime_runs_api_uses_session_manager_when_flag_enabled(self):
         manager = _DummyManager()
         body = {
@@ -87,13 +110,13 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
             client_request_id="req-1",
             message="hello",
         )
-        services = TurnExecutionServices(
+        services = build_turn_execution_services(
             run_execution=RunExecutionServices(
                 stamp_request_owner=lambda req, current_user: req,
                 prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
                 create_run_from_request=lambda req: {"run_id": "unused"},
             ),
-            direct_chat=DirectChatExecutionServices(
+            direct_chat=build_direct_chat_execution_services(
                 chat_stream_key=runtime_runs_api._chat_stream_key,
                 session_manager_enabled=runtime_runs_api._direct_chat_session_manager_enabled,
                 session_manager_factory=runtime_runs_api._direct_chat_session_manager,

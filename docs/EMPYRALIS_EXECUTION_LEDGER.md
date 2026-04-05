@@ -1565,6 +1565,57 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Legacy Run Preparation Wrapper Flow Centralized
+
+#### Stage
+
+Stage 1 continues. The shared wrapper flow behind legacy `_prepare_run_start_request()` entrypoints now lives in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of being rebuilt in both legacy run modules.
+
+This keeps the old module-level compatibility names in place while making [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) the clearer ownership boundary for shared request preparation.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `LegacyRunPreparationServices`
+  - `prepare_legacy_run_start_request()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so `_prepare_run_start_request()` now delegates its wrapper flow through the canonical helper.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so `_prepare_run_start_request()` now delegates the same wrapper flow through the canonical helper.
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with focused coverage for the new shared preparation helper.
+
+#### Current Truth
+
+- The durable-run service layer now owns the shared wrapper flows for:
+  - legacy preparation entrypoints
+  - legacy request-to-result entrypoints
+  - prepared-result adaptation
+  - prepared-run creation
+- The legacy run modules still own their historical module-level names and late-bound callback wiring, but less of the repeated wrapper logic.
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still mixes schedule, live-run state, and history concerns with run lifecycle logic.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still owns retry lineage, parent refresh, and snapshot selection behavior.
+- The shared durable-run surface is cleaner, but the legacy modules remain large.
+
+#### Next Required Work
+
+1. Continue extracting genuinely shared lifecycle logic into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Preserve the patched module-level compatibility surface while shrinking ownership inside the legacy run modules.
+3. Avoid adding new durable-run wrapper behavior to the legacy modules.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Legacy Run Request Wrapper Flow Centralized
 
 #### Stage

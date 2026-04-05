@@ -72,6 +72,11 @@ class LegacyRunRequestServices:
 
 
 @dataclass(slots=True)
+class LegacyRunPreparationServices:
+    build_preparation_services: Any
+
+
+@dataclass(slots=True)
 class RunPreparationServices:
     engine_registry: Any
     engine_validation_errors: Any
@@ -565,6 +570,15 @@ def prepare_run_start_request(
         "metadata": metadata,
         "workflow_snapshot": workflow_snapshot,
     }
+
+
+def prepare_legacy_run_start_request(
+    request: RunStartRequest,
+    *,
+    services: LegacyRunPreparationServices,
+) -> Dict[str, Any]:
+    preparation_services = services.build_preparation_services()
+    return prepare_run_start_request(request, services=preparation_services)
 
 
 def create_run_result_from_request(

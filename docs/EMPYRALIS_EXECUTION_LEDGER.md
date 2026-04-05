@@ -1746,6 +1746,75 @@ The chat module still exports the same wrapper names, but the callback bundle as
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Direct Tool Config And Result Helpers Moved Behind Config Service
+
+#### Stage
+
+Stage 1 continues. The direct-tool config builders, approval-call conversion helper, async runner, and direct-tool result formatting band no longer live inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut materially reduced the chat module instead of only moving constructor bands.
+
+#### Completed Work
+
+- Added [server_modules/direct_tool_config_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_config_service.py) to own:
+  - email/subject/body extraction helpers for tool input parsing
+  - direct connector tool config construction
+  - direct local tool config construction
+  - write-action availability checks
+  - approved-action to tool-call conversion
+  - async tool-call execution helper
+  - direct connector/local tool result formatting
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the historical helper names now delegate through the new service:
+  - `_extract_first_email()`
+  - `_extract_subject_text()`
+  - `_extract_body_text()`
+  - `_first_non_empty_line()`
+  - `_build_direct_tool_config()`
+  - `_build_direct_local_tool_config()`
+  - `_tool_write_action_available()`
+  - `_approved_action_to_tool_call()`
+  - `_run_async_tool_call()`
+  - `_format_direct_tool_result()`
+  - `_format_direct_local_tool_result()`
+- Added focused coverage in [server_modules/tests/test_direct_tool_config_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_config_service.py).
+- Tightened subject parsing in the new service so phrases like `subject Demo body Hello there` stop the subject before the body marker instead of swallowing the whole tail.
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `2963` to `2522` lines in this cut.
+- The direct-tool input normalization and result-shaping logic now has a dedicated service boundary instead of sitting as a large inline implementation block in the chat module.
+- This is a real shell reduction, not just a constructor extraction.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns higher-level direct-chat coordination, including provider routing, tool-selection policy, and handoff planning.
+- The remaining wrapper and policy surface is still larger than the target architecture wants.
+- The direct-chat path is still not yet reduced to a minimal orchestration shell around separated services.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another implementation-heavy orchestration seam, not only callback builders.
+2. Keep the operator-chat wrapper names stable while more behavior moves behind dedicated services.
+3. Maintain focused regression coverage around direct-tool flow, no-provider fallback, and chat runtime behavior after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_tool_config_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_config_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_tool_config_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_tool_config_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

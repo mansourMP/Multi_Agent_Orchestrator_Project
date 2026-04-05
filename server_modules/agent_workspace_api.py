@@ -11,7 +11,9 @@ from urllib.parse import urlencode
 
 from scripts.platform_execution import current_platform_context, supported_device_actions
 from server_modules.auth import enforce_workspace_access
+from server_modules.run_service import RunExecutionServices
 from server_modules.schemas import DeviceExecuteRequest, WorkspaceFileDeleteRequest, WorkspaceFileWriteRequest
+from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
 
 
 def _late_server_export(name: str):
@@ -25,6 +27,22 @@ def _refresh_server_exports():
 
     globals().update(_server.__dict__)
     return _server
+
+
+def _agent_workspace_run_execution_services() -> RunExecutionServices:
+    return RunExecutionServices(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
+        create_run_from_request=_late_server_export("_create_run_from_request"),
+    )
+
+
+def _execute_workspace_run_request(request: Any) -> Dict[str, Any]:
+    return execute_system_run_start_request_via_turn_runtime(
+        request,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=_agent_workspace_run_execution_services(),
+    )
 
 
 AGENT_WORKSPACE_LABELS: Dict[str, str] = {
@@ -1800,7 +1818,7 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Write file {rel_path}",
             metadata=metadata,
         )
-        created = _create_run_from_request(req)
+        created = _execute_workspace_run_request(req)
         return {"ok": True, **created}
 
     @app.post("/files/delete_request", dependencies=[Depends(require_admin_api_key)])
@@ -1836,7 +1854,7 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Delete file {rel_path}",
             metadata=metadata,
         )
-        created = _create_run_from_request(req)
+        created = _execute_workspace_run_request(req)
         return {"ok": True, **created}
 
     DEVICE_ACTIONS = supported_device_actions()
@@ -1876,5 +1894,5 @@ def register_agent_workspace_routes(app) -> None:
             user_goal=f"Device action: {action}",
             metadata=metadata,
         )
-        created = _create_run_from_request(req)
+        created = _execute_workspace_run_request(req)
         return {"ok": True, **created}

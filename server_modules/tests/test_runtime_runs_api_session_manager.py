@@ -6,7 +6,13 @@ from server_modules.agent_turn import build_direct_chat_turn_request
 from server_modules.direct_chat_service import DirectChatExecutionServices
 from server_modules.run_service import RunExecutionServices
 from server_modules.runtime_models import RunStartRequest
-from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
+from server_modules import turn_runtime
+from server_modules.turn_runtime import (
+    TurnExecutionServices,
+    execute_agent_turn_request,
+    execute_run_start_request_via_turn_runtime,
+    execute_system_run_start_request_via_turn_runtime,
+)
 
 
 class _DummyManager:
@@ -113,16 +119,23 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
 
     def test_execute_run_start_request_via_turn_runtime_returns_result_payload(self):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        services = RunExecutionServices(
+            stamp_request_owner=lambda req, current_user: req,
+            prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+            create_run_from_request=lambda req: {"run_id": "unused"},
+        )
 
         with patch.object(
-            runtime_runs_api,
-            "execute_agent_turn_request",
+            turn_runtime,
+            "execute_durable_turn_request",
             new=AsyncMock(return_value={"result": {"run_id": "run-1", "status": "starting"}}),
         ):
             result = __import__("asyncio").run(
-                runtime_runs_api._execute_run_start_request_via_turn_runtime(
+                execute_run_start_request_via_turn_runtime(
                     request,
                     current_user={"user_id": "user-1"},
+                    stamp_request_owner_fn=lambda req, current_user: req,
+                    services=services,
                 )
             )
 
@@ -133,16 +146,24 @@ class RuntimeRunsApiSessionManagerTests(unittest.TestCase):
         request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
         captured = {}
 
-        async def _fake_execute(request_payload, *, current_user):
+        async def _fake_execute(request_payload, *, current_user, **kwargs):
             captured["current_user"] = dict(current_user or {})
             return {"run_id": "run-2", "status": "starting"}
 
         with patch.object(
-            runtime_runs_api,
-            "_execute_run_start_request_via_turn_runtime",
+            turn_runtime,
+            "execute_run_start_request_via_turn_runtime",
             side_effect=_fake_execute,
         ):
-            result = runtime_runs_api._execute_system_run_start_request_via_turn_runtime(request)
+            result = execute_system_run_start_request_via_turn_runtime(
+                request,
+                stamp_request_owner_fn=lambda req, current_user: req,
+                services=RunExecutionServices(
+                    stamp_request_owner=lambda req, current_user: req,
+                    prepare_run_start_request=lambda req: {"metadata": dict(req.metadata or {})},
+                    create_run_from_request=lambda req: {"run_id": "unused"},
+                ),
+            )
 
         self.assertEqual(result["run_id"], "run-2")
         self.assertEqual(captured["current_user"]["auth_type"], "api_key")

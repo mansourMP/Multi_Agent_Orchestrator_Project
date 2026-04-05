@@ -19,7 +19,6 @@ from server_modules.agent_turn import (
     bind_agent_turn_metadata,
     build_direct_chat_turn_request,
     resolve_direct_chat_turn_request,
-    resolve_run_start_turn_request,
 )
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
@@ -37,7 +36,12 @@ from server_modules.run_service import (
     build_run_routing_preview,
     create_run_result_from_request,
 )
-from server_modules.turn_runtime import TurnExecutionServices, execute_agent_turn_request
+from server_modules.turn_runtime import (
+    TurnExecutionServices,
+    execute_agent_turn_request,
+    execute_run_start_request_via_turn_runtime,
+    execute_system_run_start_request_via_turn_runtime,
+)
 from server_modules.runtime_policy import (
     browser_automation_plan_hash_from_pack_inputs,
     build_browser_execution_binding,
@@ -131,48 +135,6 @@ def _create_run_result(request: RunStartRequest, *, schedule_id: Optional[str] =
         services=_run_creation_services(),
         schedule_id=schedule_id,
     )
-
-
-async def _execute_run_start_request_via_turn_runtime(
-    request: RunStartRequest,
-    *,
-    current_user: Any,
-) -> Dict[str, Any]:
-    resolution = resolve_run_start_turn_request(
-        current_user=current_user,
-        body=request,
-        stamp_request_owner_fn=_stamp_request_owner,
-    )
-    execution = await execute_agent_turn_request(
-        turn_request=resolution.turn_request,
-        current_user=current_user,
-        services=TurnExecutionServices(
-            run_execution=_run_execution_services(),
-            direct_chat=_direct_chat_execution_services(),
-        ),
-        run_request=resolution.request,
-    )
-    result = execution.get("result")
-    return dict(result) if isinstance(result, dict) else {"result": result}
-
-
-def _execute_system_run_start_request_via_turn_runtime(
-    request: RunStartRequest,
-    *,
-    current_user: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    system_user = (
-        dict(current_user)
-        if isinstance(current_user, dict)
-        else {"auth_type": "api_key", "user_id": "", "email": ""}
-    )
-    return asyncio.run(
-        _execute_run_start_request_via_turn_runtime(
-            request,
-            current_user=system_user,
-        )
-    )
-
 
 def _load_webhook_triggers() -> None:
     global _WEBHOOK_TRIGGERS_LOADED
@@ -1175,7 +1137,11 @@ def register_run_routes(app) -> None:
                 "heartbeat_file": str(metadata.get("heartbeat_file") or ""),
             },
         )
-        result = _execute_system_run_start_request_via_turn_runtime(request)
+        result = execute_system_run_start_request_via_turn_runtime(
+            request,
+            stamp_request_owner_fn=_stamp_request_owner,
+            services=_run_execution_services(),
+        )
         return {
             "acted": True,
             **(result if isinstance(result, dict) else {}),
@@ -1209,9 +1175,11 @@ def register_run_routes(app) -> None:
     async def start_run(body: Optional[RunStartRequest] = None, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         request_payload = body or RunStartRequest()
-        result = await _execute_run_start_request_via_turn_runtime(
+        result = await execute_run_start_request_via_turn_runtime(
             request_payload,
             current_user=current_user,
+            stamp_request_owner_fn=_stamp_request_owner,
+            services=_run_execution_services(),
         )
         return result
 
@@ -1435,9 +1403,11 @@ def register_run_routes(app) -> None:
                 **(matched_trigger.get("metadata") if isinstance(matched_trigger.get("metadata"), dict) else {}),
             },
         )
-        result = await _execute_run_start_request_via_turn_runtime(
+        result = await execute_run_start_request_via_turn_runtime(
             request_payload,
             current_user=current_user,
+            stamp_request_owner_fn=_stamp_request_owner,
+            services=_run_execution_services(),
         )
         return {
             "ok": True,
@@ -1473,7 +1443,11 @@ def register_run_routes(app) -> None:
                 "metadata": child.metadata if isinstance(child.metadata, dict) else {},
             }
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
+            result = execute_system_run_start_request_via_turn_runtime(
+                delegated_req,
+                stamp_request_owner_fn=_stamp_request_owner,
+                services=_run_execution_services(),
+            )
             created.append(
                 {
                     **result,
@@ -1527,7 +1501,11 @@ def register_run_routes(app) -> None:
         created: List[Dict[str, Any]] = []
         for child in plan:
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child, note=note)
-            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
+            result = execute_system_run_start_request_via_turn_runtime(
+                delegated_req,
+                stamp_request_owner_fn=_stamp_request_owner,
+                services=_run_execution_services(),
+            )
             created.append(
                 {
                     **result,
@@ -1613,7 +1591,11 @@ def register_run_routes(app) -> None:
         for child in failed_effective_children:
             child_payload = _build_retry_child_payload(parent_snapshot, child, note=note)
             delegated_req = _late_server_export("_build_delegated_run_request")(parent_snapshot, child_payload, note=note)
-            result = _execute_system_run_start_request_via_turn_runtime(delegated_req)
+            result = execute_system_run_start_request_via_turn_runtime(
+                delegated_req,
+                stamp_request_owner_fn=_stamp_request_owner,
+                services=_run_execution_services(),
+            )
             created.append(
                 {
                     **result,
@@ -1961,7 +1943,11 @@ def register_run_routes(app) -> None:
             raise HTTPException(status_code=400, detail="Replay request is not available for this run.")
         try:
             req = RunStartRequest(**replay_payload)
-            return _execute_system_run_start_request_via_turn_runtime(req)
+            return execute_system_run_start_request_via_turn_runtime(
+                req,
+                stamp_request_owner_fn=_stamp_request_owner,
+                services=_run_execution_services(),
+            )
         except HTTPException:
             raise
         except Exception as exc:

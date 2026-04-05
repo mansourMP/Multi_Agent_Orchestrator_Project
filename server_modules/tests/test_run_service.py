@@ -13,6 +13,7 @@ from server_modules.run_service import (
     apply_browser_execution_metadata,
     build_run_creation_services,
     build_auto_delegation_plan,
+    build_delegated_run_execution_services,
     build_server_run_creation_services,
     build_legacy_run_execution_services,
     build_legacy_run_execution_services_from_values,
@@ -57,6 +58,7 @@ from server_modules.run_service import (
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
     create_run_result_from_prepared_request,
+    execute_delegated_run_request,
     local_execution_block_prompt,
     local_execution_confirmation_prompt,
     local_execution_requires_start_confirmation,
@@ -386,6 +388,22 @@ class RunServiceTests(unittest.TestCase):
         create = object()
 
         services = build_namespace_delegated_system_run_execution_services(
+            namespace={
+                "_prepare_run_start_request": prepare,
+                "_create_run_from_request": create,
+            }
+        )
+
+        request = object()
+        self.assertIs(services.prepare_run_start_request, prepare)
+        self.assertIs(services.create_run_from_request, create)
+        self.assertIs(services.stamp_request_owner(request, object()), request)
+
+    def test_build_delegated_run_execution_services_uses_namespace_callbacks(self):
+        prepare = object()
+        create = object()
+
+        services = build_delegated_run_execution_services(
             namespace={
                 "_prepare_run_start_request": prepare,
                 "_create_run_from_request": create,
@@ -1643,6 +1661,36 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertIsNone(context)
+
+    def test_execute_delegated_run_request_builds_services_through_canonical_helper(self):
+        prepare = object()
+        create = object()
+        captured = {}
+
+        result = execute_delegated_run_request(
+            RunStartRequest(engine="orion", workspace_id="default", user_goal="delegate"),
+            namespace={
+                "_prepare_run_start_request": prepare,
+                "_create_run_from_request": create,
+            },
+            execute_system_run_start_request_via_turn_runtime_fn="turn-runtime",
+            create_run_from_request_fn=create,
+            execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn=lambda request, **kwargs: captured.update(
+                {
+                    "request": request,
+                    "execute_system": kwargs["execute_system_run_start_request_via_turn_runtime_fn"],
+                    "services": kwargs["build_run_execution_services_fn"](),
+                    "create_run": kwargs["create_run_from_request_fn"],
+                }
+            )
+            or {"status": "starting"},
+        )
+
+        self.assertEqual(result["status"], "starting")
+        self.assertEqual(captured["execute_system"], "turn-runtime")
+        self.assertIs(captured["services"].prepare_run_start_request, prepare)
+        self.assertIs(captured["services"].create_run_from_request, create)
+        self.assertIs(captured["create_run"], create)
 
     def test_build_auto_delegation_plan_prefers_llm_route(self):
         plan = build_auto_delegation_plan(

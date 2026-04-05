@@ -546,6 +546,37 @@ def build_namespace_delegated_system_run_execution_services(
     )
 
 
+def build_delegated_run_execution_services(
+    *,
+    namespace: Dict[str, Any],
+) -> RunExecutionServices:
+    return build_namespace_delegated_system_run_execution_services(
+        namespace=namespace,
+    )
+
+
+def execute_delegated_run_request(
+    request: Any,
+    *,
+    namespace: Dict[str, Any],
+    execute_system_run_start_request_via_turn_runtime_fn: Any,
+    create_run_from_request_fn: Any,
+    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn: Any = None,
+) -> Dict[str, Any]:
+    execute_fn = execute_built_legacy_unowned_system_run_start_request_via_turn_runtime_fn
+    if execute_fn is None:
+        from server_modules.turn_runtime import (
+            execute_built_legacy_unowned_system_run_start_request_via_turn_runtime as execute_fn,
+        )
+
+    return execute_fn(
+        request,
+        execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime_fn,
+        build_run_execution_services_fn=lambda: build_delegated_run_execution_services(namespace=namespace),
+        create_run_from_request_fn=create_run_from_request_fn,
+    )
+
+
 def build_legacy_run_execution_services(
     *,
     callbacks: LegacyRunExecutionCallbacks,

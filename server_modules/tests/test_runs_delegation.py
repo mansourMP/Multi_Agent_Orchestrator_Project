@@ -465,6 +465,28 @@ class RunsDelegationTests(unittest.TestCase):
         self.assertEqual(event["event"], "delegation_routing")
         self.assertEqual(event["data"]["strategy"], "llm")
 
+    def test_execute_delegated_run_request_delegates_to_run_service(self):
+        request = runs_delegation.RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="delegate this task",
+        )
+
+        with patch.object(runs_delegation.run_service, "execute_delegated_run_request", return_value={"status": "starting"}) as execute_mock:
+            result = runs_delegation._execute_delegated_run_request(request)
+
+        self.assertEqual(result["status"], "starting")
+        self.assertIs(execute_mock.call_args.args[0], request)
+        self.assertIs(execute_mock.call_args.kwargs["namespace"], runs_delegation.__dict__)
+        self.assertIs(
+            execute_mock.call_args.kwargs["execute_system_run_start_request_via_turn_runtime_fn"],
+            runs_delegation.execute_system_run_start_request_via_turn_runtime,
+        )
+        self.assertIs(
+            execute_mock.call_args.kwargs["create_run_from_request_fn"],
+            runs_delegation._create_run_from_request,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

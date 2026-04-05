@@ -16,7 +16,6 @@ from server_modules.runs_output import (
 )
 from server_modules.turn_runtime import (
     build_execute_unowned_system_run_start_request_via_turn_runtime,
-    execute_built_legacy_unowned_system_run_start_request_via_turn_runtime,
 )
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
@@ -127,16 +126,16 @@ execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system
 
 
 def _delegation_run_execution_services() -> run_service.RunExecutionServices:
-    return run_service.build_namespace_delegated_system_run_execution_services(
+    return run_service.build_delegated_run_execution_services(
         namespace=globals(),
     )
 
 
 def _execute_delegated_run_request(req: RunStartRequest) -> Dict[str, Any]:
-    return execute_built_legacy_unowned_system_run_start_request_via_turn_runtime(
+    return run_service.execute_delegated_run_request(
         req,
+        namespace=globals(),
         execute_system_run_start_request_via_turn_runtime_fn=execute_system_run_start_request_via_turn_runtime,
-        build_run_execution_services_fn=_delegation_run_execution_services,
         create_run_from_request_fn=_create_run_from_request,
     )
 

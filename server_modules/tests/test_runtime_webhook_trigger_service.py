@@ -7,6 +7,24 @@ from server_modules import runtime_webhook_trigger_service
 
 
 class RuntimeWebhookTriggerServiceTests(unittest.TestCase):
+    def test_build_load_webhook_triggers_fn_updates_loaded_flag(self):
+        triggers = {}
+        loaded = {"value": False}
+
+        loader = runtime_webhook_trigger_service.build_load_webhook_triggers_fn(
+            triggers,
+            lock=threading.Lock(),
+            get_loaded=lambda: loaded["value"],
+            set_loaded=lambda value: loaded.__setitem__("value", value),
+            path="/tmp/webhooks.json",
+            safe_read_json=lambda path, default: {"items": [{"id": "trigger-1", "workspace_id": "default"}]},
+        )
+
+        loader()
+
+        self.assertTrue(loaded["value"])
+        self.assertIn("trigger-1", triggers)
+
     def test_load_webhook_triggers_populates_registry(self):
         triggers = {}
 
@@ -20,6 +38,26 @@ class RuntimeWebhookTriggerServiceTests(unittest.TestCase):
 
         self.assertTrue(loaded)
         self.assertIn("trigger-1", triggers)
+
+    def test_build_match_webhook_trigger_fn_loads_before_matching(self):
+        calls = []
+        matcher = runtime_webhook_trigger_service.build_match_webhook_trigger_fn(
+            {
+                "trigger-1": {
+                    "id": "trigger-1",
+                    "workspace_id": "default",
+                    "url_pattern": "*/webhooks/ingest/default",
+                    "enabled": True,
+                }
+            },
+            lock=threading.Lock(),
+            load_webhook_triggers_fn=lambda: calls.append("loaded"),
+        )
+
+        trigger = matcher("default", "https://example.com/webhooks/ingest/default")
+
+        self.assertEqual(calls, ["loaded"])
+        self.assertEqual(trigger["id"], "trigger-1")
 
     def test_match_webhook_trigger_filters_by_workspace_and_pattern(self):
         trigger = runtime_webhook_trigger_service.match_webhook_trigger(

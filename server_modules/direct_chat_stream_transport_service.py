@@ -43,6 +43,16 @@ def extract_direct_chat_error_response(raw_event: Any) -> Optional[dict[str, str
     }
 
 
+def normalize_chat_stream_cursor(value: Any) -> int:
+    token = str(value or "").strip()
+    if not token:
+        return 0
+    try:
+        return max(0, int(token))
+    except Exception:
+        return 0
+
+
 def start_chat_stream_producer(
     session: dict[str, Any],
     *,

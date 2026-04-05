@@ -1,10 +1,56 @@
 from __future__ import annotations
 
 import fnmatch
+import inspect
 import time
 from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
+
+
+def _resolve(value_or_factory: Any) -> Any:
+    if not callable(value_or_factory):
+        return value_or_factory
+    try:
+        signature = inspect.signature(value_or_factory)
+    except (TypeError, ValueError):
+        return value_or_factory
+    required = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.default is inspect._empty
+        and parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    ]
+    if required:
+        return value_or_factory
+    return value_or_factory()
+
+
+def build_load_webhook_triggers_fn(
+    triggers: dict[str, dict[str, Any]],
+    *,
+    lock: Any,
+    get_loaded: Callable[[], bool],
+    set_loaded: Callable[[bool], None],
+    path: Any,
+    safe_read_json: Callable[[Any, dict[str, Any]], Any],
+) -> Callable[[], None]:
+    def _load() -> None:
+        loaded = load_webhook_triggers(
+            triggers,
+            lock=lock,
+            loaded=get_loaded(),
+            path=_resolve(path),
+            safe_read_json=_resolve(safe_read_json),
+        )
+        set_loaded(loaded)
+
+    return _load
 
 
 def load_webhook_triggers(
@@ -70,6 +116,37 @@ def match_webhook_trigger(
             ):
                 return dict(item)
     return None
+
+
+def build_persist_webhook_triggers_locked_fn(
+    triggers: dict[str, dict[str, Any]],
+    *,
+    path: Any,
+    safe_write_json: Callable[[Any, dict[str, Any]], None],
+) -> Callable[[], None]:
+    return lambda: persist_webhook_triggers_locked(
+        triggers,
+        path=_resolve(path),
+        safe_write_json=_resolve(safe_write_json),
+    )
+
+
+def build_match_webhook_trigger_fn(
+    triggers: dict[str, dict[str, Any]],
+    *,
+    lock: Any,
+    load_webhook_triggers_fn: Callable[[], None],
+) -> Callable[[str, str], Optional[dict[str, Any]]]:
+    def _match(workspace_id: str, request_url: str) -> Optional[dict[str, Any]]:
+        load_webhook_triggers_fn()
+        return match_webhook_trigger(
+            triggers,
+            lock=lock,
+            workspace_id=workspace_id,
+            request_url=request_url,
+        )
+
+    return _match
 
 
 def build_webhook_trigger(

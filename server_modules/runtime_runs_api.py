@@ -2,7 +2,6 @@ from __future__ import annotations
 import sentry_sdk
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
 from server_modules.agent_turn import resolve_direct_chat_turn_request
@@ -146,32 +145,35 @@ _create_run_result = lambda request, *, schedule_id=None: create_run_result_from
     schedule_id=schedule_id,
 )
 
-def _load_webhook_triggers() -> None:
+_get_webhook_triggers_loaded = lambda: _WEBHOOK_TRIGGERS_LOADED
+
+
+def _set_webhook_triggers_loaded(loaded: bool) -> None:
     global _WEBHOOK_TRIGGERS_LOADED
-    _WEBHOOK_TRIGGERS_LOADED = runtime_webhook_trigger_service.load_webhook_triggers(
-        _WEBHOOK_TRIGGERS,
-        lock=_WEBHOOK_TRIGGER_LOCK,
-        loaded=_WEBHOOK_TRIGGERS_LOADED,
-        path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
-        safe_read_json=_late_server_export("_safe_read_json"),
-    )
+    _WEBHOOK_TRIGGERS_LOADED = bool(loaded)
 
 
-_persist_webhook_triggers_locked = lambda: runtime_webhook_trigger_service.persist_webhook_triggers_locked(
+_load_webhook_triggers = runtime_webhook_trigger_service.build_load_webhook_triggers_fn(
     _WEBHOOK_TRIGGERS,
-    path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
-    safe_write_json=_late_server_export("_safe_write_json"),
+    lock=_WEBHOOK_TRIGGER_LOCK,
+    get_loaded=_get_webhook_triggers_loaded,
+    set_loaded=_set_webhook_triggers_loaded,
+    path=lambda: _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
+    safe_read_json=lambda: _late_server_export("_safe_read_json"),
 )
 
 
-_match_webhook_trigger = lambda workspace_id, request_url: (
-    _load_webhook_triggers()
-    or runtime_webhook_trigger_service.match_webhook_trigger(
-        _WEBHOOK_TRIGGERS,
-        lock=_WEBHOOK_TRIGGER_LOCK,
-        workspace_id=workspace_id,
-        request_url=request_url,
-    )
+_persist_webhook_triggers_locked = runtime_webhook_trigger_service.build_persist_webhook_triggers_locked_fn(
+    _WEBHOOK_TRIGGERS,
+    path=lambda: _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
+    safe_write_json=lambda: _late_server_export("_safe_write_json"),
+)
+
+
+_match_webhook_trigger = runtime_webhook_trigger_service.build_match_webhook_trigger_fn(
+    _WEBHOOK_TRIGGERS,
+    lock=_WEBHOOK_TRIGGER_LOCK,
+    load_webhook_triggers_fn=_load_webhook_triggers,
 )
 
 
@@ -190,14 +192,7 @@ _usage_snapshots_for_user = lambda current_user: runtime_usage_service.usage_sna
 )
 
 
-def _normalize_chat_stream_cursor(value: Any) -> int:
-    token = str(value or "").strip()
-    if not token:
-        return 0
-    try:
-        return max(0, int(token))
-    except Exception:
-        return 0
+_normalize_chat_stream_cursor = chat_stream_transport_service.normalize_chat_stream_cursor
 
 
 _chat_stream_state_db_path = lambda: chat_stream_runtime_service.resolve_chat_stream_state_db_path(

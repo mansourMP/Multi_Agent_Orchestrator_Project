@@ -235,6 +235,18 @@ from server_modules.vault_helpers import (
     openai_bearer_from_credentials as _openai_bearer_from_credentials_impl,
 )
 from server_modules.runtime_policy import *
+from server_modules.policy_service import (
+    action_policy_from_app_permissions,
+    apply_execution_route_metadata,
+    decide_execution_target,
+    enforce_tool_policy,
+    evaluate_action_policy,
+    evaluate_tool_policy_decision,
+    merge_action_policies,
+    resolve_runtime_policy_mode,
+    summarize_action_policy_eval,
+    tool_policy_snapshot,
+)
 from server_modules.runtime_state_store import (
     init_runtime_state_db,
     upsert_live_run_state,
@@ -253,7 +265,7 @@ from server_modules.runtime_state_store import (
     replace_channel_events,
     list_channel_events,
 )
-from server_modules.runtime_memory import (
+from server_modules.memory_service import (
     configure_runtime_memory,
     _memory_health_snapshot,
     _memory_manager_or_503,

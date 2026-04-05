@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timezone
+import queue
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -42,6 +44,11 @@ from server_modules.run_service import (
     build_runs_delegation_runtime_preparation_services_from_namespace,
     build_runs_delegation_runtime_request_services_from_namespace,
     build_runs_delegation_result_services,
+    build_delegated_child_run_request,
+    build_live_run_record,
+    register_live_run,
+    activate_live_run,
+    transition_live_run_status,
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
     create_run_result_from_prepared_request,
@@ -69,11 +76,117 @@ from server_modules.run_service import (
     create_run_result_from_request,
     execute_durable_turn_request,
     prepare_run_start_request,
+    timeout_stale_delegated_child_runs,
 )
 from server_modules.runtime_models import RunStartRequest
 
 
 class RunServiceTests(unittest.TestCase):
+    def test_build_live_run_record_initializes_active_runtime_fields(self):
+        record = build_live_run_record(
+            run_id="run-1",
+            engine="orion",
+            context={"workspace_id": "default"},
+            now_iso="2026-04-06T00:00:00Z",
+            started_mono=12.5,
+            log_queue=queue.Queue(),
+            input_queue=queue.Queue(),
+            memory_enabled=True,
+            memory_updated_at="2026-04-06T00:00:00Z",
+            active_profile_id="profile-1",
+            active_profile_label="Primary",
+            active_provider="openai",
+            active_model="gpt-test",
+        )
+
+        self.assertEqual(record["run_id"], "run-1")
+        self.assertEqual(record["status"], "starting")
+        self.assertEqual(record["memory_trace"]["enabled"], True)
+        self.assertEqual(record["active_profile_id"], "profile-1")
+        self.assertEqual(record["active_provider"], "openai")
+
+    def test_register_live_run_indexes_and_persists(self):
+        runs = {}
+        queue_index = {}
+        persisted = []
+        metrics = []
+        run = {"logs": queue.Queue()}
+
+        register_live_run(
+            "run-1",
+            run,
+            runs_by_id=runs,
+            run_queue_index=queue_index,
+            metrics_inc_fn=lambda key, value=1: metrics.append((key, value)),
+            persist_live_run_state_fn=lambda run_id, payload: persisted.append((run_id, payload)),
+        )
+
+        self.assertIs(runs["run-1"], run)
+        self.assertEqual(queue_index[id(run["logs"])], "run-1")
+        self.assertEqual(metrics, [("runs_started", 1)])
+        self.assertEqual(persisted[0][0], "run-1")
+
+    def test_activate_live_run_routes_local_target_through_hydrate_and_enqueue(self):
+        calls = []
+        result = activate_live_run(
+            "run-1",
+            {"run_id": "run-1"},
+            selected_target="local_companion",
+            local_companion_target="local_companion",
+            defer_local_enqueue=False,
+            hydrate_run_memory_context_fn=lambda run_id, run: calls.append(("hydrate", run_id)),
+            enqueue_local_companion_run_fn=lambda run_id: calls.append(("enqueue", run_id)),
+            start_background_run_fn=lambda run_id: calls.append(("start", run_id)),
+        )
+
+        self.assertEqual(result, "run-1")
+        self.assertEqual(calls, [("hydrate", "run-1"), ("enqueue", "run-1")])
+
+    def test_transition_live_run_status_handles_terminal_cleanup(self):
+        run = {
+            "status": "running",
+            "_started_mono": 5.0,
+            "logs": queue.Queue(),
+        }
+        queue_index = {id(run["logs"]): "run-1"}
+        pending = ["run-1"]
+        claimed = {"run-1": {"worker_id": "worker-1"}}
+        archived = []
+        removed = []
+        synced = []
+        metrics_added = []
+        metrics_inc = []
+
+        transition_live_run_status(
+            "run-1",
+            "completed",
+            run=run,
+            now_mono=7.5,
+            now_iso="2026-04-06T00:00:00Z",
+            terminal_statuses={"completed", "failed", "timeout"},
+            local_queue_lock=__import__("threading").Lock(),
+            local_pending_run_ids=pending,
+            local_claimed_runs=claimed,
+            archive_run_if_terminal_fn=lambda run_id, payload: archived.append((run_id, payload["status"])),
+            remove_live_run_state_fn=lambda run_id: removed.append(run_id),
+            sync_local_runtime_state_snapshot_fn=lambda: synced.append(True),
+            persist_live_run_state_fn=lambda run_id, payload: None,
+            run_queue_index=queue_index,
+            metrics_add_fn=lambda key, value: metrics_added.append((key, value)),
+            metrics_inc_fn=lambda key, value=1: metrics_inc.append((key, value)),
+        )
+
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["completed_at"], "2026-04-06T00:00:00Z")
+        self.assertEqual(run["duration_ms"], 2500.0)
+        self.assertEqual(pending, [])
+        self.assertEqual(claimed, {})
+        self.assertEqual(archived, [("run-1", "completed")])
+        self.assertEqual(removed, ["run-1"])
+        self.assertEqual(synced, [True])
+        self.assertNotIn(id(run["logs"]), queue_index)
+        self.assertIn(("runs_completed", 1), metrics_inc)
+
     def test_safe_int_and_normalize_requested_max_iterations(self):
         self.assertEqual(safe_int("7", 0), 7)
         self.assertEqual(safe_int("bad", 5), 5)
@@ -1182,6 +1295,78 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(metadata["browser_session_profile"], "profile-1")
         self.assertEqual(metadata["browser_immutable_plan_hash"], "hash-1")
         self.assertTrue(metadata["browser_reviewed_approval_required"])
+
+    def test_build_delegated_child_run_request_inherits_parent_execution_metadata(self):
+        request = build_delegated_child_run_request(
+            {
+                "run_id": "parent-run",
+                "engine": "orion",
+                "agent_role": "builder",
+                "context": {
+                    "workflow_id": "workflow-1",
+                    "workspace_id": "default",
+                    "business_plan": "Ship the fix",
+                    "max_iterations": 7,
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "credential_id": "cred-1",
+                    "metadata": {
+                        "execution_target_selected": "local_companion",
+                        "trust_mode": "guarded",
+                    },
+                },
+            },
+            {
+                "user_goal": "Handle browser work",
+                "agent_role": "research",
+                "metadata": {},
+            },
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            normalize_requested_max_iterations=lambda value: int(value) if value is not None else None,
+            valid_execution_targets={"local_companion", "cloud", "auto"},
+            note="Retry after failure.",
+        )
+
+        self.assertEqual(request.parent_run_id, "parent-run")
+        self.assertEqual(request.workflow_id, "workflow-1")
+        self.assertEqual(request.metadata["delegation_root_run_id"], "parent-run")
+        self.assertEqual(request.metadata["delegated_by_role"], "builder")
+        self.assertEqual(request.metadata["execution_target"], "local_companion")
+        self.assertEqual(request.metadata["trust_mode"], "guarded")
+        self.assertEqual(request.metadata["delegation_note"], "Retry after failure.")
+        self.assertEqual(request.max_iterations, 7)
+
+    def test_timeout_stale_delegated_child_runs_marks_failed_child(self):
+        child_logs = queue.Queue()
+        runs_by_id = {
+            "child-run": {
+                "run_id": "child-run",
+                "status": "running_local",
+                "local_last_progress_at": "2026-04-01T23:50:00Z",
+                "logs": child_logs,
+            }
+        }
+        log_calls = []
+        status_calls = []
+
+        timed_out = timeout_stale_delegated_child_runs(
+            "parent-run",
+            [dict(runs_by_id["child-run"])],
+            runs_by_id=runs_by_id,
+            terminal_run_statuses={"completed", "failed", "timeout"},
+            stale_child_run_timeout_seconds=300,
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+            utc_now=lambda: datetime(2026, 4, 2, 0, 10, 30, tzinfo=timezone.utc),
+            set_run_status=lambda run_id, status: status_calls.append((run_id, status)),
+            emit_log=lambda *args, **kwargs: log_calls.append((args, kwargs)),
+        )
+
+        self.assertEqual(timed_out, ["child-run"])
+        self.assertEqual(runs_by_id["child-run"]["result_data"]["error"], "delegated_child_timeout")
+        self.assertEqual(status_calls, [("child-run", "failed")])
+        self.assertEqual(log_calls[0][1]["event"], "delegated_child_timeout")
 
 
 if __name__ == "__main__":

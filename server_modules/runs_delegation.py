@@ -526,45 +526,14 @@ def _build_delegated_run_request(
     child_payload: Dict[str, Any],
     note: Optional[str] = None,
 ) -> RunStartRequest:
-    parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
-    parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
-    if not isinstance(parent_metadata, dict):
-        parent_metadata = {}
-    child_metadata = dict(child_payload.get("metadata") or {})
-    parent_run_id = str(parent_snapshot.get("run_id") or "").strip()
-    root_run_id = _normalize_run_id_token(parent_snapshot.get("delegation_root_run_id") or parent_metadata.get("delegation_root_run_id")) or parent_run_id
-    delegated_by_role = normalize_agent_role(parent_snapshot.get("agent_role") or parent_metadata.get("agent_role")) or "orchestrator"
-
-    child_metadata["parent_run_id"] = parent_run_id
-    child_metadata["delegation_root_run_id"] = root_run_id
-    child_metadata["delegated_by_run_id"] = parent_run_id
-    child_metadata["delegated_by_role"] = delegated_by_role
-    if note:
-        child_metadata["delegation_note"] = note
-    selected_target = str(parent_metadata.get("execution_target_selected") or parent_metadata.get("execution_target") or "").strip().lower()
-    if selected_target in VALID_EXECUTION_TARGETS and "execution_target" not in child_metadata:
-        child_metadata["execution_target"] = selected_target
-    if parent_metadata.get("trust_mode") and "trust_mode" not in child_metadata:
-        child_metadata["trust_mode"] = parent_metadata.get("trust_mode")
-
-    return RunStartRequest(
-        engine=str(parent_snapshot.get("engine") or "orion"),
-        workflow_id=parent_context.get("workflow_id"),
-        workspace_id=parent_context.get("workspace_id"),
-        user_goal=str(child_payload.get("user_goal") or "").strip(),
-        business_plan=str(child_payload.get("business_plan") or parent_context.get("business_plan") or "").strip() or None,
-        max_iterations=_normalize_requested_max_iterations(
-            child_payload.get("max_iterations")
-            or child_metadata.get("max_iterations")
-            or parent_context.get("max_iterations")
-            or parent_metadata.get("max_iterations")
-        ),
-        agent_role=str(child_payload.get("agent_role") or "").strip(),
-        provider=parent_context.get("provider"),
-        model=parent_context.get("model"),
-        credential_id=parent_context.get("credential_id"),
-        parent_run_id=parent_run_id,
-        metadata=child_metadata,
+    return run_service.build_delegated_child_run_request(
+        parent_snapshot,
+        child_payload,
+        normalize_run_id_token=_normalize_run_id_token,
+        normalize_agent_role=normalize_agent_role,
+        normalize_requested_max_iterations=_normalize_requested_max_iterations,
+        valid_execution_targets=VALID_EXECUTION_TARGETS,
+        note=note,
     )
 
 
@@ -572,50 +541,18 @@ def _timeout_stale_child_runs(parent_run_id: str, child_runs: List[Dict[str, Any
     status_setter = globals().get("set_run_status")
     if not callable(status_setter):
         from server_modules.runs_core import set_run_status as status_setter  # type: ignore[assignment]
-    now = _utc_now()
-    timed_out: List[str] = []
-    for child in child_runs:
-        status = str(child.get("status") or "").strip().lower()
-        if not status or status in TERMINAL_RUN_STATUSES or status in {"waiting", "waiting_for_input"}:
-            continue
-        run_id = _normalize_run_id_token(child.get("run_id"))
-        if not run_id:
-            continue
-        last_progress = (
-            _parse_utc_ts(child.get("local_last_progress_at"))
-            or _parse_utc_ts(child.get("local_last_heartbeat_at"))
-            or _parse_utc_ts(child.get("updated_at"))
-            or _parse_utc_ts(child.get("created_at"))
-        )
-        if last_progress is None or (now - last_progress).total_seconds() <= STALE_CHILD_RUN_TIMEOUT_SECONDS:
-            continue
-        live_child = runs.get(run_id)
-        if not isinstance(live_child, dict):
-            continue
-        live_child["result"] = "Child run timed out after 5 minutes without progress."
-        result_data = live_child.get("result_data")
-        if not isinstance(result_data, dict):
-            result_data = {}
-        result_data.update(
-            {
-                "summary": "Child run timed out after 5 minutes without progress.",
-                "error": "delegated_child_timeout",
-                "parent_run_id": parent_run_id,
-            }
-        )
-        live_child["result_data"] = result_data
-        log_queue = live_child.get("logs")
-        if log_queue is not None:
-            emit_log(
-                log_queue,
-                "error",
-                "Child run timed out after 5 minutes without progress.",
-                event="delegated_child_timeout",
-                data={"run_id": run_id, "parent_run_id": parent_run_id},
-            )
-        status_setter(run_id, "failed")
-        timed_out.append(run_id)
-    return timed_out
+    return run_service.timeout_stale_delegated_child_runs(
+        parent_run_id,
+        child_runs,
+        runs_by_id=runs,
+        terminal_run_statuses=TERMINAL_RUN_STATUSES,
+        stale_child_run_timeout_seconds=STALE_CHILD_RUN_TIMEOUT_SECONDS,
+        normalize_run_id_token=_normalize_run_id_token,
+        parse_utc_ts=_parse_utc_ts,
+        utc_now=_utc_now,
+        set_run_status=status_setter,
+        emit_log=emit_log,
+    )
 
 
 def _schedule_auto_retry_for_failed_children(

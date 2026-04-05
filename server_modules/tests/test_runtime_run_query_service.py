@@ -27,8 +27,8 @@ class RuntimeRunQueryServiceTests(unittest.TestCase):
                     "redact_sensitive": staticmethod(lambda context: {"redacted": True}),
                 },
             )(),
-            "server_modules.runtime_memory": type(
-                "RuntimeMemoryModule",
+            "server_modules.memory_service": type(
+                "MemoryServiceModule",
                 (),
                 {
                     "_trim_memory_trace": staticmethod(lambda value: {"trimmed": True}),

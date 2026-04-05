@@ -1,6 +1,7 @@
 from server_modules import runtime_config as config
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import outbox_service
 from datetime import datetime, timedelta, timezone as dt_timezone
 import sys
 import re
@@ -61,27 +62,16 @@ def _clear_pending_confirmation(run: Dict[str, Any]) -> None:
 
 
 def _sync_local_runtime_state_snapshot() -> None:
-    try:
-        with LOCAL_QUEUE_LOCK:
-            pending_run_ids = list(LOCAL_PENDING_RUN_IDS)
-            claimed_runs = {
-                run_id: dict(info)
-                for run_id, info in LOCAL_CLAIMED_RUNS.items()
-                if isinstance(info, dict)
-            }
-            runtime_registrations = {
-                runtime_id: dict(record)
-                for runtime_id, record in LOCAL_WORKER_REGISTRY.items()
-                if isinstance(record, dict)
-            }
-        replace_local_runtime_state(
-            ORION_RUNTIME_STATE_DB,
-            pending_run_ids=pending_run_ids,
-            claimed_runs=claimed_runs,
-            runtime_registrations=runtime_registrations,
-        )
-    except Exception:
-        pass
+    with LOCAL_QUEUE_LOCK:
+        pending_run_ids = list(LOCAL_PENDING_RUN_IDS)
+        claimed_runs = dict(LOCAL_CLAIMED_RUNS)
+        runtime_registrations = dict(LOCAL_WORKER_REGISTRY)
+    outbox_service.persist_local_runtime_state(
+        db_path=ORION_RUNTIME_STATE_DB,
+        pending_run_ids=pending_run_ids,
+        claimed_runs=claimed_runs,
+        runtime_registrations=runtime_registrations,
+    )
 
 
 def _is_local_runtime_run(run: Dict[str, Any]) -> bool:
@@ -341,55 +331,27 @@ def set_run_status(run_id: str, status: str):
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     parent_run_id = _normalize_run_id_token(metadata.get("parent_run_id")) if isinstance(metadata, dict) else None
-    previous = run.get("status")
     now_mono = time.monotonic()
-
-    if previous == "waiting_for_input" and status != "waiting_for_input":
-        wait_start = run.get("_hitl_wait_start_mono")
-        if isinstance(wait_start, (int, float)):
-            waited_ms = max(0.0, (now_mono - wait_start) * 1000.0)
-            run["_hitl_wait_total_ms"] = run.get("_hitl_wait_total_ms", 0.0) + waited_ms
-            metrics_add("hitl_wait_sum_ms", waited_ms)
-            metrics_inc("hitl_wait_count", 1)
-            run["_hitl_wait_start_mono"] = None
-
-    if status == "waiting_for_input":
-        run["_hitl_wait_start_mono"] = now_mono
-        metrics_inc("runs_waiting_for_input", 1)
-
-    if status in ["completed", "failed", "timeout"] and run.get("_finished_mono") is None:
-        run["_finished_mono"] = now_mono
-        started = run.get("_started_mono")
-        if isinstance(started, (int, float)):
-            duration_ms = max(0.0, (now_mono - started) * 1000.0)
-            run["duration_ms"] = round(duration_ms, 2)
-            metrics_add("run_duration_sum_ms", duration_ms)
-            metrics_inc("run_duration_count", 1)
-        run["completed_at"] = datetime.utcnow().isoformat() + "Z"
-        if status == "completed":
-            metrics_inc("runs_completed", 1)
-        elif status == "failed":
-            metrics_inc("runs_failed", 1)
-        elif status == "timeout":
-            metrics_inc("runs_timeout", 1)
-
-    run["status"] = status
-    run["updated_at"] = datetime.utcnow().isoformat() + "Z"
-    if status in ["completed", "failed", "timeout"]:
-        with LOCAL_QUEUE_LOCK:
-            if run_id in LOCAL_PENDING_RUN_IDS:
-                LOCAL_PENDING_RUN_IDS[:] = [rid for rid in LOCAL_PENDING_RUN_IDS if rid != run_id]
-            LOCAL_CLAIMED_RUNS.pop(run_id, None)
-        _archive_run_if_terminal(run_id, run)
-        log_queue = run.get("logs")
-        if log_queue is not None:
-            RUN_QUEUE_INDEX.pop(id(log_queue), None)
-        _remove_live_run_state(run_id)
-        _sync_local_runtime_state_snapshot()
-    else:
-        _persist_live_run_state(run_id, run)
-    if parent_run_id and status in TERMINAL_RUN_STATUSES:
-        _refresh_parent_delegation_state(parent_run_id, triggering_run_id=run_id)
+    run_service.transition_live_run_status(
+        run_id,
+        status,
+        run=run,
+        now_mono=now_mono,
+        now_iso=datetime.utcnow().isoformat() + "Z",
+        terminal_statuses=TERMINAL_RUN_STATUSES,
+        local_queue_lock=LOCAL_QUEUE_LOCK,
+        local_pending_run_ids=LOCAL_PENDING_RUN_IDS,
+        local_claimed_runs=LOCAL_CLAIMED_RUNS,
+        archive_run_if_terminal_fn=_archive_run_if_terminal,
+        remove_live_run_state_fn=_remove_live_run_state,
+        sync_local_runtime_state_snapshot_fn=_sync_local_runtime_state_snapshot,
+        persist_live_run_state_fn=_persist_live_run_state,
+        run_queue_index=RUN_QUEUE_INDEX,
+        metrics_add_fn=metrics_add,
+        metrics_inc_fn=metrics_inc,
+        parent_run_id=parent_run_id,
+        refresh_parent_delegation_state_fn=_refresh_parent_delegation_state,
+    )
 
 
 def emit_log(log_queue, level: str, message: str, event: str = "runtime", data: Optional[dict] = None):

@@ -2767,3 +2767,19 @@ def enforce_tool_policy(
         metadata=metadata,
     )
     return str(evaluation.get("decision") or "allow")
+
+
+# Canonical policy ownership lives in policy_service.py. Keep these bindings as
+# compatibility exports for callers that still import the historical module.
+from server_modules import policy_service as _canonical_policy_service
+
+action_policy_from_app_permissions = _canonical_policy_service.action_policy_from_app_permissions
+merge_action_policies = _canonical_policy_service.merge_action_policies
+resolve_runtime_policy_mode = _canonical_policy_service.resolve_runtime_policy_mode
+apply_execution_route_metadata = _canonical_policy_service.apply_execution_route_metadata
+decide_execution_target = _canonical_policy_service.decide_execution_target
+evaluate_action_policy = _canonical_policy_service.evaluate_action_policy
+summarize_action_policy_eval = _canonical_policy_service.summarize_action_policy_eval
+evaluate_tool_policy_decision = _canonical_policy_service.evaluate_tool_policy_decision
+tool_policy_snapshot = _canonical_policy_service.tool_policy_snapshot
+enforce_tool_policy = _canonical_policy_service.enforce_tool_policy

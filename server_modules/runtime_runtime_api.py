@@ -230,6 +230,7 @@ async def _iter_audio_chunks(chunks: List[bytes]) -> AsyncIterator[bytes]:
 
 def _runtime_summary_from_worker_item(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
+        "machine_id": str(item.get("machine_id") or item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_id": str(item.get("runtime_id") or item.get("worker_id") or ""),
         "runtime_type": str(item.get("runtime_type") or "local"),
         "display_name": str(item.get("display_name") or item.get("worker_id") or ""),
@@ -260,6 +261,8 @@ def _task_summary_from_local_claim(run: Dict[str, Any]) -> Dict[str, Any]:
         "execution_target": "local",
         "status": run.get("status"),
         "lease_seconds": run.get("lease_seconds"),
+        "machine_id": run.get("machine_id") or run.get("local_worker_id"),
+        "machine_lease_id": run.get("machine_lease_id"),
         "prompt": str(context.get("user_goal") or ""),
         "created_at": run.get("created_at"),
         "required_capabilities": list(precheck.get("capability_ids") or []) if isinstance(precheck, dict) else [],
@@ -379,6 +382,7 @@ def register_runtime_routes(app) -> None:
             "ok": True,
             "runtime": item,
             "session_token": registration.get("session_token"),
+            "machine_id": registration.get("machine_id") or runtime_token,
             "instance_id": registration.get("instance_id"),
             "capability_digest": registration.get("capability_digest"),
             "session_issued_at": registration.get("session_issued_at"),

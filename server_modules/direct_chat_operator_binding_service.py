@@ -20,6 +20,7 @@ from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
 from server_modules import direct_tool_config_service
 from server_modules import direct_tool_execution_service
+from server_modules import skills_service
 from server_modules import direct_tool_loop_guard_service
 from server_modules import direct_tool_runtime_facade_service
 
@@ -649,7 +650,7 @@ def build_direct_chat_tool_runtime_bindings(
         reasoning_effort="",
         session_ctx=None,
     ):
-        return direct_tool_execution_service.execute_single_direct_tool_call(
+        return skills_service.execute_single_direct_tool_call(
             tool_call=tool_call,
             workspace_id=workspace_id,
             thread_id=thread_id,
@@ -2414,7 +2415,7 @@ def build_direct_chat_tool_support_bindings(
     parse_json_object_loose_fn: Any,
 ) -> DirectChatOperatorToolSupportBindings:
     def build_direct_tool_config(connector_id, action_id, tool_input):
-        return direct_tool_config_service.build_direct_tool_config(
+        return skills_service.build_direct_tool_config(
             connector_id,
             action_id,
             tool_input,
@@ -2422,7 +2423,7 @@ def build_direct_chat_tool_support_bindings(
         )
 
     def approved_action_to_tool_call(approved_action):
-        return direct_tool_config_service.approved_action_to_tool_call(
+        return skills_service.approved_action_to_tool_call(
             approved_action,
             parse_json_object_loose=parse_json_object_loose_fn,
         )
@@ -2436,13 +2437,13 @@ def build_direct_chat_tool_support_bindings(
     return DirectChatOperatorToolSupportBindings(
         parse_tool_name=parse_tool_name,
         tool_arguments_payload=tool_arguments_payload_wrapper,
-        extract_first_email=direct_tool_config_service.extract_first_email,
-        extract_subject_text=direct_tool_config_service.extract_subject_text,
-        extract_body_text=direct_tool_config_service.extract_body_text,
-        first_non_empty_line=direct_tool_config_service.first_non_empty_line,
+        extract_first_email=skills_service.extract_first_email,
+        extract_subject_text=skills_service.extract_subject_text,
+        extract_body_text=skills_service.extract_body_text,
+        first_non_empty_line=skills_service.first_non_empty_line,
         build_direct_tool_config=build_direct_tool_config,
-        build_direct_local_tool_config=direct_tool_config_service.build_direct_local_tool_config,
-        tool_write_action_available=direct_tool_config_service.tool_write_action_available,
+        build_direct_local_tool_config=skills_service.build_direct_local_tool_config,
+        tool_write_action_available=skills_service.tool_write_action_available,
         normalize_direct_approved_action=normalize_direct_approved_action,
         approved_action_to_tool_call=approved_action_to_tool_call,
         run_async_tool_call=direct_tool_config_service.run_async_tool_call,

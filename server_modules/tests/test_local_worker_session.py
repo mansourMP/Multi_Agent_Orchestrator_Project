@@ -134,6 +134,7 @@ class LocalWorkerSessionTests(TestCase):
                     instance_id="instance-claim",
                 )
                 session_token = registration["session_token"]
+                self.assertEqual(registration["machine_id"], "worker-claim")
 
                 with self.assertRaises(HTTPException) as missing_exc:
                     local_queue._assert_runtime_session("worker-claim", None, instance_id="instance-claim")

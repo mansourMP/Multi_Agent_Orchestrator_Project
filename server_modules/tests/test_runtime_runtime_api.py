@@ -12,6 +12,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
             "capability_queue": {"read_write_files": ["empyralis-tauri-local"]},
             "items": [
                 {
+                    "machine_id": "empyralis-tauri-local",
                     "runtime_id": "empyralis-tauri-local",
                     "worker_id": "empyralis-tauri-local",
                     "runtime_type": "local_companion",
@@ -35,6 +36,7 @@ class RuntimeRuntimeApiTests(unittest.TestCase):
 
         self.assertEqual(payload["scope"], "local_companion_bridge")
         self.assertEqual(payload["summary"]["online"], 1)
+        self.assertEqual(payload["items"][0]["machine_id"], "empyralis-tauri-local")
         self.assertEqual(payload["items"][0]["runtime_id"], "empyralis-tauri-local")
         self.assertEqual(payload["items"][0]["status"], "idle")
         self.assertEqual(payload["items"][0]["policy_mode"], "trusted_full_access")

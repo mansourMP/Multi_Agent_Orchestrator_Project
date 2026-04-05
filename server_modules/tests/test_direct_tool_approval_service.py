@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from server_modules import direct_tool_approval_service as service
 
@@ -39,6 +40,23 @@ class DirectToolApprovalServiceTests(unittest.TestCase):
                 http_request_requires_approval=lambda method, url: False,
             )
         )
+
+    def test_direct_tool_approval_delegates_to_policy_service(self) -> None:
+        with patch(
+            "server_modules.direct_tool_approval_service.policy_service.approval_required_for_direct_tool",
+            return_value=True,
+        ) as mock_policy:
+            result = service.approval_required_for_direct_tool(
+                "slack",
+                "post_message",
+                {},
+                [],
+                compact_text=lambda value: str(value or "").strip().lower(),
+                http_request_requires_approval=lambda method, url: False,
+            )
+
+        self.assertTrue(result)
+        mock_policy.assert_called_once()
 
 
 if __name__ == "__main__":

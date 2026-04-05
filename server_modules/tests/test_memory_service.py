@@ -54,16 +54,16 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertTrue(any(block.startswith("Recent Daily Logs") for block in result.context_blocks))
 
     def test_runtime_memory_search_wraps_runtime_subsystem_results(self) -> None:
-        with patch.object(memory_service.runtime_memory, "_memory_manager_or_503", return_value=object()) as manager_mock, patch.object(
-            memory_service.runtime_memory,
+        with patch.object(memory_service, "_memory_manager_or_503", return_value=object()) as manager_mock, patch.object(
+            memory_service,
             "_normalize_memory_bucket",
             return_value="session",
         ) as bucket_mock, patch.object(
-            memory_service.runtime_memory,
-            "_normalize_workspace_id",
+            memory_service,
+            "_runtime_workspace_id",
             return_value="default",
         ) as workspace_mock, patch.object(
-            memory_service.runtime_memory,
+            memory_service,
             "_memory_search_scoped",
             return_value=[{"id": "mem-1", "text": "remember this", "metadata": {"bucket": "session"}}],
         ) as scoped_mock:
@@ -94,17 +94,17 @@ class MemoryServiceTests(unittest.TestCase):
 
     def test_runtime_memory_upsert_wraps_runtime_subsystem_manager(self) -> None:
         manager = type("Manager", (), {"upsert_memory": lambda self, text, metadata: metadata.get("id") or "mem-2"})()
-        with patch.object(memory_service.runtime_memory, "_memory_manager_or_503", return_value=manager) as manager_mock, patch.object(
-            memory_service.runtime_memory,
+        with patch.object(memory_service, "_memory_manager_or_503", return_value=manager) as manager_mock, patch.object(
+            memory_service,
             "_normalize_memory_bucket",
             return_value="session",
         ) as bucket_mock, patch.object(
-            memory_service.runtime_memory,
-            "_normalize_workspace_id",
+            memory_service,
+            "_runtime_workspace_id",
             return_value="default",
         ) as workspace_mock, patch.object(
-            memory_service.runtime_memory,
-            "_utc_now",
+            memory_service,
+            "_runtime_utc_now",
             return_value=datetime(2026, 4, 4, tzinfo=timezone.utc),
         ), patch.object(
             memory_service.runtime_memory,
@@ -132,6 +132,112 @@ class MemoryServiceTests(unittest.TestCase):
         self.assertEqual(result["workspace_id"], "default")
         self.assertEqual(result["retention_days"], 14)
         self.assertTrue(str(result["expires_at"]).endswith("Z"))
+
+    def test_hydrate_run_memory_context_uses_canonical_memory_service_search(self) -> None:
+        run = {
+            "logs": object(),
+            "context": {
+                "workspace_id": "default",
+                "user_goal": "Find customer migration status",
+                "metadata": {"profile_id": "profile-1"},
+            },
+            "memory_trace": {"enabled": True, "reads": [], "writes": [], "last_error": None, "updated_at": None},
+        }
+
+        with patch.object(memory_service.runtime_memory, "ORION_MEMORY_ENABLED", True), patch.object(
+            memory_service.runtime_memory,
+            "_memory_manager",
+            return_value=object(),
+        ), patch.object(
+            memory_service,
+            "_memory_search_scoped",
+            return_value=[{"id": "mem-1", "text": "customer migration active", "metadata": {"bucket": "profile"}}],
+        ) as scoped_mock, patch.object(
+            memory_service.runtime_memory,
+            "_emit_log",
+            return_value=None,
+        ) as emit_log_mock, patch.object(
+            memory_service.runtime_memory,
+            "_compact_event_text",
+            side_effect=lambda value, limit=800: str(value or "")[:limit],
+        ), patch.object(
+            memory_service,
+            "_runtime_workspace_id",
+            return_value="default",
+        ), patch.object(
+            memory_service,
+            "_runtime_utc_now_iso",
+            return_value="2026-04-04T00:00:00Z",
+        ):
+            memory_service._hydrate_run_memory_context("run-1", run)
+
+        scoped_mock.assert_called()
+        self.assertEqual(run["context"]["metadata"]["memory_context"]["count"], 1)
+        self.assertEqual(run["memory_trace"]["reads"][0]["bucket"], "profile")
+        emit_log_mock.assert_called_once()
+
+    def test_persist_run_memory_uses_canonical_memory_service_write_path(self) -> None:
+        writes = []
+        manager = type(
+            "Manager",
+            (),
+            {"upsert_memory": lambda self, text, metadata: writes.append((text, metadata)) or f"mem-{len(writes)}"},
+        )()
+        run = {
+            "status": "completed",
+            "engine": "orion",
+            "logs": object(),
+            "result": "Customer migration completed.",
+            "context": {
+                "workspace_id": "default",
+                "user_goal": "Complete customer migration",
+                "metadata": {"profile_id": "profile-1", "project_id": "project-1"},
+            },
+            "memory_trace": {"enabled": True, "reads": [], "writes": [], "last_error": None, "updated_at": None},
+        }
+
+        with patch.object(memory_service.runtime_memory, "ORION_MEMORY_ENABLED", True), patch.object(
+            memory_service.runtime_memory,
+            "_memory_manager",
+            return_value=manager,
+        ), patch.object(
+            memory_service.runtime_memory,
+            "MEMORY_BUCKETS",
+            {"session", "project", "profile"},
+        ), patch.object(
+            memory_service.runtime_memory,
+            "_emit_log",
+            return_value=None,
+        ) as emit_log_mock, patch.object(
+            memory_service.runtime_memory,
+            "_refresh_archived_run_snapshot",
+            return_value=None,
+        ), patch.object(
+            memory_service.runtime_memory,
+            "_json_safe",
+            side_effect=lambda value: value,
+        ), patch.object(
+            memory_service.runtime_memory,
+            "_compact_event_text",
+            side_effect=lambda value, limit=800: str(value or "")[:limit],
+        ), patch.object(
+            memory_service,
+            "_runtime_utc_now",
+            return_value=datetime(2026, 4, 4, tzinfo=timezone.utc),
+        ), patch.object(
+            memory_service,
+            "_runtime_workspace_id",
+            return_value="default",
+        ), patch.object(
+            memory_service,
+            "_runtime_utc_now_iso",
+            return_value="2026-04-04T00:00:00Z",
+        ):
+            memory_service._persist_run_memory("run-1", run)
+
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(run["memory_trace"]["writes"][-1]["bucket"], "profile")
+        emit_log_mock.assert_called_once()
 
     def test_direct_chat_workspace_context_text_collects_context_logs_and_memory(self) -> None:
         workspace_context.write_workspace_context_file("SOUL.md", "Stay concise.\n")

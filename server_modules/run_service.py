@@ -7,7 +7,8 @@ from fastapi import HTTPException
 
 from server_modules.agent_turn import AgentTurnRequest, bind_agent_turn_metadata
 from server_modules.doctor_gate import build_doctor_run_gate_live
-from server_modules.runtime_policy import apply_execution_route_metadata, decide_execution_target
+from server_modules import machine_lease_service
+from server_modules.policy_service import apply_execution_route_metadata, decide_execution_target
 from server_modules.runtime_models import RunStartRequest
 
 
@@ -167,6 +168,180 @@ class PreparedRunCreationServices:
     create_run: Any
     load_created_run: Any = None
     now_iso: Any = None
+
+
+def build_live_run_record(
+    *,
+    run_id: str,
+    engine: str,
+    context: Dict[str, Any],
+    now_iso: str,
+    started_mono: float,
+    log_queue: Any,
+    input_queue: Any,
+    memory_enabled: bool,
+    memory_updated_at: str,
+    active_profile_id: Optional[str],
+    active_profile_label: Optional[str],
+    active_provider: Optional[str],
+    active_model: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "status": "starting",
+        "logs": log_queue,
+        "input_queue": input_queue,
+        "thread_id": None,
+        "engine": engine,
+        "context": context,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "result": None,
+        "result_data": None,
+        "duration_ms": None,
+        "_started_mono": started_mono,
+        "_finished_mono": None,
+        "_first_value_mono": None,
+        "_hitl_wait_start_mono": None,
+        "_hitl_wait_total_ms": 0.0,
+        "_archived": False,
+        "_event_seq": 0,
+        "events": [],
+        "node_states": None,
+        "tool_policy_audit": [],
+        "memory_trace": {
+            "enabled": bool(memory_enabled),
+            "reads": [],
+            "writes": [],
+            "last_error": None,
+            "updated_at": memory_updated_at,
+        },
+        "active_profile_id": active_profile_id or None,
+        "active_profile_label": active_profile_label or None,
+        "active_provider": active_provider or None,
+        "active_model": active_model or None,
+        "active_adapter": None,
+    }
+
+
+def register_live_run(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    runs_by_id: Dict[str, Dict[str, Any]],
+    run_queue_index: Dict[int, str],
+    metrics_inc_fn: Callable[[str, int], Any],
+    persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+) -> None:
+    runs_by_id[run_id] = run
+    log_queue = run.get("logs")
+    if log_queue is not None:
+        run_queue_index[id(log_queue)] = run_id
+    metrics_inc_fn("runs_started", 1)
+    try:
+        persist_live_run_state_fn(run_id, run)
+    except Exception:
+        pass
+
+
+def activate_live_run(
+    run_id: str,
+    run: Dict[str, Any],
+    *,
+    selected_target: str,
+    local_companion_target: str,
+    defer_local_enqueue: bool,
+    hydrate_run_memory_context_fn: Callable[[str, Dict[str, Any]], Any],
+    enqueue_local_companion_run_fn: Callable[[str], Any],
+    start_background_run_fn: Callable[[str], Any],
+) -> str:
+    if str(selected_target or "").strip().lower() == str(local_companion_target or "").strip().lower():
+        try:
+            hydrate_run_memory_context_fn(run_id, run)
+        except Exception:
+            pass
+        if not defer_local_enqueue:
+            enqueue_local_companion_run_fn(run_id)
+        return run_id
+
+    start_background_run_fn(run_id)
+    return run_id
+
+
+def transition_live_run_status(
+    run_id: str,
+    status: str,
+    *,
+    run: Optional[Dict[str, Any]],
+    now_mono: float,
+    now_iso: str,
+    terminal_statuses: set[str],
+    local_queue_lock: Any,
+    local_pending_run_ids: List[str],
+    local_claimed_runs: Dict[str, Any],
+    archive_run_if_terminal_fn: Callable[[str, Dict[str, Any]], Any],
+    remove_live_run_state_fn: Callable[[str], Any],
+    sync_local_runtime_state_snapshot_fn: Callable[[], Any],
+    persist_live_run_state_fn: Callable[[str, Dict[str, Any]], Any],
+    run_queue_index: Dict[int, str],
+    metrics_add_fn: Callable[[str, float], Any],
+    metrics_inc_fn: Callable[[str, int], Any],
+    parent_run_id: Optional[str] = None,
+    refresh_parent_delegation_state_fn: Optional[Callable[..., Any]] = None,
+) -> None:
+    if not isinstance(run, dict):
+        return
+
+    previous = run.get("status")
+    if previous == "waiting_for_input" and status != "waiting_for_input":
+        wait_start = run.get("_hitl_wait_start_mono")
+        if isinstance(wait_start, (int, float)):
+            waited_ms = max(0.0, (now_mono - wait_start) * 1000.0)
+            run["_hitl_wait_total_ms"] = run.get("_hitl_wait_total_ms", 0.0) + waited_ms
+            metrics_add_fn("hitl_wait_sum_ms", waited_ms)
+            metrics_inc_fn("hitl_wait_count", 1)
+            run["_hitl_wait_start_mono"] = None
+
+    if status == "waiting_for_input":
+        run["_hitl_wait_start_mono"] = now_mono
+        metrics_inc_fn("runs_waiting_for_input", 1)
+
+    if status in {"completed", "failed", "timeout"} and run.get("_finished_mono") is None:
+        run["_finished_mono"] = now_mono
+        started = run.get("_started_mono")
+        if isinstance(started, (int, float)):
+            duration_ms = max(0.0, (now_mono - started) * 1000.0)
+            run["duration_ms"] = round(duration_ms, 2)
+            metrics_add_fn("run_duration_sum_ms", duration_ms)
+            metrics_inc_fn("run_duration_count", 1)
+        run["completed_at"] = now_iso
+        if status == "completed":
+            metrics_inc_fn("runs_completed", 1)
+        elif status == "failed":
+            metrics_inc_fn("runs_failed", 1)
+        elif status == "timeout":
+            metrics_inc_fn("runs_timeout", 1)
+
+    run["status"] = status
+    run["updated_at"] = now_iso
+    if status in {"completed", "failed", "timeout"}:
+        machine_lease_service.reconcile_machine_lease_release(
+            run_id,
+            local_queue_lock=local_queue_lock,
+            local_pending_run_ids=local_pending_run_ids,
+            local_claimed_runs=local_claimed_runs,
+            sync_local_runtime_state_snapshot_fn=sync_local_runtime_state_snapshot_fn,
+        )
+        archive_run_if_terminal_fn(run_id, run)
+        log_queue = run.get("logs")
+        if log_queue is not None:
+            run_queue_index.pop(id(log_queue), None)
+        remove_live_run_state_fn(run_id)
+    else:
+        persist_live_run_state_fn(run_id, run)
+
+    if parent_run_id and status in terminal_statuses and callable(refresh_parent_delegation_state_fn):
+        refresh_parent_delegation_state_fn(parent_run_id, triggering_run_id=run_id)
 
 
 def build_run_routing_preview_services(
@@ -1455,6 +1630,128 @@ def create_legacy_run_result_from_request(
         result_services=services.result_services,
         schedule_id=schedule_id,
     )
+
+
+def build_delegated_child_run_request(
+    parent_snapshot: Dict[str, Any],
+    child_payload: Dict[str, Any],
+    *,
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    normalize_agent_role: Callable[[Any], str],
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]],
+    valid_execution_targets: Any,
+    note: Optional[str] = None,
+) -> RunStartRequest:
+    parent_context = parent_snapshot.get("context") if isinstance(parent_snapshot.get("context"), dict) else {}
+    parent_metadata = parent_context.get("metadata") if isinstance(parent_context.get("metadata"), dict) else {}
+    if not isinstance(parent_metadata, dict):
+        parent_metadata = {}
+    child_metadata = dict(child_payload.get("metadata") or {})
+    parent_run_id = str(parent_snapshot.get("run_id") or "").strip()
+    root_run_id = normalize_run_id_token(
+        parent_snapshot.get("delegation_root_run_id") or parent_metadata.get("delegation_root_run_id")
+    ) or parent_run_id
+    delegated_by_role = normalize_agent_role(
+        parent_snapshot.get("agent_role") or parent_metadata.get("agent_role")
+    ) or "orchestrator"
+
+    child_metadata["parent_run_id"] = parent_run_id
+    child_metadata["delegation_root_run_id"] = root_run_id
+    child_metadata["delegated_by_run_id"] = parent_run_id
+    child_metadata["delegated_by_role"] = delegated_by_role
+    if note:
+        child_metadata["delegation_note"] = note
+    selected_target = str(
+        parent_metadata.get("execution_target_selected") or parent_metadata.get("execution_target") or ""
+    ).strip().lower()
+    if selected_target in valid_execution_targets and "execution_target" not in child_metadata:
+        child_metadata["execution_target"] = selected_target
+    if parent_metadata.get("trust_mode") and "trust_mode" not in child_metadata:
+        child_metadata["trust_mode"] = parent_metadata.get("trust_mode")
+
+    return RunStartRequest(
+        engine=str(parent_snapshot.get("engine") or "orion"),
+        workflow_id=parent_context.get("workflow_id"),
+        workspace_id=parent_context.get("workspace_id"),
+        user_goal=str(child_payload.get("user_goal") or "").strip(),
+        business_plan=str(
+            child_payload.get("business_plan") or parent_context.get("business_plan") or ""
+        ).strip()
+        or None,
+        max_iterations=normalize_requested_max_iterations(
+            child_payload.get("max_iterations")
+            or child_metadata.get("max_iterations")
+            or parent_context.get("max_iterations")
+            or parent_metadata.get("max_iterations")
+        ),
+        agent_role=str(child_payload.get("agent_role") or "").strip(),
+        provider=parent_context.get("provider"),
+        model=parent_context.get("model"),
+        credential_id=parent_context.get("credential_id"),
+        parent_run_id=parent_run_id,
+        metadata=child_metadata,
+    )
+
+
+def timeout_stale_delegated_child_runs(
+    parent_run_id: str,
+    child_runs: List[Dict[str, Any]],
+    *,
+    runs_by_id: Dict[str, Any],
+    terminal_run_statuses: Any,
+    stale_child_run_timeout_seconds: int,
+    normalize_run_id_token: Callable[[Any], Optional[str]],
+    parse_utc_ts: Callable[[Any], Any],
+    utc_now: Callable[[], Any],
+    set_run_status: Callable[[str, str], Any],
+    emit_log: Callable[..., Any],
+) -> List[str]:
+    now = utc_now()
+    timed_out: List[str] = []
+    for child in child_runs:
+        status = str(child.get("status") or "").strip().lower()
+        if not status or status in terminal_run_statuses or status in {"waiting", "waiting_for_input"}:
+            continue
+        run_id = normalize_run_id_token(child.get("run_id"))
+        if not run_id:
+            run_id = str(child.get("run_id") or "").strip() or None
+        if not run_id:
+            continue
+        last_progress = (
+            parse_utc_ts(child.get("local_last_progress_at"))
+            or parse_utc_ts(child.get("local_last_heartbeat_at"))
+            or parse_utc_ts(child.get("updated_at"))
+            or parse_utc_ts(child.get("created_at"))
+        )
+        if last_progress is None or (now - last_progress).total_seconds() <= stale_child_run_timeout_seconds:
+            continue
+        live_child = runs_by_id.get(run_id)
+        if not isinstance(live_child, dict):
+            continue
+        live_child["result"] = "Child run timed out after 5 minutes without progress."
+        result_data = live_child.get("result_data")
+        if not isinstance(result_data, dict):
+            result_data = {}
+        result_data.update(
+            {
+                "summary": "Child run timed out after 5 minutes without progress.",
+                "error": "delegated_child_timeout",
+                "parent_run_id": parent_run_id,
+            }
+        )
+        live_child["result_data"] = result_data
+        log_queue = live_child.get("logs")
+        if log_queue is not None:
+            emit_log(
+                log_queue,
+                "error",
+                "Child run timed out after 5 minutes without progress.",
+                event="delegated_child_timeout",
+                data={"run_id": run_id, "parent_run_id": parent_run_id},
+            )
+        set_run_status(run_id, "failed")
+        timed_out.append(run_id)
+    return timed_out
 
 
 def create_run_from_prepared_request(

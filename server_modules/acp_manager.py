@@ -15,13 +15,13 @@ from server_modules.runtime_config import (
     ORION_RUNTIME_STATE_DB,
     ORION_SETUP_SESSIONS_FILE,
 )
+from server_modules import outbox_service
 from server_modules.runtime_state_store import (
     delete_live_run_state,
     init_runtime_state_db,
     list_live_run_states,
     list_run_history,
     load_local_runtime_state,
-    replace_local_runtime_state,
     replace_run_history,
     upsert_live_run_state,
 )
@@ -435,8 +435,8 @@ class AcpSessionManager:
     def _persist_local_runtime_state(self) -> None:
         self._ensure_runtime_db()
         with self._lock_for("local_runtime_state"):
-            replace_local_runtime_state(
-                self.runtime_db_path,
+            outbox_service.persist_local_runtime_state(
+                db_path=self.runtime_db_path,
                 pending_run_ids=[str(item) for item in self.local_pending_run_ids],
                 claimed_runs={str(key): _json_safe(value) for key, value in self.local_claimed_runs.items()},
                 runtime_registrations={str(key): _json_safe(value) for key, value in self.local_worker_registry.items()},

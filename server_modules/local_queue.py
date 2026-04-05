@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from server_modules.runtime_state_store import replace_local_runtime_state
+from server_modules import machine_lease_service, outbox_service, worker_dispatch_service
 
 _server = None
 LOCAL_RUN_STILL_WORKING_INTERVAL_SECONDS = 15
@@ -87,19 +87,15 @@ def _mark_local_worker_seen(worker_id: str, current_run_id: Optional[str], statu
     now_iso = _server._utc_now_iso()
     with _server.LOCAL_QUEUE_LOCK:
         previous = _server.LOCAL_WORKER_REGISTRY.get(worker) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker), dict) else {}
-        next_record: Dict[str, Any] = dict(previous)
-        next_record.update(
-            {
-                "worker_id": worker,
-                "last_seen_at": now_iso,
-                "status": status_hint or str(previous.get("status") or "idle"),
-                "current_run_id": current_run_id if current_run_id is not None else previous.get("current_run_id"),
-                "lease_seconds": int(previous.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS),
-                "note": str(previous.get("note") or ""),
-            }
+        next_record = machine_lease_service.build_machine_presence_record(
+            previous_record=previous,
+            machine_id=worker,
+            current_run_id=current_run_id,
+            status_hint=status_hint,
+            lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
+            now_iso=now_iso,
+            note=note,
         )
-        if note:
-            next_record["note"] = str(note)[:280]
         _server.LOCAL_WORKER_REGISTRY[worker] = next_record
     _persist_local_runtime_state()
 
@@ -161,27 +157,16 @@ def _normalize_runtime_ids(raw_items: Any) -> List[str]:
 
 def _persist_local_runtime_state() -> None:
     _init()
-    try:
-        with _server.LOCAL_QUEUE_LOCK:
-            pending_run_ids = list(_server.LOCAL_PENDING_RUN_IDS)
-            claimed_runs = {
-                run_id: dict(info)
-                for run_id, info in _server.LOCAL_CLAIMED_RUNS.items()
-                if isinstance(info, dict)
-            }
-            runtime_registrations = {
-                runtime_id: dict(record)
-                for runtime_id, record in _server.LOCAL_WORKER_REGISTRY.items()
-                if isinstance(record, dict)
-            }
-        replace_local_runtime_state(
-            _server.ORION_RUNTIME_STATE_DB,
-            pending_run_ids=pending_run_ids,
-            claimed_runs=claimed_runs,
-            runtime_registrations=runtime_registrations,
-        )
-    except Exception:
-        return
+    with _server.LOCAL_QUEUE_LOCK:
+        pending_run_ids = list(_server.LOCAL_PENDING_RUN_IDS)
+        claimed_runs = dict(_server.LOCAL_CLAIMED_RUNS)
+        runtime_registrations = dict(_server.LOCAL_WORKER_REGISTRY)
+    outbox_service.persist_local_runtime_state(
+        db_path=_server.ORION_RUNTIME_STATE_DB,
+        pending_run_ids=pending_run_ids,
+        claimed_runs=claimed_runs,
+        runtime_registrations=runtime_registrations,
+    )
 
 
 def _required_capabilities_for_run(run: Dict[str, Any]) -> List[str]:
@@ -290,50 +275,30 @@ def _best_online_preferred_runtime(preferred_runtime_ids: List[str]) -> Optional
 
 def _issue_runtime_session(record: Dict[str, Any]) -> Dict[str, Any]:
     _init()
-    token = _server.secrets.token_urlsafe(24)
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    issued_at = _server._utc_now_iso()
-    record["session_token_hash"] = token_hash
-    record["session_issued_at"] = issued_at
-    record["session_last_authenticated_at"] = issued_at
-    record["trust_state"] = "verified"
-    return {
-        "session_token": token,
-        "session_issued_at": issued_at,
-    }
+    return machine_lease_service.issue_machine_session(
+        record,
+        token_factory=_server.secrets.token_urlsafe,
+        hash_token_fn=lambda token: hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        issued_at=_server._utc_now_iso(),
+    )
 
 
 def _touch_runtime_session(record: Dict[str, Any]) -> None:
     _init()
-    record["session_last_authenticated_at"] = _server._utc_now_iso()
-    record["trust_state"] = "verified"
+    machine_lease_service.touch_machine_session(record, touched_at=_server._utc_now_iso())
 
 
 def _assert_runtime_session(runtime_id: str, session_token: Optional[str], *, instance_id: Optional[str] = None) -> Dict[str, Any]:
     _init()
-    runtime_token = str(runtime_id or "").strip()
-    if not runtime_token:
-        raise HTTPException(status_code=400, detail="runtime_id is required.")
-    provided = str(session_token or "").strip()
-    if not provided:
-        raise HTTPException(status_code=401, detail="runtime session token is required.")
-    with _server.LOCAL_QUEUE_LOCK:
-        record = _server.LOCAL_WORKER_REGISTRY.get(runtime_token) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(runtime_token), dict) else None
-        if not isinstance(record, dict):
-            raise HTTPException(status_code=404, detail="runtime_id is not registered.")
-        expected_hash = str(record.get("session_token_hash") or "").strip()
-        if not expected_hash:
-            raise HTTPException(status_code=409, detail="runtime session is not active. Re-register this machine.")
-        provided_hash = hashlib.sha256(provided.encode("utf-8")).hexdigest()
-        if provided_hash != expected_hash:
-            raise HTTPException(status_code=401, detail="runtime session is no longer valid. Re-register this machine.")
-        expected_instance = str(record.get("instance_id") or "").strip()
-        provided_instance = str(instance_id or "").strip()
-        if expected_instance and provided_instance and expected_instance != provided_instance:
-            raise HTTPException(status_code=409, detail="runtime instance changed. Re-register this machine.")
-        _touch_runtime_session(record)
-        _server.LOCAL_WORKER_REGISTRY[runtime_token] = record
-        next_record = dict(record)
+    next_record = machine_lease_service.assert_machine_session(
+        runtime_id,
+        session_token,
+        machine_registry=_server.LOCAL_WORKER_REGISTRY,
+        machine_registry_lock=_server.LOCAL_QUEUE_LOCK,
+        instance_id=instance_id,
+        hash_token_fn=lambda token: hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        touch_machine_session_fn=_touch_runtime_session,
+    )
     _persist_local_runtime_state()
     return next_record
 
@@ -356,41 +321,32 @@ def _upsert_runtime_registration(
         return
     with _server.LOCAL_QUEUE_LOCK:
         previous = _server.LOCAL_WORKER_REGISTRY.get(worker) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker), dict) else {}
-        record: Dict[str, Any] = dict(previous)
-        record["worker_id"] = worker
-        record["runtime_id"] = worker
-        record["runtime_type"] = str(runtime_type or previous.get("runtime_type") or "local").strip() or "local"
-        record["display_name"] = str(display_name or previous.get("display_name") or worker).strip() or worker
-        record["platform"] = str(platform or previous.get("platform") or "").strip() or None
-        record["policy_mode"] = _server.normalize_policy_mode(
-            policy_mode
-            or previous.get("policy_mode")
-            or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT
+        record = machine_lease_service.build_runtime_registration_record(
+            worker,
+            previous_record=previous,
+            runtime_type=runtime_type,
+            display_name=display_name,
+            platform=platform,
+            policy_mode=(
+                policy_mode
+                or previous.get("policy_mode")
+                or _server.ORION_RUNTIME_POLICY_MODE_DEFAULT
+            ),
+            capabilities=capabilities,
+            execution_targets=execution_targets,
+            instance_id=instance_id,
+            capability_digest=capability_digest,
+            lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
+            now_iso=_server._utc_now_iso(),
+            normalize_policy_mode_fn=_server.normalize_policy_mode,
+            capability_digest_fn=_capability_digest,
         )
-        normalized_capabilities = [
-            str(item).strip()
-            for item in (capabilities if isinstance(capabilities, list) else previous.get("capabilities") or [])
-            if str(item).strip()
-        ]
-        record["capabilities"] = normalized_capabilities
-        record["execution_targets"] = [
-            str(item).strip()
-            for item in (execution_targets if isinstance(execution_targets, list) else previous.get("execution_targets") or [])
-            if str(item).strip()
-        ]
-        record["instance_id"] = str(instance_id or previous.get("instance_id") or worker).strip() or worker
-        record["capability_digest"] = (
-            str(capability_digest or "").strip()
-            or str(previous.get("capability_digest") or "").strip()
-            or _capability_digest(normalized_capabilities)
-        )
-        record["registered_at"] = str(previous.get("registered_at") or _server._utc_now_iso())
-        record["last_registered_at"] = _server._utc_now_iso()
         session = _issue_runtime_session(record)
         _server.LOCAL_WORKER_REGISTRY[worker] = record
     _persist_local_runtime_state()
     return {
         "runtime_id": worker,
+        "machine_id": record.get("machine_id") or worker,
         "instance_id": record.get("instance_id"),
         "capability_digest": record.get("capability_digest"),
         **session,
@@ -410,83 +366,20 @@ def _is_worker_online(record: Dict[str, Any], now: Optional[datetime] = None) ->
 
 def _cleanup_stale_local_claims() -> List[str]:
     _init()
-    now = _server._utc_now()
-    stale: List[Dict[str, Any]] = []
-    changed = False
-
-    with _server.LOCAL_QUEUE_LOCK:
-        for run_id, claim in list(_server.LOCAL_CLAIMED_RUNS.items()):
-            if not isinstance(claim, dict):
-                _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
-                changed = True
-                continue
-            lease_seconds = max(10, int(claim.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS))
-            last_heartbeat = _server._parse_utc_ts(claim.get("last_heartbeat_at")) or _server._parse_utc_ts(claim.get("claimed_at"))
-            if last_heartbeat is None:
-                last_heartbeat = now
-            if (now - last_heartbeat).total_seconds() <= LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS:
-                continue
-
-            worker_id = str(claim.get("worker_id") or "").strip() or None
-            _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
-            changed = True
-            if worker_id:
-                worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
-                worker_state["worker_id"] = worker_id
-                worker_state["current_run_id"] = None
-                worker_state["status"] = "offline"
-                worker_state["lease_seconds"] = int(worker_state.get("lease_seconds") or lease_seconds)
-                worker_state["last_seen_at"] = worker_state.get("last_seen_at") or claim.get("last_heartbeat_at") or claim.get("claimed_at") or _server._utc_now_iso()
-                _server.LOCAL_WORKER_REGISTRY[worker_id] = worker_state
-                changed = True
-            stale.append(
-                {
-                    "run_id": run_id,
-                    "worker_id": worker_id,
-                    "lease_seconds": lease_seconds,
-                    "last_heartbeat_at": claim.get("last_heartbeat_at"),
-                }
-            )
-    if changed:
-        _persist_local_runtime_state()
-
-    for item in stale:
-        run_id = str(item.get("run_id") or "")
-        run = _server.runs.get(run_id)
-        if not isinstance(run, dict):
-            continue
-        status = str(run.get("status") or "").strip().lower()
-        if status in {"completed", "failed", "timeout"}:
-            continue
-        run["local_worker_id"] = None
-        run["local_claimed_at"] = None
-        run["local_last_heartbeat_at"] = None
-        run["result"] = "Worker lost connection."
-        run["result_data"] = {
-            "summary": "Worker lost connection.",
-            "error": "local_worker_lost_connection",
-            "worker_id": item.get("worker_id"),
-            "last_heartbeat_at": item.get("last_heartbeat_at"),
-        }
-        log_queue = run.get("logs")
-        if log_queue is not None:
-            _server.emit_log(
-                log_queue,
-                "error",
-                "Worker lost connection. Run failed.",
-                event="local_worker_lost",
-                data={
-                    "run_id": run_id,
-                    "worker_id": item.get("worker_id"),
-                    "lease_seconds": item.get("lease_seconds"),
-                    "last_heartbeat_at": item.get("last_heartbeat_at"),
-                },
-            )
-        _server.set_run_status(run_id, "failed")
-        if log_queue is not None:
-            log_queue.put(None)
-
-    return [str(item.get("run_id") or "") for item in stale]
+    return machine_lease_service.cleanup_stale_machine_leases(
+        now=_server._utc_now(),
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        worker_registry=_server.LOCAL_WORKER_REGISTRY,
+        runs_by_id=_server.runs,
+        parse_utc_ts_fn=_server._parse_utc_ts,
+        utc_now_iso_fn=_server._utc_now_iso,
+        persist_local_runtime_state_fn=_persist_local_runtime_state,
+        emit_log_fn=_server.emit_log,
+        set_run_status_fn=_server.set_run_status,
+        local_worker_lost_timeout_seconds=LOCAL_RUN_WORKER_LOST_TIMEOUT_SECONDS,
+        default_lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
+    )
 
 
 def recover_orphaned_local_runs_on_startup() -> List[str]:
@@ -535,9 +428,7 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
         if not checkpoint:
             continue
         run["status"] = "waiting_for_input"
-        run["local_worker_id"] = None
-        run["local_claimed_at"] = None
-        run["local_last_heartbeat_at"] = None
+        machine_lease_service.clear_active_machine_lease_binding(run)
         run["result"] = "Local operator paused at saved checkpoint after runtime restart."
         run["result_data"] = {
             "summary": "Local operator paused at saved checkpoint after runtime restart.",
@@ -567,82 +458,37 @@ def recover_orphaned_local_runs_on_startup() -> List[str]:
         _server._persist_live_run_state(run_id, run)
 
     if recovered:
-        with _server.LOCAL_QUEUE_LOCK:
-            _server.LOCAL_PENDING_RUN_IDS[:] = [
-                run_id
-                for run_id in _server.LOCAL_PENDING_RUN_IDS
-                if run_id not in set(recovered)
-            ]
-            for run_id in recovered:
-                _server.LOCAL_CLAIMED_RUNS.pop(run_id, None)
-        _persist_local_runtime_state()
+        machine_lease_service.reconcile_recovered_machine_leases(
+            recovered,
+            local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+            local_pending_run_ids=_server.LOCAL_PENDING_RUN_IDS,
+            local_claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+            persist_local_runtime_state_fn=_persist_local_runtime_state,
+        )
     _COLD_BOOT_RECOVERY_DONE = True
     return recovered
 
 
 def _claim_local_run(worker_id: str, required_capabilities: Optional[List[str]] = None) -> Optional[str]:
     _init()
-    _cleanup_stale_local_claims()
-    claimed_run_id: Optional[str] = None
-    deferred_run_ids: List[str] = []
-    capability_filtered = False
-    state_changed = False
-
-    with _server.LOCAL_QUEUE_LOCK:
-        worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
-        worker_capabilities = _normalize_capability_ids(worker_state.get("capabilities") if isinstance(worker_state, dict) else [])
-        worker_capability_set = set(worker_capabilities)
-        requested_capability_filter = set(_normalize_capability_ids(required_capabilities))
-        while _server.LOCAL_PENDING_RUN_IDS:
-            run_id = _server.LOCAL_PENDING_RUN_IDS.pop(0)
-            state_changed = True
-            run = _server.runs.get(run_id)
-            if not isinstance(run, dict):
-                continue
-            status = str(run.get("status") or "").strip().lower()
-            if status not in {"queued_local", "starting"}:
-                continue
-            preferred_runtime_ids = _ordered_runtime_preferences_for_run(run)
-            preferred_runtime_id = _best_online_preferred_runtime(preferred_runtime_ids)
-            if preferred_runtime_id and preferred_runtime_id != worker_id:
-                deferred_run_ids.append(run_id)
-                capability_filtered = True
-                continue
-            run_required_capabilities = _required_capabilities_for_run(run)
-            required_capability_set = set(run_required_capabilities)
-            if run_required_capabilities and not required_capability_set.issubset(worker_capability_set):
-                deferred_run_ids.append(run_id)
-                capability_filtered = True
-                continue
-            if requested_capability_filter and run_required_capabilities and not required_capability_set.issubset(requested_capability_filter):
-                deferred_run_ids.append(run_id)
-                capability_filtered = True
-                continue
-            _server.LOCAL_CLAIMED_RUNS[run_id] = {
-                "worker_id": worker_id,
-                "claimed_at": datetime.utcnow().isoformat() + "Z",
-                "last_heartbeat_at": datetime.utcnow().isoformat() + "Z",
-                "last_progress_event_at": datetime.utcnow().isoformat() + "Z",
-                "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
-            }
-            state_changed = True
-            claimed_run_id = run_id
-            break
-        if deferred_run_ids:
-            _server.LOCAL_PENDING_RUN_IDS[:] = deferred_run_ids + list(_server.LOCAL_PENDING_RUN_IDS)
-            state_changed = True
-    if state_changed:
-        _persist_local_runtime_state()
-    if claimed_run_id:
-        _mark_local_worker_seen(worker_id, claimed_run_id, "busy", note="claimed_local_run")
-    else:
-        _mark_local_worker_seen(
-            worker_id,
-            None,
-            "idle",
-            note="idle_capability_wait" if capability_filtered else "idle_poll",
-        )
-    return claimed_run_id
+    return worker_dispatch_service.claim_local_run(
+        worker_id,
+        required_capabilities=required_capabilities,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        pending_run_ids=_server.LOCAL_PENDING_RUN_IDS,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        worker_registry=_server.LOCAL_WORKER_REGISTRY,
+        runs_by_id=_server.runs,
+        lease_seconds=_server.ORION_LOCAL_LEASE_SECONDS,
+        cleanup_stale_local_claims_fn=_cleanup_stale_local_claims,
+        ordered_runtime_preferences_for_run_fn=_ordered_runtime_preferences_for_run,
+        best_online_preferred_runtime_fn=_best_online_preferred_runtime,
+        required_capabilities_for_run_fn=_required_capabilities_for_run,
+        normalize_capability_ids_fn=_normalize_capability_ids,
+        persist_local_runtime_state_fn=_persist_local_runtime_state,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        now_iso_fn=_server._utc_now_iso,
+    )
 
 
 def _local_run_summary(run_id: str, run: Dict[str, Any], claim: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -913,31 +759,18 @@ def handle_get_local_workers_status() -> Dict[str, Any]:
 
 def handle_heartbeat_local_worker(worker_id: str, payload: Optional[LocalWorkerHeartbeatPayload] = None) -> Dict[str, Any]:
     _init()
-    worker = str(worker_id or "").strip()
-    if not worker:
-        raise HTTPException(status_code=400, detail="worker_id is required.")
-
-    current_run_id = str((payload.current_run_id if payload else None) or "").strip() if payload else ""
-    note = str((payload.note if payload else None) or "").strip() if payload else ""
-    _mark_local_worker_seen(worker, current_run_id or None, "busy" if current_run_id else "idle", note=note or None)
-
-    if current_run_id:
-        run = _server.runs.get(current_run_id)
-        should_emit_progress = False
-        if isinstance(run, dict):
-            with _server.LOCAL_QUEUE_LOCK:
-                claim = _server.LOCAL_CLAIMED_RUNS.get(current_run_id)
-                if isinstance(claim, dict) and str(claim.get("worker_id") or "") == worker:
-                    now_iso = _server._utc_now_iso()
-                    claim["last_heartbeat_at"] = now_iso
-                    _server.LOCAL_CLAIMED_RUNS[current_run_id] = claim
-                    run["local_last_heartbeat_at"] = now_iso
-                    should_emit_progress = _maybe_emit_local_still_working(current_run_id, run, claim, note=note or None)
-            _persist_local_runtime_state()
-            if should_emit_progress:
-                _persist_local_runtime_state()
-
-    return {"status": "ok", "worker_id": worker, "current_run_id": current_run_id or None, "last_seen_at": _server._utc_now_iso()}
+    return worker_dispatch_service.heartbeat_local_worker(
+        worker_id,
+        current_run_id=(payload.current_run_id if payload else None),
+        note=(payload.note if payload else None),
+        runs_by_id=_server.runs,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        maybe_emit_local_still_working_fn=_maybe_emit_local_still_working,
+        persist_local_runtime_state_fn=_persist_local_runtime_state,
+        utc_now_iso_fn=_server._utc_now_iso,
+    )
 
 
 def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[str, Any]:
@@ -961,26 +794,29 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
     context = run.get("context") if isinstance(run.get("context"), dict) else {}
     metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
     worker_state = _server.LOCAL_WORKER_REGISTRY.get(worker_id) if isinstance(_server.LOCAL_WORKER_REGISTRY.get(worker_id), dict) else {}
-    if isinstance(metadata, dict):
-        metadata["runtime_id"] = worker_id
-        metadata["policy_mode"] = _server.normalize_policy_mode(
-            worker_state.get("policy_mode") if isinstance(worker_state, dict) else None
-        )
-        context["metadata"] = metadata
-        run["context"] = context
-
     now = datetime.utcnow().isoformat() + "Z"
-    run["local_worker_id"] = worker_id
-    run["local_claimed_at"] = now
-    run["local_last_heartbeat_at"] = now
-    run.pop("_resume_after_confirmation_scheduled", None)
+    claim = _server.LOCAL_CLAIMED_RUNS.get(run_id) if isinstance(_server.LOCAL_CLAIMED_RUNS.get(run_id), dict) else {}
+    machine_lease_service.bind_machine_lease_to_run(
+        run,
+        worker_id=worker_id,
+        claim=claim,
+        worker_state=worker_state,
+        now_iso=now,
+        normalize_policy_mode_fn=_server.normalize_policy_mode,
+    )
     _server.set_run_status(run_id, "running_local")
     _server.emit_log(
         run["logs"],
         "info",
         f"Local companion claimed run ({worker_id}).",
         event="local_claimed",
-        data={"run_id": run_id, "worker_id": worker_id, "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS},
+        data={
+            "run_id": run_id,
+            "worker_id": worker_id,
+            "machine_id": claim.get("machine_id") or worker_id,
+            "lease_id": claim.get("lease_id"),
+            "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
+        },
     )
 
     return {
@@ -990,7 +826,9 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
             "run_id": run_id,
             "engine": run.get("engine"),
             "status": run.get("status"),
-            "lease_seconds": _server.ORION_LOCAL_LEASE_SECONDS,
+            "lease_seconds": int(claim.get("lease_seconds") or _server.ORION_LOCAL_LEASE_SECONDS),
+            "machine_id": claim.get("machine_id") or worker_id,
+            "machine_lease_id": claim.get("lease_id"),
             "context": _server.redact_sensitive(run.get("context", {})),
             "browser_checkpoint": (
                 run.get("browser_checkpoint")
@@ -1005,162 +843,71 @@ def handle_claim_local_run(body: Optional[LocalRunClaimRequest] = None) -> Dict[
 def handle_heartbeat_local_run(run_id: uuid.UUID, payload: Optional[LocalRunHeartbeatPayload] = None) -> Dict[str, Any]:
     _init()
     run_id_str = str(run_id)
-    run = _server.runs.get(run_id_str)
-    if not isinstance(run, dict):
-        raise HTTPException(status_code=404, detail="Run ID not found")
-
-    with _server.LOCAL_QUEUE_LOCK:
-        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id_str)
-        if not isinstance(claim, dict):
-            raise HTTPException(status_code=409, detail="Run is not claimed by a local companion.")
-        incoming_worker = str((payload.worker_id if payload else None) or "").strip() if payload else ""
-        if incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        resolved_worker = incoming_worker or str(claim.get("worker_id") or "").strip()
-        now = datetime.utcnow().isoformat() + "Z"
-        claim["last_heartbeat_at"] = now
-        _maybe_emit_local_still_working(run_id_str, run, claim, note=(payload.note if payload else None))
-        _server.LOCAL_CLAIMED_RUNS[run_id_str] = claim
-
-    run["local_last_heartbeat_at"] = now
-    if resolved_worker:
-        _mark_local_worker_seen(resolved_worker, run_id_str, "busy", note=(payload.note if payload else None))
+    result = worker_dispatch_service.heartbeat_local_run(
+        run_id_str,
+        worker_id=(payload.worker_id if payload else None),
+        note=(payload.note if payload else None),
+        runs_by_id=_server.runs,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        maybe_emit_local_still_working_fn=_maybe_emit_local_still_working,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        utc_now_iso_fn=_server._utc_now_iso,
+    )
     note = str((payload.note if payload else None) or "").strip() if payload else ""
-    if note:
+    run = _server.runs.get(run_id_str)
+    if note and isinstance(run, dict):
         _server.emit_log(run["logs"], "info", note[:400], event="local_heartbeat")
-    return {"status": "ok", "run_id": run_id_str, "last_heartbeat_at": now}
+    return result
 
 
 def handle_complete_local_run(run_id: uuid.UUID, payload: LocalRunCompletePayload) -> Dict[str, Any]:
     _init()
-    run_id_str = str(run_id)
-    run = _server.runs.get(run_id_str)
-    if not isinstance(run, dict):
-        raise HTTPException(status_code=404, detail="Run ID not found")
-
-    with _server.LOCAL_QUEUE_LOCK:
-        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id_str)
-        incoming_worker = str(payload.worker_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        resolved_worker = incoming_worker or (str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else "")
-
-    status = str(run.get("status") or "").strip().lower()
-    if status in {"completed", "failed", "timeout"}:
-        return {"status": "ok", "run_id": run_id_str, "already_terminal": True}
-
-    if isinstance(payload.result_data, dict):
-        run["result_data"] = payload.result_data
-    if isinstance(payload.usage_masked, dict):
-        run["usage_masked"] = payload.usage_masked
-
-    result_text = str(payload.result_text or "").strip()
-    if not result_text and isinstance(payload.result_data, dict):
-        result_text = str(payload.result_data.get("summary") or "").strip()
-    if not result_text:
-        result_text = "Local companion run completed."
-    run["result"] = result_text
-
-    _server.emit_log(run["logs"], "info", result_text, event="local_result", data=payload.result_data if isinstance(payload.result_data, dict) else None)
-    _server.emit_log(run["logs"], "info", "Run completed by Local Companion.", event="run_complete")
-    if resolved_worker:
-        _mark_local_worker_seen(resolved_worker, None, "idle", note="completed_run")
-    _server.set_run_status(run_id_str, "completed")
-    try:
-        _server._persist_run_memory(run_id_str, run)
-    except Exception:
-        pass
-    run["logs"].put(None)
-    return {"status": "ok", "run_id": run_id_str}
+    return worker_dispatch_service.complete_local_run(
+        str(run_id),
+        worker_id=payload.worker_id,
+        result_text=payload.result_text,
+        result_data=payload.result_data,
+        usage_masked=payload.usage_masked,
+        runs_by_id=_server.runs,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        emit_log_fn=_server.emit_log,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        set_run_status_fn=_server.set_run_status,
+        persist_run_memory_fn=_server._persist_run_memory,
+    )
 
 
 def handle_pause_local_run(run_id: uuid.UUID, payload: LocalRunPausePayload) -> Dict[str, Any]:
     _init()
-    run_id_str = str(run_id)
-    run = _server.runs.get(run_id_str)
-    if not isinstance(run, dict):
-        raise HTTPException(status_code=404, detail="Run ID not found")
-
-    with _server.LOCAL_QUEUE_LOCK:
-        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id_str)
-        incoming_worker = str(payload.worker_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        resolved_worker = incoming_worker or (str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else "")
-        _server.LOCAL_CLAIMED_RUNS.pop(run_id_str, None)
-    _persist_local_runtime_state()
-
-    if isinstance(payload.result_data, dict):
-        run["result_data"] = payload.result_data
-    if isinstance(payload.browser_checkpoint, dict):
-        run["browser_checkpoint"] = payload.browser_checkpoint
-        context = run.get("context") if isinstance(run.get("context"), dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-        metadata["browser_checkpoint"] = payload.browser_checkpoint
-        metadata["browser_resume_supported"] = True
-        context["metadata"] = metadata
-        run["context"] = context
-
-    result_text = str(payload.result_text or "").strip()
-    if not result_text and isinstance(payload.result_data, dict):
-        result_text = str(payload.result_data.get("summary") or "").strip()
-    if not result_text:
-        result_text = "Local companion paused and is waiting for human input."
-    run["result"] = result_text
-    run["local_worker_id"] = None
-    run["local_claimed_at"] = None
-    run["local_last_heartbeat_at"] = None
-    run.pop("_resume_after_confirmation_scheduled", None)
-
-    wait_reason = str(payload.wait_reason or "").strip() or "human_unblock_required"
-    _server.emit_log(
-        run["logs"],
-        "warn",
-        result_text,
-        event="local_pause_required",
-        data={
-            "run_id": run_id_str,
-            "wait_reason": wait_reason,
-            "session_profile": (
-                payload.browser_checkpoint.get("session_profile")
-                if isinstance(payload.browser_checkpoint, dict)
-                else None
-            ),
-            "next_action_index": (
-                payload.browser_checkpoint.get("next_action_index")
-                if isinstance(payload.browser_checkpoint, dict)
-                else None
-            ),
-        },
+    return worker_dispatch_service.pause_local_run(
+        str(run_id),
+        worker_id=payload.worker_id,
+        result_text=payload.result_text,
+        result_data=payload.result_data,
+        browser_checkpoint=payload.browser_checkpoint,
+        wait_reason=payload.wait_reason,
+        runs_by_id=_server.runs,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        emit_log_fn=_server.emit_log,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        set_run_status_fn=_server.set_run_status,
+        persist_local_runtime_state_fn=_persist_local_runtime_state,
     )
-    if resolved_worker:
-        _mark_local_worker_seen(resolved_worker, None, "idle", note="paused_waiting_for_input")
-    _server.set_run_status(run_id_str, "waiting_for_input")
-    return {"status": "ok", "run_id": run_id_str, "waiting_for_input": True}
 
 
 def handle_fail_local_run(run_id: uuid.UUID, payload: LocalRunFailPayload) -> Dict[str, Any]:
     _init()
-    run_id_str = str(run_id)
-    run = _server.runs.get(run_id_str)
-    if not isinstance(run, dict):
-        raise HTTPException(status_code=404, detail="Run ID not found")
-
-    with _server.LOCAL_QUEUE_LOCK:
-        claim = _server.LOCAL_CLAIMED_RUNS.get(run_id_str)
-        incoming_worker = str(payload.worker_id or "").strip()
-        if isinstance(claim, dict) and incoming_worker and incoming_worker != str(claim.get("worker_id")):
-            raise HTTPException(status_code=403, detail="Worker does not own this local run.")
-        resolved_worker = incoming_worker or (str(claim.get("worker_id") or "").strip() if isinstance(claim, dict) else "")
-
-    status = str(run.get("status") or "").strip().lower()
-    if status in {"completed", "failed", "timeout"}:
-        return {"status": "ok", "run_id": run_id_str, "already_terminal": True}
-
-    message = str(payload.error or "").strip() or "Local companion run failed."
-    _server.emit_log(run["logs"], "error", message[:1200], event="run_error")
-    if resolved_worker:
-        _mark_local_worker_seen(resolved_worker, None, "idle", note="failed_run")
-    _server.set_run_status(run_id_str, "failed")
-    run["logs"].put(None)
-    return {"status": "ok", "run_id": run_id_str}
+    return worker_dispatch_service.fail_local_run(
+        str(run_id),
+        worker_id=payload.worker_id,
+        error=payload.error,
+        runs_by_id=_server.runs,
+        local_queue_lock=_server.LOCAL_QUEUE_LOCK,
+        claimed_runs=_server.LOCAL_CLAIMED_RUNS,
+        emit_log_fn=_server.emit_log,
+        mark_local_worker_seen_fn=_mark_local_worker_seen,
+        set_run_status_fn=_server.set_run_status,
+    )

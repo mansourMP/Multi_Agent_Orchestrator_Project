@@ -84,8 +84,11 @@ from server_modules.connectors.s3_connector import (
     upload_file as s3_upload_file,
 )
 from server_modules import runtime_config as config
+from server_modules import run_service as run_service
 from server_modules import shared as shared
 from server_modules import runtime_common as common
+from server_modules import outbox_service
+from server_modules import policy_service
 from server_modules.runs_engine import (
     ENGINE_REGISTRY,
     RUN_TOOL_LOOP_REPLY,
@@ -795,89 +798,18 @@ def _derive_browser_automation_policy(context: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _compute_tool_policy_precheck(context: Dict[str, Any]) -> Dict[str, Any]:
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    target = normalize_execution_target(
-        metadata.get("execution_target_selected") or metadata.get("execution_target")
+    return policy_service.compute_tool_policy_precheck(
+        context,
+        derive_browser_automation_policy_fn=_derive_browser_automation_policy,
+        predict_tool_ids_for_context_fn=_predict_tool_ids_for_context,
+        build_skill_contract_from_metadata_fn=_build_skill_contract_from_metadata,
+        predict_capability_ids_for_context_fn=_predict_capability_ids_for_context,
+        apply_agent_machine_bypass_to_tool_policy_evaluation_fn=lambda evaluation: _apply_agent_machine_bypass_to_tool_policy_evaluation(
+            evaluation,
+            context=context,
+        ),
+        capability_metadata_root=Path(__file__).resolve().parent,
     )
-    runtime_policy = resolve_runtime_policy_mode(metadata, selected_target=target)
-    policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
-    tool_ids = _predict_tool_ids_for_context(context)
-    skill_contract = _build_skill_contract_from_metadata(metadata, tool_ids, policy_mode, target)
-    enforced_undeclared = set(skill_contract.get("undeclared_tools") or []) if skill_contract.get("policy_mode") == "enforce" else set()
-    items: List[Dict[str, Any]] = []
-    denied: List[str] = []
-    require_confirmation: List[str] = []
-    allowed: List[str] = []
-
-    browser_policy = _derive_browser_automation_policy(context)
-    evaluation_metadata = dict(metadata)
-    if browser_policy:
-        evaluation_metadata["browser_automation_policy"] = browser_policy
-
-    capability_ids = _predict_capability_ids_for_context(context)
-    capability_details = [
-        detail
-        for detail in (
-            capability_metadata(capability_id, Path(__file__).resolve().parent)
-            for capability_id in capability_ids
-        )
-        if isinstance(detail, dict)
-    ]
-    capabilities_by_tool: Dict[str, List[str]] = {}
-    for detail in capability_details:
-        tool_for_capability = normalize_action_id(detail.get("tool_id"))
-        capability_id = str(detail.get("id") or "").strip().lower()
-        if not tool_for_capability or not capability_id:
-            continue
-        capabilities_by_tool.setdefault(tool_for_capability, []).append(capability_id)
-
-    for tool_id in tool_ids:
-        item = evaluate_tool_policy_decision(
-            tool_id=tool_id,
-            trust_mode=policy_mode,
-            target=target,
-            metadata=evaluation_metadata,
-            capability_ids=capabilities_by_tool.get(normalize_action_id(tool_id), []),
-        )
-        if tool_id in enforced_undeclared:
-            item = dict(item)
-            item["execution_decision"] = "deny"
-            item["decision"] = "blocked"
-            item["reason"] = "skill_contract_missing_runtime_tool"
-        elif skill_contract.get("declared_runtime_tools"):
-            item = dict(item)
-            item["skill_declared"] = tool_id in set(skill_contract.get("declared_runtime_tools") or [])
-        item = _apply_agent_machine_bypass_to_tool_policy_evaluation(item, context=context)
-        items.append(item)
-        execution_decision = str(item.get("execution_decision") or "").strip().lower()
-        clean_tool = str(item.get("tool_id") or tool_id).strip().lower()
-        if execution_decision == "deny":
-            denied.append(clean_tool)
-        elif execution_decision == "require_confirmation":
-            require_confirmation.append(clean_tool)
-        else:
-            allowed.append(clean_tool)
-
-    return {
-        "policy_mode": policy_mode,
-        "target": target,
-        "tool_ids": tool_ids,
-        "capability_ids": capability_ids,
-        "capabilities": capability_details,
-        "denied": denied,
-        "require_confirmation": require_confirmation,
-        "allowed": allowed,
-        "denied_count": len(denied),
-        "require_confirmation_count": len(require_confirmation),
-        "allow_count": len(allowed),
-        "blocked": denied,
-        "approval_required": require_confirmation,
-        "blocked_count": len(denied),
-        "approval_required_count": len(require_confirmation),
-        "items": items,
-        "skill_contract": skill_contract,
-        "browser_automation_policy": browser_policy or None,
-    }
 
 
 def _append_run_tool_policy_audit(
@@ -913,59 +845,20 @@ def _append_run_tool_policy_audit(
 
 
 def _enqueue_local_companion_run(run_id: str, *, message: str = "Run queued for Local Companion execution.", event: str = "local_queued") -> None:
-    run = runs.get(run_id)
-    if not isinstance(run, dict):
-        return
-    context = run.get("context") if isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    if message == "Run queued for Local Companion execution." and bool(metadata.get("execution_target_waiting_for_runtime")):
-        waiting_reason = str(metadata.get("execution_target_reason") or "").strip()
-        if waiting_reason:
-            message = waiting_reason
-    if message == "Run queued for Local Companion execution." and bool(metadata.get("execution_target_waiting_for_capacity")):
-        waiting_reason = str(metadata.get("execution_target_reason") or "").strip()
-        if waiting_reason:
-            message = waiting_reason
-    set_run_status(run_id, "queued_local")
-    run["updated_at"] = datetime.utcnow().isoformat() + "Z"
-    with LOCAL_QUEUE_LOCK:
-        if run_id not in LOCAL_PENDING_RUN_IDS:
-            LOCAL_PENDING_RUN_IDS.append(run_id)
-        try:
-            replace_local_runtime_state(
-                ORION_RUNTIME_STATE_DB,
-                pending_run_ids=list(LOCAL_PENDING_RUN_IDS),
-                claimed_runs={
-                    local_run_id: dict(info)
-                    for local_run_id, info in LOCAL_CLAIMED_RUNS.items()
-                    if isinstance(info, dict)
-                },
-                runtime_registrations={
-                    runtime_id: dict(record)
-                    for runtime_id, record in LOCAL_WORKER_REGISTRY.items()
-                    if isinstance(record, dict)
-                },
-            )
-        except Exception:
-            pass
-    emit_log(
-        run["logs"],
-        "info",
-        message,
+    outbox_service.enqueue_local_companion_run(
+        run_id,
+        runs_by_id=runs,
+        set_run_status_fn=set_run_status,
+        utc_now_iso_fn=_utc_now_iso,
+        local_queue_lock=LOCAL_QUEUE_LOCK,
+        pending_run_ids=LOCAL_PENDING_RUN_IDS,
+        claimed_runs=LOCAL_CLAIMED_RUNS,
+        runtime_registrations=LOCAL_WORKER_REGISTRY,
+        db_path=ORION_RUNTIME_STATE_DB,
+        lease_seconds=ORION_LOCAL_LEASE_SECONDS,
+        emit_log_fn=emit_log,
+        message=message,
         event=event,
-        data={
-            "run_id": run_id,
-            "lease_seconds": ORION_LOCAL_LEASE_SECONDS,
-            "waiting_for_runtime": bool(metadata.get("execution_target_waiting_for_runtime")),
-            "required_capabilities": list(metadata.get("execution_target_required_capabilities") or []),
-            "missing_capabilities": list(metadata.get("execution_target_missing_capabilities") or []),
-            "matching_runtime_ids": list(metadata.get("execution_target_matching_runtime_ids") or []),
-            "available_runtime_ids": list(metadata.get("execution_target_available_runtime_ids") or []),
-            "busy_runtime_ids": list(metadata.get("execution_target_busy_runtime_ids") or []),
-            "preferred_runtime_id": metadata.get("execution_target_preferred_runtime_id"),
-            "preferred_runtime_label": metadata.get("execution_target_preferred_runtime_label"),
-            "waiting_for_capacity": bool(metadata.get("execution_target_waiting_for_capacity")),
-        },
     )
 
 
@@ -1014,61 +907,43 @@ def create_run(engine: str, context: Optional[dict] = None, *, defer_local_enque
         or ""
     ).strip()
     selected_target = selected_execution_target_from_context(run_context)
-    runs[run_id] = {
-        "run_id": run_id,
-        "status": "starting",
-        "logs": log_queue,
-        "input_queue": queue.Queue(),
-        "thread_id": None,
-        "engine": engine,
-        "context": run_context,
-        "created_at": now,
-        "updated_at": now,
-        "result": None,
-        "result_data": None,
-        "duration_ms": None,
-        "_started_mono": started_mono,
-        "_finished_mono": None,
-        "_first_value_mono": None,
-        "_hitl_wait_start_mono": None,
-        "_hitl_wait_total_ms": 0.0,
-        "_archived": False,
-        "_event_seq": 0,
-        "events": [],
-        "node_states": None,
-        "tool_policy_audit": [],
-        "memory_trace": {
-            "enabled": ORION_MEMORY_ENABLED,
-            "reads": [],
-            "writes": [],
-            "last_error": None,
-            "updated_at": _utc_now_iso(),
-        },
-        "active_profile_id": runtime_profile_id or None,
-        "active_profile_label": initial_active_label or None,
-        "active_provider": initial_active_provider or None,
-        "active_model": initial_active_model or None,
-        "active_adapter": None,
-    }
-    RUN_QUEUE_INDEX[id(log_queue)] = run_id
-    metrics_inc("runs_started", 1)
-    try:
-        _persist_live_run_state(run_id, runs[run_id])
-    except Exception:
-        pass
-
-    if selected_target == EXECUTION_TARGET_LOCAL_COMPANION:
-        try:
-            _hydrate_run_memory_context(run_id, runs[run_id])
-        except Exception:
-            pass
-        if not defer_local_enqueue:
-            _enqueue_local_companion_run(run_id)
-        return run_id
-
-    worker = threading.Thread(target=run_mission, args=(run_id,), daemon=True)
-    worker.start()
-    return run_id
+    run = run_service.build_live_run_record(
+        run_id=run_id,
+        engine=engine,
+        context=run_context,
+        now_iso=now,
+        started_mono=started_mono,
+        log_queue=log_queue,
+        input_queue=queue.Queue(),
+        memory_enabled=ORION_MEMORY_ENABLED,
+        memory_updated_at=_utc_now_iso(),
+        active_profile_id=runtime_profile_id or None,
+        active_profile_label=initial_active_label or None,
+        active_provider=initial_active_provider or None,
+        active_model=initial_active_model or None,
+    )
+    run_service.register_live_run(
+        run_id,
+        run,
+        runs_by_id=runs,
+        run_queue_index=RUN_QUEUE_INDEX,
+        metrics_inc_fn=metrics_inc,
+        persist_live_run_state_fn=_persist_live_run_state,
+    )
+    return run_service.activate_live_run(
+        run_id,
+        run,
+        selected_target=selected_target,
+        local_companion_target=EXECUTION_TARGET_LOCAL_COMPANION,
+        defer_local_enqueue=defer_local_enqueue,
+        hydrate_run_memory_context_fn=_hydrate_run_memory_context,
+        enqueue_local_companion_run_fn=_enqueue_local_companion_run,
+        start_background_run_fn=lambda active_run_id: threading.Thread(
+            target=run_mission,
+            args=(active_run_id,),
+            daemon=True,
+        ).start(),
+    )
 
 
 def _workflow_outgoing_edges(edges: List[Dict[str, Any]], node_id: str) -> List[Dict[str, Any]]:
@@ -4573,7 +4448,7 @@ def _execute_workflow_graph(
                     if raw_argv:
                         policy_metadata["raw_shell_argv"] = raw_argv
                 if tool_id:
-                    evaluation = evaluate_tool_policy_decision(
+                    evaluation = policy_service.evaluate_tool_policy_decision(
                         tool_id=tool_id,
                         trust_mode=str(policy_metadata.get("trust_mode") or "guarded"),
                         target=str(policy_metadata.get("execution_target") or execution_target or "auto"),
@@ -5009,13 +4884,13 @@ def _execute_orion_dag_node(
         raw_result = execute_outcome_pack(outcome_pack, context, run_id=run_id)
         result_data = normalize_pack_result(outcome_pack, raw_result)
         validate_pack_tool_contracts(outcome_pack, result_data, role="orion_operator")
-        runtime_policy = resolve_runtime_policy_mode(
+        runtime_policy = policy_service.resolve_runtime_policy_mode(
             metadata,
             selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
         policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
         action_counts = infer_actions_from_pack_result(outcome_pack, result_data)
-        action_policy = evaluate_action_policy(
+        action_policy = policy_service.evaluate_action_policy(
             action_counts,
             policy_mode,
             metadata,
@@ -5026,7 +4901,7 @@ def _execute_orion_dag_node(
         emit_log(
             log_queue,
             "info",
-            summarize_action_policy_eval(action_policy),
+            policy_service.summarize_action_policy_eval(action_policy),
             event="action_policy_evaluated",
             data={
                 "phase": "pack_prepare",
@@ -5071,7 +4946,11 @@ def _execute_orion_dag_node(
         outcome_pack = str(state.get("outcome_pack") or "").strip().lower()
         result_data = state.get("result_data") if isinstance(state.get("result_data"), dict) else {}
         summary_text = str(state.get("summary_text") or "Outcome pack completed.")
-        policy_mode = str(state.get("policy_mode") or resolve_runtime_policy_mode(metadata).get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
+        policy_mode = str(
+            state.get("policy_mode")
+            or policy_service.resolve_runtime_policy_mode(metadata).get("policy_mode")
+            or POLICY_MODE_LOCAL_DEFAULT
+        )
         approval_required = bool(state.get("confirmation_required"))
         approval_reason = str(state.get("confirmation_reason") or "")
         execution_summary = build_pack_execution_summary(
@@ -5157,13 +5036,13 @@ def _execute_orion_dag_node(
 
     if kind == "plan_approval":
         plan_text = str(state.get("plan_text") or "")
-        runtime_policy = resolve_runtime_policy_mode(
+        runtime_policy = policy_service.resolve_runtime_policy_mode(
             metadata,
             selected_target=metadata.get("execution_target_selected") or metadata.get("execution_target"),
         )
         policy_mode = str(runtime_policy.get("policy_mode") or POLICY_MODE_LOCAL_DEFAULT)
         plan_actions = infer_actions_from_text(plan_text)
-        action_policy = evaluate_action_policy(
+        action_policy = policy_service.evaluate_action_policy(
             plan_actions,
             policy_mode,
             metadata,
@@ -5174,7 +5053,7 @@ def _execute_orion_dag_node(
         emit_log(
             log_queue,
             "info",
-            summarize_action_policy_eval(action_policy),
+            policy_service.summarize_action_policy_eval(action_policy),
             event="action_policy_evaluated",
             data={
                 "phase": "plan_approval",

@@ -4,8 +4,12 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import hashlib
 import json
+import sqlite3
 import re
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
+from fastapi import HTTPException
 
 from server_modules import agent_memory
 from server_modules import runtime_memory
@@ -451,10 +455,10 @@ def runtime_memory_search(
     session_key: str | None = None,
     k: int = 5,
 ) -> Dict[str, Any]:
-    runtime_memory._memory_manager_or_503()
-    normalized_bucket = runtime_memory._normalize_memory_bucket(bucket, required=False)
-    normalized_workspace_id = runtime_memory._normalize_workspace_id(workspace_id) or "default"
-    items = runtime_memory._memory_search_scoped(
+    _memory_manager_or_503()
+    normalized_bucket = _normalize_memory_bucket(bucket, required=False)
+    normalized_workspace_id = _runtime_workspace_id(workspace_id)
+    items = _memory_search_scoped(
         query=str(query or "").strip(),
         bucket=normalized_bucket,
         workspace_id=normalized_workspace_id,
@@ -486,11 +490,11 @@ def runtime_memory_upsert(
     metadata: Dict[str, Any] | None = None,
     memory_id: str | None = None,
 ) -> Dict[str, Any]:
-    manager = runtime_memory._memory_manager_or_503()
-    normalized_bucket = runtime_memory._normalize_memory_bucket(bucket, required=True) or "session"
-    normalized_workspace_id = runtime_memory._normalize_workspace_id(workspace_id) or "default"
+    manager = _memory_manager_or_503()
+    normalized_bucket = _normalize_memory_bucket(bucket, required=True) or "session"
+    normalized_workspace_id = _runtime_workspace_id(workspace_id)
     normalized_retention_days = int(retention_days or runtime_memory.ORION_MEMORY_RETENTION_DAYS_DEFAULT)
-    expires_at = (runtime_memory._utc_now() + timedelta(days=normalized_retention_days)).isoformat().replace("+00:00", "Z")
+    expires_at = (_runtime_utc_now() + timedelta(days=normalized_retention_days)).isoformat().replace("+00:00", "Z")
     record_metadata = dict(metadata) if isinstance(metadata, dict) else {}
     record_metadata.update(
         {
@@ -515,3 +519,362 @@ def runtime_memory_upsert(
         "retention_days": normalized_retention_days,
         "expires_at": expires_at,
     }
+
+
+def configure_runtime_memory(**kwargs: Any) -> None:
+    runtime_memory.configure_runtime_memory(**kwargs)
+
+
+def _runtime_workspace_id(value: Any) -> str:
+    normalized = runtime_memory._normalize_workspace_id(value)
+    return str(normalized or "default").strip() or "default"
+
+
+def _runtime_utc_now() -> Any:
+    return runtime_memory._utc_now()
+
+
+def _runtime_utc_now_iso() -> str:
+    return runtime_memory._utc_now_iso()
+
+
+def _memory_manager_or_503() -> Any:
+    return runtime_memory._memory_manager_or_503()
+
+
+def _normalize_memory_bucket(value: Any, *, required: bool = True) -> Optional[str]:
+    return runtime_memory._normalize_memory_bucket(value, required=required)
+
+
+def _memory_item_matches_scope(
+    metadata: Dict[str, Any],
+    *,
+    bucket: Optional[str],
+    workspace_id: Optional[str],
+    profile_id: Optional[str],
+    project_id: Optional[str],
+    session_key: Optional[str],
+) -> bool:
+    if bucket and str(metadata.get("bucket") or "").strip().lower() != bucket:
+        return False
+    if workspace_id and str(metadata.get("workspace_id") or "").strip() != workspace_id:
+        return False
+    if profile_id and str(metadata.get("profile_id") or "").strip() != profile_id:
+        return False
+    if project_id and str(metadata.get("project_id") or "").strip() != project_id:
+        return False
+    if session_key and str(metadata.get("session_key") or "").strip() != session_key:
+        return False
+    expires_at = runtime_memory._parse_utc_ts(metadata.get("expires_at"))
+    if expires_at and expires_at <= _runtime_utc_now():
+        return False
+    return True
+
+
+def _memory_search_scoped(
+    query: str,
+    *,
+    bucket: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    session_key: Optional[str] = None,
+    k: int = 5,
+) -> List[Dict[str, Any]]:
+    manager = runtime_memory._memory_manager()
+    if manager is None:
+        return []
+    try:
+        fetch_limit = max(int(k), 1)
+        fetch_limit = min(max(fetch_limit * 8, 24), 120)
+        raw_results = manager.search_memory(query, fetch_limit)
+    except Exception:
+        return []
+    if not isinstance(raw_results, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        mem_id = str(item.get("id") or "").strip()
+        if not mem_id or mem_id in seen_ids:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if not _memory_item_matches_scope(
+            metadata,
+            bucket=bucket,
+            workspace_id=workspace_id,
+            profile_id=profile_id,
+            project_id=project_id,
+            session_key=session_key,
+        ):
+            continue
+        seen_ids.add(mem_id)
+        out.append(
+            {
+                "id": mem_id,
+                "text": str(item.get("text") or ""),
+                "score": item.get("score"),
+                "metadata": metadata,
+            }
+        )
+        if len(out) >= int(k):
+            break
+    return out
+
+
+def _memory_scope_from_context(context: Dict[str, Any]) -> Dict[str, str]:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    workspace_id = _runtime_workspace_id(context.get("workspace_id") or metadata.get("workspace_id"))
+    session_key = str(metadata.get("session_key") or "").strip()
+    if not session_key:
+        chat_id = str(metadata.get("chat_id") or "").strip()
+        if chat_id:
+            session_key = f"telegram:{chat_id}"
+    return {
+        "workspace_id": workspace_id,
+        "profile_id": str(metadata.get("profile_id") or metadata.get("user_id") or "").strip(),
+        "project_id": str(metadata.get("project_id") or context.get("workflow_id") or "").strip(),
+        "session_key": session_key,
+    }
+
+
+def _trim_memory_trace(trace: Dict[str, Any]) -> Dict[str, Any]:
+    reads = trace.get("reads") if isinstance(trace.get("reads"), list) else []
+    writes = trace.get("writes") if isinstance(trace.get("writes"), list) else []
+    return {
+        "enabled": bool(trace.get("enabled")),
+        "reads": [runtime_memory._json_safe(item) for item in reads[-20:]],
+        "writes": [runtime_memory._json_safe(item) for item in writes[-20:]],
+        "last_error": str(trace.get("last_error") or "").strip() or None,
+        "updated_at": str(trace.get("updated_at") or "").strip() or None,
+    }
+
+
+def _memory_prompt_context_block(context: Dict[str, Any], max_items: int = 6) -> str:
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    memory_ctx = metadata.get("memory_context") if isinstance(metadata.get("memory_context"), dict) else {}
+    items = memory_ctx.get("items") if isinstance(memory_ctx.get("items"), list) else []
+    if not items:
+        return "Memory Context:\n- none"
+    lines: List[str] = []
+    for item in items[: max(1, max_items)]:
+        if not isinstance(item, dict):
+            continue
+        item_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        bucket = str(item_metadata.get("bucket") or "unknown").strip().lower()
+        text = runtime_memory._compact_event_text(item.get("text"), limit=220)
+        if text:
+            lines.append(f"- ({bucket}) {text}")
+    if not lines:
+        return "Memory Context:\n- none"
+    return "Memory Context:\n" + "\n".join(lines)
+
+
+def _run_result_summary(run: Dict[str, Any]) -> str:
+    result_data = run.get("result_data") if isinstance(run.get("result_data"), dict) else {}
+    if isinstance(run.get("result"), str) and str(run.get("result")).strip():
+        return str(run.get("result")).strip()
+    if isinstance(result_data.get("summary"), str) and str(result_data.get("summary")).strip():
+        return str(result_data.get("summary")).strip()
+    return ""
+
+
+def _memory_health_snapshot() -> Dict[str, Any]:
+    db_path = Path(runtime_memory.ORION_MEMORY_DB_PATH)
+    rows = 0
+    sqlite_error: Optional[str] = None
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM fallback_memory")
+            row = cur.fetchone()
+            rows = int(row[0] if row and row[0] is not None else 0)
+            conn.close()
+        except Exception as exc:
+            sqlite_error = str(exc)
+    manager = runtime_memory._memory_manager()
+    lancedb_initialized = bool(getattr(getattr(manager, "lancedb", None), "_initialized", False)) if manager else False
+    return {
+        "enabled": runtime_memory.ORION_MEMORY_ENABLED,
+        "manager_ready": manager is not None,
+        "manager_error": runtime_memory.MEMORY_MANAGER_ERROR,
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "db_size_bytes": int(db_path.stat().st_size) if db_path.exists() else 0,
+        "sqlite_rows": rows,
+        "sqlite_error": sqlite_error,
+        "lancedb_uri": runtime_memory.ORION_MEMORY_LANCEDB_URI,
+        "lancedb_initialized": lancedb_initialized,
+    }
+
+
+def _hydrate_run_memory_context(run_id: str, run: Dict[str, Any]) -> None:
+    trace = run.setdefault(
+        "memory_trace",
+        {"enabled": runtime_memory.ORION_MEMORY_ENABLED, "reads": [], "writes": [], "last_error": None, "updated_at": None},
+    )
+    if not runtime_memory.ORION_MEMORY_ENABLED:
+        trace["enabled"] = False
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+    manager = runtime_memory._memory_manager()
+    if manager is None:
+        trace["last_error"] = runtime_memory.MEMORY_MANAGER_ERROR or "memory_unavailable"
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if str(metadata.get("memory_read_enabled") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+
+    user_goal = str(context.get("user_goal") or "").strip()
+    business_plan = str(context.get("business_plan") or "").strip()
+    query = "\n".join([part for part in [user_goal, business_plan] if part]).strip() or "recent context"
+    try:
+        read_k = max(1, min(int(metadata.get("memory_read_k") or runtime_memory.ORION_MEMORY_READ_K), 20))
+    except Exception:
+        read_k = runtime_memory.ORION_MEMORY_READ_K
+
+    scope = _memory_scope_from_context(context)
+    bucket_queries: List[tuple[str, Dict[str, Optional[str]]]] = []
+    if scope.get("profile_id"):
+        bucket_queries.append(("profile", {"profile_id": scope.get("profile_id")}))
+    if scope.get("project_id"):
+        bucket_queries.append(("project", {"project_id": scope.get("project_id")}))
+    if scope.get("session_key"):
+        bucket_queries.append(("session", {"session_key": scope.get("session_key")}))
+    if not bucket_queries:
+        bucket_queries.append(("session", {"session_key": f"run:{run_id}"}))
+
+    aggregated: List[Dict[str, Any]] = []
+    read_records: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for bucket, bucket_scope in bucket_queries:
+        items = _memory_search_scoped(
+            query,
+            bucket=bucket,
+            workspace_id=scope.get("workspace_id"),
+            profile_id=bucket_scope.get("profile_id"),
+            project_id=bucket_scope.get("project_id"),
+            session_key=bucket_scope.get("session_key"),
+            k=read_k,
+        )
+        read_records.append({"bucket": bucket, "count": len(items), "k": read_k})
+        for item in items:
+            mem_id = str(item.get("id") or "").strip()
+            if not mem_id or mem_id in seen_ids:
+                continue
+            seen_ids.add(mem_id)
+            aggregated.append(item)
+
+    memory_context = {
+        "query": runtime_memory._compact_event_text(query, limit=500),
+        "scope": scope,
+        "items": aggregated[: max(1, read_k * 2)],
+        "count": len(aggregated),
+    }
+    metadata["memory_context"] = memory_context
+    context["metadata"] = metadata
+    run["context"] = context
+    trace_reads = trace.get("reads") if isinstance(trace.get("reads"), list) else []
+    trace_reads.extend(read_records)
+    trace["reads"] = trace_reads[-20:]
+    trace["updated_at"] = _runtime_utc_now_iso()
+    run["memory_trace"] = trace
+
+    runtime_memory._emit_log(
+        run["logs"],
+        "info",
+        f"Memory context loaded: {len(aggregated)} item(s).",
+        event="memory_context",
+        data={"query": memory_context["query"], "scope": scope, "count": len(aggregated)},
+    )
+
+
+def _persist_run_memory(run_id: str, run: Dict[str, Any]) -> None:
+    trace = run.setdefault(
+        "memory_trace",
+        {"enabled": runtime_memory.ORION_MEMORY_ENABLED, "reads": [], "writes": [], "last_error": None, "updated_at": None},
+    )
+    if not runtime_memory.ORION_MEMORY_ENABLED:
+        trace["enabled"] = False
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+    manager = runtime_memory._memory_manager()
+    if manager is None:
+        trace["last_error"] = runtime_memory.MEMORY_MANAGER_ERROR or "memory_unavailable"
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+    if str(run.get("status") or "").strip().lower() != "completed":
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+
+    context = run.get("context") if isinstance(run.get("context"), dict) else {}
+    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    if str(metadata.get("memory_write_enabled") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+
+    scope = _memory_scope_from_context(context)
+    goal = runtime_memory._compact_event_text(context.get("user_goal"), limit=700)
+    summary = runtime_memory._compact_event_text(_run_result_summary(run), limit=1300)
+    if not summary:
+        trace["updated_at"] = _runtime_utc_now_iso()
+        return
+    memory_text = f"Goal: {goal or 'n/a'}\nResult: {summary}"[: runtime_memory.ORION_MEMORY_MAX_TEXT_CHARS]
+
+    try:
+        retention_days = max(1, min(int(metadata.get("memory_retention_days") or runtime_memory.ORION_MEMORY_RETENTION_DAYS_DEFAULT), 3650))
+    except Exception:
+        retention_days = runtime_memory.ORION_MEMORY_RETENTION_DAYS_DEFAULT
+    expires_at = (_runtime_utc_now() + timedelta(days=retention_days)).isoformat().replace("+00:00", "Z")
+
+    targets: List[Dict[str, str]] = []
+    session_key = scope.get("session_key") or f"run:{run_id}"
+    targets.append({"bucket": "session", "session_key": session_key})
+    if scope.get("project_id"):
+        targets.append({"bucket": "project", "project_id": scope["project_id"]})
+    if scope.get("profile_id"):
+        targets.append({"bucket": "profile", "profile_id": scope["profile_id"]})
+
+    writes = trace.get("writes") if isinstance(trace.get("writes"), list) else []
+    for target in targets:
+        bucket = str(target.get("bucket") or "").strip().lower()
+        if bucket not in runtime_memory.MEMORY_BUCKETS:
+            continue
+        record_metadata = {
+            "bucket": bucket,
+            "workspace_id": scope.get("workspace_id") or "default",
+            "profile_id": target.get("profile_id") or "",
+            "project_id": target.get("project_id") or "",
+            "session_key": target.get("session_key") or "",
+            "source": "run_completion",
+            "run_id": run_id,
+            "engine": str(run.get("engine") or "").strip().lower(),
+            "retention_days": retention_days,
+            "expires_at": expires_at,
+        }
+        try:
+            memory_id = manager.upsert_memory(memory_text, record_metadata)
+            writes.append({"bucket": bucket, "id": memory_id, "scope": runtime_memory._json_safe(target)})
+        except Exception as exc:
+            trace["last_error"] = f"memory_write_failed:{exc}"
+
+    trace["writes"] = writes[-20:]
+    trace["updated_at"] = _runtime_utc_now_iso()
+    run["memory_trace"] = trace
+    runtime_memory._refresh_archived_run_snapshot(run_id, run)
+    if writes:
+        runtime_memory._emit_log(
+            run["logs"],
+            "info",
+            f"Memory write completed: {len(writes)} item(s).",
+            event="memory_write",
+            data={"writes": writes[-len(targets):]},
+        )

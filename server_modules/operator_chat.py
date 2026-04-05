@@ -31,6 +31,7 @@ from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_entry_service
 from server_modules import direct_chat_callback_facade_service
 from server_modules import direct_chat_context_service
+from server_modules import direct_chat_metadata_service
 from server_modules import direct_chat_response_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_runtime_service
@@ -705,37 +706,25 @@ def _build_context_used(
     fallback_used: bool = False,
     fallback_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
-    provider_overridden = bool(
-        requested_provider and effective_provider and requested_provider != effective_provider
+    return direct_chat_metadata_service.build_context_used(
+        workspace_id=workspace_id,
+        requested_provider=requested_provider,
+        effective_provider=effective_provider,
+        requested_model=requested_model,
+        effective_model=effective_model,
+        reasoning_effort=reasoning_effort,
+        connected_systems=connected_systems,
+        tool_capabilities=tool_capabilities,
+        prior_messages_used=prior_messages_used,
+        history_mode=history_mode,
+        run_created=run_created,
+        fallback_used=fallback_used,
+        fallback_reason=fallback_reason,
     )
-    model_overridden = bool(
-        requested_model and effective_model and requested_model != effective_model
-    )
-    payload = {
-        "workspace": workspace_id or "default",
-        "requested_provider": requested_provider or None,
-        "effective_provider": effective_provider or None,
-        "requested_model": requested_model or None,
-        "effective_model": effective_model or None,
-        "provider_overridden": provider_overridden,
-        "model_overridden": model_overridden,
-        "fallback_used": bool(fallback_used),
-        "reasoning_effort": reasoning_effort or None,
-        "connected_systems": connected_systems,
-        "tool_capabilities": tool_capabilities,
-        "prior_messages_used": bool(prior_messages_used),
-        "history_mode": history_mode if history_mode in {"none", "raw_messages", "summary"} else "none",
-        "run_created": bool(run_created),
-    }
-    if fallback_reason:
-        payload["fallback_reason"] = fallback_reason
-    return payload
 
 
 def _with_context_used(payload: Dict[str, Any], context_used: Dict[str, Any]) -> Dict[str, Any]:
-    next_payload = dict(payload)
-    next_payload["context_used"] = context_used
-    return next_payload
+    return direct_chat_metadata_service.with_context_used(payload, context_used)
 
 
 def _connect_action(label: str, href: str) -> Dict[str, Any]:
@@ -879,18 +868,9 @@ def _suggest_actions(message: str, availability: Dict[str, Any]) -> List[Dict[st
 
 
 def _heartbeat_pending_tasks_for_suggestions() -> List[str]:
-    try:
-        from server_modules.heartbeat import parse_unchecked_heartbeat_tasks
-    except Exception:
-        return []
-    heartbeat_path = workspace_context_dir() / "HEARTBEAT.md"
-    if not heartbeat_path.exists():
-        return []
-    try:
-        text = heartbeat_path.read_text(encoding="utf-8")
-    except Exception:
-        return []
-    return parse_unchecked_heartbeat_tasks(text)[:3]
+    return direct_chat_metadata_service.heartbeat_pending_tasks_for_suggestions(
+        workspace_context_dir_fn=workspace_context_dir,
+    )
 
 
 def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
@@ -898,27 +878,12 @@ def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
         from server_modules.shared import RUN_HISTORY, RUN_HISTORY_LOCK
     except Exception:
         return []
-    prompts: List[str] = []
-    seen: set[str] = set()
-    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
     with RUN_HISTORY_LOCK:
         history_items = list(RUN_HISTORY)
-    for item in history_items:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("workspace_id") or "").strip() != normalized_workspace_id:
-            continue
-        goal = re.sub(r"\s+", " ", str(item.get("user_goal") or "").strip())
-        if len(goal) < 12:
-            continue
-        key = goal.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        prompts.append(goal)
-        if len(prompts) >= 3:
-            break
-    return prompts
+    return direct_chat_metadata_service.recent_run_prompts_for_suggestions(
+        workspace_id,
+        run_history=history_items,
+    )
 
 
 def _build_proactive_suggestions(workspace_id: str) -> List[str]:

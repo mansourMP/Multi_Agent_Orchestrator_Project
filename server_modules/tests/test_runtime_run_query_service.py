@@ -6,6 +6,29 @@ from server_modules import runtime_run_query_service
 
 
 class RuntimeRunQueryServiceTests(unittest.TestCase):
+    def test_build_run_detail_response_callbacks_preserves_callables(self):
+        get_replay_payload = lambda run_id: {"run_id": run_id}
+        callbacks = runtime_run_query_service.build_run_detail_response_callbacks(
+            get_replay_payload=get_replay_payload,
+            serialize_run_snapshot=lambda run_id, run: {},
+            enforce_run_owner_access=lambda current_user, snapshot: None,
+            can_view_sensitive_run_payload=lambda current_user: False,
+            limited_run_context_view=lambda context: {},
+            build_delegation_summary=lambda snapshot, child_runs: {},
+            find_run_relationships=lambda run_id, snapshot: (None, []),
+            resolve_run_connector_binding=lambda snapshot: {},
+            redact_sensitive=lambda context: {},
+            limited_result_data_view_fn=lambda value: None,
+            limited_node_states_view_fn=lambda value: None,
+            trim_memory_trace_fn=lambda value: None,
+            get_pending_confirmation_fn=lambda run: None,
+            build_archived_run_detail_response=lambda **kwargs: {},
+            build_live_run_detail_response=lambda **kwargs: {},
+        )
+
+        self.assertIs(callbacks["get_replay_payload"], get_replay_payload)
+        self.assertIn("build_live_run_detail_response", callbacks)
+
     def test_build_run_detail_response_returns_archived_payload_when_live_run_missing(self):
         payload = runtime_run_query_service.build_run_detail_response(
             "run-1",

@@ -5,6 +5,43 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 
+def build_run_detail_response_callbacks(
+    *,
+    get_replay_payload: Callable[[str], dict[str, Any]],
+    serialize_run_snapshot: Callable[[str, dict[str, Any]], dict[str, Any]],
+    enforce_run_owner_access: Callable[[Any, Any], None],
+    can_view_sensitive_run_payload: Callable[[Any], bool],
+    limited_run_context_view: Callable[[dict[str, Any]], dict[str, Any]],
+    build_delegation_summary: Callable[[dict[str, Any], Any], Any],
+    find_run_relationships: Callable[[str, dict[str, Any]], tuple[Any, Any]],
+    resolve_run_connector_binding: Callable[[dict[str, Any]], Any],
+    redact_sensitive: Callable[[dict[str, Any]], dict[str, Any]],
+    limited_result_data_view_fn: Callable[[Any], Any],
+    limited_node_states_view_fn: Callable[[Any], Any],
+    trim_memory_trace_fn: Callable[[dict[str, Any]], Any],
+    get_pending_confirmation_fn: Callable[[dict[str, Any]], Any],
+    build_archived_run_detail_response: Callable[..., dict[str, Any]],
+    build_live_run_detail_response: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "get_replay_payload": get_replay_payload,
+        "serialize_run_snapshot": serialize_run_snapshot,
+        "enforce_run_owner_access": enforce_run_owner_access,
+        "can_view_sensitive_run_payload": can_view_sensitive_run_payload,
+        "limited_run_context_view": limited_run_context_view,
+        "build_delegation_summary": build_delegation_summary,
+        "find_run_relationships": find_run_relationships,
+        "resolve_run_connector_binding": resolve_run_connector_binding,
+        "redact_sensitive": redact_sensitive,
+        "limited_result_data_view_fn": limited_result_data_view_fn,
+        "limited_node_states_view_fn": limited_node_states_view_fn,
+        "trim_memory_trace_fn": trim_memory_trace_fn,
+        "get_pending_confirmation_fn": get_pending_confirmation_fn,
+        "build_archived_run_detail_response": build_archived_run_detail_response,
+        "build_live_run_detail_response": build_live_run_detail_response,
+    }
+
+
 def build_run_detail_response(
     run_id: str,
     *,

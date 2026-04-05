@@ -10,6 +10,7 @@ import sys
 import time
 import importlib.util
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
@@ -595,51 +596,32 @@ def _slash_command_help_text() -> str:
     return direct_chat_entry_policy_service.slash_command_help_text()
 
 
-def _tool_call_signature(tool_call: Dict[str, Any]) -> str:
-    return direct_tool_loop_guard_service.tool_call_signature(
-        tool_call,
-        tool_arguments_payload_fn=_tool_arguments_payload,
-        parse_tool_name_fn=_parse_tool_name,
-        parse_json_object_loose_fn=parse_json_object_loose,
-    )
+_tool_call_signature = partial(
+    direct_tool_loop_guard_service.tool_call_signature,
+    tool_arguments_payload_fn=lambda arguments: _tool_arguments_payload(arguments),
+    parse_tool_name_fn=lambda tool_name: _parse_tool_name(tool_name),
+    parse_json_object_loose_fn=parse_json_object_loose,
+)
 
+_record_direct_tool_signature = partial(
+    direct_tool_loop_guard_service.record_direct_tool_signature,
+    loop_state=_DIRECT_TOOL_LOOP_STATE,
+    repeat_limit=DIRECT_CHAT_LOOP_REPEAT_LIMIT,
+    tool_call_signature_fn=lambda tool_call: _tool_call_signature(tool_call),
+)
 
-def _record_direct_tool_signature(session_key: str, tool_call: Dict[str, Any]) -> bool:
-    return direct_tool_loop_guard_service.record_direct_tool_signature(
-        session_key,
-        tool_call,
-        loop_state=_DIRECT_TOOL_LOOP_STATE,
-        repeat_limit=DIRECT_CHAT_LOOP_REPEAT_LIMIT,
-        tool_call_signature_fn=_tool_call_signature,
-    )
+_clear_direct_tool_loop_state = partial(
+    direct_tool_loop_guard_service.clear_direct_tool_loop_state,
+    loop_state=_DIRECT_TOOL_LOOP_STATE,
+)
 
+_direct_chat_memory_context_message = partial(
+    direct_chat_memory_facade_service.direct_chat_memory_context_message,
+    system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
+)
 
-def _clear_direct_tool_loop_state(session_key: str) -> None:
-    direct_tool_loop_guard_service.clear_direct_tool_loop_state(
-        session_key,
-        loop_state=_DIRECT_TOOL_LOOP_STATE,
-    )
-
-
-def _direct_chat_memory_context_message(workspace_id: str) -> Optional[Dict[str, str]]:
-    return direct_chat_memory_facade_service.direct_chat_memory_context_message(
-        workspace_id,
-        system_prefix=_DIRECT_CHAT_MEMORY_SYSTEM_PREFIX,
-    )
-
-
-def _direct_chat_workspace_context_text(workspace_id: str, *, memory_query: str = "") -> str:
-    return direct_chat_memory_facade_service.direct_chat_workspace_context_text(
-        workspace_id,
-        memory_query=memory_query,
-    )
-
-
-def _build_direct_chat_daily_log_summary(*, user_message: str, assistant_reply: str) -> str:
-    return direct_chat_memory_facade_service.build_direct_chat_daily_log_summary(
-        user_message=user_message,
-        assistant_reply=assistant_reply,
-    )
+_direct_chat_workspace_context_text = direct_chat_memory_facade_service.direct_chat_workspace_context_text
+_build_direct_chat_daily_log_summary = direct_chat_memory_facade_service.build_direct_chat_daily_log_summary
 
 
 def _persist_direct_chat_memory_best_effort(
@@ -723,29 +705,27 @@ def _build_context_used(
     )
 
 
-def _with_context_used(payload: Dict[str, Any], context_used: Dict[str, Any]) -> Dict[str, Any]:
-    return direct_chat_metadata_service.with_context_used(payload, context_used)
+_with_context_used = direct_chat_metadata_service.with_context_used
 
 
 _connect_action = direct_chat_availability_service.connect_action
 _open_action = direct_chat_availability_service.open_action
 
 
-def _google_repair_action() -> Dict[str, Any]:
-    return direct_chat_availability_service.google_repair_action(
-        connect_action_fn=_connect_action,
-    )
+_google_repair_action = partial(
+    direct_chat_availability_service.google_repair_action,
+    connect_action_fn=_connect_action,
+)
 
 
 _run_action = direct_chat_availability_service.run_action
 _workflow_action = direct_chat_availability_service.workflow_action
 
 
-def _question_like(compact_message: str) -> bool:
-    return direct_chat_availability_service.question_like(
-        compact_message,
-        question_openers=QUESTION_OPENERS,
-    )
+_question_like = partial(
+    direct_chat_availability_service.question_like,
+    question_openers=QUESTION_OPENERS,
+)
 
 
 def _mentions_any(compact_message: str, markers: tuple[str, ...]) -> bool:
@@ -755,11 +735,10 @@ def _mentions_any(compact_message: str, markers: tuple[str, ...]) -> bool:
     )
 
 
-def _starts_like_direct_run(compact_message: str) -> bool:
-    return direct_chat_availability_service.starts_like_direct_run(
-        compact_message,
-        direct_run_openers=DIRECT_RUN_OPENERS,
-    )
+_starts_like_direct_run = partial(
+    direct_chat_availability_service.starts_like_direct_run,
+    direct_run_openers=DIRECT_RUN_OPENERS,
+)
 
 
 def _is_obvious_telegram_write_request(compact_message: str) -> bool:
@@ -802,13 +781,12 @@ def _connector_write_preview_allowed(message: str, availability: Dict[str, Any])
     )
 
 
-def _is_explicit_workflow_request(message: str) -> bool:
-    return direct_chat_availability_service.is_explicit_workflow_request(
-        message,
-        compact_text_fn=_compact_text,
-        mentions_any_fn=_mentions_any,
-        workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
-    )
+_is_explicit_workflow_request = partial(
+    direct_chat_availability_service.is_explicit_workflow_request,
+    compact_text_fn=_compact_text,
+    mentions_any_fn=_mentions_any,
+    workflow_request_markers=WORKFLOW_REQUEST_MARKERS,
+)
 
 
 def _no_ai_chat_response(availability: Dict[str, Any]) -> Dict[str, Any]:
@@ -898,12 +876,12 @@ def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optiona
     )
 
 
-def _action_marker_count(compact_message: str) -> int:
-    return direct_chat_routing_service.action_marker_count(compact_message, EXECUTION_MARKERS)
+_action_marker_count = partial(
+    direct_chat_routing_service.action_marker_count,
+    execution_markers=EXECUTION_MARKERS,
+)
 
-
-def _path_like_reference_count(message: str) -> int:
-    return direct_chat_routing_service.path_like_reference_count(message)
+_path_like_reference_count = direct_chat_routing_service.path_like_reference_count
 
 
 def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> bool:
@@ -928,27 +906,18 @@ def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.Direc
     )
 
 
-def _durable_run_preferred_response(message: str) -> Dict[str, Any]:
-    return direct_chat_handoff_facade_service.durable_run_preferred_response(
-        message,
-        run_action_fn=_run_action,
-    )
+_durable_run_preferred_response = partial(
+    direct_chat_handoff_facade_service.durable_run_preferred_response,
+    run_action_fn=_run_action,
+)
 
+_run_handoff_execution_target = direct_chat_handoff_facade_service.run_handoff_execution_target
+_can_auto_start_run_handoff = direct_chat_handoff_facade_service.can_auto_start_run_handoff
 
-def _run_handoff_execution_target(availability: Dict[str, Any]) -> str:
-    return direct_chat_handoff_facade_service.run_handoff_execution_target(availability)
-
-
-def _can_auto_start_run_handoff(availability: Dict[str, Any]) -> bool:
-    return direct_chat_handoff_facade_service.can_auto_start_run_handoff(availability)
-
-
-def _direct_chat_run_handoff_failure_payload(message: str, error_detail: str) -> Dict[str, Any]:
-    return direct_chat_handoff_facade_service.direct_chat_run_handoff_failure_payload(
-        message,
-        error_detail,
-        run_action_fn=_run_action,
-    )
+_direct_chat_run_handoff_failure_payload = partial(
+    direct_chat_handoff_facade_service.direct_chat_run_handoff_failure_payload,
+    run_action_fn=_run_action,
+)
 
 
 def _start_direct_chat_run_handoff(
@@ -973,31 +942,19 @@ def _start_direct_chat_run_handoff(
     )
 
 
-def _direct_chat_run_handoff_reply(started: Dict[str, Any]) -> Dict[str, Any]:
-    return direct_chat_handoff_facade_service.direct_chat_run_handoff_reply(
-        started,
-        open_action_fn=_open_action,
-    )
+_direct_chat_run_handoff_reply = partial(
+    direct_chat_handoff_facade_service.direct_chat_run_handoff_reply,
+    open_action_fn=_open_action,
+)
 
+_direct_chat_run_actions = partial(
+    direct_chat_handoff_facade_service.direct_chat_run_actions,
+    open_action_fn=_open_action,
+)
 
-def _direct_chat_run_actions(run_id: str, *, waiting_for_confirmation: bool = False) -> List[Dict[str, Any]]:
-    return direct_chat_handoff_facade_service.direct_chat_run_actions(
-        run_id,
-        waiting_for_confirmation=waiting_for_confirmation,
-        open_action_fn=_open_action,
-    )
-
-
-def _direct_chat_run_snapshot(run_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    return direct_chat_handoff_facade_service.direct_chat_run_snapshot(run_id)
-
-
-def _direct_chat_run_event_to_step(run_id: str, event: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-    return direct_chat_handoff_facade_service.direct_chat_run_event_to_step(run_id, event)
-
-
-def _direct_chat_run_snapshot_to_step(run_id: str, snapshot: Dict[str, Any]) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
-    return direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step(run_id, snapshot)
+_direct_chat_run_snapshot = direct_chat_handoff_facade_service.direct_chat_run_snapshot
+_direct_chat_run_event_to_step = direct_chat_handoff_facade_service.direct_chat_run_event_to_step
+_direct_chat_run_snapshot_to_step = direct_chat_handoff_facade_service.direct_chat_run_snapshot_to_step
 
 
 def _direct_chat_run_final_payload(
@@ -1091,11 +1048,10 @@ def _direct_chat_tool_policy_callbacks() -> direct_chat_tool_catalog_service.Dir
     )
 
 
-def _build_local_direct_chat_tools(availability: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return direct_chat_tool_catalog_service.build_local_direct_chat_tools(
-        availability,
-        local_worker_available=_local_worker_available,
-    )
+_build_local_direct_chat_tools = partial(
+    direct_chat_tool_catalog_service.build_local_direct_chat_tools,
+    local_worker_available=_local_worker_available,
+)
 
 
 _build_direct_chat_tools = direct_chat_tool_catalog_service.build_direct_chat_tools

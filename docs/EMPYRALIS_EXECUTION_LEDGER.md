@@ -1768,6 +1768,64 @@ This cut does not introduce a new subsystem boundary. It is a compatibility-pres
   - `server_modules.tests.test_direct_chat_operator_binding_service`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Keyword-Injected Delegate Band Reduced With Alias And Partial Bindings
+
+#### Stage
+
+Stage 1 continues. Another strip of keyword-injected delegate wrappers was collapsed inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut is still structural cleanup rather than a new architecture boundary, but it removes another meaningful chunk of shell code while keeping the same module-level compatibility surface.
+
+#### Completed Work
+
+- Replaced a remaining band of thin wrappers in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) with direct aliases or `partial(...)` bindings where the only job was injecting fixed callback arguments.
+- Reduced wrapper noise for:
+  - loop-guard helpers
+  - memory facade passthroughs
+  - metadata passthroughs
+  - availability and workflow marker helpers
+  - routing helper passthroughs
+  - handoff helper passthroughs
+  - local direct-tool catalog passthroughs
+- Preserved explicit wrapper functions only where runtime callback assembly or dynamic imports still matter.
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1600` to `1556` lines in this cut.
+- The affected helper names still exist on the module and remain importable.
+- The behavior is unchanged; this is another shell-thinning pass.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns substantial orchestration and callback graph assembly.
+- The remaining wins will increasingly require moving real orchestration logic, not just collapsing delegate glue.
+- The docs continuity cleanup still remains for later after the current code-refactor run settles.
+
+#### Next Required Work
+
+1. Target another dense orchestration band in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py), not just additional alias cleanups.
+2. Keep preserving module-level compatibility names while reducing internal ownership.
+3. Reconcile the ledger/doc continuity once the current refactor band is stable.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Top-Level Runtime Entry Wiring Moved Behind Runtime Entry Facade
 
 #### Stage

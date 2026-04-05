@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
@@ -14,6 +15,115 @@ class DirectChatRouteDecision:
     allow_builtin_direct_tools: bool
     allow_direct_tool_calls: bool
     should_auto_start_run: bool
+
+
+@dataclass(frozen=True)
+class DirectChatRoutingPolicyCallbacks:
+    compact_text: Callable[[Any], str]
+    mentions_any: Callable[[str, tuple[str, ...] | list[str]], bool]
+    question_like: Callable[[str], bool]
+    is_explicit_workflow_request: Callable[[str], bool]
+    starts_like_direct_run: Callable[[str], bool]
+    workflow_action: Callable[[str], Dict[str, Any]]
+    run_action: Callable[[str], Dict[str, Any]]
+    message_requests_local_file_tool: Callable[[str], bool]
+    message_requests_local_shell_tool: Callable[[str], bool]
+    message_requests_local_screenshot_tool: Callable[[str], bool]
+    complex_task_sequence_markers: tuple[str, ...] | list[str]
+    complex_task_outcome_markers: tuple[str, ...] | list[str]
+    execution_markers: tuple[str, ...] | list[str]
+    google_workspace_keywords: tuple[str, ...] | list[str]
+    telegram_keywords: tuple[str, ...] | list[str]
+    slack_keywords: tuple[str, ...] | list[str]
+    dropbox_keywords: tuple[str, ...] | list[str]
+    s3_keywords: tuple[str, ...] | list[str]
+
+
+def preview_run_response(
+    message: str,
+    availability: Dict[str, Any],
+    callbacks: DirectChatRoutingPolicyCallbacks,
+) -> Optional[Dict[str, Any]]:
+    compact = callbacks.compact_text(message)
+    if callbacks.is_explicit_workflow_request(message):
+        return {
+            "reply": "I can help turn that into a workflow.",
+            "actions": [callbacks.workflow_action(message)],
+            "mode": "answer_with_action",
+        }
+    if callbacks.mentions_any(compact, callbacks.execution_markers) and callbacks.starts_like_direct_run(compact) and not callbacks.question_like(compact):
+        return {
+            "reply": "I can run that here.",
+            "actions": [callbacks.run_action(message)],
+            "mode": "answer_with_action",
+        }
+    return None
+
+
+def action_marker_count(compact_message: str, execution_markers: tuple[str, ...] | list[str]) -> int:
+    if not compact_message:
+        return 0
+    count = 0
+    for marker in execution_markers:
+        if re.search(rf"\b{re.escape(marker)}\b", compact_message):
+            count += 1
+    return count
+
+
+def path_like_reference_count(message: str) -> int:
+    if not message:
+        return 0
+    return len(
+        re.findall(
+            r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])\S+",
+            str(message),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def prefer_durable_run_handoff(
+    message: str,
+    availability: Dict[str, Any],
+    callbacks: DirectChatRoutingPolicyCallbacks,
+) -> bool:
+    compact = callbacks.compact_text(message)
+    if not compact or callbacks.question_like(compact):
+        return False
+    if not isinstance(availability, dict) or not bool(availability.get("ai_ready")):
+        return False
+    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
+
+    local_file = callbacks.message_requests_local_file_tool(message)
+    local_shell = callbacks.message_requests_local_shell_tool(message)
+    local_screenshot = callbacks.message_requests_local_screenshot_tool(message)
+    local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot) if flag)
+    sequence_requested = any(marker in compact for marker in callbacks.complex_task_sequence_markers)
+    outcome_requested = any(marker in compact for marker in callbacks.complex_task_outcome_markers)
+    path_reference_total = path_like_reference_count(message)
+    marker_count = action_marker_count(compact, callbacks.execution_markers)
+    if local_request_count <= 0:
+        return connection_mode in {"local_companion", "byok"} and outcome_requested and marker_count >= 1 and len(compact) >= 40
+
+    mixes_connector_work = (
+        callbacks.mentions_any(compact, callbacks.google_workspace_keywords)
+        or callbacks.mentions_any(compact, callbacks.telegram_keywords)
+        or callbacks.mentions_any(compact, callbacks.slack_keywords)
+        or callbacks.mentions_any(compact, callbacks.dropbox_keywords)
+        or callbacks.mentions_any(compact, callbacks.s3_keywords)
+    )
+
+    if local_request_count >= 2:
+        return True
+    if path_reference_total >= 2:
+        return True
+    if mixes_connector_work:
+        return True
+    if sequence_requested and (marker_count >= 2 or len(compact) >= 110):
+        return True
+    if outcome_requested and (sequence_requested or marker_count >= 2):
+        return True
+    return False
 
 
 def plan_direct_chat_route(

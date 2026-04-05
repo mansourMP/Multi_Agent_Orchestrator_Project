@@ -1892,6 +1892,70 @@ This is another implementation-heavy extraction, not just a constructor move.
   - `server_modules.tests.test_iteration_caps`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Durable Run Routing Policy Moved Behind Routing Service
+
+#### Stage
+
+Stage 1 continues. The durable-run preview and handoff-preference policy band no longer lives inline inside [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py).
+
+This cut moves more routing policy into the existing routing service boundary instead of creating another isolated helper island.
+
+#### Completed Work
+
+- Expanded [server_modules/direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_routing_service.py) with:
+  - `DirectChatRoutingPolicyCallbacks`
+  - `preview_run_response()`
+  - `action_marker_count()`
+  - `path_like_reference_count()`
+  - `prefer_durable_run_handoff()`
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so these historical helpers now delegate through the routing service:
+  - `_preview_run_response()`
+  - `_action_marker_count()`
+  - `_path_like_reference_count()`
+  - `_prefer_durable_run_handoff()`
+- Added `_direct_chat_routing_policy_callbacks()` in [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so the late-bound compatibility surface stays stable while the policy moves behind the service.
+- Expanded focused routing coverage in [server_modules/tests/test_direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_routing_service.py) for:
+  - imperative preview-run responses
+  - multi-step local requests preferring durable run handoff
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `2065` to `2033` lines in this cut.
+- The run-routing policy is now better aligned with the existing routing service boundary instead of being split between service and chat module.
+- The remaining chat module is increasingly wrapper-oriented rather than policy-owned.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns significant direct-chat coordination and run-handoff composition.
+- The direct-chat handoff flow still has wrapper-heavy orchestration in the chat module that should move further behind service boundaries.
+- The module is thinner than before, but it is still not yet at the target shell size implied by the platform architecture.
+
+#### Next Required Work
+
+1. Continue reducing [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) by extracting another orchestration-heavy seam, likely around run-handoff composition or top-level response entry flow.
+2. Keep wrapper names stable so existing operator-chat tests can still patch the same late-bound entrypoints.
+3. Maintain focused regression coverage around routing, handoff, direct-tool execution, and fallback behavior after each cut.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_routing_service.py)
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/tests/test_direct_chat_routing_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_routing_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_direct_chat_routing_service`
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_service`
+  - `server_modules.tests.test_direct_chat_tool_catalog_service`
+  - `server_modules.tests.test_direct_tool_config_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_iteration_caps`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Remaining Connector Constructor Graph Moved Behind Dedicated Shell Service
 
 #### Stage

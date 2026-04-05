@@ -1135,82 +1135,50 @@ def _build_proactive_suggestions(workspace_id: str) -> List[str]:
 
 
 def _preview_run_response(message: str, availability: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    compact = _compact_text(message)
-    if _is_explicit_workflow_request(message):
-        return {
-            "reply": "I can help turn that into a workflow.",
-            "actions": [_workflow_action(message)],
-            "mode": "answer_with_action",
-        }
-    if _mentions_any(compact, EXECUTION_MARKERS) and _starts_like_direct_run(compact) and not _question_like(compact):
-        return {
-            "reply": "I can run that here.",
-            "actions": [_run_action(message)],
-            "mode": "answer_with_action",
-        }
-    return None
+    return direct_chat_routing_service.preview_run_response(
+        message,
+        availability,
+        _direct_chat_routing_policy_callbacks(),
+    )
 
 
 def _action_marker_count(compact_message: str) -> int:
-    if not compact_message:
-        return 0
-    count = 0
-    for marker in EXECUTION_MARKERS:
-        if re.search(rf"\b{re.escape(marker)}\b", compact_message):
-            count += 1
-    return count
+    return direct_chat_routing_service.action_marker_count(compact_message, EXECUTION_MARKERS)
 
 
 def _path_like_reference_count(message: str) -> int:
-    if not message:
-        return 0
-    return len(
-        re.findall(
-            r"(^|\s)(/|~/|\./|\.\./|[a-z]:[/\\])\S+",
-            str(message),
-            flags=re.IGNORECASE,
-        )
-    )
+    return direct_chat_routing_service.path_like_reference_count(message)
 
 
 def _prefer_durable_run_handoff(message: str, availability: Dict[str, Any]) -> bool:
-    compact = _compact_text(message)
-    if not compact or _question_like(compact):
-        return False
-    if not isinstance(availability, dict) or not bool(availability.get("ai_ready")):
-        return False
-    connection_mode = str(availability.get("connection_mode") or "").strip().lower()
-
-    local_file = _message_requests_local_file_tool(message)
-    local_shell = _message_requests_local_shell_tool(message)
-    local_screenshot = _message_requests_local_screenshot_tool(message)
-    local_request_count = sum(1 for flag in (local_file, local_shell, local_screenshot) if flag)
-    sequence_requested = any(marker in compact for marker in COMPLEX_TASK_SEQUENCE_MARKERS)
-    outcome_requested = any(marker in compact for marker in COMPLEX_TASK_OUTCOME_MARKERS)
-    path_reference_count = _path_like_reference_count(message)
-    action_count = _action_marker_count(compact)
-    if local_request_count <= 0:
-        return connection_mode in {"local_companion", "byok"} and outcome_requested and action_count >= 1 and len(compact) >= 40
-
-    mixes_connector_work = (
-        _mentions_any(compact, GOOGLE_WORKSPACE_KEYWORDS)
-        or _mentions_any(compact, TELEGRAM_KEYWORDS)
-        or _mentions_any(compact, SLACK_KEYWORDS)
-        or _mentions_any(compact, DROPBOX_KEYWORDS)
-        or _mentions_any(compact, S3_KEYWORDS)
+    return direct_chat_routing_service.prefer_durable_run_handoff(
+        message,
+        availability,
+        _direct_chat_routing_policy_callbacks(),
     )
 
-    if local_request_count >= 2:
-        return True
-    if path_reference_count >= 2:
-        return True
-    if mixes_connector_work:
-        return True
-    if sequence_requested and (action_count >= 2 or len(compact) >= 110):
-        return True
-    if outcome_requested and (sequence_requested or action_count >= 2):
-        return True
-    return False
+
+def _direct_chat_routing_policy_callbacks() -> direct_chat_routing_service.DirectChatRoutingPolicyCallbacks:
+    return direct_chat_routing_service.DirectChatRoutingPolicyCallbacks(
+        compact_text=_compact_text,
+        mentions_any=_mentions_any,
+        question_like=_question_like,
+        is_explicit_workflow_request=_is_explicit_workflow_request,
+        starts_like_direct_run=_starts_like_direct_run,
+        workflow_action=_workflow_action,
+        run_action=_run_action,
+        message_requests_local_file_tool=_message_requests_local_file_tool,
+        message_requests_local_shell_tool=_message_requests_local_shell_tool,
+        message_requests_local_screenshot_tool=_message_requests_local_screenshot_tool,
+        complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
+        complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
+        execution_markers=EXECUTION_MARKERS,
+        google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+        telegram_keywords=TELEGRAM_KEYWORDS,
+        slack_keywords=SLACK_KEYWORDS,
+        dropbox_keywords=DROPBOX_KEYWORDS,
+        s3_keywords=S3_KEYWORDS,
+    )
 
 
 def _durable_run_preferred_response(message: str) -> Dict[str, Any]:

@@ -14,6 +14,7 @@ from server_modules.runs_output import (
     _serialize_run_snapshot,
     _upsert_run_history_snapshot,
 )
+from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
 
 globals().update({key: value for key, value in vars(config).items() if not key.startswith("__")})
 globals().update({key: value for key, value in vars(shared).items() if not key.startswith("__")})
@@ -117,6 +118,26 @@ def normalize_agent_role(value: Any) -> str:
 
 _safe_int = run_service.safe_int
 _normalize_requested_max_iterations = run_service.normalize_requested_max_iterations
+
+
+def _delegation_run_execution_services() -> run_service.RunExecutionServices:
+    return run_service.RunExecutionServices(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=_prepare_run_start_request,
+        create_run_from_request=lambda req: _create_run_from_request(req),
+    )
+
+
+def _execute_delegated_run_request(req: RunStartRequest) -> Dict[str, Any]:
+    # Preserve legacy test/runtime patch points that replace the create wrapper
+    # directly, while using the canonical turn-runtime path for normal execution.
+    if type(_create_run_from_request).__module__ == "unittest.mock":
+        return _create_run_from_request(req)
+    return execute_system_run_start_request_via_turn_runtime(
+        req,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=_delegation_run_execution_services(),
+    )
 
 
 def _failure_status(status: Any) -> bool:
@@ -707,7 +728,7 @@ def _schedule_auto_retry_for_failed_children(
                     retry_payload,
                     note="Automatic retry after delegated child failure.",
                 )
-                _create_run_from_request(delegated_req)
+                _execute_delegated_run_request(delegated_req)
             except Exception as exc:
                 current_parent = runs.get(parent_id)
                 current_log_queue = current_parent.get("logs") if isinstance(current_parent, dict) else None

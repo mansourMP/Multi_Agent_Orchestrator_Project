@@ -156,38 +156,37 @@ def _load_webhook_triggers() -> None:
     )
 
 
-def _persist_webhook_triggers_locked() -> None:
-    return runtime_webhook_trigger_service.persist_webhook_triggers_locked(
-        _WEBHOOK_TRIGGERS,
-        path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
-        safe_write_json=_late_server_export("_safe_write_json"),
-    )
+_persist_webhook_triggers_locked = lambda: runtime_webhook_trigger_service.persist_webhook_triggers_locked(
+    _WEBHOOK_TRIGGERS,
+    path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
+    safe_write_json=_late_server_export("_safe_write_json"),
+)
 
 
-def _match_webhook_trigger(workspace_id: str, request_url: str) -> Optional[dict[str, Any]]:
+_match_webhook_trigger = lambda workspace_id, request_url: (
     _load_webhook_triggers()
-    return runtime_webhook_trigger_service.match_webhook_trigger(
+    or runtime_webhook_trigger_service.match_webhook_trigger(
         _WEBHOOK_TRIGGERS,
         lock=_WEBHOOK_TRIGGER_LOCK,
         workspace_id=workspace_id,
         request_url=request_url,
     )
+)
 
 
 _normalize_usage_period = runtime_usage_service.normalize_usage_period
 
 
-def _usage_snapshots_for_user(current_user: Any) -> list[dict[str, Any]]:
-    return runtime_usage_service.usage_snapshots_for_user(
-        current_user,
-        refresh_server_exports=_refresh_server_exports,
-        run_history_lock=RUN_HISTORY_LOCK,
-        run_history=RUN_HISTORY,
-        runs=runs,
-        serialize_snapshot=_late_server_export("_serialize_run_snapshot"),
-        current_user_is_privileged=_current_user_is_privileged,
-        extract_run_owner_user_id=_extract_run_owner_user_id,
-    )
+_usage_snapshots_for_user = lambda current_user: runtime_usage_service.usage_snapshots_for_user(
+    current_user,
+    refresh_server_exports=_refresh_server_exports,
+    run_history_lock=RUN_HISTORY_LOCK,
+    run_history=RUN_HISTORY,
+    runs=runs,
+    serialize_snapshot=_late_server_export("_serialize_run_snapshot"),
+    current_user_is_privileged=_current_user_is_privileged,
+    extract_run_owner_user_id=_extract_run_owner_user_id,
+)
 
 
 def _normalize_chat_stream_cursor(value: Any) -> int:
@@ -200,23 +199,22 @@ def _normalize_chat_stream_cursor(value: Any) -> int:
         return 0
 
 
-def _chat_stream_state_db_path() -> Path:
-    from server_modules.runtime_config import ORION_RUNTIME_STATE_DB
-
-    return chat_stream_runtime_service.resolve_chat_stream_state_db_path(
-        override=globals().get("_CHAT_STREAM_STATE_DB_OVERRIDE"),
-        late_server_export=_late_server_export,
-        fallback_db_path=ORION_RUNTIME_STATE_DB,
-    )
+_chat_stream_state_db_path = lambda: chat_stream_runtime_service.resolve_chat_stream_state_db_path(
+    override=globals().get("_CHAT_STREAM_STATE_DB_OVERRIDE"),
+    late_server_export=_late_server_export,
+    fallback_db_path=__import__(
+        "server_modules.runtime_config",
+        fromlist=["ORION_RUNTIME_STATE_DB"],
+    ).ORION_RUNTIME_STATE_DB,
+)
 
 
 _configured_direct_chat_worker_count = chat_stream_runtime_service.configured_direct_chat_worker_count
 
 
-def ensure_single_worker_direct_chat_stream_runtime() -> None:
-    return chat_stream_state_service.ensure_single_worker_runtime(
-        configured_worker_count=_configured_direct_chat_worker_count(),
-    )
+ensure_single_worker_direct_chat_stream_runtime = lambda: chat_stream_state_service.ensure_single_worker_runtime(
+    configured_worker_count=_configured_direct_chat_worker_count(),
+)
 
 
 def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> None:
@@ -474,15 +472,14 @@ _run_thread_is_alive = lambda run: runtime_run_resume_service.run_thread_is_aliv
 )
 
 
-def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
-    return runtime_run_resume_service.schedule_restored_run_resume(
-        run_id_str,
-        run,
-        run_thread_is_alive_fn=_run_thread_is_alive,
-        utc_now_iso=_utc_now_iso,
-        late_server_export=_late_server_export,
-        thread_class=threading.Thread,
-    )
+_schedule_restored_run_resume = lambda run_id_str, run: runtime_run_resume_service.schedule_restored_run_resume(
+    run_id_str,
+    run,
+    run_thread_is_alive_fn=_run_thread_is_alive,
+    utc_now_iso=_utc_now_iso,
+    late_server_export=_late_server_export,
+    thread_class=threading.Thread,
+)
 
 
 def register_run_routes(app) -> None:

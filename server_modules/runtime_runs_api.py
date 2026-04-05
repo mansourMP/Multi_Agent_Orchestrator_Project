@@ -65,6 +65,7 @@ from server_modules.runtime_state_store import (
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_local_execution_approval_service
+from server_modules import runtime_request_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_approval_service
 from server_modules import runtime_run_control_service
@@ -595,16 +596,12 @@ def register_run_routes(app) -> None:
     @app.post("/chat/respond", dependencies=[Depends(require_api_key)])
     async def respond_chat(request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        if not isinstance(current_user, dict):
-            raise HTTPException(status_code=401, detail="Authentication required.")
-        try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid chat payload: {exc}") from exc
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Invalid chat payload.")
+        body = await runtime_request_service.read_json_object_payload(
+            request,
+            invalid_detail="Invalid chat payload",
+        )
         return await build_direct_chat_stream_response(
-            current_user=current_user,
+            current_user=runtime_request_service.require_authenticated_user(current_user),
             body=body,
             last_event_id=request.headers.get("last-event-id") or body.get("last_event_id"),
             services=_direct_chat_stream_response_services(),
@@ -637,10 +634,10 @@ def register_run_routes(app) -> None:
     @app.post("/workspace/context-files/{filename}", dependencies=[Depends(require_api_key)])
     async def update_workspace_context_file(filename: str, request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid context file payload: {exc}") from exc
+        body = await runtime_request_service.read_json_payload(
+            request,
+            invalid_detail="Invalid context file payload",
+        )
         return runtime_workspace_service.update_workspace_context_file_payload(
             filename,
             body,
@@ -668,10 +665,10 @@ def register_run_routes(app) -> None:
     async def register_webhook_trigger(request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
         _load_webhook_triggers()
-        try:
-            body = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid webhook trigger payload: {exc}") from exc
+        body = await runtime_request_service.read_json_payload(
+            request,
+            invalid_detail="Invalid webhook trigger payload",
+        )
         return runtime_webhook_trigger_service.register_webhook_trigger_payload(
             body,
             uuid_factory=uuid.uuid4,
@@ -684,10 +681,10 @@ def register_run_routes(app) -> None:
     @app.post("/webhooks/ingest/{workspace_id}", dependencies=[Depends(require_api_key)])
     async def ingest_webhook(workspace_id: str, request: Request, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        try:
-            payload = await request.json()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid webhook payload: {exc}") from exc
+        payload = await runtime_request_service.read_json_payload(
+            request,
+            invalid_detail="Invalid webhook payload",
+        )
         return await runtime_webhook_trigger_service.ingest_webhook_payload(
             workspace_id=workspace_id,
             request_url=str(request.url),

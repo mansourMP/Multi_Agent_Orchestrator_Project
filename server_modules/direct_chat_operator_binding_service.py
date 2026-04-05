@@ -19,6 +19,13 @@ class DirectChatOperatorRuntimeBindings:
     runtime_services: Any
 
 
+@dataclass(slots=True)
+class DirectChatOperatorPolicyBindings:
+    routing_policy_callbacks: Any
+    tool_policy_callbacks: Any
+    direct_tool_execution_callbacks: Any
+
+
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
     if name in namespace:
         value = namespace[name]
@@ -306,4 +313,85 @@ def build_direct_chat_runtime_bindings(
         prepare_request=prepare_request,
         response_services=response_services,
         runtime_services=runtime_services,
+    )
+
+
+def build_direct_chat_policy_bindings(
+    *,
+    namespace: Dict[str, Any],
+    complex_task_sequence_markers: tuple[str, ...] | list[str],
+    complex_task_outcome_markers: tuple[str, ...] | list[str],
+    execution_markers: tuple[str, ...] | list[str],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    smtp_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    discord_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+    browser_keywords: tuple[str, ...] | list[str],
+    local_file_keywords: tuple[str, ...] | list[str],
+    local_shell_keywords: tuple[str, ...] | list[str],
+    local_screenshot_keywords: tuple[str, ...] | list[str],
+    local_computer_control_keywords: tuple[str, ...] | list[str],
+    web_lookup_keywords: tuple[str, ...] | list[str],
+    http_request_keywords: tuple[str, ...] | list[str],
+    image_generation_keywords: tuple[str, ...] | list[str],
+    llm_task_keywords: tuple[str, ...] | list[str],
+    parse_json_object_loose: Any,
+    llm_task: Any,
+    web_search: Any,
+    web_fetch: Any,
+    search_memory_notebook: Any,
+    get_memory_notebook_excerpt: Any,
+) -> DirectChatOperatorPolicyBindings:
+    def routing_policy_callbacks():
+        return build_direct_chat_routing_policy_callbacks(
+            namespace=namespace,
+            complex_task_sequence_markers=complex_task_sequence_markers,
+            complex_task_outcome_markers=complex_task_outcome_markers,
+            execution_markers=execution_markers,
+            google_workspace_keywords=google_workspace_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+        )
+
+    def tool_policy_callbacks():
+        return build_direct_chat_tool_policy_callbacks(
+            namespace=namespace,
+            google_workspace_keywords=google_workspace_keywords,
+            smtp_keywords=smtp_keywords,
+            telegram_keywords=telegram_keywords,
+            slack_keywords=slack_keywords,
+            discord_keywords=discord_keywords,
+            dropbox_keywords=dropbox_keywords,
+            s3_keywords=s3_keywords,
+            browser_keywords=browser_keywords,
+            local_file_keywords=local_file_keywords,
+            local_shell_keywords=local_shell_keywords,
+            local_screenshot_keywords=local_screenshot_keywords,
+            local_computer_control_keywords=local_computer_control_keywords,
+            web_lookup_keywords=web_lookup_keywords,
+            http_request_keywords=http_request_keywords,
+            image_generation_keywords=image_generation_keywords,
+            llm_task_keywords=llm_task_keywords,
+        )
+
+    def direct_tool_execution_callbacks():
+        return build_direct_tool_execution_callbacks(
+            namespace=namespace,
+            parse_json_object_loose=parse_json_object_loose,
+            llm_task=llm_task,
+            web_search=web_search,
+            web_fetch=web_fetch,
+            search_memory_notebook=search_memory_notebook,
+            get_memory_notebook_excerpt=get_memory_notebook_excerpt,
+        )
+
+    return DirectChatOperatorPolicyBindings(
+        routing_policy_callbacks=routing_policy_callbacks,
+        tool_policy_callbacks=tool_policy_callbacks,
+        direct_tool_execution_callbacks=direct_tool_execution_callbacks,
     )

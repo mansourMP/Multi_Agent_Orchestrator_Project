@@ -615,39 +615,12 @@ _build_proactive_suggestions = partial(
 )
 
 
-_preview_run_response = lambda message, availability: direct_chat_routing_service.preview_run_response(
-    message,
-    availability,
-    _direct_chat_routing_policy_callbacks(),
-)
-
-
 _action_marker_count = partial(
     direct_chat_routing_service.action_marker_count,
     execution_markers=EXECUTION_MARKERS,
 )
 
 _path_like_reference_count = direct_chat_routing_service.path_like_reference_count
-
-
-_prefer_durable_run_handoff = lambda message, availability: direct_chat_routing_service.prefer_durable_run_handoff(
-    message,
-    availability,
-    _direct_chat_routing_policy_callbacks(),
-)
-
-
-_direct_chat_routing_policy_callbacks = lambda: direct_chat_operator_binding_service.build_direct_chat_routing_policy_callbacks(
-    namespace=globals(),
-    complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
-    complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
-    execution_markers=EXECUTION_MARKERS,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-)
 
 
 _durable_run_preferred_response = partial(
@@ -724,27 +697,6 @@ _stream_direct_chat_run_handoff = lambda *, started_run, requested_workspace_id,
 
 
 _provider_supports_direct_tool_calls = direct_chat_tool_catalog_service.provider_supports_direct_tool_calls
-
-
-_direct_chat_tool_policy_callbacks = lambda: direct_chat_operator_binding_service.build_direct_chat_tool_policy_callbacks(
-    namespace=globals(),
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    smtp_keywords=SMTP_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    discord_keywords=DISCORD_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
-    browser_keywords=BROWSER_KEYWORDS,
-    local_file_keywords=LOCAL_FILE_KEYWORDS,
-    local_shell_keywords=LOCAL_SHELL_KEYWORDS,
-    local_screenshot_keywords=LOCAL_SCREENSHOT_KEYWORDS,
-    local_computer_control_keywords=LOCAL_COMPUTER_CONTROL_KEYWORDS,
-    web_lookup_keywords=WEB_LOOKUP_KEYWORDS,
-    http_request_keywords=HTTP_REQUEST_KEYWORDS,
-    image_generation_keywords=IMAGE_GENERATION_KEYWORDS,
-    llm_task_keywords=LLM_TASK_KEYWORDS,
-)
 
 
 _build_local_direct_chat_tools = partial(
@@ -862,17 +814,6 @@ _thinking_step_payload = direct_tool_execution_service.thinking_step_payload
 _extract_first_url = direct_tool_execution_service.extract_first_url
 _extract_first_path_reference = direct_tool_execution_service.extract_first_path_reference
 _resolve_chat_local_path = direct_tool_execution_service.resolve_chat_local_path
-
-
-_direct_tool_execution_callbacks = lambda: direct_chat_operator_binding_service.build_direct_tool_execution_callbacks(
-    namespace=globals(),
-    parse_json_object_loose=parse_json_object_loose,
-    llm_task=llm_task,
-    web_search=web_search,
-    web_fetch=web_fetch,
-    search_memory_notebook=search_memory_notebook,
-    get_memory_notebook_excerpt=get_memory_notebook_excerpt,
-)
 
 
 _no_provider_execution_services = lambda: direct_tool_runtime_facade_service.build_no_provider_execution_services(
@@ -1000,12 +941,57 @@ _direct_chat_runtime_bindings = direct_chat_operator_binding_service.build_direc
     no_provider_reasoning_required_response=lambda: no_provider_service.no_provider_reasoning_required_response(),
     supported_providers=list(SUPPORTED_PROVIDERS),
 )
+_direct_chat_policy_bindings = direct_chat_operator_binding_service.build_direct_chat_policy_bindings(
+    namespace=globals(),
+    complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
+    complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
+    execution_markers=EXECUTION_MARKERS,
+    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
+    smtp_keywords=SMTP_KEYWORDS,
+    telegram_keywords=TELEGRAM_KEYWORDS,
+    slack_keywords=SLACK_KEYWORDS,
+    discord_keywords=DISCORD_KEYWORDS,
+    dropbox_keywords=DROPBOX_KEYWORDS,
+    s3_keywords=S3_KEYWORDS,
+    browser_keywords=BROWSER_KEYWORDS,
+    local_file_keywords=LOCAL_FILE_KEYWORDS,
+    local_shell_keywords=LOCAL_SHELL_KEYWORDS,
+    local_screenshot_keywords=LOCAL_SCREENSHOT_KEYWORDS,
+    local_computer_control_keywords=LOCAL_COMPUTER_CONTROL_KEYWORDS,
+    web_lookup_keywords=WEB_LOOKUP_KEYWORDS,
+    http_request_keywords=HTTP_REQUEST_KEYWORDS,
+    image_generation_keywords=IMAGE_GENERATION_KEYWORDS,
+    llm_task_keywords=LLM_TASK_KEYWORDS,
+    parse_json_object_loose=lambda value: parse_json_object_loose(value),
+    llm_task=lambda **kwargs: llm_task(**kwargs),
+    web_search=lambda **kwargs: web_search(**kwargs),
+    web_fetch=lambda **kwargs: web_fetch(**kwargs),
+    search_memory_notebook=lambda *args, **kwargs: search_memory_notebook(*args, **kwargs),
+    get_memory_notebook_excerpt=lambda *args, **kwargs: get_memory_notebook_excerpt(*args, **kwargs),
+)
+_direct_chat_routing_policy_callbacks = _direct_chat_policy_bindings.routing_policy_callbacks
+_direct_chat_tool_policy_callbacks = _direct_chat_policy_bindings.tool_policy_callbacks
+_direct_tool_execution_callbacks = _direct_chat_policy_bindings.direct_tool_execution_callbacks
 _direct_chat_callback_facade_inputs = _direct_chat_runtime_bindings.callback_facade_inputs
 _direct_chat_generation_services = _direct_chat_runtime_bindings.generation_services
 _direct_chat_runtime_facade_callbacks = _direct_chat_runtime_bindings.runtime_facade_callbacks
 _prepare_direct_chat_request = _direct_chat_runtime_bindings.prepare_request
 _direct_chat_response_services = _direct_chat_runtime_bindings.response_services
 _direct_chat_runtime_services = _direct_chat_runtime_bindings.runtime_services
+
+
+_preview_run_response = lambda message, availability: direct_chat_routing_service.preview_run_response(
+    message,
+    availability,
+    _direct_chat_routing_policy_callbacks(),
+)
+
+
+_prefer_durable_run_handoff = lambda message, availability: direct_chat_routing_service.prefer_durable_run_handoff(
+    message,
+    availability,
+    _direct_chat_routing_policy_callbacks(),
+)
 
 
 build_direct_operator_reply = lambda *, message, workspace_id, requested_model, requested_provider, thread_id="", prior_messages=None, reasoning_effort="", availability=None, approved_action=None, max_iterations=None, session_ctx=None, agent_turn_request=None: direct_chat_runtime_entry_facade_service.build_direct_operator_reply(

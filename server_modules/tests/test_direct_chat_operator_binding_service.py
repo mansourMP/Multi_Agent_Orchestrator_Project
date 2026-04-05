@@ -154,6 +154,46 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIs(callbacks.resolve_provider_for_direct_chat_message, namespace["_resolve_provider_for_direct_chat_message"])
         self.assertIsNotNone(services_payload)
 
+    def test_build_direct_chat_policy_bindings_reads_underscored_namespace(self) -> None:
+        namespace = _operator_namespace()
+
+        bindings = service.build_direct_chat_policy_bindings(
+            namespace=namespace,
+            complex_task_sequence_markers=("first",),
+            complex_task_outcome_markers=("done",),
+            execution_markers=("run",),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            discord_keywords=("discord",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            browser_keywords=("browser",),
+            local_file_keywords=("file",),
+            local_shell_keywords=("shell",),
+            local_screenshot_keywords=("screenshot",),
+            local_computer_control_keywords=("click",),
+            web_lookup_keywords=("latest",),
+            http_request_keywords=("api",),
+            image_generation_keywords=("image",),
+            llm_task_keywords=("reason",),
+            parse_json_object_loose=lambda value: {},
+            llm_task=lambda **kwargs: None,
+            web_search=lambda **kwargs: None,
+            web_fetch=lambda **kwargs: None,
+            search_memory_notebook=lambda *args, **kwargs: [],
+            get_memory_notebook_excerpt=lambda *args, **kwargs: "",
+        )
+
+        routing_callbacks = bindings.routing_policy_callbacks()
+        tool_callbacks = bindings.tool_policy_callbacks()
+        execution_callbacks = bindings.direct_tool_execution_callbacks()
+
+        self.assertEqual(routing_callbacks.compact_text(" Hello "), "hello")
+        self.assertEqual(tool_callbacks.extract_first_url("value"), "")
+        self.assertEqual(execution_callbacks.compact_step_detail("value"), "detail")
+
 
 if __name__ == "__main__":
     unittest.main()

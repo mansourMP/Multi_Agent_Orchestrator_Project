@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from server_modules import direct_chat_stream_state_service as state_service
 from server_modules.direct_chat_stream_response_service import DirectChatStreamResponseServices
+
+
+@dataclass(frozen=True)
+class DirectChatStreamRuntimeBindings:
+    default_chat_stream_session: Callable[..., dict[str, Any]]
+    persist_chat_stream_session_state: Callable[[dict[str, Any]], None]
+    build_chat_stream_replay_session: Callable[..., dict[str, Any]]
+    load_replayable_chat_stream_session: Callable[..., Optional[dict[str, Any]]]
+    direct_chat_session_manager: Callable[[], Any]
+    initialize_chat_stream_runtime_state: Callable[..., None]
+    direct_chat_execution_services: Callable[[], Any]
+    direct_chat_stream_response_services: Callable[[], DirectChatStreamResponseServices]
+    get_or_create_chat_stream_session: Callable[..., dict[str, Any]]
 
 
 def resolve_chat_stream_state_db_path(
@@ -288,6 +302,121 @@ def build_direct_chat_stream_response_services_factory(
         extract_direct_chat_error_response=extract_direct_chat_error_response,
         start_chat_stream_producer=start_chat_stream_producer,
         iter_chat_stream_events=iter_chat_stream_events,
+    )
+
+
+def build_direct_chat_stream_runtime_bindings(
+    sessions: dict[str, dict[str, Any]],
+    *,
+    lock: Any,
+    ensure_single_worker_runtime_fn: Callable[[], None],
+    chat_stream_state_db_path: Callable[[], Any],
+    stale_after_seconds: int,
+    ttl_seconds: int,
+    state_ttl_seconds: int,
+    mark_stale_sessions_interrupted: Callable[..., int],
+    delete_sessions_older_than: Callable[..., int],
+    metrics_inc: Callable[[str, float], None],
+    session_manager_enabled: Callable[[], bool],
+    session_manager_factory: Optional[Callable[[], Any]] = None,
+    import_module: Callable[..., Any],
+    now_iso: Callable[[], str],
+    replay_payload_from_state: Callable[[dict[str, Any]], dict[str, Any]],
+    get_state: Callable[[Any, str], Optional[dict[str, Any]]],
+    upsert_state: Callable[[Any, dict[str, Any]], None],
+    interrupted_final_payload: Callable[[str, str], dict[str, Any]],
+    direct_chat_execution_services_builder: Callable[..., Any],
+    chat_stream_key: Callable[..., str],
+    resolve_direct_chat_turn_request: Callable[..., Any],
+    chat_stream_request_signature: Callable[..., str],
+    execute_agent_turn_request: Callable[..., Any],
+    build_turn_execution_services: Callable[..., Any],
+    run_execution_services: Callable[[], Any],
+    extract_direct_chat_error_response: Callable[[Any], Optional[dict[str, str]]],
+    start_chat_stream_producer: Callable[[dict[str, Any], Any], None],
+    iter_chat_stream_events: Callable[[dict[str, Any], Any], Any],
+    prune_sessions_locked: Callable[[], None],
+) -> DirectChatStreamRuntimeBindings:
+    direct_chat_session_manager = build_default_direct_chat_session_manager_factory(
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        import_module=import_module,
+    )
+    resolved_session_manager_factory = session_manager_factory or direct_chat_session_manager
+    default_chat_stream_session = build_default_chat_stream_session_factory(
+        now_iso=now_iso,
+    )
+    persist_chat_stream_session_state = build_persist_chat_stream_session_state(
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        now_iso=now_iso,
+        upsert_state=upsert_state,
+    )
+    build_chat_stream_replay_session = build_chat_stream_replay_session_factory(
+        default_session_factory=default_chat_stream_session,
+        replay_payload_from_state=replay_payload_from_state,
+        now_iso=now_iso,
+    )
+    load_replayable_chat_stream_session = build_replayable_chat_stream_session_loader(
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        get_state=get_state,
+        upsert_state=upsert_state,
+        metrics_inc=metrics_inc,
+        now_iso=now_iso,
+        interrupted_final_payload=interrupted_final_payload,
+        build_replay_session=build_chat_stream_replay_session,
+    )
+    initialize_chat_stream_runtime_state = build_initialize_chat_stream_runtime_state_fn(
+        ensure_single_worker_runtime_fn=ensure_single_worker_runtime_fn,
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        stale_after_seconds=stale_after_seconds,
+        ttl_seconds=ttl_seconds,
+        mark_stale_sessions_interrupted=mark_stale_sessions_interrupted,
+        delete_sessions_older_than=delete_sessions_older_than,
+        metrics_inc=metrics_inc,
+        session_manager_enabled=session_manager_enabled,
+        session_manager_factory=resolved_session_manager_factory,
+    )
+    direct_chat_execution_services = lambda: build_imported_direct_chat_execution_services(
+        builder=direct_chat_execution_services_builder,
+        chat_stream_key=chat_stream_key,
+        session_manager_enabled=session_manager_enabled,
+        session_manager_factory=resolved_session_manager_factory,
+        import_module=import_module,
+    )
+    get_or_create_chat_stream_session = build_get_or_create_chat_stream_session_fn(
+        sessions,
+        lock=lock,
+        prune_sessions_locked=prune_sessions_locked,
+        delete_sessions_older_than=delete_sessions_older_than,
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        state_ttl_seconds=state_ttl_seconds,
+        load_replayable_session=load_replayable_chat_stream_session,
+        default_session_factory=default_chat_stream_session,
+        persist_session_state=persist_chat_stream_session_state,
+    )
+    direct_chat_stream_response_services = build_direct_chat_stream_response_services_factory(
+        resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
+        chat_stream_request_signature=chat_stream_request_signature,
+        execute_agent_turn_request=execute_agent_turn_request,
+        build_turn_execution_services=build_turn_execution_services,
+        run_execution_services=run_execution_services,
+        direct_chat_execution_services=direct_chat_execution_services,
+        get_chat_stream_state=get_state,
+        chat_stream_state_db_path=chat_stream_state_db_path,
+        get_or_create_chat_stream_session=get_or_create_chat_stream_session,
+        extract_direct_chat_error_response=extract_direct_chat_error_response,
+        start_chat_stream_producer=start_chat_stream_producer,
+        iter_chat_stream_events=iter_chat_stream_events,
+    )
+    return DirectChatStreamRuntimeBindings(
+        default_chat_stream_session=default_chat_stream_session,
+        persist_chat_stream_session_state=persist_chat_stream_session_state,
+        build_chat_stream_replay_session=build_chat_stream_replay_session,
+        load_replayable_chat_stream_session=load_replayable_chat_stream_session,
+        direct_chat_session_manager=direct_chat_session_manager,
+        initialize_chat_stream_runtime_state=initialize_chat_stream_runtime_state,
+        direct_chat_execution_services=direct_chat_execution_services,
+        direct_chat_stream_response_services=direct_chat_stream_response_services,
+        get_or_create_chat_stream_session=get_or_create_chat_stream_session,
     )
 
 

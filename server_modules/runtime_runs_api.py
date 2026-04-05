@@ -27,7 +27,6 @@ from server_modules.run_service import (
     build_server_run_creation_services,
     build_server_run_execution_services,
     build_server_run_routing_preview_services,
-    create_run_result_from_request,
 )
 from server_modules.turn_runtime import (
     build_turn_execution_services,
@@ -126,12 +125,6 @@ _run_routing_preview_services = lambda: build_server_run_routing_preview_service
 )
 
 
-_create_run_result = lambda request, *, schedule_id=None: create_run_result_from_request(
-    request,
-    services=_run_creation_services(),
-    schedule_id=schedule_id,
-)
-
 _get_webhook_triggers_loaded = lambda: _WEBHOOK_TRIGGERS_LOADED
 
 
@@ -200,44 +193,8 @@ ensure_single_worker_direct_chat_stream_runtime = lambda: chat_stream_state_serv
 )
 
 
-_default_chat_stream_session = chat_stream_runtime_service.build_default_chat_stream_session_factory(
-    now_iso=_chat_stream_now_iso,
-)
-
-
-_persist_chat_stream_session_state = lambda session: chat_stream_runtime_service.build_persist_chat_stream_session_state(
-    chat_stream_state_db_path=_chat_stream_state_db_path,
-    now_iso=_chat_stream_now_iso,
-    upsert_state=upsert_chat_stream_state,
-)(session)
-
-
 _chat_stream_interrupted_final_payload = chat_stream_state_service.chat_stream_interrupted_final_payload
 _chat_stream_replay_payload_from_state = chat_stream_state_service.chat_stream_replay_payload_from_state
-
-
-_build_chat_stream_replay_session = chat_stream_runtime_service.build_chat_stream_replay_session_factory(
-    default_session_factory=_default_chat_stream_session,
-    replay_payload_from_state=_chat_stream_replay_payload_from_state,
-    now_iso=_chat_stream_now_iso,
-)
-
-
-_load_replayable_chat_stream_session = lambda key, *, thread_id, request_id, workspace_id: chat_stream_runtime_service.build_replayable_chat_stream_session_loader(
-    chat_stream_state_db_path=_chat_stream_state_db_path,
-    get_state=get_chat_stream_state,
-    upsert_state=upsert_chat_stream_state,
-    metrics_inc=_chat_stream_metrics_inc,
-    now_iso=_chat_stream_now_iso,
-    interrupted_final_payload=_chat_stream_interrupted_final_payload,
-    build_replay_session=_build_chat_stream_replay_session,
-)(
-    key,
-    thread_id=thread_id,
-    request_id=request_id,
-    workspace_id=workspace_id,
-)
-
 
 _chat_stream_request_signature = _service_direct_chat_request_signature
 _chat_stream_key = _service_direct_chat_stream_key
@@ -246,51 +203,56 @@ _direct_chat_session_manager_enabled = lambda: _service_direct_chat_session_mana
     globals().get("ORION_DIRECT_CHAT_SESSION_MANAGER")
 )
 
+_build_direct_chat_request_meta = _service_build_direct_chat_request_meta
 
-_direct_chat_session_manager = chat_stream_runtime_service.build_default_direct_chat_session_manager_factory(
-    chat_stream_state_db_path=_chat_stream_state_db_path,
-    import_module=__import__,
+_prune_chat_stream_sessions_locked = lambda now_ts=None: chat_stream_state_service.prune_chat_stream_sessions_locked(
+    _CHAT_STREAM_SESSIONS,
+    ttl_seconds=_CHAT_STREAM_TTL_SECONDS,
+    now_ts=now_ts,
 )
 
-
-initialize_chat_stream_runtime_state = chat_stream_runtime_service.build_initialize_chat_stream_runtime_state_fn(
+_direct_chat_stream_runtime_bindings = chat_stream_runtime_service.build_direct_chat_stream_runtime_bindings(
+    _CHAT_STREAM_SESSIONS,
+    lock=_CHAT_STREAM_LOCK,
     ensure_single_worker_runtime_fn=ensure_single_worker_direct_chat_stream_runtime,
     chat_stream_state_db_path=lambda: _chat_stream_state_db_path(),
     stale_after_seconds=_CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
     ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
+    state_ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
     mark_stale_sessions_interrupted=mark_stale_chat_stream_sessions_interrupted,
     delete_sessions_older_than=delete_chat_stream_sessions_older_than,
     metrics_inc=_chat_stream_metrics_inc,
     session_manager_enabled=lambda: _direct_chat_session_manager_enabled(),
     session_manager_factory=lambda: _direct_chat_session_manager(),
-)
-
-
-_direct_chat_execution_services = lambda: chat_stream_runtime_service.build_imported_direct_chat_execution_services(
-    builder=build_direct_chat_execution_services,
-    chat_stream_key=_chat_stream_key,
-    session_manager_enabled=_direct_chat_session_manager_enabled,
-    session_manager_factory=_direct_chat_session_manager,
     import_module=__import__,
-)
-
-_direct_chat_stream_response_services = chat_stream_runtime_service.build_direct_chat_stream_response_services_factory(
+    now_iso=_chat_stream_now_iso,
+    replay_payload_from_state=_chat_stream_replay_payload_from_state,
+    get_state=get_chat_stream_state,
+    upsert_state=upsert_chat_stream_state,
+    interrupted_final_payload=_chat_stream_interrupted_final_payload,
+    direct_chat_execution_services_builder=build_direct_chat_execution_services,
+    chat_stream_key=_chat_stream_key,
     resolve_direct_chat_turn_request=resolve_direct_chat_turn_request,
     chat_stream_request_signature=_chat_stream_request_signature,
     execute_agent_turn_request=execute_agent_turn_request,
     build_turn_execution_services=build_turn_execution_services,
     run_execution_services=_run_execution_services,
-    direct_chat_execution_services=_direct_chat_execution_services,
-    get_chat_stream_state=get_chat_stream_state,
-    chat_stream_state_db_path=_chat_stream_state_db_path,
-    get_or_create_chat_stream_session=lambda *args, **kwargs: _get_or_create_chat_stream_session(*args, **kwargs),
     extract_direct_chat_error_response=lambda *args, **kwargs: _extract_direct_chat_error_response(*args, **kwargs),
     start_chat_stream_producer=lambda *args, **kwargs: _start_chat_stream_producer(*args, **kwargs),
     iter_chat_stream_events=lambda *args, **kwargs: _iter_chat_stream_events(*args, **kwargs),
+    prune_sessions_locked=_prune_chat_stream_sessions_locked,
 )
 
+_default_chat_stream_session = _direct_chat_stream_runtime_bindings.default_chat_stream_session
+_persist_chat_stream_session_state = _direct_chat_stream_runtime_bindings.persist_chat_stream_session_state
+_build_chat_stream_replay_session = _direct_chat_stream_runtime_bindings.build_chat_stream_replay_session
+_load_replayable_chat_stream_session = _direct_chat_stream_runtime_bindings.load_replayable_chat_stream_session
+_direct_chat_session_manager = _direct_chat_stream_runtime_bindings.direct_chat_session_manager
+initialize_chat_stream_runtime_state = _direct_chat_stream_runtime_bindings.initialize_chat_stream_runtime_state
+_direct_chat_execution_services = _direct_chat_stream_runtime_bindings.direct_chat_execution_services
+_direct_chat_stream_response_services = _direct_chat_stream_runtime_bindings.direct_chat_stream_response_services
+_get_or_create_chat_stream_session = _direct_chat_stream_runtime_bindings.get_or_create_chat_stream_session
 
-_build_direct_chat_request_meta = _service_build_direct_chat_request_meta
 _build_direct_chat_event_producer = lambda *, current_user, body, message, workspace_id, session_key, thread_id, client_request_id, agent_turn_request=None: _service_build_direct_chat_event_producer(
     current_user=current_user,
     body=body,
@@ -301,26 +263,6 @@ _build_direct_chat_event_producer = lambda *, current_user, body, message, works
     client_request_id=client_request_id,
     services=_direct_chat_execution_services(),
     agent_turn_request=agent_turn_request,
-)
-
-
-_prune_chat_stream_sessions_locked = lambda now_ts=None: chat_stream_state_service.prune_chat_stream_sessions_locked(
-    _CHAT_STREAM_SESSIONS,
-    ttl_seconds=_CHAT_STREAM_TTL_SECONDS,
-    now_ts=now_ts,
-)
-
-
-_get_or_create_chat_stream_session = chat_stream_runtime_service.build_get_or_create_chat_stream_session_fn(
-    _CHAT_STREAM_SESSIONS,
-    lock=_CHAT_STREAM_LOCK,
-    prune_sessions_locked=lambda: _prune_chat_stream_sessions_locked(),
-    delete_sessions_older_than=delete_chat_stream_sessions_older_than,
-    chat_stream_state_db_path=lambda: _chat_stream_state_db_path(),
-    state_ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
-    load_replayable_session=lambda *args, **kwargs: _load_replayable_chat_stream_session(*args, **kwargs),
-    default_session_factory=lambda *args, **kwargs: _default_chat_stream_session(*args, **kwargs),
-    persist_session_state=lambda session: _persist_chat_stream_session_state(session),
 )
 
 

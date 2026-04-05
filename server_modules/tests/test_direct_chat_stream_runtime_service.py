@@ -268,6 +268,63 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(calls[0], "pruned")
         self.assertEqual(calls[1], ("persisted", "session-1"))
 
+    def test_build_direct_chat_stream_runtime_bindings_returns_bound_factories(self):
+        sessions = {}
+        calls = []
+        bindings = runtime_service.build_direct_chat_stream_runtime_bindings(
+            sessions,
+            lock=__import__("threading").Lock(),
+            ensure_single_worker_runtime_fn=lambda: calls.append("single-worker"),
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            stale_after_seconds=10,
+            ttl_seconds=20,
+            state_ttl_seconds=30,
+            mark_stale_sessions_interrupted=lambda db_path, **kwargs: calls.append(("interrupt", db_path)) or 0,
+            delete_sessions_older_than=lambda *args, **kwargs: 0,
+            metrics_inc=lambda key, amount: calls.append((key, amount)),
+            session_manager_enabled=lambda: False,
+            import_module=lambda name, fromlist=(): type(
+                "ImportedModule",
+                (),
+                {
+                    "get_default_session_manager": staticmethod(lambda **kwargs: "manager"),
+                    "build_direct_operator_reply": staticmethod(lambda *args, **kwargs: {}),
+                    "build_chat_turn_event_stream": staticmethod(lambda *args, **kwargs: iter(())),
+                },
+            )(),
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+            replay_payload_from_state=lambda state: {"events": list(state.get("events") or ())},
+            get_state=lambda db_path, key: None,
+            upsert_state=lambda db_path, payload: calls.append(("upsert", db_path, payload["session_id"])),
+            interrupted_final_payload=lambda partial_text, error_text: {"reply": "Interrupted"},
+            direct_chat_execution_services_builder=lambda **kwargs: "execution-services",
+            chat_stream_key=lambda *args, **kwargs: "stream-key",
+            resolve_direct_chat_turn_request=lambda **kwargs: None,
+            chat_stream_request_signature=lambda **kwargs: "sig",
+            execute_agent_turn_request=lambda **kwargs: None,
+            build_turn_execution_services=lambda **kwargs: None,
+            run_execution_services=lambda: "run-services",
+            extract_direct_chat_error_response=lambda event: None,
+            start_chat_stream_producer=lambda session, producer_fn: None,
+            iter_chat_stream_events=lambda session, last_event_id: iter(()),
+            prune_sessions_locked=lambda: calls.append("pruned"),
+        )
+
+        session = bindings.get_or_create_chat_stream_session(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+        services = bindings.direct_chat_stream_response_services()
+
+        self.assertEqual(bindings.direct_chat_session_manager(), "manager")
+        self.assertEqual(bindings.direct_chat_execution_services(), "execution-services")
+        self.assertEqual(session["key"], "session-1")
+        self.assertEqual(services.chat_stream_request_signature(), "sig")
+        self.assertIn("pruned", calls)
+        self.assertIn(("upsert", Path("/tmp/state.db"), "session-1"), calls)
+
 
 if __name__ == "__main__":
     unittest.main()

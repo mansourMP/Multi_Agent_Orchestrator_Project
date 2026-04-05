@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -36,6 +38,34 @@ def build_direct_chat_execution_services(
         build_direct_operator_reply=build_direct_operator_reply,
         build_chat_turn_event_stream=build_chat_turn_event_stream,
     )
+
+
+def direct_chat_request_signature(body: dict) -> str:
+    payload = {
+        "workspace_id": str(body.get("workspace_id") or "").strip(),
+        "thread_id": str(body.get("thread_id") or "").strip(),
+        "client_request_id": str(body.get("client_request_id") or "").strip(),
+        "message": str(body.get("message") or "").strip(),
+        "provider": str(body.get("provider") or "").strip(),
+        "model": str(body.get("model") or "").strip(),
+        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
+        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
+        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def direct_chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
+    owner = (
+        str((current_user or {}).get("user_id") or "").strip()
+        or str((current_user or {}).get("email") or "").strip().lower()
+        or str((current_user or {}).get("auth_type") or "").strip()
+        or "anonymous"
+    )
+    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
+    client_request_id = str(body.get("client_request_id") or "").strip() or direct_chat_request_signature(body)
+    return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
 
 
 def direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:

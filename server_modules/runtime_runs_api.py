@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import json
 import os
 import sentry_sdk
@@ -26,7 +25,9 @@ from server_modules.direct_chat_service import (
     build_direct_chat_event_producer as _service_build_direct_chat_event_producer,
     build_direct_chat_request_meta as _service_build_direct_chat_request_meta,
     direct_chat_actor_key as _service_direct_chat_actor_key,
+    direct_chat_request_signature as _service_direct_chat_request_signature,
     direct_chat_session_manager_enabled as _service_direct_chat_session_manager_enabled,
+    direct_chat_stream_key as _service_direct_chat_stream_key,
 )
 from server_modules.heartbeat import HeartbeatScheduler
 from server_modules.run_service import (
@@ -459,31 +460,11 @@ def _load_replayable_chat_stream_session(
 
 
 def _chat_stream_request_signature(body: dict) -> str:
-    payload = {
-        "workspace_id": str(body.get("workspace_id") or "").strip(),
-        "thread_id": str(body.get("thread_id") or "").strip(),
-        "client_request_id": str(body.get("client_request_id") or "").strip(),
-        "message": str(body.get("message") or "").strip(),
-        "provider": str(body.get("provider") or "").strip(),
-        "model": str(body.get("model") or "").strip(),
-        "reasoning_effort": str(body.get("reasoning_effort") or "").strip(),
-        "prior_messages": body.get("prior_messages") if isinstance(body.get("prior_messages"), list) else [],
-        "approved_action": body.get("approved_action") if isinstance(body.get("approved_action"), dict) else None,
-    }
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return _service_direct_chat_request_signature(body)
 
 
 def _chat_stream_key(current_user: Any, body: dict) -> tuple[str, str, str]:
-    owner = (
-        str((current_user or {}).get("user_id") or "").strip()
-        or str((current_user or {}).get("email") or "").strip().lower()
-        or str((current_user or {}).get("auth_type") or "").strip()
-        or "anonymous"
-    )
-    thread_id = str(body.get("thread_id") or "").strip() or "direct-chat"
-    client_request_id = str(body.get("client_request_id") or "").strip() or _chat_stream_request_signature(body)
-    return f"{owner}:{thread_id}:{client_request_id}", thread_id, client_request_id
+    return _service_direct_chat_stream_key(current_user, body)
 
 
 def _direct_chat_actor_key(current_user: Any, workspace_id: str, thread_id: str) -> str:

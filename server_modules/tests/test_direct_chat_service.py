@@ -3,6 +3,8 @@ import unittest
 from server_modules.agent_turn import build_direct_chat_turn_request, serialize_agent_turn_request
 from server_modules.direct_chat_service import (
     DirectChatExecutionServices,
+    direct_chat_request_signature,
+    direct_chat_stream_key,
     build_direct_chat_event_producer,
     build_direct_chat_request_meta,
     execute_direct_chat_turn_request,
@@ -32,6 +34,24 @@ class _DummyManager:
 
 
 class DirectChatServiceTests(unittest.TestCase):
+    def test_direct_chat_stream_key_uses_request_signature_fallback(self):
+        body = {
+            "thread_id": "thread-1",
+            "message": "hello",
+            "provider": "openai",
+            "model": "gpt-test",
+        }
+
+        signature = direct_chat_request_signature(body)
+        session_key, thread_id, client_request_id = direct_chat_stream_key(
+            {"user_id": "user-1"},
+            body,
+        )
+
+        self.assertEqual(thread_id, "thread-1")
+        self.assertEqual(client_request_id, signature)
+        self.assertEqual(session_key, f"user-1:thread-1:{signature}")
+
     def test_build_direct_chat_event_producer_uses_session_manager_when_enabled(self):
         manager = _DummyManager()
         services = DirectChatExecutionServices(

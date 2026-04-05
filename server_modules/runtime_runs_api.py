@@ -67,6 +67,7 @@ from server_modules import runtime_history_service
 from server_modules import runtime_run_access_service
 from server_modules import runtime_run_detail_service
 from server_modules import runtime_run_replay_service
+from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
@@ -675,64 +676,21 @@ def _resolve_local_execution_start_approval(
 
 
 def _run_thread_is_alive(run: dict) -> bool:
-    thread_id = run.get("thread_id")
-    if not isinstance(thread_id, int) or thread_id <= 0:
-        return False
-    for worker in threading.enumerate():
-        try:
-            if worker.ident == thread_id and worker.is_alive():
-                return True
-        except Exception:
-            continue
-    return False
+    return runtime_run_resume_service.run_thread_is_alive(
+        run,
+        enumerate_threads=threading.enumerate,
+    )
 
 
 def _schedule_restored_run_resume(run_id_str: str, run: dict) -> bool:
-    if not isinstance(run, dict):
-        return False
-    if _run_thread_is_alive(run):
-        return False
-    if str(run.get("status") or "").strip().lower() != "waiting_for_input":
-        return False
-    if bool(run.get("_resume_after_confirmation_scheduled")):
-        return True
-    context = run.get("context") if isinstance(run.get("context"), dict) else {}
-    metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
-    selected_target = str(
-        metadata.get("execution_target_selected")
-        or metadata.get("execution_target")
-        or ""
-    ).strip().lower()
-    if selected_target == "local_companion":
-        run["_resume_after_confirmation_scheduled"] = True
-        run["thread_id"] = None
-        run["updated_at"] = _utc_now_iso()
-        checkpoint = run.get("browser_checkpoint") if isinstance(run.get("browser_checkpoint"), dict) else {}
-        metadata["browser_resume_supported"] = bool(checkpoint)
-        context["metadata"] = metadata
-        run["context"] = context
-        _late_server_export("_enqueue_local_companion_run")(
-            run_id_str,
-            message=(
-                "Resuming local companion run from saved browser checkpoint."
-                if checkpoint
-                else "Resuming local companion run."
-            ),
-            event=("local_resumed_from_checkpoint" if checkpoint else "local_resumed"),
-        )
-        return True
-    run["_resume_after_confirmation_scheduled"] = True
-    run["thread_id"] = None
-    run["updated_at"] = _utc_now_iso()
-    _late_server_export("_persist_live_run_state")(run_id_str, run)
-    worker = threading.Thread(
-        target=_late_server_export("run_mission"),
-        args=(run_id_str,),
-        daemon=True,
-        name=f"run-resume-{run_id_str[:8]}",
+    return runtime_run_resume_service.schedule_restored_run_resume(
+        run_id_str,
+        run,
+        run_thread_is_alive_fn=_run_thread_is_alive,
+        utc_now_iso=_utc_now_iso,
+        late_server_export=_late_server_export,
+        thread_class=threading.Thread,
     )
-    worker.start()
-    return True
 
 
 def register_run_routes(app) -> None:

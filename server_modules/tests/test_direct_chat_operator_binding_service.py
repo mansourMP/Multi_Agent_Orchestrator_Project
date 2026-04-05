@@ -549,6 +549,84 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIsNotNone(bundle.entry_bindings)
         self.assertIsNotNone(bundle.tool_runtime_bindings)
 
+    def test_build_direct_chat_operator_binding_bundle_from_namespace_resolves_wrappers(self) -> None:
+        namespace = _operator_namespace()
+        namespace.update(
+            {
+                "_availability_lines": lambda workspace_id, availability: ["AI ready"],
+                "_preferred_provider": lambda workspace_id, requested_provider="": ("openai", {"api_key": "sk-test"}),
+                "_supports_direct_message_native_chat": lambda provider, credentials: True,
+                "_preview_run_response": lambda message, availability: None,
+                "_prefer_durable_run_handoff": lambda message, availability: False,
+                "_durable_run_preferred_response": lambda message: {"mode": "answer_with_action"},
+                "_can_auto_start_run_handoff": lambda availability: False,
+                "_credential_auth_mode": lambda provider, credentials: "api_key",
+                "_message_requests_local_computer_tool": lambda message: False,
+                "_message_can_use_direct_connector_tools": lambda message, *, provider, tools: False,
+                "_message_can_use_direct_local_tools": lambda message, *, provider, tools: False,
+                "_message_can_use_builtin_direct_tools": lambda message, *, tools: False,
+            }
+        )
+
+        bundle = service.build_direct_chat_operator_binding_bundle_from_namespace(
+            namespace=namespace,
+            parse_json_object_loose_fn=lambda value: {},
+            capture_exception_fn=lambda exc: None,
+            generate_chat_reply_stream_with_provider_fallback_fn=lambda **kwargs: iter(()),
+            compact_conversation_history_fn=lambda **kwargs: {"messages": [], "history_mode": "none", "prior_messages_used": False},
+            parse_memory_write_fn=lambda value: None,
+            parse_memory_read_fn=lambda value: None,
+            handle_memory_request_fn=lambda workspace_id, message: None,
+            list_memory_entries_fn=lambda workspace_id: [],
+            get_memory_fn=lambda workspace_id: "",
+            delete_memory_fn=lambda workspace_id, key: False,
+            no_provider_reasoning_required_response_fn=lambda: {"reply": "fallback", "actions": [], "mode": "answer"},
+            supported_providers=["openai"],
+            direct_chat_compaction_token_limit=12000,
+            complex_task_sequence_markers=("first",),
+            complex_task_outcome_markers=("done",),
+            execution_markers=("run",),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            discord_keywords=("discord",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            browser_keywords=("browser",),
+            local_file_keywords=("file",),
+            local_shell_keywords=("shell",),
+            local_screenshot_keywords=("screenshot",),
+            local_computer_control_keywords=("click",),
+            web_lookup_keywords=("latest",),
+            http_request_keywords=("api",),
+            image_generation_keywords=("image",),
+            llm_task_keywords=("reason",),
+            llm_task_fn=lambda **kwargs: None,
+            web_search_fn=lambda **kwargs: None,
+            web_fetch_fn=lambda **kwargs: None,
+            search_memory_notebook_fn=lambda *args, **kwargs: [],
+            get_memory_notebook_excerpt_fn=lambda *args, **kwargs: "",
+            build_operator_system_prompt_fn=lambda **kwargs: "base prompt",
+            memory_tool_names=("memory_search",),
+            local_worker_registry={},
+            is_worker_online_fn=lambda *_args, **_kwargs: True,
+            resolve_workspace_tool_capabilities_fn=lambda workspace_id: [],
+            build_provider_credential_candidates_fn=lambda workspace_id, provider: [{"api_key": "sk-test"}],
+            normalize_auth_mode_fn=lambda value="": str(value or "").strip().lower(),
+            get_claude_code_session_token_fn=lambda: "",
+            provider_has_key_fn=lambda provider: provider == "openai",
+            connect_action_fn=lambda label, href: {"label": label, "href": href},
+            chat_iteration_limit_reply_fn=lambda limit: f"limit:{limit}",
+            safe_positive_int_fn=lambda value, default: default,
+            chat_max_iterations_default=30,
+        )
+
+        self.assertIsNotNone(bundle.runtime_bindings)
+        self.assertIsNotNone(bundle.policy_bindings)
+        self.assertIsNotNone(bundle.entry_bindings)
+        self.assertIsNotNone(bundle.tool_runtime_bindings)
+
     def test_build_direct_chat_entrypoint_bindings_delegates_runtime_entry_facade(self) -> None:
         calls = []
 

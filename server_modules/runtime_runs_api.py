@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import json
 import sentry_sdk
 import threading
@@ -64,6 +63,7 @@ from server_modules.runtime_state_store import (
     upsert_chat_stream_state,
 )
 from server_modules import runtime_usage_service
+from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
@@ -150,49 +150,31 @@ def _create_run_result(request: RunStartRequest, *, schedule_id: Optional[str] =
 
 def _load_webhook_triggers() -> None:
     global _WEBHOOK_TRIGGERS_LOADED
-    with _WEBHOOK_TRIGGER_LOCK:
-        if _WEBHOOK_TRIGGERS_LOADED:
-            return
-        path = _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE")
-        payload = _late_server_export("_safe_read_json")(path, {"version": 1, "items": []})
-        items = payload.get("items") if isinstance(payload, dict) else []
-        _WEBHOOK_TRIGGERS.clear()
-        if isinstance(items, list):
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                trigger_id = str(item.get("id") or "").strip()
-                if not trigger_id:
-                    continue
-                _WEBHOOK_TRIGGERS[trigger_id] = dict(item)
-        _WEBHOOK_TRIGGERS_LOADED = True
+    _WEBHOOK_TRIGGERS_LOADED = runtime_webhook_trigger_service.load_webhook_triggers(
+        _WEBHOOK_TRIGGERS,
+        lock=_WEBHOOK_TRIGGER_LOCK,
+        loaded=_WEBHOOK_TRIGGERS_LOADED,
+        path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
+        safe_read_json=_late_server_export("_safe_read_json"),
+    )
 
 
 def _persist_webhook_triggers_locked() -> None:
-    path = _late_server_export("ORION_WEBHOOK_TRIGGERS_FILE")
-    _late_server_export("_safe_write_json")(
-        path,
-        {
-            "version": 1,
-            "updated_at": time.time(),
-            "items": list(_WEBHOOK_TRIGGERS.values()),
-        },
+    return runtime_webhook_trigger_service.persist_webhook_triggers_locked(
+        _WEBHOOK_TRIGGERS,
+        path=_late_server_export("ORION_WEBHOOK_TRIGGERS_FILE"),
+        safe_write_json=_late_server_export("_safe_write_json"),
     )
 
 
 def _match_webhook_trigger(workspace_id: str, request_url: str) -> Optional[dict[str, Any]]:
     _load_webhook_triggers()
-    normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-    with _WEBHOOK_TRIGGER_LOCK:
-        for item in _WEBHOOK_TRIGGERS.values():
-            if not isinstance(item, dict) or not bool(item.get("enabled", True)):
-                continue
-            if str(item.get("workspace_id") or "default").strip() != normalized_workspace_id:
-                continue
-            pattern = str(item.get("url_pattern") or "").strip()
-            if not pattern or fnmatch.fnmatch(request_url, pattern) or fnmatch.fnmatch(f"/webhooks/ingest/{normalized_workspace_id}", pattern):
-                return dict(item)
-    return None
+    return runtime_webhook_trigger_service.match_webhook_trigger(
+        _WEBHOOK_TRIGGERS,
+        lock=_WEBHOOK_TRIGGER_LOCK,
+        workspace_id=workspace_id,
+        request_url=request_url,
+    )
 
 
 _normalize_usage_period = runtime_usage_service.normalize_usage_period
@@ -1020,16 +1002,15 @@ def register_run_routes(app) -> None:
         if not workflow_id:
             raise HTTPException(status_code=400, detail="workflow_id is required.")
         trigger_id = str(uuid.uuid4())
-        trigger = {
-            "id": trigger_id,
-            "workspace_id": workspace_id,
-            "url_pattern": url_pattern,
-            "workflow_id": workflow_id,
-            "user_goal": str(body.get("user_goal") or "").strip() or None,
-            "metadata": body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
-            "enabled": bool(body.get("enabled", True)),
-            "created_at": time.time(),
-        }
+        trigger = runtime_webhook_trigger_service.build_webhook_trigger(
+            trigger_id=trigger_id,
+            workspace_id=workspace_id,
+            url_pattern=url_pattern,
+            workflow_id=workflow_id,
+            user_goal=body.get("user_goal"),
+            metadata=body.get("metadata"),
+            enabled=body.get("enabled", True),
+        )
         with _WEBHOOK_TRIGGER_LOCK:
             _WEBHOOK_TRIGGERS[trigger_id] = trigger
             _persist_webhook_triggers_locked()

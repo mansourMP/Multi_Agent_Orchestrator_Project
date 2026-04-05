@@ -65,6 +65,13 @@ class RunPreparedResultServices:
 
 
 @dataclass(slots=True)
+class LegacyRunRequestServices:
+    prepare_run_start_request: Any
+    build_creation_services: Any
+    result_services: RunPreparedResultServices
+
+
+@dataclass(slots=True)
 class RunPreparationServices:
     engine_registry: Any
     engine_validation_errors: Any
@@ -573,6 +580,17 @@ def create_run_result_from_request(
     return dict(result) if isinstance(result, dict) else {"result": result}
 
 
+def build_run_prepared_result_services(
+    *,
+    create_run_from_prepared_request: Any,
+    build_result: Any,
+) -> RunPreparedResultServices:
+    return RunPreparedResultServices(
+        create_run_from_prepared_request=create_run_from_prepared_request,
+        build_result=build_result,
+    )
+
+
 def create_run_result_from_prepared_request(
     request: RunStartRequest,
     *,
@@ -589,6 +607,23 @@ def create_run_result_from_prepared_request(
     )
     result = result_services.build_result(request, created=created)
     return dict(result) if isinstance(result, dict) else {"result": result}
+
+
+def create_legacy_run_result_from_request(
+    request: RunStartRequest,
+    *,
+    services: LegacyRunRequestServices,
+    schedule_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    prepared = services.prepare_run_start_request(request)
+    creation_services = services.build_creation_services()
+    return create_run_result_from_prepared_request(
+        request,
+        prepared=prepared,
+        services=creation_services,
+        result_services=services.result_services,
+        schedule_id=schedule_id,
+    )
 
 
 def create_run_from_prepared_request(

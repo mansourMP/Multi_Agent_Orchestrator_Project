@@ -470,31 +470,33 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     if not callable(begin_confirmation_fn):
         from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
 
-    return run_service.create_run_result_from_prepared_request(
+    return run_service.create_legacy_run_result_from_request(
         req,
-        prepared=_prepare_run_start_request(req),
         schedule_id=schedule_id,
-        services=run_service.build_prepared_run_creation_services(
-            decide_execution_target=decide_execution_target,
-            apply_execution_route_metadata=apply_execution_route_metadata,
-            build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
-            agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
-            compute_tool_policy_precheck=precheck_fn,
-            apply_browser_execution_metadata=_apply_browser_execution_metadata,
-            local_execution_block_prompt=_local_execution_block_prompt,
-            resolve_runtime_policy_mode=resolve_runtime_policy_mode,
-            agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
-            local_execution_requires_start_confirmation=_local_execution_requires_start_confirmation,
-            mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
-            precheck_human_action_labels=_precheck_human_action_labels,
-            local_execution_confirmation_prompt=_local_execution_confirmation_prompt,
-            begin_run_pending_confirmation=begin_confirmation_fn,
-            create_run=create_run_fn,
-            now_iso=lambda: datetime.utcnow().isoformat() + "Z",
-        ),
-        result_services=run_service.RunPreparedResultServices(
-            create_run_from_prepared_request=run_service.create_run_from_prepared_request,
-            build_result=lambda _request, *, created: run_service.build_runs_delegation_creation_result(created=created),
+        services=run_service.LegacyRunRequestServices(
+            prepare_run_start_request=_prepare_run_start_request,
+            build_creation_services=lambda: run_service.build_prepared_run_creation_services(
+                decide_execution_target=decide_execution_target,
+                apply_execution_route_metadata=apply_execution_route_metadata,
+                build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
+                agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+                compute_tool_policy_precheck=precheck_fn,
+                apply_browser_execution_metadata=_apply_browser_execution_metadata,
+                local_execution_block_prompt=_local_execution_block_prompt,
+                resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+                agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+                local_execution_requires_start_confirmation=_local_execution_requires_start_confirmation,
+                mark_local_execution_tools_approved=_mark_local_execution_tools_approved,
+                precheck_human_action_labels=_precheck_human_action_labels,
+                local_execution_confirmation_prompt=_local_execution_confirmation_prompt,
+                begin_run_pending_confirmation=begin_confirmation_fn,
+                create_run=create_run_fn,
+                now_iso=lambda: datetime.utcnow().isoformat() + "Z",
+            ),
+            result_services=run_service.build_run_prepared_result_services(
+                create_run_from_prepared_request=run_service.create_run_from_prepared_request,
+                build_result=lambda _request, *, created: run_service.build_runs_delegation_creation_result(created=created),
+            ),
         ),
     )
 

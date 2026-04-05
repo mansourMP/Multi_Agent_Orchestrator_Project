@@ -1565,6 +1565,60 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Legacy Run Request Wrapper Flow Centralized
+
+#### Stage
+
+Stage 1 continues. The shared wrapper flow for legacy run entrypoints now lives in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of being reassembled in both legacy run modules.
+
+The compatibility entrypoints in [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still exist, but they now mainly provide late-bound callbacks and historical result shapers.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `LegacyRunRequestServices`
+  - `build_run_prepared_result_services()`
+  - `create_legacy_run_result_from_request()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so `_create_run_from_request()` now delegates its whole shared wrapper flow through the canonical legacy-run helper.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so `_create_run_from_request()` now delegates the same wrapper flow through the canonical helper while preserving its late-bound lookup of patched runtime callbacks.
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with focused coverage for the new helper boundary.
+
+#### Current Truth
+
+- The durable-run service layer now owns:
+  - prepared-run creation
+  - prepared-result adaptation
+  - the shared legacy wrapper flow from request to result
+- The legacy run modules still own:
+  - their module-level compatibility entrypoints
+  - their local late-bound callback sources
+  - their broader schedule, retry, and runtime orchestration logic
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still mixes run lifecycle behavior with schedule and runtime history concerns.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still owns retry lineage, delegation refresh, and snapshot selection logic.
+- The durable-run boundary is cleaner, but the legacy modules are still too large.
+
+#### Next Required Work
+
+1. Continue extracting remaining run-lifecycle behavior from the legacy modules into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) where the ownership is clearly shared.
+2. Preserve the patched module-level entrypoints until downstream tests and callers no longer depend on them.
+3. Keep new durable-run behavior out of the legacy wrappers.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Prepared Run Result Adapter Moved Into Run Service
 
 #### Stage

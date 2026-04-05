@@ -285,6 +285,64 @@ This is still not the final connector cutover. The module remains the compatibil
   - `server_modules.tests.test_autopilot_terminal_bridge_service`
   - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
 - Result: `23 passed`
+
+### 2026-04-05 - Shared Bridge Assembly Moved Behind Bridge Façade Service
+
+#### Stage
+
+Stage 2 connector convergence continues. The shared-registry plus bridge-assembly constructor block is no longer owned inline by [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py).
+
+This does not change the historical import surface. The connector module still exports the same helpers, but the shared bridge graph is now assembled behind a dedicated façade service instead of being wired directly inside the compatibility module.
+
+#### Completed Work
+
+- Added [server_modules/connectors/autopilot_bridge_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_facade_service.py).
+- Added focused coverage in [server_modules/tests/test_autopilot_bridge_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_bridge_facade_service.py).
+- Updated [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) so the shared bridge construction now flows through the bridge façade service instead of instantiating [server_modules/connectors/autopilot_bridge_registry_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_registry_service.py) inline.
+- Moved these access paths behind the new façade:
+  - `_autopilot_shared_service_registry()`
+  - `_autopilot_status_service()`
+  - `_autopilot_endpoint_service()`
+  - `_autopilot_event_service()`
+  - `_autopilot_event_bridge_service()`
+  - `_autopilot_terminal_bridge_service()`
+  - `_autopilot_state_bridge_service()`
+  - `_telegram_compatibility_bridge_service()`
+  - `_whatsapp_webhook_bridge_service()`
+- Reduced [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) from `862` lines to `850` lines in this cut.
+
+#### Current Truth
+
+- Shared event/status/endpoint service access and the shared bridge graph are now assembled in one dedicated façade service.
+- The connector compatibility module remains the stable import boundary, but it owns less bridge wiring logic directly.
+- Late-bound compatibility remains intact because enabled flags, profile catalogs, Telegram state/lock, and webhook secret values are still read through getters when the façade builds the bridge registry.
+
+#### Open Gaps
+
+- [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py) still contains the remaining singleton-construction layer for channel, helper, support, and runtime registries.
+- The connector module is smaller, but it is still not a pure adapter shell.
+- This cut only removes the shared bridge assembly block; broader canonical runtime convergence is still unfinished.
+
+#### Next Required Work
+
+1. Continue extracting the remaining singleton constructor bands from [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py), especially the channel/helper/support/runtime registry setup.
+2. Keep preserving late-bound patchability for tests that override globals on `server_modules.autopilot_connectors` after import.
+3. Maintain focused verification on webhook, runtime-status, agent-machine, and event-dedupe paths after each constructor-band move.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/autopilot_connectors.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/autopilot_connectors.py)
+  - [server_modules/connectors/autopilot_bridge_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/connectors/autopilot_bridge_facade_service.py)
+  - [server_modules/tests/test_autopilot_bridge_facade_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_autopilot_bridge_facade_service.py)
+- Focused repo-venv tests passed:
+  - `server_modules.tests.test_autopilot_bridge_facade_service`
+  - `server_modules.tests.test_autopilot_bridge_registry_service`
+  - `server_modules.tests.test_autopilot_runtime_facade_service`
+  - `server_modules.tests.test_whatsapp_webhook_bridge_service`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `scripts.orion_terminal.tests.test_autopilot_event_dedupe`
+- Result: `24 passed`
 - The broader connector monolith still contains other channel behavior outside the Telegram slices already extracted.
 
 #### Next Required Work

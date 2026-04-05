@@ -11,6 +11,7 @@ from server_modules.doctor_gate import build_doctor_run_gate_from_snapshot
 from server_modules import run_service as run_service
 from server_modules.runs_delegation import _detect_agent_role, _normalize_run_id_token, _refresh_parent_delegation_state, normalize_agent_role
 from server_modules.runs_engine import ENGINE_REGISTRY, ORION_ENGINE_VALIDATION_ERRORS
+from server_modules.turn_runtime import execute_system_run_start_request_via_turn_runtime
 from server_modules.runs_history import (
     _append_approval_audit,
     _approval_correlation_id,
@@ -559,7 +560,7 @@ def _run_weekly_scheduler_forever():
                         changed = True
                         continue
                 req = RunStartRequest(**req_payload)
-                run_result = _create_run_from_request(req, schedule_id=schedule_id)
+                run_result = _execute_scheduled_run_request(req, schedule_id=schedule_id)
                 with SCHEDULES_LOCK:
                     current = WEEKLY_SCHEDULES.get(schedule_id)
                     if current is not None:
@@ -614,7 +615,7 @@ def trigger_pending_heartbeat_schedules() -> Dict[str, Any]:
             continue
         try:
             req = RunStartRequest(**req_payload)
-            run_result = _create_run_from_request(req, schedule_id=schedule_id)
+            run_result = _execute_scheduled_run_request(req, schedule_id=schedule_id)
             with SCHEDULES_LOCK:
                 current = WEEKLY_SCHEDULES.get(schedule_id)
                 if current is None:
@@ -1151,6 +1152,26 @@ _mark_local_execution_tools_approved = run_service.mark_local_execution_tools_ap
 _apply_browser_execution_metadata = run_service.apply_browser_execution_metadata
 
 
+def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_service.RunExecutionServices:
+    return run_service.RunExecutionServices(
+        stamp_request_owner=lambda req, current_user: req,
+        prepare_run_start_request=_prepare_run_start_request,
+        create_run_from_request=(
+            (lambda req: _create_run_from_request(req, schedule_id=schedule_id))
+            if schedule_id is not None
+            else (lambda req: _create_run_from_request(req))
+        ),
+    )
+
+
+def _execute_scheduled_run_request(req: RunStartRequest, *, schedule_id: Optional[str] = None) -> Dict[str, Any]:
+    return execute_system_run_start_request_via_turn_runtime(
+        req,
+        stamp_request_owner_fn=lambda req, current_user: req,
+        services=_schedule_run_execution_services(schedule_id),
+    )
+
+
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     return run_service.prepare_legacy_run_start_request(
         req,
@@ -1404,7 +1425,7 @@ async def trigger_schedule_now(schedule_id: str):
         req_payload = dict(schedule.get("run_request") or {})
     try:
         req = RunStartRequest(**req_payload)
-        result = _create_run_from_request(req, schedule_id=schedule_id)
+        result = _execute_scheduled_run_request(req, schedule_id=schedule_id)
     except HTTPException:
         raise
     except Exception as exc:

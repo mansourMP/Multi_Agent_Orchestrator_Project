@@ -45,6 +45,8 @@ from server_modules.run_service import (
     build_runs_delegation_runtime_request_services_from_namespace,
     build_runs_delegation_result_services,
     build_delegated_child_run_request,
+    build_delegation_summary,
+    build_run_relation_summary,
     build_live_run_record,
     register_live_run,
     activate_live_run,
@@ -76,6 +78,11 @@ from server_modules.run_service import (
     create_run_result_from_request,
     execute_durable_turn_request,
     prepare_run_start_request,
+    build_retry_child_payload,
+    find_run_relationships,
+    iter_known_run_snapshots,
+    refresh_parent_delegation_state,
+    schedule_auto_retry_for_failed_children,
     timeout_stale_delegated_child_runs,
 )
 from server_modules.runtime_models import RunStartRequest
@@ -1367,6 +1374,292 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(runs_by_id["child-run"]["result_data"]["error"], "delegated_child_timeout")
         self.assertEqual(status_calls, [("child-run", "failed")])
         self.assertEqual(log_calls[0][1]["event"], "delegated_child_timeout")
+
+    def test_build_retry_child_payload_increments_retry_metadata(self):
+        payload = build_retry_child_payload(
+            {"run_id": "parent-run"},
+            {
+                "run_id": "child-run",
+                "agent_role": "research",
+                "context": {
+                    "user_goal": "Analyze the docs",
+                    "business_plan": "Ship the release",
+                    "max_iterations": 4,
+                    "metadata": {
+                        "retry_sequence": 1,
+                        "retry_count": 1,
+                    },
+                },
+            },
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            normalize_requested_max_iterations=lambda value: int(value) if value is not None else None,
+            child_retry_count=lambda child: int(child.get("context", {}).get("metadata", {}).get("retry_count") or 0),
+            note="Automatic retry after delegated child failure.",
+        )
+
+        self.assertEqual(payload["agent_role"], "research")
+        self.assertEqual(payload["user_goal"], "Analyze the docs")
+        self.assertEqual(payload["business_plan"], "Ship the release")
+        self.assertEqual(payload["max_iterations"], 4)
+        self.assertEqual(payload["metadata"]["retry_of_run_id"], "child-run")
+        self.assertEqual(payload["metadata"]["retry_sequence"], 2)
+        self.assertEqual(payload["metadata"]["retry_count"], 2)
+        self.assertEqual(
+            payload["metadata"]["delegation_retry_note"],
+            "Automatic retry after delegated child failure.",
+        )
+
+    def test_schedule_auto_retry_for_failed_children_dispatches_retry_job(self):
+        class _ImmediateTimer:
+            def __init__(self, _delay, func, args=None, kwargs=None):
+                self._func = func
+                self._args = args or ()
+                self._kwargs = kwargs or {}
+                self.daemon = False
+
+            def start(self):
+                self._func(*self._args, **self._kwargs)
+
+        log_queue = queue.Queue()
+        runs_by_id = {
+            "parent-run": {"logs": log_queue},
+        }
+        auto_retry_pending = set()
+        auto_retry_attempts = {}
+        created_requests = []
+        refresh_calls = []
+
+        scheduled = schedule_auto_retry_for_failed_children(
+            {"run_id": "parent-run"},
+            [
+                {
+                    "run_id": "child-run",
+                    "status": "failed",
+                    "created_at": "2026-04-02T00:00:00Z",
+                    "updated_at": "2026-04-02T00:00:00Z",
+                    "context": {"metadata": {}},
+                }
+            ],
+            runs_by_id=runs_by_id,
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+            child_lineage_key=lambda child: "lineage-1",
+            failure_status=lambda status: str(status or "").strip().lower() == "failed",
+            child_retry_count=lambda child: 0,
+            safe_int=lambda value, default=0: int(value) if value is not None else default,
+            auto_retry_pending=auto_retry_pending,
+            auto_retry_attempts=auto_retry_attempts,
+            auto_retry_pending_lock=__import__("threading").Lock(),
+            auto_retry_max_retries=1,
+            auto_retry_delay_seconds=0.0,
+            emit_log=lambda *args, **kwargs: None,
+            build_retry_child_payload_fn=lambda *args, **kwargs: {"metadata": {}},
+            build_delegated_child_run_request_fn=lambda *args, **kwargs: RunStartRequest(
+                engine="orion",
+                workspace_id="default",
+                user_goal="retry",
+                metadata={"auto_retry": True},
+            ),
+            execute_delegated_run_request_fn=lambda req: created_requests.append(req) or {"status": "starting"},
+            lookup_run_snapshot_fn=lambda run_id: {"run_id": run_id},
+            find_run_relationships_fn=lambda run_id, snapshot: (
+                snapshot,
+                [
+                    {
+                        "run_id": "child-run",
+                        "status": "failed",
+                        "created_at": "2026-04-02T00:00:00Z",
+                        "updated_at": "2026-04-02T00:00:00Z",
+                        "context": {"metadata": {}},
+                    }
+                ],
+            ),
+            refresh_parent_delegation_state_fn=lambda parent_id, triggering_run_id=None: refresh_calls.append((parent_id, triggering_run_id)),
+            timer_factory=_ImmediateTimer,
+            triggering_run_id="child-run",
+        )
+
+        self.assertEqual(scheduled, {"lineage-1"})
+        self.assertEqual(len(created_requests), 1)
+        self.assertEqual(refresh_calls, [("parent-run", "child-run")])
+        self.assertEqual(auto_retry_pending, set())
+        self.assertEqual(auto_retry_attempts[("parent-run", "lineage-1")], 1)
+
+    def test_build_delegation_summary_reports_retrying_and_failed_children(self):
+        summary = build_delegation_summary(
+            {"run_id": "parent-run"},
+            [
+                {
+                    "run_id": "child-a",
+                    "status": "failed",
+                    "agent_role": "research",
+                    "updated_at": "2026-04-02T00:00:00Z",
+                    "created_at": "2026-04-02T00:00:00Z",
+                },
+                {
+                    "run_id": "child-b",
+                    "status": "completed",
+                    "agent_role": "builder",
+                    "result_summary": "Finished implementation",
+                    "updated_at": "2026-04-02T00:01:00Z",
+                    "created_at": "2026-04-02T00:01:00Z",
+                },
+            ],
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            normalize_agent_role=lambda value: str(value or "").strip().lower(),
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+            terminal_run_statuses={"completed", "failed", "timeout"},
+            agent_workspace_labels={"research": "Research", "builder": "Builder"},
+            child_lineage_key=lambda child: str(child.get("run_id") or ""),
+            failure_status=lambda status: str(status or "").strip().lower() == "failed",
+            parent_pending_retry_lineages=lambda parent_run_id: {"child-a"},
+        )
+
+        self.assertEqual(summary["next_action"], "waiting_for_children")
+        self.assertEqual(summary["active_children"], 1)
+        self.assertEqual(summary["completed_children"], 1)
+        self.assertEqual(summary["failed_children"], 0)
+        self.assertIn("research", summary["child_roles"])
+        self.assertIn("builder", summary["child_roles"])
+        self.assertIn("retrying", summary["summary_text"])
+
+    def test_iter_known_run_snapshots_merges_live_and_archived_without_duplicates(self):
+        snapshots = iter_known_run_snapshots(
+            runs_by_id={
+                "live-run": {"status": "running"},
+                "shared-run": {"status": "completed"},
+                "bad-run": "ignore-me",
+            },
+            run_history=[
+                {"run_id": "archived-run", "status": "completed"},
+                {"run_id": "shared-run", "status": "failed"},
+                "ignore-me",
+            ],
+            serialize_run_snapshot_fn=lambda run_id, run: {"run_id": run_id, "status": run.get("status")},
+        )
+
+        self.assertEqual(
+            [item["run_id"] for item in snapshots],
+            ["live-run", "shared-run", "archived-run"],
+        )
+
+    def test_build_run_relation_summary_maps_agent_label(self):
+        summary = build_run_relation_summary(
+            {
+                "run_id": "child-run",
+                "agent_role": "research",
+                "status": "completed",
+                "result_summary": "done",
+            },
+            agent_workspace_labels={"research": "Research"},
+        )
+
+        self.assertEqual(summary["run_id"], "child-run")
+        self.assertEqual(summary["agent_label"], "Research")
+        self.assertEqual(summary["result_summary"], "done")
+
+    def test_find_run_relationships_returns_parent_and_sorted_children(self):
+        snapshot = {
+            "run_id": "parent-run",
+            "context": {"metadata": {"parent_run_id": "root-run"}},
+        }
+
+        parent, children = find_run_relationships(
+            "parent-run",
+            snapshot,
+            extract_run_relationships_from_context_fn=lambda context: {
+                "parent_run_id": context.get("metadata", {}).get("parent_run_id")
+            },
+            iter_known_run_snapshots_fn=lambda: [
+                {
+                    "run_id": "root-run",
+                    "status": "completed",
+                    "agent_role": "orchestrator",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "run_id": "child-older",
+                    "status": "completed",
+                    "agent_role": "research",
+                    "parent_run_id": "parent-run",
+                    "updated_at": "2026-04-01T00:00:00Z",
+                    "created_at": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "run_id": "child-newer",
+                    "status": "running",
+                    "agent_role": "builder",
+                    "parent_run_id": "parent-run",
+                    "updated_at": "2026-04-02T00:00:00Z",
+                    "created_at": "2026-04-02T00:00:00Z",
+                },
+            ],
+            normalize_run_id_token=lambda value: str(value or "").strip() or None,
+            build_run_relation_summary_fn=lambda candidate: {
+                "run_id": candidate.get("run_id"),
+                "status": candidate.get("status"),
+                "updated_at": candidate.get("updated_at"),
+                "created_at": candidate.get("created_at"),
+            },
+            parse_utc_ts=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None,
+        )
+
+        self.assertEqual(parent["run_id"], "root-run")
+        self.assertEqual([item["run_id"] for item in children], ["child-newer", "child-older"])
+
+    def test_refresh_parent_delegation_state_updates_live_parent_and_emits_log(self):
+        parent_logs = queue.Queue()
+        runs_by_id = {
+            "parent-run": {
+                "context": {"metadata": {}},
+                "result_data": {},
+                "logs": parent_logs,
+            }
+        }
+        archived = []
+        emitted = []
+
+        summary = refresh_parent_delegation_state(
+            "parent-run",
+            lookup_run_snapshot_fn=lambda run_id: {"run_id": run_id},
+            find_run_relationships_fn=lambda run_id, snapshot: (
+                {"run_id": run_id},
+                [
+                    {
+                        "run_id": "child-1",
+                        "status": "completed",
+                        "agent_role": "builder",
+                        "result_summary": "done",
+                        "updated_at": "2026-04-02T00:01:00Z",
+                        "created_at": "2026-04-02T00:01:00Z",
+                    }
+                ],
+            ),
+            timeout_stale_child_runs_fn=lambda parent_run_id, child_runs: [],
+            schedule_auto_retry_for_failed_children_fn=lambda snapshot, child_runs, triggering_run_id=None: set(),
+            build_delegation_summary_fn=lambda snapshot, child_runs, extra_retry_pending_lineages=None: {
+                "ready": True,
+                "next_action": "merge_results",
+                "overall_status": "completed",
+            },
+            runs_by_id=runs_by_id,
+            refresh_archived_run_snapshot_fn=lambda run_id, payload: archived.append((run_id, payload["updated_at"])),
+            upsert_run_history_snapshot_fn=lambda snapshot: None,
+            emit_log_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+            utc_now_iso_fn=lambda: "2026-04-06T00:00:00Z",
+        )
+
+        self.assertEqual(summary["next_action"], "merge_results")
+        self.assertEqual(
+            runs_by_id["parent-run"]["context"]["metadata"]["delegation_summary_cache"]["next_action"],
+            "merge_results",
+        )
+        self.assertEqual(
+            runs_by_id["parent-run"]["result_data"]["orchestration"]["updated_at"],
+            "2026-04-06T00:00:00Z",
+        )
+        self.assertEqual(archived, [("parent-run", "2026-04-06T00:00:00Z")])
+        self.assertEqual(emitted[0][1]["event"], "delegation_state")
 
 
 if __name__ == "__main__":

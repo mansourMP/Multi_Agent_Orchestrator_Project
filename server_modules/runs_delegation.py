@@ -425,26 +425,24 @@ def _build_delegation_summary(
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     return run_service.prepare_legacy_run_start_request(
         req,
-        services=run_service.LegacyRunPreparationServices(
-            build_preparation_services=lambda: run_service.build_legacy_orion_preparation_services(
-                callbacks=run_service.LegacyOrionPreparationCallbacks(
-                    engine_registry=ENGINE_REGISTRY,
-                    engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
-                    supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
-                    normalize_requested_max_iterations=_normalize_requested_max_iterations,
-                    normalize_trust_mode=normalize_trust_mode,
-                    trust_mode_aliases=TRUST_MODE_ALIASES,
-                    valid_trust_modes=VALID_TRUST_MODES,
-                    normalize_execution_target=normalize_execution_target,
-                    valid_execution_targets=VALID_EXECUTION_TARGETS,
-                    normalize_run_id_token=_normalize_run_id_token,
-                    normalize_agent_role=normalize_agent_role,
-                    detect_agent_role=_detect_agent_role,
-                    resolve_app_permissions=resolve_app_permissions,
-                    action_policy_from_app_permissions=action_policy_from_app_permissions,
-                    merge_action_policies=merge_action_policies,
-                    fetch_workflow_snapshot=fetch_workflow_snapshot,
-                ),
+        services=run_service.build_legacy_run_preparation_services(
+            callbacks=run_service.LegacyOrionPreparationCallbacks(
+                engine_registry=ENGINE_REGISTRY,
+                engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
+                supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
+                normalize_requested_max_iterations=_normalize_requested_max_iterations,
+                normalize_trust_mode=normalize_trust_mode,
+                trust_mode_aliases=TRUST_MODE_ALIASES,
+                valid_trust_modes=VALID_TRUST_MODES,
+                normalize_execution_target=normalize_execution_target,
+                valid_execution_targets=VALID_EXECUTION_TARGETS,
+                normalize_run_id_token=_normalize_run_id_token,
+                normalize_agent_role=normalize_agent_role,
+                detect_agent_role=_detect_agent_role,
+                resolve_app_permissions=resolve_app_permissions,
+                action_policy_from_app_permissions=action_policy_from_app_permissions,
+                merge_action_policies=merge_action_policies,
+                fetch_workflow_snapshot=fetch_workflow_snapshot,
             ),
         ),
     )
@@ -477,23 +475,21 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     return run_service.create_legacy_run_result_from_request(
         req,
         schedule_id=schedule_id,
-        services=run_service.LegacyRunRequestServices(
+        services=run_service.build_legacy_run_request_services(
             prepare_run_start_request=_prepare_run_start_request,
-            build_creation_services=lambda: run_service.build_legacy_local_execution_creation_services(
-                callbacks=run_service.LegacyLocalExecutionCreationCallbacks(
-                    decide_execution_target=decide_execution_target,
-                    apply_execution_route_metadata=apply_execution_route_metadata,
-                    build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
-                    agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
-                    compute_tool_policy_precheck=precheck_fn,
-                    resolve_runtime_policy_mode=resolve_runtime_policy_mode,
-                    agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
-                    begin_run_pending_confirmation=begin_confirmation_fn,
-                    create_run=create_run_fn,
-                    local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
-                    local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
-                    now_iso=lambda: datetime.utcnow().isoformat() + "Z",
-                ),
+            callbacks=run_service.LegacyLocalExecutionCreationCallbacks(
+                decide_execution_target=decide_execution_target,
+                apply_execution_route_metadata=apply_execution_route_metadata,
+                build_doctor_run_gate=build_doctor_run_gate_from_snapshot,
+                agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+                compute_tool_policy_precheck=precheck_fn,
+                resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+                agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+                begin_run_pending_confirmation=begin_confirmation_fn,
+                create_run=create_run_fn,
+                local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
+                local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
+                now_iso=lambda: datetime.utcnow().isoformat() + "Z",
             ),
             result_services=run_service.build_runs_delegation_result_services(),
         ),

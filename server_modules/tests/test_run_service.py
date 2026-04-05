@@ -10,6 +10,8 @@ from server_modules.run_service import (
     build_run_precheck_result,
     build_legacy_local_execution_creation_services,
     build_legacy_orion_preparation_services,
+    build_legacy_run_preparation_services,
+    build_legacy_run_request_services,
     build_prepared_run_creation_services,
     build_run_preview_context,
     build_run_preparation_services,
@@ -174,6 +176,36 @@ class RunServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(prepared["metadata"]["postprocessed"])
+
+    def test_build_legacy_run_preparation_services_wraps_orion_callbacks(self):
+        services = build_legacy_run_preparation_services(
+            callbacks=LegacyOrionPreparationCallbacks(
+                engine_registry={"orion": object()},
+                engine_validation_errors=[],
+                supported_outcome_packs={"local_execution"},
+                normalize_requested_max_iterations=normalize_requested_max_iterations,
+                normalize_trust_mode=lambda value: str(value or ""),
+                trust_mode_aliases={},
+                valid_trust_modes={"guarded"},
+                normalize_execution_target=lambda value: str(value or ""),
+                valid_execution_targets={"cloud"},
+                normalize_run_id_token=lambda value: str(value or "") or None,
+                normalize_agent_role=lambda value: str(value or ""),
+                detect_agent_role=lambda req, metadata: ("builder", "default"),
+                resolve_app_permissions=lambda app_id: {},
+                action_policy_from_app_permissions=lambda permissions: {},
+                merge_action_policies=lambda existing, new: {},
+                fetch_workflow_snapshot=lambda workflow_id: None,
+            )
+        )
+
+        prepared = prepare_legacy_run_start_request(
+            RunStartRequest(engine="orion", workspace_id="default", user_goal="hello"),
+            services=services,
+        )
+
+        self.assertEqual(prepared["engine"], "orion")
+        self.assertEqual(prepared["metadata"]["agent_role"], "builder")
 
     def test_build_runs_result_services_preserve_shared_result_builders(self):
         self.assertIsNotNone(build_runs_core_result_services().build_result)
@@ -493,6 +525,32 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result["run_id"], "run-3")
         self.assertEqual(result["status"], "starting")
         self.assertEqual(result["route"]["selected"], "cloud")
+
+    def test_build_legacy_run_request_services_wraps_creation_builder(self):
+        services = build_legacy_run_request_services(
+            prepare_run_start_request=lambda req: {"engine": "orion", "metadata": {"agent_role": "builder"}, "workflow_snapshot": None},
+            callbacks=LegacyLocalExecutionCreationCallbacks(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+                apply_execution_route_metadata=lambda metadata, route: metadata,
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"approval_id": "approval-1"},
+                create_run=lambda **kwargs: "run-1",
+                local_execution_target="local_companion",
+                local_execution_pack_id="local-execution-v1",
+            ),
+            result_services=build_runs_core_result_services(),
+        )
+
+        self.assertEqual(
+            services.prepare_run_start_request(RunStartRequest()),
+            {"engine": "orion", "metadata": {"agent_role": "builder"}, "workflow_snapshot": None},
+        )
+        built_creation = services.build_creation_services()
+        self.assertIs(built_creation.mark_local_execution_tools_approved, mark_local_execution_tools_approved)
 
     def test_prepare_run_start_request_applies_shared_normalization_and_postprocess(self):
         request = RunStartRequest(

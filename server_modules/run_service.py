@@ -228,6 +228,15 @@ def build_legacy_orion_preparation_services(
     )
 
 
+def build_legacy_run_preparation_services(
+    *,
+    callbacks: LegacyOrionPreparationCallbacks,
+) -> LegacyRunPreparationServices:
+    return LegacyRunPreparationServices(
+        build_preparation_services=lambda: build_legacy_orion_preparation_services(callbacks=callbacks),
+    )
+
+
 def build_prepared_run_creation_services(
     *,
     decide_execution_target: Any,
@@ -296,6 +305,19 @@ def build_legacy_local_execution_creation_services(
         create_run=callbacks.create_run,
         load_created_run=callbacks.load_created_run,
         now_iso=callbacks.now_iso,
+    )
+
+
+def build_legacy_run_request_services(
+    *,
+    prepare_run_start_request: Any,
+    callbacks: LegacyLocalExecutionCreationCallbacks,
+    result_services: RunPreparedResultServices,
+) -> LegacyRunRequestServices:
+    return LegacyRunRequestServices(
+        prepare_run_start_request=prepare_run_start_request,
+        build_creation_services=lambda: build_legacy_local_execution_creation_services(callbacks=callbacks),
+        result_services=result_services,
     )
 
 

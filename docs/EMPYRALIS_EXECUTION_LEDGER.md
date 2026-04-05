@@ -1565,6 +1565,54 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+## 2026-04-05 - Legacy Run Adapter Service Bundles Moved Behind run_service.py
+
+### Why This Cut
+
+[server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) were still assembling near-identical legacy preparation and request-service bundles inline before delegating to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py). That left adapter composition duplicated in the legacy modules instead of owned by the canonical run service.
+
+### What Changed
+
+- Added shared legacy adapter builders to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py):
+  - `build_legacy_run_preparation_services(...)`
+  - `build_legacy_run_request_services(...)`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so:
+  - `_prepare_run_start_request(...)` now delegates through `build_legacy_run_preparation_services(...)`
+  - `_create_run_from_request(...)` now delegates through `build_legacy_run_request_services(...)`
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) with the same builder pattern.
+- Added focused coverage in [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) for both new builders.
+
+### Current Truth
+
+- The legacy run modules still expose compatibility entrypoints, but they now hand another layer of service-bundle composition back to [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+- Shared legacy adapter wiring is now centralized in the canonical run service instead of mirrored across `runs_core.py` and `runs_delegation.py`.
+- This moves both legacy modules closer to the intended adapter-only role from the architecture Bible.
+
+### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still retain runtime, scheduling, and delegation ownership beyond pure compatibility adapters.
+- `agent_turn.py` is still not the sole normalization entrypoint for every inbound run and channel-triggered path.
+- `runtime_runs_api.py` still owns endpoint orchestration that should keep collapsing behind canonical services.
+
+### Next Required Work
+
+1. Continue removing remaining shared lifecycle ownership from [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py).
+2. Keep pushing inbound request normalization behind [server_modules/agent_turn.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/agent_turn.py) instead of leaving it in API or chat shells.
+3. Preserve legacy patch points while the adapter collapse continues, then remove them only in a later explicit cleanup phase.
+
+### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ## 2026-04-05 - Direct Chat Turn Fallback Moved Behind agent_turn.py
 
 ### Why This Cut

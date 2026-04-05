@@ -8,6 +8,7 @@ from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
     build_legacy_local_execution_creation_services,
+    build_legacy_orion_preparation_services,
     build_prepared_run_creation_services,
     build_run_preparation_services,
     build_run_prepared_result_services,
@@ -27,6 +28,7 @@ from server_modules.run_service import (
     RunCreationServices,
     RunExecutionServices,
     LegacyLocalExecutionCreationCallbacks,
+    LegacyOrionPreparationCallbacks,
     LegacyRunPreparationServices,
     LegacyRunRequestServices,
     RunPreparedResultServices,
@@ -136,6 +138,36 @@ class RunServiceTests(unittest.TestCase):
 
         self.assertIs(creation.apply_browser_execution_metadata, apply_browser_execution_metadata)
         self.assertIs(creation.mark_local_execution_tools_approved, mark_local_execution_tools_approved)
+
+    def test_build_legacy_orion_preparation_services_preserves_postprocess_callback(self):
+        services = build_legacy_orion_preparation_services(
+            callbacks=LegacyOrionPreparationCallbacks(
+                engine_registry={"orion": object()},
+                engine_validation_errors=[],
+                supported_outcome_packs={"local_execution"},
+                normalize_requested_max_iterations=normalize_requested_max_iterations,
+                normalize_trust_mode=lambda value: str(value or ""),
+                trust_mode_aliases={},
+                valid_trust_modes={"guarded"},
+                normalize_execution_target=lambda value: str(value or ""),
+                valid_execution_targets={"cloud"},
+                normalize_run_id_token=lambda value: str(value or "") or None,
+                normalize_agent_role=lambda value: str(value or ""),
+                detect_agent_role=lambda req, metadata: ("builder", "default"),
+                resolve_app_permissions=lambda app_id: {},
+                action_policy_from_app_permissions=lambda permissions: {},
+                merge_action_policies=lambda existing, new: {},
+                fetch_workflow_snapshot=lambda workflow_id: None,
+                postprocess_metadata=lambda req, metadata: {**metadata, "postprocessed": True},
+            )
+        )
+
+        prepared = prepare_run_start_request(
+            RunStartRequest(engine="orion", workspace_id="default", user_goal="hello"),
+            services=services,
+        )
+
+        self.assertTrue(prepared["metadata"]["postprocessed"])
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

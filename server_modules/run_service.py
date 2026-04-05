@@ -94,6 +94,27 @@ class LegacyLocalExecutionCreationCallbacks:
 
 
 @dataclass(slots=True)
+class LegacyOrionPreparationCallbacks:
+    engine_registry: Any
+    engine_validation_errors: Any
+    supported_outcome_packs: Any
+    normalize_requested_max_iterations: Callable[[Any], Optional[int]]
+    normalize_trust_mode: Callable[[str], str]
+    trust_mode_aliases: Any
+    valid_trust_modes: Any
+    normalize_execution_target: Callable[[Any], str]
+    valid_execution_targets: Any
+    normalize_run_id_token: Callable[[Any], Optional[str]]
+    normalize_agent_role: Callable[[Any], str]
+    detect_agent_role: Callable[[RunStartRequest, Dict[str, Any]], tuple[str, str]]
+    resolve_app_permissions: Callable[[str], Any]
+    action_policy_from_app_permissions: Callable[[Any], Dict[str, Any]]
+    merge_action_policies: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]
+    fetch_workflow_snapshot: Callable[[Any], Any]
+    postprocess_metadata: Optional[Callable[[RunStartRequest, Dict[str, Any]], Dict[str, Any]]] = None
+
+
+@dataclass(slots=True)
 class RunPreparationServices:
     engine_registry: Any
     engine_validation_errors: Any
@@ -173,6 +194,31 @@ def build_run_preparation_services(
         merge_action_policies=merge_action_policies,
         fetch_workflow_snapshot=fetch_workflow_snapshot,
         postprocess_metadata=postprocess_metadata,
+    )
+
+
+def build_legacy_orion_preparation_services(
+    *,
+    callbacks: LegacyOrionPreparationCallbacks,
+) -> RunPreparationServices:
+    return build_run_preparation_services(
+        engine_registry=callbacks.engine_registry,
+        engine_validation_errors=callbacks.engine_validation_errors,
+        supported_outcome_packs=callbacks.supported_outcome_packs,
+        normalize_requested_max_iterations=callbacks.normalize_requested_max_iterations,
+        normalize_trust_mode=callbacks.normalize_trust_mode,
+        trust_mode_aliases=callbacks.trust_mode_aliases,
+        valid_trust_modes=callbacks.valid_trust_modes,
+        normalize_execution_target=callbacks.normalize_execution_target,
+        valid_execution_targets=callbacks.valid_execution_targets,
+        normalize_run_id_token=callbacks.normalize_run_id_token,
+        normalize_agent_role=callbacks.normalize_agent_role,
+        detect_agent_role=callbacks.detect_agent_role,
+        resolve_app_permissions=callbacks.resolve_app_permissions,
+        action_policy_from_app_permissions=callbacks.action_policy_from_app_permissions,
+        merge_action_policies=callbacks.merge_action_policies,
+        fetch_workflow_snapshot=callbacks.fetch_workflow_snapshot,
+        postprocess_metadata=callbacks.postprocess_metadata,
     )
 
 

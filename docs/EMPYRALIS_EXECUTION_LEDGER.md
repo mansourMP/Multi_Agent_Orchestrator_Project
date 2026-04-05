@@ -1565,6 +1565,59 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Shared Orion Preparation Builder Extracted
+
+#### Stage
+
+Stage 1 continues. The repeated Orion-specific preparation-service composition now lives in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) instead of being assembled inline in both legacy run modules.
+
+The legacy `_prepare_run_start_request()` entrypoints remain stable, but their service composition now crosses a more explicit canonical boundary.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `LegacyOrionPreparationCallbacks`
+  - `build_legacy_orion_preparation_services()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so its legacy preparation wrapper now builds shared preparation services through the new canonical helper.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so its legacy preparation wrapper now uses the same canonical helper.
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with focused coverage for the new builder, including the optional `postprocess_metadata` path.
+
+#### Current Truth
+
+- The durable-run service layer now owns the shared composition for:
+  - Orion preparation services
+  - local-execution creation services
+  - legacy preparation wrapper flow
+  - legacy request-to-result wrapper flow
+  - prepared-result adaptation
+  - prepared-run creation
+- The legacy run modules still own their module-level compatibility names and broader schedule/delegation/runtime behaviors, but less duplicated service-bundle setup.
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still mixes schedule management, live-run state, and history behavior with lifecycle logic.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still owns retry lineage, parent refresh, and snapshot orchestration behavior.
+- The shared durable-run boundary is cleaner, but not yet the only obvious ownership layer.
+
+#### Next Required Work
+
+1. Continue extracting shared lifecycle/state behavior into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Preserve the patched module-level compatibility surface while shrinking ownership in the legacy run modules.
+3. Keep new durable-run orchestration out of the legacy wrappers.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Shared Local Execution Creation Builder Extracted
 
 #### Stage

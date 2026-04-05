@@ -834,6 +834,56 @@ def build_runs_core_legacy_preparation_services(
     )
 
 
+def build_runs_core_runtime_preparation_services_from_namespace(
+    *,
+    namespace: Dict[str, Any],
+    engine_registry: dict[str, Any],
+    engine_validation_errors: list[str],
+    supported_outcome_packs: set[str],
+    normalize_trust_mode: Callable[[Any], str],
+    trust_mode_aliases: dict[str, str],
+    valid_trust_modes: set[str],
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: set[str],
+    normalize_agent_role: Callable[[Any], str],
+    resolve_app_permissions: Callable[[Any], dict[str, Any]],
+    action_policy_from_app_permissions: Callable[[dict[str, Any]], dict[str, Any]],
+    merge_action_policies: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Optional[dict[str, Any]]],
+) -> LegacyRunPreparationServices:
+    return build_runs_core_legacy_preparation_services(
+        engine_registry=engine_registry,
+        engine_validation_errors=engine_validation_errors,
+        supported_outcome_packs=supported_outcome_packs,
+        normalize_requested_max_iterations=_resolve_namespace_callable(
+            namespace,
+            "_normalize_requested_max_iterations",
+        ),
+        normalize_trust_mode=normalize_trust_mode,
+        trust_mode_aliases=trust_mode_aliases,
+        valid_trust_modes=valid_trust_modes,
+        normalize_execution_target=normalize_execution_target,
+        valid_execution_targets=valid_execution_targets,
+        normalize_run_id_token=_resolve_namespace_callable(
+            namespace,
+            "_normalize_run_id_token",
+        ),
+        normalize_agent_role=normalize_agent_role,
+        detect_agent_role=_resolve_namespace_callable(
+            namespace,
+            "_detect_agent_role",
+        ),
+        resolve_app_permissions=resolve_app_permissions,
+        action_policy_from_app_permissions=action_policy_from_app_permissions,
+        merge_action_policies=merge_action_policies,
+        fetch_workflow_snapshot=fetch_workflow_snapshot,
+        postprocess_metadata=_resolve_namespace_callable(
+            namespace,
+            "_bind_obvious_connector_write_intent",
+        ),
+    )
+
+
 def build_runs_delegation_legacy_preparation_services(
     *,
     engine_registry: dict[str, Any],
@@ -871,6 +921,62 @@ def build_runs_delegation_legacy_preparation_services(
         merge_action_policies=merge_action_policies,
         fetch_workflow_snapshot=fetch_workflow_snapshot,
     )
+
+
+def build_runs_delegation_runtime_preparation_services_from_namespace(
+    *,
+    namespace: Dict[str, Any],
+    engine_registry: dict[str, Any],
+    engine_validation_errors: list[str],
+    supported_outcome_packs: set[str],
+    normalize_trust_mode: Callable[[Any], str],
+    trust_mode_aliases: dict[str, str],
+    valid_trust_modes: set[str],
+    normalize_execution_target: Callable[[Any], str],
+    valid_execution_targets: set[str],
+    normalize_agent_role: Callable[[Any], str],
+    resolve_app_permissions: Callable[[Any], dict[str, Any]],
+    action_policy_from_app_permissions: Callable[[dict[str, Any]], dict[str, Any]],
+    merge_action_policies: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    fetch_workflow_snapshot: Callable[[Any], Optional[dict[str, Any]]],
+) -> LegacyRunPreparationServices:
+    return build_runs_delegation_legacy_preparation_services(
+        engine_registry=engine_registry,
+        engine_validation_errors=engine_validation_errors,
+        supported_outcome_packs=supported_outcome_packs,
+        normalize_requested_max_iterations=_resolve_namespace_callable(
+            namespace,
+            "_normalize_requested_max_iterations",
+        ),
+        normalize_trust_mode=normalize_trust_mode,
+        trust_mode_aliases=trust_mode_aliases,
+        valid_trust_modes=valid_trust_modes,
+        normalize_execution_target=normalize_execution_target,
+        valid_execution_targets=valid_execution_targets,
+        normalize_run_id_token=_resolve_namespace_callable(
+            namespace,
+            "_normalize_run_id_token",
+        ),
+        normalize_agent_role=normalize_agent_role,
+        detect_agent_role=_resolve_namespace_callable(
+            namespace,
+            "_detect_agent_role",
+        ),
+        resolve_app_permissions=resolve_app_permissions,
+        action_policy_from_app_permissions=action_policy_from_app_permissions,
+        merge_action_policies=merge_action_policies,
+        fetch_workflow_snapshot=fetch_workflow_snapshot,
+    )
+
+
+def build_schedule_bound_create_run_from_request(
+    create_run_from_request: Callable[..., Any],
+    *,
+    schedule_id: Optional[str] = None,
+) -> Callable[[Any], Any]:
+    if schedule_id is None:
+        return lambda req: create_run_from_request(req)
+    return lambda req: create_run_from_request(req, schedule_id=schedule_id)
 
 
 def is_valid_run_state(value: str) -> bool:

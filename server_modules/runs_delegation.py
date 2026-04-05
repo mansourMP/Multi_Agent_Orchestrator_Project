@@ -447,19 +447,17 @@ def _build_delegation_summary(
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     return run_service.prepare_legacy_run_start_request(
         req,
-        services=run_service.build_runs_delegation_legacy_preparation_services(
+        services=run_service.build_runs_delegation_runtime_preparation_services_from_namespace(
+            namespace=globals(),
             engine_registry=ENGINE_REGISTRY,
             engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
             supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
-            normalize_requested_max_iterations=_normalize_requested_max_iterations,
             normalize_trust_mode=normalize_trust_mode,
             trust_mode_aliases=TRUST_MODE_ALIASES,
             valid_trust_modes=VALID_TRUST_MODES,
             normalize_execution_target=normalize_execution_target,
             valid_execution_targets=VALID_EXECUTION_TARGETS,
-            normalize_run_id_token=_normalize_run_id_token,
             normalize_agent_role=normalize_agent_role,
-            detect_agent_role=_detect_agent_role,
             resolve_app_permissions=resolve_app_permissions,
             action_policy_from_app_permissions=action_policy_from_app_permissions,
             merge_action_policies=merge_action_policies,

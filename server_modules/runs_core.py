@@ -1158,10 +1158,9 @@ execute_system_run_start_request_via_turn_runtime = build_execute_unowned_system
 def _schedule_run_execution_services(schedule_id: Optional[str] = None) -> run_service.RunExecutionServices:
     return run_service.build_system_run_execution_services(
         prepare_run_start_request=_prepare_run_start_request,
-        create_run_from_request=(
-            (lambda req: _create_run_from_request(req, schedule_id=schedule_id))
-            if schedule_id is not None
-            else (lambda req: _create_run_from_request(req))
+        create_run_from_request=run_service.build_schedule_bound_create_run_from_request(
+            _create_run_from_request,
+            schedule_id=schedule_id,
         ),
     )
 
@@ -1177,24 +1176,21 @@ def _execute_scheduled_run_request(req: RunStartRequest, *, schedule_id: Optiona
 def _prepare_run_start_request(req: RunStartRequest) -> Dict[str, Any]:
     return run_service.prepare_legacy_run_start_request(
         req,
-        services=run_service.build_runs_core_legacy_preparation_services(
+        services=run_service.build_runs_core_runtime_preparation_services_from_namespace(
+            namespace=globals(),
             engine_registry=ENGINE_REGISTRY,
             engine_validation_errors=ORION_ENGINE_VALIDATION_ERRORS,
             supported_outcome_packs=SUPPORTED_OUTCOME_PACKS,
-            normalize_requested_max_iterations=_normalize_requested_max_iterations,
             normalize_trust_mode=normalize_trust_mode,
             trust_mode_aliases=TRUST_MODE_ALIASES,
             valid_trust_modes=VALID_TRUST_MODES,
             normalize_execution_target=normalize_execution_target,
             valid_execution_targets=VALID_EXECUTION_TARGETS,
-            normalize_run_id_token=_normalize_run_id_token,
             normalize_agent_role=normalize_agent_role,
-            detect_agent_role=_detect_agent_role,
             resolve_app_permissions=resolve_app_permissions,
             action_policy_from_app_permissions=action_policy_from_app_permissions,
             merge_action_policies=merge_action_policies,
             fetch_workflow_snapshot=fetch_workflow_snapshot,
-            postprocess_metadata=_bind_obvious_connector_write_intent,
         ),
     )
 

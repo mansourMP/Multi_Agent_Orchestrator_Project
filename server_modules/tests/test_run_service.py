@@ -28,8 +28,10 @@ from server_modules.run_service import (
     build_run_routing_preview_services,
     build_run_routing_preview,
     build_runs_core_creation_result,
+    build_runs_core_legacy_request_services,
     build_runs_core_result_services,
     build_runs_delegation_creation_result,
+    build_runs_delegation_legacy_request_services,
     build_runs_delegation_result_services,
     prepare_legacy_run_start_request,
     create_legacy_run_result_from_request,
@@ -357,6 +359,47 @@ class RunServiceTests(unittest.TestCase):
     def test_build_runs_result_services_preserve_shared_result_builders(self):
         self.assertIsNotNone(build_runs_core_result_services().build_result)
         self.assertIsNotNone(build_runs_delegation_result_services().build_result)
+
+    def test_build_runs_core_legacy_request_services_uses_core_result_builder(self):
+        services = build_runs_core_legacy_request_services(
+            prepare_run_start_request=lambda req: {"engine": "orion", "metadata": {}},
+            decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+            apply_execution_route_metadata=lambda metadata, route: metadata,
+            build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+            agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+            compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+            resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+            agent_machine_full_trust_enabled=lambda owner_user_id: False,
+            begin_run_pending_confirmation=lambda *args, **kwargs: {"approval_id": "approval-1"},
+            create_run=lambda **kwargs: "run-1",
+            local_execution_target="local_companion",
+            local_execution_pack_id="local-execution-v1",
+            load_created_run=lambda run_id: {"active_profile_id": "profile-1"},
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+        )
+
+        self.assertIsNotNone(services.result_services.build_result)
+        self.assertIs(services.build_creation_services().load_created_run("run-1")["active_profile_id"], "profile-1")
+
+    def test_build_runs_delegation_legacy_request_services_uses_delegation_result_builder(self):
+        services = build_runs_delegation_legacy_request_services(
+            prepare_run_start_request=lambda req: {"engine": "orion", "metadata": {}},
+            decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+            apply_execution_route_metadata=lambda metadata, route: metadata,
+            build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+            agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+            compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+            resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+            agent_machine_full_trust_enabled=lambda owner_user_id: False,
+            begin_run_pending_confirmation=lambda *args, **kwargs: {"approval_id": "approval-1"},
+            create_run=lambda **kwargs: "run-1",
+            local_execution_target="local_companion",
+            local_execution_pack_id="local-execution-v1",
+            now_iso=lambda: "2026-04-05T00:00:00Z",
+        )
+
+        self.assertIsNotNone(services.result_services.build_result)
+        self.assertIsNone(services.build_creation_services().load_created_run)
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

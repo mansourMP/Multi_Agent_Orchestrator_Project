@@ -588,6 +588,76 @@ def build_runs_delegation_result_services() -> RunPreparedResultServices:
     )
 
 
+def build_runs_core_legacy_request_services(
+    *,
+    prepare_run_start_request: Any,
+    decide_execution_target: Callable[..., dict[str, Any]],
+    apply_execution_route_metadata: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    build_doctor_run_gate: Callable[..., dict[str, Any]],
+    agent_machine_inherited_owner_user_id: Callable[[Any], Any],
+    compute_tool_policy_precheck: Callable[[dict[str, Any]], dict[str, Any]],
+    resolve_runtime_policy_mode: Callable[..., dict[str, Any]],
+    agent_machine_full_trust_enabled: Callable[[Any], bool],
+    begin_run_pending_confirmation: Callable[..., dict[str, Any]],
+    create_run: Callable[..., str],
+    local_execution_target: str,
+    local_execution_pack_id: str,
+    load_created_run: Optional[Callable[[str], dict[str, Any]]] = None,
+    now_iso: Optional[Callable[[], str]] = None,
+) -> LegacyRunRequestServices:
+    return build_legacy_run_request_services_from_values(
+        prepare_run_start_request=prepare_run_start_request,
+        decide_execution_target=decide_execution_target,
+        apply_execution_route_metadata=apply_execution_route_metadata,
+        build_doctor_run_gate=build_doctor_run_gate,
+        agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+        compute_tool_policy_precheck=compute_tool_policy_precheck,
+        resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+        agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+        begin_run_pending_confirmation=begin_run_pending_confirmation,
+        create_run=create_run,
+        local_execution_target=local_execution_target,
+        local_execution_pack_id=local_execution_pack_id,
+        result_services=build_runs_core_result_services(),
+        load_created_run=load_created_run,
+        now_iso=now_iso,
+    )
+
+
+def build_runs_delegation_legacy_request_services(
+    *,
+    prepare_run_start_request: Any,
+    decide_execution_target: Callable[..., dict[str, Any]],
+    apply_execution_route_metadata: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    build_doctor_run_gate: Callable[..., dict[str, Any]],
+    agent_machine_inherited_owner_user_id: Callable[[Any], Any],
+    compute_tool_policy_precheck: Callable[[dict[str, Any]], dict[str, Any]],
+    resolve_runtime_policy_mode: Callable[..., dict[str, Any]],
+    agent_machine_full_trust_enabled: Callable[[Any], bool],
+    begin_run_pending_confirmation: Callable[..., dict[str, Any]],
+    create_run: Callable[..., str],
+    local_execution_target: str,
+    local_execution_pack_id: str,
+    now_iso: Optional[Callable[[], str]] = None,
+) -> LegacyRunRequestServices:
+    return build_legacy_run_request_services_from_values(
+        prepare_run_start_request=prepare_run_start_request,
+        decide_execution_target=decide_execution_target,
+        apply_execution_route_metadata=apply_execution_route_metadata,
+        build_doctor_run_gate=build_doctor_run_gate,
+        agent_machine_inherited_owner_user_id=agent_machine_inherited_owner_user_id,
+        compute_tool_policy_precheck=compute_tool_policy_precheck,
+        resolve_runtime_policy_mode=resolve_runtime_policy_mode,
+        agent_machine_full_trust_enabled=agent_machine_full_trust_enabled,
+        begin_run_pending_confirmation=begin_run_pending_confirmation,
+        create_run=create_run,
+        local_execution_target=local_execution_target,
+        local_execution_pack_id=local_execution_pack_id,
+        result_services=build_runs_delegation_result_services(),
+        now_iso=now_iso,
+    )
+
+
 def is_valid_run_state(value: str) -> bool:
     return value in RUN_STATES
 

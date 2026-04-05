@@ -1202,7 +1202,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     return run_service.create_legacy_run_result_from_request(
         req,
         schedule_id=schedule_id,
-        services=run_service.build_legacy_run_request_services_from_values(
+        services=run_service.build_runs_core_legacy_request_services(
             prepare_run_start_request=_prepare_run_start_request,
             decide_execution_target=decide_execution_target,
             apply_execution_route_metadata=apply_execution_route_metadata,
@@ -1215,7 +1215,6 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             create_run=create_run,
             local_execution_target=EXECUTION_TARGET_LOCAL_COMPANION,
             local_execution_pack_id=LOCAL_EXECUTION_PACK_ID,
-            result_services=run_service.build_runs_core_result_services(),
             load_created_run=lambda run_id: runs.get(run_id) if isinstance(runs.get(run_id), dict) else {},
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),

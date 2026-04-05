@@ -7,6 +7,8 @@ from fastapi import HTTPException
 from server_modules.agent_turn import build_run_start_turn_request
 from server_modules.run_service import (
     apply_browser_execution_metadata,
+    build_runs_core_creation_result,
+    build_runs_delegation_creation_result,
     local_execution_block_prompt,
     local_execution_confirmation_prompt,
     local_execution_requires_start_confirmation,
@@ -233,6 +235,63 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(prepared["metadata"]["agent_role_source"], "detected")
         self.assertEqual(prepared["metadata"]["workflow_name"], "Workflow")
         self.assertEqual(prepared["metadata"]["postprocessed"], True)
+
+    def test_build_runs_core_creation_result_shapes_legacy_core_payload(self):
+        request = RunStartRequest(
+            engine="orion",
+            workspace_id="default",
+            user_goal="hello",
+            provider="openai",
+            model="gpt-test",
+        )
+
+        payload = build_runs_core_creation_result(
+            request,
+            created={
+                "run_id": "run-1",
+                "engine": "orion",
+                "status": "starting",
+                "route": {"selected": "cloud"},
+                "doctor_preflight": {"blocking": False},
+                "pending_confirmation": None,
+                "created_run": {
+                    "active_profile_id": "profile-1",
+                    "active_profile_label": "Primary",
+                    "active_provider": "openai",
+                    "active_model": "gpt-test",
+                },
+                "metadata": {
+                    "policy_mode": "guarded",
+                    "agent_role": "orchestrator",
+                    "agent_role_source": "detected",
+                },
+            },
+        )
+
+        self.assertEqual(payload["active_profile_id"], "profile-1")
+        self.assertEqual(payload["requested_provider"], "openai")
+        self.assertEqual(payload["requested_model"], "gpt-test")
+        self.assertIsNone(payload["pending_approval"])
+
+    def test_build_runs_delegation_creation_result_shapes_legacy_delegation_payload(self):
+        payload = build_runs_delegation_creation_result(
+            created={
+                "run_id": "run-1",
+                "engine": "orion",
+                "status": "starting",
+                "route": {"selected": "cloud"},
+                "doctor_preflight": {"blocking": False},
+                "pending_confirmation": {"approval_id": "approval-1"},
+                "metadata": {
+                    "agent_role": "researcher",
+                    "agent_role_source": "delegated",
+                },
+            },
+        )
+
+        self.assertEqual(payload["agent_role"], "researcher")
+        self.assertEqual(payload["pending_confirmation"]["approval_id"], "approval-1")
+        self.assertEqual(payload["pending_approval"]["approval_id"], "approval-1")
 
     def test_local_execution_helper_block(self):
         precheck = {

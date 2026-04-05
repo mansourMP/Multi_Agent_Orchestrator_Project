@@ -100,6 +100,58 @@ class PreparedRunCreationServices:
     now_iso: Any = None
 
 
+def build_runs_core_creation_result(
+    req: RunStartRequest,
+    *,
+    created: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata = created["metadata"]
+    created_run = created["created_run"]
+    return {
+        "run_id": created["run_id"],
+        "engine": created["engine"],
+        "status": created["status"],
+        "active_profile_id": created_run.get("active_profile_id"),
+        "active_profile_label": created_run.get("active_profile_label"),
+        "active_profile_provider": created_run.get("active_provider"),
+        "active_profile_model": created_run.get("active_model"),
+        "requested_provider": str(req.provider or "").strip().lower() or None,
+        "requested_model": str(req.model or "").strip() or None,
+        "policy_mode": metadata.get("policy_mode"),
+        "agent_role": metadata.get("agent_role"),
+        "agent_role_source": metadata.get("agent_role_source"),
+        "parent_run_id": metadata.get("parent_run_id"),
+        "delegation_root_run_id": metadata.get("delegation_root_run_id"),
+        "delegated_by_run_id": metadata.get("delegated_by_run_id"),
+        "delegated_by_role": metadata.get("delegated_by_role"),
+        "route": created["route"],
+        "doctor_preflight": created["doctor_preflight"],
+        "pending_approval": created["pending_confirmation"],
+    }
+
+
+def build_runs_delegation_creation_result(
+    *,
+    created: Dict[str, Any],
+) -> Dict[str, Any]:
+    metadata = created["metadata"]
+    return {
+        "run_id": created["run_id"],
+        "engine": created["engine"],
+        "status": created["status"],
+        "agent_role": metadata.get("agent_role"),
+        "agent_role_source": metadata.get("agent_role_source"),
+        "parent_run_id": metadata.get("parent_run_id"),
+        "delegation_root_run_id": metadata.get("delegation_root_run_id"),
+        "delegated_by_run_id": metadata.get("delegated_by_run_id"),
+        "delegated_by_role": metadata.get("delegated_by_role"),
+        "route": created["route"],
+        "doctor_preflight": created["doctor_preflight"],
+        "pending_confirmation": created["pending_confirmation"],
+        "pending_approval": created["pending_confirmation"],
+    }
+
+
 def is_valid_run_state(value: str) -> bool:
     return value in RUN_STATES
 

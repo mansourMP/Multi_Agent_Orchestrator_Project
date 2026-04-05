@@ -1565,6 +1565,112 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Operator Chat Support Helpers Moved Behind Service Boundary
+
+#### Stage
+
+Stage 1 refactor continues. The operator chat shell now owns less support logic and more of its remaining helper surface is delegated into explicit service code.
+
+#### Completed Work
+
+- Added [server_modules/direct_chat_operator_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_operator_support_service.py) to own:
+  - tool-capability normalization and lookup
+  - live tool connection/runtime helper checks
+  - active-run counting
+  - recent-run prompt sourcing from shared runtime history
+- Updated [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) so those helpers now delegate through the new support service.
+- Reduced shell-owned direct-tool glue further by:
+  - delegating `_approval_required_for_direct_tool()` straight through [server_modules/direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_approval_service.py)
+  - collapsing `_direct_tool_execution_callbacks()` into a late-bound lambda
+- Added focused coverage in:
+  - [server_modules/tests/test_direct_chat_operator_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_operator_support_service.py)
+
+#### Current Truth
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) dropped from `1153` lines to `1069` lines in this cut.
+- The compatibility surface is preserved: the same underscored helper names remain patchable from the operator-chat tests.
+- The remaining shell logic is now more concentrated on coordination than helper implementation.
+
+#### Open Gaps
+
+- [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) still owns some coordination glue, especially around callback wiring and top-level orchestration.
+- The operator shell is thinner, but it is still not yet the final minimal coordinator boundary.
+
+#### Next Required Work
+
+1. Continue shrinking [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py) until it is mostly compatibility exports plus orchestration entrypoints.
+2. Avoid adding any new behavior to the shell; new logic should land in service modules only.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/operator_chat.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/operator_chat.py)
+  - [server_modules/direct_chat_operator_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_chat_operator_support_service.py)
+  - [server_modules/direct_tool_approval_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/direct_tool_approval_service.py)
+  - [server_modules/tests/test_direct_chat_operator_support_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_direct_chat_operator_support_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_operator_chat`
+  - `server_modules.tests.test_operator_chat_no_provider`
+  - `server_modules.tests.test_operator_chat_direct_tools`
+  - `server_modules.tests.test_direct_chat_memory_facade_service`
+  - `server_modules.tests.test_direct_chat_metadata_service`
+  - `server_modules.tests.test_direct_chat_prompt_service`
+  - `server_modules.tests.test_direct_tool_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_composition_service`
+  - `server_modules.tests.test_direct_chat_callback_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_service`
+  - `server_modules.tests.test_direct_chat_runtime_entry_facade_service`
+  - `server_modules.tests.test_direct_chat_provider_facade_service`
+  - `server_modules.tests.test_direct_chat_runtime_facade_service`
+  - `server_modules.tests.test_direct_chat_entry_policy_service`
+  - `server_modules.tests.test_direct_chat_operator_binding_service`
+  - `server_modules.tests.test_direct_chat_support_binding_service`
+  - `server_modules.tests.test_direct_chat_operator_support_service`
+  - `server_modules.tests.test_agent_machine_mode`
+
+### 2026-04-05 - Run Service Owns More Legacy Result Shaping
+
+#### Stage
+
+Stage 2 continues. The durable-run path is now slightly less fragmented because legacy wrapper result shaping moved into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `build_runs_core_creation_result()`
+  - `build_runs_delegation_creation_result()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so `_create_run_from_request()` now uses the shared `run_service.py` result shaper instead of building the legacy response inline.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so its `_create_run_from_request()` result payload now also comes from `run_service.py`.
+- Added focused coverage in:
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+
+#### Current Truth
+
+- Shared durable-run creation already flowed through [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py); now the legacy wrapper response shaping does too.
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) are a bit thinner and less likely to drift in their outer result payloads.
+
+#### Open Gaps
+
+- `run_service.py` still does not own the full durable lifecycle.
+- The legacy run modules still construct their own service bundles and still own deeper orchestration branches.
+
+#### Next Required Work
+
+1. Keep moving wrapper-level durable-run behavior from the legacy run modules into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+2. Preserve the exact legacy response shape while centralizing more ownership.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+
 ### 2026-04-05 - Operator Chat Import And Trivial Wrapper Cleanup
 
 #### Stage

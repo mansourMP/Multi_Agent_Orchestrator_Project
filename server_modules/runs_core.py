@@ -1217,7 +1217,11 @@ def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
     from server_modules.runs_execution import _compute_tool_policy_precheck, create_run
-    from server_modules.run_service import PreparedRunCreationServices, create_run_from_prepared_request
+    from server_modules.run_service import (
+        PreparedRunCreationServices,
+        build_runs_core_creation_result,
+        create_run_from_prepared_request,
+    )
 
     prepared = _prepare_run_start_request(req)
     created = create_run_from_prepared_request(
@@ -1244,29 +1248,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),
     )
-    metadata = created["metadata"]
-    created_run = created["created_run"]
-    return {
-        "run_id": created["run_id"],
-        "engine": created["engine"],
-        "status": created["status"],
-        "active_profile_id": created_run.get("active_profile_id"),
-        "active_profile_label": created_run.get("active_profile_label"),
-        "active_profile_provider": created_run.get("active_provider"),
-        "active_profile_model": created_run.get("active_model"),
-        "requested_provider": str(req.provider or "").strip().lower() or None,
-        "requested_model": str(req.model or "").strip() or None,
-        "policy_mode": metadata.get("policy_mode"),
-        "agent_role": metadata.get("agent_role"),
-        "agent_role_source": metadata.get("agent_role_source"),
-        "parent_run_id": metadata.get("parent_run_id"),
-        "delegation_root_run_id": metadata.get("delegation_root_run_id"),
-        "delegated_by_run_id": metadata.get("delegated_by_run_id"),
-        "delegated_by_role": metadata.get("delegated_by_role"),
-        "route": created["route"],
-        "doctor_preflight": created["doctor_preflight"],
-        "pending_approval": created["pending_confirmation"],
-    }
+    return build_runs_core_creation_result(req, created=created)
 
 async def list_weekly_schedules(workspace_id: Optional[str] = None):
     with SCHEDULES_LOCK:

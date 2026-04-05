@@ -27,6 +27,7 @@ from server_modules import direct_chat_handoff_facade_service
 from server_modules import direct_chat_memory_facade_service
 from server_modules import direct_chat_entry_policy_service
 from server_modules import direct_chat_operator_binding_service
+from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_prompt_service
@@ -311,71 +312,11 @@ _build_direct_chat_system_prompt = lambda *, workspace_id, availability, tools: 
 )
 
 
-def _normalize_tool_capabilities(availability: Any) -> List[Dict[str, Any]]:
-    tools = availability.get("tool_capabilities") if isinstance(availability, dict) else []
-    normalized: List[Dict[str, Any]] = []
-    if not isinstance(tools, list):
-        return normalized
-    for item in tools:
-        if not isinstance(item, dict):
-            continue
-        tool_id = str(item.get("id") or "").strip().lower()
-        if not tool_id:
-            continue
-        normalized.append(
-            {
-                "id": tool_id,
-                "label": str(item.get("label") or tool_id).strip() or tool_id,
-                "connected": bool(item.get("connected")),
-                "authenticated": item.get("authenticated") if isinstance(item.get("authenticated"), bool) else None,
-                "runtime_usable": item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None,
-                "read_actions": [
-                    str(entry or "").strip()
-                    for entry in (item.get("read_actions") if isinstance(item.get("read_actions"), list) else [])
-                    if str(entry or "").strip()
-                ],
-                "write_actions": [
-                    str(entry or "").strip()
-                    for entry in (item.get("write_actions") if isinstance(item.get("write_actions"), list) else [])
-                    if str(entry or "").strip()
-                ],
-                "approval_required_actions": [
-                    str(entry or "").strip()
-                    for entry in (item.get("approval_required_actions") if isinstance(item.get("approval_required_actions"), list) else [])
-                    if str(entry or "").strip()
-                ],
-            }
-        )
-    return normalized
-
-
-def _tool_capability(availability: Dict[str, Any], tool_id: str) -> Optional[Dict[str, Any]]:
-    token = str(tool_id or "").strip().lower()
-    for item in _normalize_tool_capabilities(availability):
-        if item.get("id") == token:
-            return item
-    return None
-
-
-def _tool_connected(availability: Dict[str, Any], tool_id: str) -> bool:
-    item = _tool_capability(availability, tool_id)
-    return bool(item and item.get("connected"))
-
-
-def _tool_runtime_usable(availability: Dict[str, Any], tool_id: str) -> Optional[bool]:
-    item = _tool_capability(availability, tool_id)
-    if not isinstance(item, dict):
-        return None
-    return item.get("runtime_usable") if isinstance(item.get("runtime_usable"), bool) else None
-
-
-_local_worker_available = lambda availability: (
-    False
-    if not isinstance(availability, dict)
-    else availability.get("runtime_ok")
-    if isinstance(availability.get("runtime_ok"), bool)
-    else True
-)
+_normalize_tool_capabilities = direct_chat_operator_support_service.normalize_tool_capabilities
+_tool_capability = direct_chat_operator_support_service.tool_capability
+_tool_connected = direct_chat_operator_support_service.tool_connected
+_tool_runtime_usable = direct_chat_operator_support_service.tool_runtime_usable
+_local_worker_available = direct_chat_operator_support_service.local_worker_available
 
 
 _agent_machine_owner_user_id = direct_chat_context_service.agent_machine_owner_user_id
@@ -496,12 +437,7 @@ _plan_direct_chat_route = lambda *, message, availability, provider, tools: dire
 )
 
 
-def _active_run_count(workspace_id: str) -> int:
-    try:
-        from server_modules.shared import runs as live_runs
-    except Exception:
-        return 0
-    return direct_chat_entry_policy_service.active_run_count(workspace_id, live_runs=live_runs)
+_active_run_count = direct_chat_operator_support_service.active_run_count
 
 
 _slash_command_help_text = direct_chat_entry_policy_service.slash_command_help_text
@@ -669,17 +605,7 @@ _heartbeat_pending_tasks_for_suggestions = lambda: direct_chat_support_binding_s
 )
 
 
-def _recent_run_prompts_for_suggestions(workspace_id: str) -> List[str]:
-    try:
-        from server_modules.shared import RUN_HISTORY, RUN_HISTORY_LOCK
-    except Exception:
-        return []
-    with RUN_HISTORY_LOCK:
-        history_items = list(RUN_HISTORY)
-    return direct_chat_support_binding_service.recent_run_prompts_for_suggestions(
-        workspace_id,
-        run_history=history_items,
-    )
+_recent_run_prompts_for_suggestions = direct_chat_operator_support_service.recent_run_prompts_for_suggestions
 
 
 _build_proactive_suggestions = partial(
@@ -942,16 +868,15 @@ _extract_first_path_reference = direct_tool_execution_service.extract_first_path
 _resolve_chat_local_path = direct_tool_execution_service.resolve_chat_local_path
 
 
-def _direct_tool_execution_callbacks() -> direct_tool_execution_service.DirectToolExecutionCallbacks:
-    return direct_chat_operator_binding_service.build_direct_tool_execution_callbacks(
-        namespace=globals(),
-        parse_json_object_loose=parse_json_object_loose,
-        llm_task=llm_task,
-        web_search=web_search,
-        web_fetch=web_fetch,
-        search_memory_notebook=search_memory_notebook,
-        get_memory_notebook_excerpt=get_memory_notebook_excerpt,
-    )
+_direct_tool_execution_callbacks = lambda: direct_chat_operator_binding_service.build_direct_tool_execution_callbacks(
+    namespace=globals(),
+    parse_json_object_loose=parse_json_object_loose,
+    llm_task=llm_task,
+    web_search=web_search,
+    web_fetch=web_fetch,
+    search_memory_notebook=search_memory_notebook,
+    get_memory_notebook_excerpt=get_memory_notebook_excerpt,
+)
 
 
 _no_provider_execution_services = lambda: direct_tool_runtime_facade_service.build_no_provider_execution_services(
@@ -998,22 +923,13 @@ _execute_direct_tool_calls = lambda *, tool_calls, workspace_id, thread_id, prov
 )
 
 
-def _approval_required_for_direct_tool(
-    connector_id: str,
-    action_id: str,
-    arguments: Dict[str, Any],
-    tool_capabilities: List[Dict[str, Any]],
-) -> bool:
-    from server_modules.tools_http import http_request_requires_approval
-
-    return direct_tool_approval_service.approval_required_for_direct_tool(
-        connector_id,
-        action_id,
-        arguments,
-        tool_capabilities,
-        compact_text=_compact_text,
-        http_request_requires_approval=http_request_requires_approval,
-    )
+_approval_required_for_direct_tool = lambda connector_id, action_id, arguments, tool_capabilities: direct_tool_approval_service.approval_required_for_direct_tool(
+    connector_id,
+    action_id,
+    arguments,
+    tool_capabilities,
+    compact_text=_compact_text,
+)
 
 
 _credential_auth_mode = lambda provider, credentials: direct_chat_provider_facade_service.credential_auth_mode(

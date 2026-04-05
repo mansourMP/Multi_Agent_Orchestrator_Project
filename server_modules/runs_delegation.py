@@ -497,7 +497,11 @@ def _apply_browser_execution_metadata(metadata: Dict[str, Any]) -> None:
 
 
 def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = None) -> Dict[str, Any]:
-    from server_modules.run_service import PreparedRunCreationServices, create_run_from_prepared_request
+    from server_modules.run_service import (
+        PreparedRunCreationServices,
+        build_runs_delegation_creation_result,
+        create_run_from_prepared_request,
+    )
 
     precheck_fn = globals().get("_compute_tool_policy_precheck")
     create_run_fn = globals().get("create_run")
@@ -532,23 +536,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),
     )
-    metadata = created["metadata"]
-    return {
-        "run_id": created["run_id"],
-        "engine": created["engine"],
-        "status": created["status"],
-        "agent_role": metadata.get("agent_role"),
-        "agent_role_source": metadata.get("agent_role_source"),
-        "parent_run_id": metadata.get("parent_run_id"),
-        "delegation_root_run_id": metadata.get("delegation_root_run_id"),
-        "delegated_by_run_id": metadata.get("delegated_by_run_id"),
-        "delegated_by_role": metadata.get("delegated_by_role"),
-        "route": created["route"],
-        "doctor_preflight": created["doctor_preflight"],
-        "pending_confirmation": created["pending_confirmation"],
-        # Deprecated compatibility alias. Prefer `pending_confirmation`.
-        "pending_approval": created["pending_confirmation"],
-    }
+    return build_runs_delegation_creation_result(created=created)
 
 
 def _lookup_run_snapshot(run_id: str) -> Dict[str, Any]:

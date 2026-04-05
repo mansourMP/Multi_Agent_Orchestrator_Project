@@ -72,10 +72,12 @@ def approval_required_for_direct_tool(
     tool_capabilities: list[dict[str, Any]],
     *,
     compact_text,
-    http_request_requires_approval,
+    http_request_requires_approval=None,
 ) -> bool:
     normalized_connector_id = str(connector_id or "").strip().lower()
     normalized_action_id = str(action_id or "").strip()
+    if http_request_requires_approval is None:
+        from server_modules.tools_http import http_request_requires_approval as http_request_requires_approval
     if normalized_connector_id == "http" and normalized_action_id == "request":
         return http_request_requires_approval(arguments.get("method") or "GET", arguments.get("url") or "")
     if normalized_connector_id == "browser":

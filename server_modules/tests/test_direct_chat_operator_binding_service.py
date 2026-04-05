@@ -884,6 +884,127 @@ class DirectChatOperatorBindingServiceTests(unittest.TestCase):
         self.assertIn("_provider_display_name", export_map)
         self.assertTrue(callable(export_map["_tool_gate_response"]))
 
+    def test_build_direct_chat_module_export_map_from_namespace_merges_shell_and_runtime_exports(self) -> None:
+        namespace = _operator_namespace()
+        namespace.update(
+            {
+                "_direct_chat_run_snapshot": lambda run_id: None,
+                "_direct_chat_run_event_to_step": lambda run_id, event: None,
+                "_direct_chat_run_snapshot_to_step": lambda run_id, snapshot: None,
+                "_direct_chat_run_final_payload": lambda **kwargs: kwargs,
+            }
+        )
+
+        export_map = service.build_direct_chat_module_export_map_from_namespace(
+            namespace=namespace,
+            agent_machine_full_trust_enabled_fn=lambda owner_user_id: owner_user_id == "owner-1",
+            chat_max_iterations_default=30,
+            chat_max_iterations_ceiling=100,
+            compact_text_fn=lambda value: str(value or "").strip().lower(),
+            direct_chat_compaction_token_limit=8000,
+            execution_markers=("run",),
+            question_openers=("what",),
+            direct_run_openers=("summarize",),
+            workflow_request_markers=("workflow",),
+            google_workspace_keywords=("gmail",),
+            smtp_keywords=("smtp",),
+            telegram_keywords=("telegram",),
+            slack_keywords=("slack",),
+            dropbox_keywords=("dropbox",),
+            s3_keywords=("s3",),
+            max_context_tool_actions=2,
+            max_context_tool_capabilities=2,
+            max_direct_chat_prior_message_chars=100,
+            max_direct_chat_prior_messages=5,
+            direct_chat_model_preferences={},
+            direct_chat_clear_markers=set(),
+            direct_tool_loop_state={},
+            direct_chat_loop_repeat_limit=2,
+            parse_json_object_loose_fn=lambda value: {},
+            generate_reply_fn=lambda **kwargs: ("", {}, "", ""),
+            extraction_prompt="prompt",
+            extraction_system_prompt="system",
+            save_session_transcript_fn=lambda *args, **kwargs: None,
+            system_prefix="Memory",
+            workspace_context_dir_fn=lambda workspace_id: Path("/tmp"),
+            memory_suggestion_prompts_fn=lambda workspace_id: [],
+            direct_chat_run_snapshot_fn=lambda run_id: None,
+            direct_chat_run_event_to_step_fn=lambda run_id, event: None,
+            direct_chat_run_snapshot_to_step_fn=lambda run_id, snapshot: None,
+            direct_chat_run_final_payload_fn=lambda **kwargs: kwargs,
+            live_window_seconds=12.0,
+            poll_seconds=0.25,
+            monotonic_fn=lambda: 1.0,
+            sleep_fn=lambda seconds: None,
+            parse_json_object_loose_support_fn=lambda value: {},
+            direct_chat_tool_policy_callbacks_fn=lambda: service.DirectChatToolPolicyCallbacks(
+                extract_first_url=lambda value: "",
+                extract_first_path_reference=lambda value: "",
+                message_requests_http_request_tool=lambda compact: False,
+                message_requests_image_generation_tool=lambda compact: False,
+                message_requests_browser_tool=lambda compact: False,
+                message_requests_local_file_tool=lambda compact: False,
+                message_requests_local_shell_tool=lambda compact: False,
+                message_requests_local_screenshot_tool=lambda compact: False,
+                message_requests_local_computer_tool=lambda compact: False,
+                approval_required_for_direct_tool=lambda connector_id, action_id, arguments, tool_capabilities: False,
+            ),
+            direct_chat_routing_policy_callbacks_fn=lambda: service.DirectChatRoutingPolicyCallbacks(
+                compact_text=lambda value: str(value or "").strip().lower(),
+                question_like=lambda compact: compact.startswith("what "),
+                mentions_any=lambda compact, markers: False,
+                starts_like_direct_run=lambda compact: compact.startswith("run "),
+                is_obvious_smtp_write_request=lambda compact: False,
+                is_explicit_workflow_request=lambda compact: False,
+            ),
+            capture_exception_fn=lambda exc: None,
+            generate_chat_reply_stream_with_provider_fallback_fn=lambda **kwargs: iter(()),
+            compact_conversation_history_fn=lambda **kwargs: {"messages": [], "history_mode": "none", "prior_messages_used": False},
+            parse_memory_write_fn=lambda value: None,
+            parse_memory_read_fn=lambda value: None,
+            handle_memory_request_fn=lambda workspace_id, message: None,
+            list_memory_entries_fn=lambda workspace_id: [],
+            get_memory_fn=lambda workspace_id: "",
+            delete_memory_fn=lambda workspace_id, key: False,
+            no_provider_reasoning_required_response_fn=lambda: {"reply": "fallback", "actions": [], "mode": "answer"},
+            supported_providers=["openai"],
+            complex_task_sequence_markers=("first",),
+            complex_task_outcome_markers=("done",),
+            discord_keywords=("discord",),
+            browser_keywords=("browser",),
+            local_file_keywords=("file",),
+            local_shell_keywords=("shell",),
+            local_screenshot_keywords=("screenshot",),
+            local_computer_control_keywords=("click",),
+            web_lookup_keywords=("latest",),
+            http_request_keywords=("api",),
+            image_generation_keywords=("image",),
+            llm_task_keywords=("reason",),
+            llm_task_fn=lambda **kwargs: None,
+            web_search_fn=lambda **kwargs: None,
+            web_fetch_fn=lambda **kwargs: None,
+            search_memory_notebook_fn=lambda *args, **kwargs: [],
+            get_memory_notebook_excerpt_fn=lambda *args, **kwargs: "",
+            build_operator_system_prompt_fn=lambda **kwargs: "base prompt",
+            memory_tool_names=("memory_search",),
+            local_worker_registry={},
+            is_worker_online_fn=lambda *_args, **_kwargs: True,
+            resolve_workspace_tool_capabilities_fn=lambda workspace_id: [],
+            build_provider_credential_candidates_fn=lambda workspace_id, provider: [{"api_key": "sk-test"}],
+            normalize_auth_mode_fn=lambda value="": str(value or "").strip().lower(),
+            get_claude_code_session_token_fn=lambda: "",
+            provider_has_key_fn=lambda provider: provider == "openai",
+            chat_iteration_limit_reply_fn=lambda limit: f"limit:{limit}",
+            safe_positive_int_fn=lambda value, default: default,
+        )
+
+        self.assertIn("_direct_chat_shell_bindings", export_map)
+        self.assertIn("_direct_chat_binding_bundle", export_map)
+        self.assertIn("_direct_chat_runtime_services", export_map)
+        self.assertIn("_direct_chat_tool_routing_bindings", export_map)
+        self.assertIn("build_direct_operator_reply", export_map)
+        self.assertTrue(callable(export_map["collect_direct_operator_reply"]))
+
     def test_build_direct_chat_tool_support_bindings_preserves_config_and_support_helpers(self) -> None:
         bindings = service.build_direct_chat_tool_support_bindings(
             parse_json_object_loose_fn=lambda value: {"url": "https://example.com"} if value else {},

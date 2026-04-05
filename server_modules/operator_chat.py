@@ -28,7 +28,6 @@ from server_modules import direct_chat_operator_binding_service
 from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_provider_facade_service
-from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_routing_service
 from server_modules import direct_chat_runtime_facade_service
 from server_modules import direct_chat_tool_catalog_service
@@ -536,7 +535,7 @@ _DIRECT_TOOL_RESULT_SUMMARY_SYSTEM_MESSAGE = (
 )
 
 
-_direct_chat_runtime_bindings = direct_chat_operator_binding_service.build_direct_chat_runtime_bindings(
+_direct_chat_binding_bundle = direct_chat_operator_binding_service.build_direct_chat_operator_binding_bundle(
     namespace=globals(),
     parse_page_state=lambda payload: parse_json_object_loose(payload),
     capture_exception=lambda exc: sentry_sdk.capture_exception(exc),
@@ -551,9 +550,6 @@ _direct_chat_runtime_bindings = direct_chat_operator_binding_service.build_direc
     delete_memory=lambda workspace_id, key: delete_memory(workspace_id, key),
     no_provider_reasoning_required_response=lambda: no_provider_service.no_provider_reasoning_required_response(),
     supported_providers=list(SUPPORTED_PROVIDERS),
-)
-_direct_chat_policy_bindings = direct_chat_operator_binding_service.build_direct_chat_policy_bindings(
-    namespace=globals(),
     complex_task_sequence_markers=COMPLEX_TASK_SEQUENCE_MARKERS,
     complex_task_outcome_markers=COMPLEX_TASK_OUTCOME_MARKERS,
     execution_markers=EXECUTION_MARKERS,
@@ -579,11 +575,6 @@ _direct_chat_policy_bindings = direct_chat_operator_binding_service.build_direct
     web_fetch=lambda **kwargs: web_fetch(**kwargs),
     search_memory_notebook=lambda *args, **kwargs: search_memory_notebook(*args, **kwargs),
     get_memory_notebook_excerpt=lambda *args, **kwargs: get_memory_notebook_excerpt(*args, **kwargs),
-)
-_direct_chat_routing_policy_callbacks = _direct_chat_policy_bindings.routing_policy_callbacks
-_direct_chat_tool_policy_callbacks = _direct_chat_policy_bindings.tool_policy_callbacks
-_direct_tool_execution_callbacks = _direct_chat_policy_bindings.direct_tool_execution_callbacks
-_direct_chat_entry_bindings = direct_chat_operator_binding_service.build_direct_chat_entry_bindings(
     availability_lines=_availability_lines,
     build_operator_system_prompt=build_operator_system_prompt,
     memory_tool_names=_MEMORY_NOTEBOOK_TOOL_NAMES,
@@ -592,7 +583,6 @@ _direct_chat_entry_bindings = direct_chat_operator_binding_service.build_direct_
     preferred_provider_fn=lambda workspace_id, requested_provider="": _preferred_provider(workspace_id, requested_provider),
     supports_direct_message_native_chat_fn=lambda provider, credentials: _supports_direct_message_native_chat(provider, credentials),
     resolve_workspace_tool_capabilities_fn=lambda workspace_id: resolve_workspace_tool_capabilities(workspace_id),
-    supported_providers=SUPPORTED_PROVIDERS,
     direct_chat_credentials_fn=lambda workspace_id, provider: _direct_chat_credentials(workspace_id, provider),
     build_provider_credential_candidates_fn=lambda *args, **kwargs: _build_provider_credential_candidates(*args, **kwargs),
     compact_text_fn=_compact_text,
@@ -617,13 +607,15 @@ _direct_chat_entry_bindings = direct_chat_operator_binding_service.build_direct_
     chat_iteration_limit_reply_fn=lambda limit: _chat_iteration_limit_reply(limit),
     safe_positive_int_fn=lambda value, default: _safe_positive_int(value, default),
     chat_max_iterations_default=CHAT_MAX_ITERATIONS_DEFAULT,
-    google_workspace_keywords=GOOGLE_WORKSPACE_KEYWORDS,
-    telegram_keywords=TELEGRAM_KEYWORDS,
-    slack_keywords=SLACK_KEYWORDS,
-    discord_keywords=DISCORD_KEYWORDS,
-    dropbox_keywords=DROPBOX_KEYWORDS,
-    s3_keywords=S3_KEYWORDS,
+    execute_single_direct_tool_call_fn=lambda **kwargs: _execute_single_direct_tool_call(**kwargs),
 )
+_direct_chat_runtime_bindings = _direct_chat_binding_bundle.runtime_bindings
+_direct_chat_policy_bindings = _direct_chat_binding_bundle.policy_bindings
+_direct_chat_entry_bindings = _direct_chat_binding_bundle.entry_bindings
+_direct_chat_tool_runtime_bindings = _direct_chat_binding_bundle.tool_runtime_bindings
+_direct_chat_routing_policy_callbacks = _direct_chat_policy_bindings.routing_policy_callbacks
+_direct_chat_tool_policy_callbacks = _direct_chat_policy_bindings.tool_policy_callbacks
+_direct_tool_execution_callbacks = _direct_chat_policy_bindings.direct_tool_execution_callbacks
 _build_direct_chat_system_prompt = _direct_chat_entry_bindings.build_direct_chat_system_prompt
 _direct_chat_runtime_available = _direct_chat_entry_bindings.direct_chat_runtime_available
 _resolve_direct_chat_availability = _direct_chat_entry_bindings.resolve_direct_chat_availability
@@ -636,11 +628,6 @@ _preferred_provider = _direct_chat_entry_bindings.preferred_provider
 _provider_unavailable_response = _direct_chat_entry_bindings.provider_unavailable_response
 _direct_chat_credentials = _direct_chat_entry_bindings.direct_chat_credentials
 _direct_chat_error_reply = _direct_chat_entry_bindings.direct_chat_error_reply
-_direct_chat_tool_runtime_bindings = direct_chat_operator_binding_service.build_direct_chat_tool_runtime_bindings(
-    direct_chat_runtime_facade_callbacks=lambda: _direct_chat_runtime_facade_callbacks(),
-    direct_tool_execution_callbacks=lambda: _direct_tool_execution_callbacks(),
-    execute_single_direct_tool_call_fn=lambda **kwargs: _execute_single_direct_tool_call(**kwargs),
-)
 _direct_tool_step_payload = _direct_chat_tool_runtime_bindings.direct_tool_step_payload
 _no_provider_execution_services = _direct_chat_tool_runtime_bindings.no_provider_execution_services
 _build_direct_tool_approval_response = _direct_chat_tool_runtime_bindings.build_direct_tool_approval_response
@@ -659,35 +646,10 @@ _preview_run_response = _direct_chat_tool_routing_bindings.preview_run_response
 _prefer_durable_run_handoff = _direct_chat_tool_routing_bindings.prefer_durable_run_handoff
 
 
-build_direct_operator_reply = lambda *, message, workspace_id, requested_model, requested_provider, thread_id="", prior_messages=None, reasoning_effort="", availability=None, approved_action=None, max_iterations=None, session_ctx=None, agent_turn_request=None: direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
-    services=_direct_chat_runtime_services(),
-    message=message,
-    workspace_id=workspace_id,
-    requested_model=requested_model,
-    requested_provider=requested_provider,
-    thread_id=thread_id,
-    prior_messages=prior_messages,
-    reasoning_effort=reasoning_effort,
-    availability=availability,
-    approved_action=approved_action,
-    max_iterations=max_iterations,
-    session_ctx=session_ctx,
-    agent_turn_request=agent_turn_request,
+_direct_chat_entrypoint_bindings = direct_chat_operator_binding_service.build_direct_chat_entrypoint_bindings(
+    direct_chat_runtime_services_fn=lambda: _direct_chat_runtime_services(),
 )
-collect_direct_operator_reply = lambda **kwargs: direct_chat_runtime_entry_facade_service.collect_direct_operator_reply(
-    services=_direct_chat_runtime_services(),
-    **kwargs,
-)
-build_chat_turn_event_stream = lambda *, session_ctx, message, request_meta=None: direct_chat_runtime_entry_facade_service.build_chat_turn_event_stream(
-    services=_direct_chat_runtime_services(),
-    session_ctx=session_ctx,
-    message=message,
-    request_meta=request_meta,
-)
-execute_chat_turn = lambda session_ctx, message, stream_sink=None, request_meta=None: direct_chat_runtime_entry_facade_service.execute_chat_turn(
-    services=_direct_chat_runtime_services(),
-    session_ctx=session_ctx,
-    message=message,
-    stream_sink=stream_sink,
-    request_meta=request_meta,
-)
+build_direct_operator_reply = _direct_chat_entrypoint_bindings.build_direct_operator_reply
+collect_direct_operator_reply = _direct_chat_entrypoint_bindings.collect_direct_operator_reply
+build_chat_turn_event_stream = _direct_chat_entrypoint_bindings.build_chat_turn_event_stream
+execute_chat_turn = _direct_chat_entrypoint_bindings.execute_chat_turn

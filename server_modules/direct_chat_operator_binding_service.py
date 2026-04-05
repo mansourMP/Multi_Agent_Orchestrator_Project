@@ -14,6 +14,7 @@ from server_modules import direct_chat_operator_support_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_provider_facade_service
 from server_modules import direct_chat_routing_service
+from server_modules import direct_chat_runtime_entry_facade_service
 from server_modules import direct_chat_support_binding_service
 from server_modules import direct_chat_tool_catalog_service
 from server_modules import direct_tool_approval_service
@@ -144,6 +145,22 @@ class DirectChatOperatorStateBindings:
     persist_direct_chat_transcript_best_effort: Any
     build_context_used: Any
     with_context_used: Any
+
+
+@dataclass(slots=True)
+class DirectChatOperatorBindingBundle:
+    runtime_bindings: DirectChatOperatorRuntimeBindings
+    policy_bindings: DirectChatOperatorPolicyBindings
+    entry_bindings: DirectChatOperatorEntryBindings
+    tool_runtime_bindings: DirectChatOperatorToolRuntimeBindings
+
+
+@dataclass(slots=True)
+class DirectChatOperatorEntrypointBindings:
+    build_direct_operator_reply: Any
+    collect_direct_operator_reply: Any
+    build_chat_turn_event_stream: Any
+    execute_chat_turn: Any
 
 
 def _lookup(namespace: Dict[str, Any], name: str) -> Any:
@@ -1393,4 +1410,243 @@ def build_direct_chat_state_bindings(
         persist_direct_chat_transcript_best_effort=persist_direct_chat_transcript_best_effort,
         build_context_used=direct_chat_support_binding_service.build_context_used,
         with_context_used=direct_chat_metadata_service.with_context_used,
+    )
+
+
+def build_direct_chat_operator_binding_bundle(
+    *,
+    namespace: Dict[str, Any],
+    parse_page_state: Any,
+    capture_exception: Any,
+    generate_chat_reply_stream_with_provider_fallback: Any,
+    compact_conversation_history: Any,
+    parse_memory_write: Any,
+    parse_memory_read: Any,
+    handle_memory_request: Any,
+    list_memory_entries: Any,
+    get_memory: Any,
+    delete_memory: Any,
+    no_provider_reasoning_required_response: Any,
+    supported_providers: list[str],
+    direct_chat_compaction_token_limit: int,
+    complex_task_sequence_markers: tuple[str, ...] | list[str],
+    complex_task_outcome_markers: tuple[str, ...] | list[str],
+    execution_markers: tuple[str, ...] | list[str],
+    google_workspace_keywords: tuple[str, ...] | list[str],
+    smtp_keywords: tuple[str, ...] | list[str],
+    telegram_keywords: tuple[str, ...] | list[str],
+    slack_keywords: tuple[str, ...] | list[str],
+    discord_keywords: tuple[str, ...] | list[str],
+    dropbox_keywords: tuple[str, ...] | list[str],
+    s3_keywords: tuple[str, ...] | list[str],
+    browser_keywords: tuple[str, ...] | list[str],
+    local_file_keywords: tuple[str, ...] | list[str],
+    local_shell_keywords: tuple[str, ...] | list[str],
+    local_screenshot_keywords: tuple[str, ...] | list[str],
+    local_computer_control_keywords: tuple[str, ...] | list[str],
+    web_lookup_keywords: tuple[str, ...] | list[str],
+    http_request_keywords: tuple[str, ...] | list[str],
+    image_generation_keywords: tuple[str, ...] | list[str],
+    llm_task_keywords: tuple[str, ...] | list[str],
+    parse_json_object_loose: Any,
+    llm_task: Any,
+    web_search: Any,
+    web_fetch: Any,
+    search_memory_notebook: Any,
+    get_memory_notebook_excerpt: Any,
+    availability_lines: Any,
+    build_operator_system_prompt: Any,
+    memory_tool_names: Any,
+    local_worker_registry: Dict[str, Any],
+    is_worker_online_fn: Any,
+    preferred_provider_fn: Any,
+    supports_direct_message_native_chat_fn: Any,
+    resolve_workspace_tool_capabilities_fn: Any,
+    direct_chat_credentials_fn: Any,
+    build_provider_credential_candidates_fn: Any,
+    compact_text_fn: Any,
+    mentions_any_fn: Any,
+    message_requests_local_file_tool_fn: Any,
+    message_requests_local_shell_tool_fn: Any,
+    message_requests_local_screenshot_tool_fn: Any,
+    message_requests_local_computer_tool_fn: Any,
+    is_obvious_smtp_write_request_fn: Any,
+    preview_run_response_fn: Any,
+    prefer_durable_run_handoff_fn: Any,
+    durable_run_preferred_response_fn: Any,
+    message_can_use_direct_connector_tools_fn: Any,
+    message_can_use_direct_local_tools_fn: Any,
+    message_can_use_builtin_direct_tools_fn: Any,
+    can_auto_start_run_handoff_fn: Any,
+    credential_auth_mode_fn: Any,
+    normalize_auth_mode_fn: Any,
+    get_claude_code_session_token_fn: Any,
+    provider_has_key_fn: Any,
+    connect_action_fn: Any,
+    chat_iteration_limit_reply_fn: Any,
+    safe_positive_int_fn: Any,
+    chat_max_iterations_default: int,
+    execute_single_direct_tool_call_fn: Any,
+) -> DirectChatOperatorBindingBundle:
+    runtime_bindings = build_direct_chat_runtime_bindings(
+        namespace=namespace,
+        parse_page_state=parse_page_state,
+        capture_exception=capture_exception,
+        generate_chat_reply_stream_with_provider_fallback=generate_chat_reply_stream_with_provider_fallback,
+        compact_conversation_history=compact_conversation_history,
+        parse_memory_write=parse_memory_write,
+        parse_memory_read=parse_memory_read,
+        handle_memory_request=handle_memory_request,
+        list_memory_entries=list_memory_entries,
+        get_memory=get_memory,
+        delete_memory=delete_memory,
+        no_provider_reasoning_required_response=no_provider_reasoning_required_response,
+        supported_providers=supported_providers,
+        direct_chat_compaction_token_limit=direct_chat_compaction_token_limit,
+    )
+    policy_bindings = build_direct_chat_policy_bindings(
+        namespace=namespace,
+        complex_task_sequence_markers=complex_task_sequence_markers,
+        complex_task_outcome_markers=complex_task_outcome_markers,
+        execution_markers=execution_markers,
+        google_workspace_keywords=google_workspace_keywords,
+        smtp_keywords=smtp_keywords,
+        telegram_keywords=telegram_keywords,
+        slack_keywords=slack_keywords,
+        discord_keywords=discord_keywords,
+        dropbox_keywords=dropbox_keywords,
+        s3_keywords=s3_keywords,
+        browser_keywords=browser_keywords,
+        local_file_keywords=local_file_keywords,
+        local_shell_keywords=local_shell_keywords,
+        local_screenshot_keywords=local_screenshot_keywords,
+        local_computer_control_keywords=local_computer_control_keywords,
+        web_lookup_keywords=web_lookup_keywords,
+        http_request_keywords=http_request_keywords,
+        image_generation_keywords=image_generation_keywords,
+        llm_task_keywords=llm_task_keywords,
+        parse_json_object_loose=parse_json_object_loose,
+        llm_task=llm_task,
+        web_search=web_search,
+        web_fetch=web_fetch,
+        search_memory_notebook=search_memory_notebook,
+        get_memory_notebook_excerpt=get_memory_notebook_excerpt,
+    )
+    entry_bindings = build_direct_chat_entry_bindings(
+        availability_lines=availability_lines,
+        build_operator_system_prompt=build_operator_system_prompt,
+        memory_tool_names=memory_tool_names,
+        local_worker_registry=local_worker_registry,
+        is_worker_online_fn=is_worker_online_fn,
+        preferred_provider_fn=preferred_provider_fn,
+        supports_direct_message_native_chat_fn=supports_direct_message_native_chat_fn,
+        resolve_workspace_tool_capabilities_fn=resolve_workspace_tool_capabilities_fn,
+        supported_providers=supported_providers,
+        direct_chat_credentials_fn=direct_chat_credentials_fn,
+        build_provider_credential_candidates_fn=build_provider_credential_candidates_fn,
+        compact_text_fn=compact_text_fn,
+        mentions_any_fn=mentions_any_fn,
+        message_requests_local_file_tool_fn=message_requests_local_file_tool_fn,
+        message_requests_local_shell_tool_fn=message_requests_local_shell_tool_fn,
+        message_requests_local_screenshot_tool_fn=message_requests_local_screenshot_tool_fn,
+        message_requests_local_computer_tool_fn=message_requests_local_computer_tool_fn,
+        is_obvious_smtp_write_request_fn=is_obvious_smtp_write_request_fn,
+        preview_run_response_fn=preview_run_response_fn,
+        prefer_durable_run_handoff_fn=prefer_durable_run_handoff_fn,
+        durable_run_preferred_response_fn=durable_run_preferred_response_fn,
+        message_can_use_direct_connector_tools_fn=message_can_use_direct_connector_tools_fn,
+        message_can_use_direct_local_tools_fn=message_can_use_direct_local_tools_fn,
+        message_can_use_builtin_direct_tools_fn=message_can_use_builtin_direct_tools_fn,
+        can_auto_start_run_handoff_fn=can_auto_start_run_handoff_fn,
+        credential_auth_mode_fn=credential_auth_mode_fn,
+        normalize_auth_mode_fn=normalize_auth_mode_fn,
+        get_claude_code_session_token_fn=get_claude_code_session_token_fn,
+        provider_has_key_fn=provider_has_key_fn,
+        connect_action_fn=connect_action_fn,
+        chat_iteration_limit_reply_fn=chat_iteration_limit_reply_fn,
+        safe_positive_int_fn=safe_positive_int_fn,
+        chat_max_iterations_default=chat_max_iterations_default,
+        google_workspace_keywords=google_workspace_keywords,
+        telegram_keywords=telegram_keywords,
+        slack_keywords=slack_keywords,
+        discord_keywords=discord_keywords,
+        dropbox_keywords=dropbox_keywords,
+        s3_keywords=s3_keywords,
+    )
+    tool_runtime_bindings = build_direct_chat_tool_runtime_bindings(
+        direct_chat_runtime_facade_callbacks=lambda: runtime_bindings.runtime_facade_callbacks(),
+        direct_tool_execution_callbacks=lambda: policy_bindings.direct_tool_execution_callbacks(),
+        execute_single_direct_tool_call_fn=execute_single_direct_tool_call_fn,
+    )
+    return DirectChatOperatorBindingBundle(
+        runtime_bindings=runtime_bindings,
+        policy_bindings=policy_bindings,
+        entry_bindings=entry_bindings,
+        tool_runtime_bindings=tool_runtime_bindings,
+    )
+
+
+def build_direct_chat_entrypoint_bindings(
+    *,
+    direct_chat_runtime_services_fn: Any,
+) -> DirectChatOperatorEntrypointBindings:
+    def build_direct_operator_reply(
+        *,
+        message,
+        workspace_id,
+        requested_model,
+        requested_provider,
+        thread_id="",
+        prior_messages=None,
+        reasoning_effort="",
+        availability=None,
+        approved_action=None,
+        max_iterations=None,
+        session_ctx=None,
+        agent_turn_request=None,
+    ):
+        return direct_chat_runtime_entry_facade_service.build_direct_operator_reply(
+            services=direct_chat_runtime_services_fn(),
+            message=message,
+            workspace_id=workspace_id,
+            requested_model=requested_model,
+            requested_provider=requested_provider,
+            thread_id=thread_id,
+            prior_messages=prior_messages,
+            reasoning_effort=reasoning_effort,
+            availability=availability,
+            approved_action=approved_action,
+            max_iterations=max_iterations,
+            session_ctx=session_ctx,
+            agent_turn_request=agent_turn_request,
+        )
+
+    def collect_direct_operator_reply(**kwargs):
+        return direct_chat_runtime_entry_facade_service.collect_direct_operator_reply(
+            services=direct_chat_runtime_services_fn(),
+            **kwargs,
+        )
+
+    def build_chat_turn_event_stream(*, session_ctx, message, request_meta=None):
+        return direct_chat_runtime_entry_facade_service.build_chat_turn_event_stream(
+            services=direct_chat_runtime_services_fn(),
+            session_ctx=session_ctx,
+            message=message,
+            request_meta=request_meta,
+        )
+
+    def execute_chat_turn(session_ctx, message, stream_sink=None, request_meta=None):
+        return direct_chat_runtime_entry_facade_service.execute_chat_turn(
+            services=direct_chat_runtime_services_fn(),
+            session_ctx=session_ctx,
+            message=message,
+            stream_sink=stream_sink,
+            request_meta=request_meta,
+        )
+
+    return DirectChatOperatorEntrypointBindings(
+        build_direct_operator_reply=build_direct_operator_reply,
+        collect_direct_operator_reply=collect_direct_operator_reply,
+        build_chat_turn_event_stream=build_chat_turn_event_stream,
+        execute_chat_turn=execute_chat_turn,
     )

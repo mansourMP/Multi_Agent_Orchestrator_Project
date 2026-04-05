@@ -48,6 +48,7 @@ from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_local_execution_approval_service
 from server_modules import runtime_request_service
+from server_modules import runtime_route_binding_service
 from server_modules import runtime_route_bootstrap_service
 from server_modules import runtime_route_registry_service
 from server_modules import runtime_route_request_handlers_service
@@ -497,92 +498,35 @@ def register_run_routes(app) -> None:
         ensure_heartbeat_scheduler_started=runtime_heartbeat_service.ensure_heartbeat_scheduler_started,
         load_webhook_triggers=_load_webhook_triggers,
     )
-    serialize_run_snapshot = _late_server_export("_serialize_run_snapshot")
-    delegate_run_children_callbacks = runtime_run_delegation_service.build_delegate_run_children_callbacks(
-        lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
+    route_bindings = runtime_route_binding_service.build_runtime_route_bindings(
+        late_server_export=_late_server_export,
         enforce_run_owner_access=_enforce_run_owner_access,
         normalize_agent_role=normalize_agent_role,
-        build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
         execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
         stamp_request_owner_fn=_stamp_request_owner,
         run_execution_services=_run_execution_services,
-        normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-        refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
-    )
-    auto_delegate_run_children_callbacks = runtime_run_delegation_service.build_auto_delegate_run_children_callbacks(
-        lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
-        enforce_run_owner_access=_enforce_run_owner_access,
-        normalize_agent_role=normalize_agent_role,
-        build_auto_delegation_plan=_late_server_export("_build_auto_delegation_plan"),
-        emit_auto_delegation_routing_log=_late_server_export("_emit_auto_delegation_routing_log"),
-        build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
-        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-        stamp_request_owner_fn=_stamp_request_owner,
-        run_execution_services=_run_execution_services,
-        normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-        refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
-    )
-    retry_failed_delegation_callbacks = runtime_run_delegation_service.build_retry_failed_delegation_callbacks(
-        lookup_run_snapshot=_late_server_export("_lookup_run_snapshot"),
-        enforce_run_owner_access=_enforce_run_owner_access,
-        normalize_agent_role=normalize_agent_role,
-        find_run_relationships=_late_server_export("_find_run_relationships"),
-        normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
-        parse_utc_ts=_parse_utc_ts,
-        build_retry_child_payload=_build_retry_child_payload,
-        build_delegated_run_request=_late_server_export("_build_delegated_run_request"),
-        execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
-        stamp_request_owner_fn=_stamp_request_owner,
-        run_execution_services=_run_execution_services,
-        refresh_parent_delegation_state=_late_server_export("_refresh_parent_delegation_state"),
-    )
-    run_detail_callbacks = runtime_run_query_service.build_default_run_detail_response_callbacks(
-        import_module=__import__,
-        enforce_run_owner_access=_enforce_run_owner_access,
         can_view_sensitive_run_payload=_can_view_sensitive_run_payload,
         limited_run_context_view=_limited_run_context_view,
         limited_result_data_view_fn=_limited_result_data_view,
         get_pending_confirmation_fn=_get_pending_confirmation,
         build_archived_run_detail_response=runtime_run_detail_service.build_archived_run_detail_response,
         build_live_run_detail_response=runtime_run_detail_service.build_live_run_detail_response,
-    )
-    runs_history_callbacks = runtime_history_service.build_runs_history_callbacks(
         refresh_server_exports=_refresh_server_exports,
         run_history_lock=RUN_HISTORY_LOCK,
         run_history=RUN_HISTORY,
         history_item_matches=_history_item_matches,
         current_user_is_privileged=_current_user_is_privileged,
         extract_run_owner_user_id=_extract_run_owner_user_id,
-        normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
         summarize_history_item=_summarize_history_item,
-    )
-    submit_run_decision_callbacks = runtime_run_approval_service.build_submit_run_decision_callbacks(
-        serialize_run_snapshot=serialize_run_snapshot,
-        enforce_run_owner_access=_enforce_run_owner_access,
-        get_pending_confirmation=_get_pending_confirmation,
+        parse_utc_ts=_parse_utc_ts,
+        build_retry_child_payload=_build_retry_child_payload,
         approval_correlation_id=_approval_correlation_id,
         append_approval_audit=_append_approval_audit,
         resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
-    )
-    resolve_run_approval_callbacks = runtime_run_approval_service.build_resolve_run_approval_callbacks(
-        serialize_run_snapshot=serialize_run_snapshot,
-        enforce_run_owner_access=_enforce_run_owner_access,
-        get_pending_confirmation=_get_pending_confirmation,
         set_pending_confirmation=_set_pending_confirmation,
-        parse_utc_ts=_parse_utc_ts,
         utc_now=_utc_now,
         utc_now_iso=_utc_now_iso,
-        approval_correlation_id=_approval_correlation_id,
-        append_approval_audit=_append_approval_audit,
-        resolve_local_execution_start_approval=_resolve_local_execution_start_approval,
         run_thread_is_alive=_run_thread_is_alive,
-        emit_log=emit_log,
-        schedule_restored_run_resume=_schedule_restored_run_resume,
-    )
-    resume_waiting_run_callbacks = runtime_run_control_service.build_resume_waiting_run_callbacks(
-        serialize_run_snapshot=serialize_run_snapshot,
-        enforce_run_owner_access=_enforce_run_owner_access,
-        get_pending_confirmation=_get_pending_confirmation,
         emit_log=emit_log,
         schedule_restored_run_resume=_schedule_restored_run_resume,
     )
@@ -613,7 +557,7 @@ def register_run_routes(app) -> None:
         write_workspace_context_file=deps.write_workspace_context_file,
         single_agent_mode=ORION_SINGLE_AGENT_MODE,
         runs=runs,
-        serialize_run_snapshot=serialize_run_snapshot,
+        serialize_run_snapshot=route_bindings.serialize_run_snapshot,
         iter_logs_for_run=iter_logs_for_run,
         get_replay_payload=_get_replay_payload,
         runtime_workspace_service=runtime_workspace_service,
@@ -639,16 +583,16 @@ def register_run_routes(app) -> None:
         build_run_routing_preview=build_run_routing_preview,
         build_run_precheck_result=build_run_precheck_result,
         run_routing_preview_services=_run_routing_preview_services,
-        delegate_run_children_callbacks=delegate_run_children_callbacks,
-        auto_delegate_run_children_callbacks=auto_delegate_run_children_callbacks,
-        retry_failed_delegation_callbacks=retry_failed_delegation_callbacks,
-        run_detail_callbacks=run_detail_callbacks,
-        runs_history_callbacks=runs_history_callbacks,
+        delegate_run_children_callbacks=route_bindings.delegate_run_children_callbacks,
+        auto_delegate_run_children_callbacks=route_bindings.auto_delegate_run_children_callbacks,
+        retry_failed_delegation_callbacks=route_bindings.retry_failed_delegation_callbacks,
+        run_detail_callbacks=route_bindings.run_detail_callbacks,
+        runs_history_callbacks=route_bindings.runs_history_callbacks,
         usage_snapshots_for_user_fn=_usage_snapshots_for_user,
         aggregate_usage_summary_fn=aggregate_usage_summary,
         list_usage_runs_fn=list_usage_runs,
-        submit_run_decision_callbacks=submit_run_decision_callbacks,
-        resolve_run_approval_callbacks=resolve_run_approval_callbacks,
-        resume_waiting_run_callbacks=resume_waiting_run_callbacks,
+        submit_run_decision_callbacks=route_bindings.submit_run_decision_callbacks,
+        resolve_run_approval_callbacks=route_bindings.resolve_run_approval_callbacks,
+        resume_waiting_run_callbacks=route_bindings.resume_waiting_run_callbacks,
         enforce_run_owner_access=_enforce_run_owner_access,
     )

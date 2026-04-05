@@ -32,6 +32,7 @@ from server_modules.run_service import (
     RunCreationServices,
     RunExecutionServices,
     RunRoutingPreviewServices,
+    build_run_execution_services,
     build_run_precheck_result,
     build_run_routing_preview,
     create_run_result_from_request,
@@ -115,7 +116,7 @@ def _run_creation_services() -> RunCreationServices:
 
 
 def _run_execution_services() -> RunExecutionServices:
-    return RunExecutionServices(
+    return build_run_execution_services(
         stamp_request_owner=_stamp_request_owner,
         prepare_run_start_request=_late_server_export("_prepare_run_start_request"),
         create_run_from_request=_late_server_export("_create_run_from_request"),

@@ -83,6 +83,13 @@ class LegacyRunPreparationServices:
 
 
 @dataclass(slots=True)
+class LegacyRunExecutionCallbacks:
+    stamp_request_owner: Any
+    prepare_run_start_request: Any
+    create_run_from_request: Any
+
+
+@dataclass(slots=True)
 class LegacyLocalExecutionCreationCallbacks:
     decide_execution_target: Any
     apply_execution_route_metadata: Any
@@ -160,6 +167,30 @@ class PreparedRunCreationServices:
     create_run: Any
     load_created_run: Any = None
     now_iso: Any = None
+
+
+def build_run_execution_services(
+    *,
+    stamp_request_owner: Any,
+    prepare_run_start_request: Any,
+    create_run_from_request: Any,
+) -> RunExecutionServices:
+    return RunExecutionServices(
+        stamp_request_owner=stamp_request_owner,
+        prepare_run_start_request=prepare_run_start_request,
+        create_run_from_request=create_run_from_request,
+    )
+
+
+def build_legacy_run_execution_services(
+    *,
+    callbacks: LegacyRunExecutionCallbacks,
+) -> RunExecutionServices:
+    return build_run_execution_services(
+        stamp_request_owner=callbacks.stamp_request_owner,
+        prepare_run_start_request=callbacks.prepare_run_start_request,
+        create_run_from_request=callbacks.create_run_from_request,
+    )
 
 
 def build_run_preparation_services(

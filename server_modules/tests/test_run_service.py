@@ -11,6 +11,7 @@ from server_modules.run_service import (
     build_run_preparation_services,
     build_runs_core_creation_result,
     build_runs_delegation_creation_result,
+    create_run_result_from_prepared_request,
     local_execution_block_prompt,
     local_execution_confirmation_prompt,
     local_execution_requires_start_confirmation,
@@ -21,6 +22,7 @@ from server_modules.run_service import (
     RunPreparationServices,
     RunCreationServices,
     RunExecutionServices,
+    RunPreparedResultServices,
     safe_int,
     build_run_start_request_from_turn,
     create_run_from_prepared_request,
@@ -227,6 +229,42 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(result["route"]["selected"], "cloud")
         self.assertEqual(result["metadata"]["policy_mode"], "guarded")
         self.assertEqual(result["created_run"]["active_profile_id"], "profile-1")
+
+    def test_create_run_result_from_prepared_request_applies_legacy_result_builder(self):
+        request = RunStartRequest(engine="orion", workspace_id="default", user_goal="hello")
+        prepared = {"engine": "orion", "metadata": {"agent_role": "builder"}, "workflow_snapshot": None}
+
+        result = create_run_result_from_prepared_request(
+            request,
+            prepared=prepared,
+            services=build_prepared_run_creation_services(
+                decide_execution_target=lambda metadata, schedule_id=None: {"selected": "cloud"},
+                apply_execution_route_metadata=lambda metadata, route: metadata,
+                build_doctor_run_gate=lambda **kwargs: {"blocking": False},
+                agent_machine_inherited_owner_user_id=lambda owner_user_id: owner_user_id,
+                compute_tool_policy_precheck=lambda preview_context: {"blocked_count": 0},
+                apply_browser_execution_metadata=lambda metadata: None,
+                local_execution_block_prompt=lambda precheck: "blocked",
+                resolve_runtime_policy_mode=lambda metadata, selected_target=None: {"policy_mode": "guarded"},
+                agent_machine_full_trust_enabled=lambda owner_user_id: False,
+                local_execution_requires_start_confirmation=lambda metadata, precheck: False,
+                mark_local_execution_tools_approved=lambda metadata: None,
+                precheck_human_action_labels=lambda precheck, decision="require_confirmation": [],
+                local_execution_confirmation_prompt=lambda precheck: "confirm",
+                begin_run_pending_confirmation=lambda *args, **kwargs: {"id": "approval-1"},
+                create_run=lambda **kwargs: "run-2",
+                load_created_run=lambda run_id: {"active_profile_id": "profile-2"},
+                now_iso=lambda: "2026-04-05T00:00:00Z",
+            ),
+            result_services=RunPreparedResultServices(
+                create_run_from_prepared_request=create_run_from_prepared_request,
+                build_result=lambda req, *, created: build_runs_core_creation_result(req, created=created),
+            ),
+        )
+
+        self.assertEqual(result["run_id"], "run-2")
+        self.assertEqual(result["status"], "starting")
+        self.assertEqual(result["route"]["selected"], "cloud")
 
     def test_prepare_run_start_request_applies_shared_normalization_and_postprocess(self):
         request = RunStartRequest(

@@ -1180,7 +1180,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     from server_modules.runs_execution import _compute_tool_policy_precheck, create_run
 
     prepared = _prepare_run_start_request(req)
-    created = run_service.create_run_from_prepared_request(
+    return run_service.create_run_result_from_prepared_request(
         req,
         prepared=prepared,
         schedule_id=schedule_id,
@@ -1203,8 +1203,11 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             load_created_run=lambda run_id: runs.get(run_id) if isinstance(runs.get(run_id), dict) else {},
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),
+        result_services=run_service.RunPreparedResultServices(
+            create_run_from_prepared_request=run_service.create_run_from_prepared_request,
+            build_result=lambda request, *, created: run_service.build_runs_core_creation_result(request, created=created),
+        ),
     )
-    return run_service.build_runs_core_creation_result(req, created=created)
 
 async def list_weekly_schedules(workspace_id: Optional[str] = None):
     with SCHEDULES_LOCK:

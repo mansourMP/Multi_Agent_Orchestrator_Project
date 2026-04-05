@@ -470,7 +470,7 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
     if not callable(begin_confirmation_fn):
         from server_modules.runs_core import _begin_run_pending_confirmation as begin_confirmation_fn  # type: ignore[assignment]
 
-    created = run_service.create_run_from_prepared_request(
+    return run_service.create_run_result_from_prepared_request(
         req,
         prepared=_prepare_run_start_request(req),
         schedule_id=schedule_id,
@@ -492,8 +492,11 @@ def _create_run_from_request(req: RunStartRequest, schedule_id: Optional[str] = 
             create_run=create_run_fn,
             now_iso=lambda: datetime.utcnow().isoformat() + "Z",
         ),
+        result_services=run_service.RunPreparedResultServices(
+            create_run_from_prepared_request=run_service.create_run_from_prepared_request,
+            build_result=lambda _request, *, created: run_service.build_runs_delegation_creation_result(created=created),
+        ),
     )
-    return run_service.build_runs_delegation_creation_result(created=created)
 
 
 def _lookup_run_snapshot(run_id: str) -> Dict[str, Any]:

@@ -1565,6 +1565,54 @@ This is still not a full direct-chat engine extraction. The LLM-driven memory ex
   - `server_modules.tests.test_session_transcript_store`
   - `server_modules.tests.test_agent_machine_mode`
 
+### 2026-04-05 - Prepared Run Result Adapter Moved Into Run Service
+
+#### Stage
+
+Stage 1 continues. The legacy run modules no longer own the final adapter step from a prepared run creation payload into the historical response shape.
+
+This keeps [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) as the shared durable-run ownership boundary while leaving [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) and [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) with their compatibility entrypoints.
+
+#### Completed Work
+
+- Expanded [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py) with:
+  - `RunPreparedResultServices`
+  - `create_run_result_from_prepared_request()`
+- Updated [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) so `_create_run_from_request()` now delegates the final prepared-result adaptation back through the canonical `run_service` helper.
+- Updated [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) so `_create_run_from_request()` now delegates the same final prepared-result adaptation through the canonical `run_service` helper while preserving its late-bound creation callback behavior.
+- Expanded [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py) with focused coverage for the new prepared-result helper.
+
+#### Current Truth
+
+- `create_run_from_prepared_request()` still owns the canonical prepared-run lifecycle path.
+- `create_run_result_from_prepared_request()` now owns the final shared adapter from canonical creation output to legacy API payload shape.
+- The legacy run modules still expose their historical `_create_run_from_request()` names, but they now delegate more of their real ownership into [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+
+#### Open Gaps
+
+- [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py) still owns substantial schedule/runtime history behavior outside the canonical service boundary.
+- [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py) still mixes retry orchestration, lineage handling, and runtime snapshot logic.
+- The durable-run ownership line is cleaner now, but not yet complete.
+
+#### Next Required Work
+
+1. Continue reducing the remaining run-lifecycle and delegation-specific ownership in the legacy modules.
+2. Keep new durable-run orchestration and response-shaping behavior centered in [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py).
+3. Preserve the existing module-level patch surface until downstream callers and tests no longer depend on it.
+
+#### Verification
+
+- `python3 -m py_compile` passed for:
+  - [server_modules/run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/run_service.py)
+  - [server_modules/runs_core.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_core.py)
+  - [server_modules/runs_delegation.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/runs_delegation.py)
+  - [server_modules/tests/test_run_service.py](/Users/mansur/Multi_Agent_Orchestrator_Project/server_modules/tests/test_run_service.py)
+- Focused unit tests passed in the project virtualenv:
+  - `server_modules.tests.test_run_service`
+  - `server_modules.tests.test_runs_delegation`
+  - `server_modules.tests.test_agent_machine_mode`
+  - `server_modules.tests.test_runs_core_connector_intent_binding`
+
 ### 2026-04-05 - Shared Run Service Bundle Construction Extracted
 
 #### Stage

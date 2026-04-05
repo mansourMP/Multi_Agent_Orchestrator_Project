@@ -59,6 +59,12 @@ class RunCreationServices:
 
 
 @dataclass(slots=True)
+class RunPreparedResultServices:
+    create_run_from_prepared_request: Any
+    build_result: Any
+
+
+@dataclass(slots=True)
 class RunPreparationServices:
     engine_registry: Any
     engine_validation_errors: Any
@@ -564,6 +570,24 @@ def create_run_result_from_request(
         result = services.create_run_from_request(request, schedule_id=schedule_id)
     else:
         result = services.create_run_from_request(request)
+    return dict(result) if isinstance(result, dict) else {"result": result}
+
+
+def create_run_result_from_prepared_request(
+    request: RunStartRequest,
+    *,
+    prepared: Dict[str, Any],
+    services: PreparedRunCreationServices,
+    result_services: RunPreparedResultServices,
+    schedule_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    created = result_services.create_run_from_prepared_request(
+        request,
+        prepared=prepared,
+        services=services,
+        schedule_id=schedule_id,
+    )
+    result = result_services.build_result(request, created=created)
     return dict(result) if isinstance(result, dict) else {"result": result}
 
 

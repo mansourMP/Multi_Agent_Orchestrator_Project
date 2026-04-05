@@ -65,6 +65,7 @@ from server_modules.runtime_state_store import (
 from server_modules import runtime_heartbeat_service
 from server_modules import runtime_history_service
 from server_modules import runtime_run_detail_service
+from server_modules import runtime_run_replay_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
@@ -1376,27 +1377,20 @@ def register_run_routes(app) -> None:
     @app.get("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def get_run_replay(run_id: uuid.UUID):
         _refresh_server_exports()
-        item = _get_replay_payload(str(run_id))
-        return {"item": item}
+        return runtime_run_replay_service.replay_item_response(
+            item=_get_replay_payload(str(run_id)),
+        )
 
     @app.post("/runs/{run_id}/replay", dependencies=[Depends(require_admin_api_key)])
     async def replay_run(run_id: uuid.UUID):
         _refresh_server_exports()
-        item = _get_replay_payload(str(run_id))
-        replay_payload = item.get("replay_request")
-        if not isinstance(replay_payload, dict):
-            raise HTTPException(status_code=400, detail="Replay request is not available for this run.")
-        try:
-            req = RunStartRequest(**replay_payload)
-            return execute_system_run_start_request_via_turn_runtime(
-                req,
-                stamp_request_owner_fn=_stamp_request_owner,
-                services=_run_execution_services(),
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+        return runtime_run_replay_service.replay_run_from_item(
+            item=_get_replay_payload(str(run_id)),
+            run_start_request_class=RunStartRequest,
+            execute_system_run_start_request_via_turn_runtime=execute_system_run_start_request_via_turn_runtime,
+            stamp_request_owner_fn=_stamp_request_owner,
+            run_execution_services=_run_execution_services,
+        )
 
     @app.get("/runs/{run_id}/stream", dependencies=[Depends(require_api_key)])
     async def stream_run(run_id: uuid.UUID, current_user=Depends(require_api_key)):

@@ -75,6 +75,7 @@ from server_modules import runtime_run_replay_service
 from server_modules import runtime_run_resume_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
+from server_modules import runtime_workspace_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
 
 _CHAT_STREAM_LOCK = threading.Lock()
@@ -656,39 +657,26 @@ def register_run_routes(app) -> None:
     @app.get("/memory/{workspace_id}", dependencies=[Depends(require_api_key)])
     async def list_workspace_memory(workspace_id: str, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-        return workspace_memory_snapshot(normalized_workspace_id).as_payload()
+        return runtime_workspace_service.list_workspace_memory_payload(
+            workspace_id,
+            workspace_memory_snapshot=workspace_memory_snapshot,
+        )
 
     @app.delete("/memory/{workspace_id}/{key}", dependencies=[Depends(require_api_key)])
     async def delete_workspace_memory(workspace_id: str, key: str, current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        normalized_workspace_id = str(workspace_id or "default").strip() or "default"
-        normalized_key = str(key or "").strip()
-        if not normalized_key:
-            raise HTTPException(status_code=400, detail="Memory key is required.")
-        deleted = delete_memory(normalized_workspace_id, normalized_key)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Memory entry not found.")
-        return {
-            "ok": True,
-            "workspace_id": normalized_workspace_id,
-            "key": normalized_key,
-        }
+        return runtime_workspace_service.delete_workspace_memory_payload(
+            workspace_id,
+            key,
+            delete_memory=delete_memory,
+        )
 
     @app.get("/workspace/context-files", dependencies=[Depends(require_api_key)])
     async def get_workspace_context_files(current_user=Depends(require_api_key)):
         _refresh_server_exports()
-        files = read_workspace_context_files()
-        return {
-            "ok": True,
-            "files": [
-                {
-                    "filename": filename,
-                    "content": str(content or ""),
-                }
-                for filename, content in files.items()
-            ],
-        }
+        return runtime_workspace_service.workspace_context_files_payload(
+            read_workspace_context_files=read_workspace_context_files,
+        )
 
     @app.post("/workspace/context-files/{filename}", dependencies=[Depends(require_api_key)])
     async def update_workspace_context_file(filename: str, request: Request, current_user=Depends(require_api_key)):
@@ -697,19 +685,11 @@ def register_run_routes(app) -> None:
             body = await request.json()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid context file payload: {exc}") from exc
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Invalid context file payload.")
-        content = body.get("content")
-        if content is None:
-            raise HTTPException(status_code=400, detail="Field 'content' is required.")
-        try:
-            saved = write_workspace_context_file(filename, str(content))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "ok": True,
-            **saved,
-        }
+        return runtime_workspace_service.update_workspace_context_file_payload(
+            filename,
+            body,
+            write_workspace_context_file=write_workspace_context_file,
+        )
 
     @app.get("/heartbeat/status", dependencies=[Depends(require_api_key)])
     async def get_heartbeat_status(current_user=Depends(require_api_key)):

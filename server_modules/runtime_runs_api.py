@@ -221,21 +221,6 @@ ensure_single_worker_direct_chat_stream_runtime = lambda: chat_stream_state_serv
 )
 
 
-def initialize_chat_stream_runtime_state(*, now_ts: Optional[float] = None) -> None:
-    return chat_stream_runtime_service.initialize_chat_stream_runtime_state(
-        now_ts=now_ts,
-        ensure_single_worker_runtime_fn=ensure_single_worker_direct_chat_stream_runtime,
-        db_path=_chat_stream_state_db_path(),
-        stale_after_seconds=_CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
-        ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
-        mark_stale_sessions_interrupted=mark_stale_chat_stream_sessions_interrupted,
-        delete_sessions_older_than=delete_chat_stream_sessions_older_than,
-        metrics_inc=_chat_stream_metrics_inc,
-        session_manager_enabled=_direct_chat_session_manager_enabled,
-        session_manager_factory=_direct_chat_session_manager,
-    )
-
-
 _default_chat_stream_session = chat_stream_runtime_service.build_default_chat_stream_session_factory(
     now_iso=_chat_stream_now_iso,
 )
@@ -292,6 +277,19 @@ _direct_chat_session_manager = lambda: chat_stream_runtime_service.build_direct_
 )
 
 
+initialize_chat_stream_runtime_state = chat_stream_runtime_service.build_initialize_chat_stream_runtime_state_fn(
+    ensure_single_worker_runtime_fn=ensure_single_worker_direct_chat_stream_runtime,
+    chat_stream_state_db_path=lambda: _chat_stream_state_db_path(),
+    stale_after_seconds=_CHAT_STREAM_STATE_STALE_AFTER_SECONDS,
+    ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
+    mark_stale_sessions_interrupted=mark_stale_chat_stream_sessions_interrupted,
+    delete_sessions_older_than=delete_chat_stream_sessions_older_than,
+    metrics_inc=_chat_stream_metrics_inc,
+    session_manager_enabled=lambda: _direct_chat_session_manager_enabled(),
+    session_manager_factory=lambda: _direct_chat_session_manager(),
+)
+
+
 _direct_chat_execution_services = lambda: chat_stream_runtime_service.build_direct_chat_execution_services(
     builder=build_direct_chat_execution_services,
     chat_stream_key=_chat_stream_key,
@@ -345,28 +343,17 @@ _prune_chat_stream_sessions_locked = lambda now_ts=None: chat_stream_state_servi
 )
 
 
-def _get_or_create_chat_stream_session(
-    key: str,
-    *,
-    thread_id: str,
-    request_id: str,
-    workspace_id: str,
-) -> dict[str, Any]:
-    with _CHAT_STREAM_LOCK:
-        return chat_stream_runtime_service.get_or_create_chat_stream_session(
-            _CHAT_STREAM_SESSIONS,
-            key=key,
-            thread_id=thread_id,
-            request_id=request_id,
-            workspace_id=workspace_id,
-            prune_sessions_locked=lambda: _prune_chat_stream_sessions_locked(),
-            delete_sessions_older_than=delete_chat_stream_sessions_older_than,
-            db_path=_chat_stream_state_db_path(),
-            state_ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
-            load_replayable_session=_load_replayable_chat_stream_session,
-            default_session_factory=_default_chat_stream_session,
-            persist_session_state=_persist_chat_stream_session_state,
-        )
+_get_or_create_chat_stream_session = chat_stream_runtime_service.build_get_or_create_chat_stream_session_fn(
+    _CHAT_STREAM_SESSIONS,
+    lock=_CHAT_STREAM_LOCK,
+    prune_sessions_locked=lambda: _prune_chat_stream_sessions_locked(),
+    delete_sessions_older_than=delete_chat_stream_sessions_older_than,
+    chat_stream_state_db_path=lambda: _chat_stream_state_db_path(),
+    state_ttl_seconds=_CHAT_STREAM_STATE_TTL_SECONDS,
+    load_replayable_session=lambda *args, **kwargs: _load_replayable_chat_stream_session(*args, **kwargs),
+    default_session_factory=lambda *args, **kwargs: _default_chat_stream_session(*args, **kwargs),
+    persist_session_state=lambda session: _persist_chat_stream_session_state(session),
+)
 
 
 _chat_stream_payload = chat_stream_transport_service.chat_stream_payload

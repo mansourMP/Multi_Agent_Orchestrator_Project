@@ -74,6 +74,32 @@ def initialize_chat_stream_runtime_state(
     )
 
 
+def build_initialize_chat_stream_runtime_state_fn(
+    *,
+    ensure_single_worker_runtime_fn: Callable[[], None],
+    chat_stream_state_db_path: Callable[[], Any],
+    stale_after_seconds: int,
+    ttl_seconds: int,
+    mark_stale_sessions_interrupted: Callable[..., int],
+    delete_sessions_older_than: Callable[..., int],
+    metrics_inc: Callable[[str, float], None],
+    session_manager_enabled: Callable[[], bool],
+    session_manager_factory: Callable[[], Any],
+) -> Callable[..., None]:
+    return lambda *, now_ts=None: initialize_chat_stream_runtime_state(
+        now_ts=now_ts,
+        ensure_single_worker_runtime_fn=ensure_single_worker_runtime_fn,
+        db_path=chat_stream_state_db_path(),
+        stale_after_seconds=stale_after_seconds,
+        ttl_seconds=ttl_seconds,
+        mark_stale_sessions_interrupted=mark_stale_sessions_interrupted,
+        delete_sessions_older_than=delete_sessions_older_than,
+        metrics_inc=metrics_inc,
+        session_manager_enabled=session_manager_enabled,
+        session_manager_factory=session_manager_factory,
+    )
+
+
 def build_default_chat_stream_session_factory(
     *,
     now_iso: Callable[[], str],
@@ -223,6 +249,44 @@ def get_or_create_chat_stream_session(
         default_session_factory=default_session_factory,
         persist_session_state=persist_session_state,
     )
+
+
+def build_get_or_create_chat_stream_session_fn(
+    sessions: dict[str, dict[str, Any]],
+    *,
+    lock: Any,
+    prune_sessions_locked: Callable[[], None],
+    delete_sessions_older_than: Callable[..., int],
+    chat_stream_state_db_path: Callable[[], Any],
+    state_ttl_seconds: int,
+    load_replayable_session: Callable[..., Optional[dict[str, Any]]],
+    default_session_factory: Callable[..., dict[str, Any]],
+    persist_session_state: Callable[[dict[str, Any]], None],
+) -> Callable[..., dict[str, Any]]:
+    def _get_or_create(
+        key: str,
+        *,
+        thread_id: str,
+        request_id: str,
+        workspace_id: str,
+    ) -> dict[str, Any]:
+        with lock:
+            return get_or_create_chat_stream_session(
+                sessions,
+                key=key,
+                thread_id=thread_id,
+                request_id=request_id,
+                workspace_id=workspace_id,
+                prune_sessions_locked=prune_sessions_locked,
+                delete_sessions_older_than=delete_sessions_older_than,
+                db_path=chat_stream_state_db_path(),
+                state_ttl_seconds=state_ttl_seconds,
+                load_replayable_session=load_replayable_session,
+                default_session_factory=default_session_factory,
+                persist_session_state=persist_session_state,
+            )
+
+    return _get_or_create
 
 
 def append_chat_stream_event(

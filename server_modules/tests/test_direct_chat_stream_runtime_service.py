@@ -153,6 +153,63 @@ class DirectChatStreamRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(session["key"], "session-1")
         self.assertEqual(session["state"]["status"], "completed")
 
+    def test_build_initialize_chat_stream_runtime_state_fn_binds_db_path_and_runtime_callbacks(self):
+        calls = []
+        initialize = runtime_service.build_initialize_chat_stream_runtime_state_fn(
+            ensure_single_worker_runtime_fn=lambda: calls.append("single-worker"),
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            stale_after_seconds=10,
+            ttl_seconds=20,
+            mark_stale_sessions_interrupted=lambda db_path, **kwargs: calls.append(("interrupt", db_path)) or 0,
+            delete_sessions_older_than=lambda db_path, **kwargs: calls.append(("cleanup", db_path)) or 0,
+            metrics_inc=lambda key, amount: calls.append((key, amount)),
+            session_manager_enabled=lambda: False,
+            session_manager_factory=lambda: object(),
+        )
+
+        initialize(now_ts=123.0)
+
+        self.assertEqual(calls[0], "single-worker")
+        self.assertEqual(calls[1], ("interrupt", Path("/tmp/state.db")))
+        self.assertEqual(calls[2], ("cleanup", Path("/tmp/state.db")))
+
+    def test_build_get_or_create_chat_stream_session_fn_uses_lock_and_db_path(self):
+        sessions = {}
+        calls = []
+        get_or_create = runtime_service.build_get_or_create_chat_stream_session_fn(
+            sessions,
+            lock=__import__("threading").Lock(),
+            prune_sessions_locked=lambda: calls.append("pruned"),
+            delete_sessions_older_than=lambda *args, **kwargs: 0,
+            chat_stream_state_db_path=lambda: Path("/tmp/state.db"),
+            state_ttl_seconds=60,
+            load_replayable_session=lambda *args, **kwargs: None,
+            default_session_factory=lambda key, *, thread_id, request_id, workspace_id: {
+                "key": key,
+                "thread_id": thread_id,
+                "request_id": request_id,
+                "workspace_id": workspace_id,
+                "condition": __import__("threading").Condition(),
+                "events": [],
+                "next_event_id": 1,
+                "producer_started": False,
+                "completed": False,
+                "last_accessed_at": 0,
+            },
+            persist_session_state=lambda session: calls.append(("persisted", session["key"])),
+        )
+
+        session = get_or_create(
+            "session-1",
+            thread_id="thread-1",
+            request_id="req-1",
+            workspace_id="default",
+        )
+
+        self.assertEqual(session["key"], "session-1")
+        self.assertEqual(calls[0], "pruned")
+        self.assertEqual(calls[1], ("persisted", "session-1"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,8 @@ from server_modules.agent_turn import (
     ensure_direct_chat_turn_request,
     resolve_direct_chat_turn_request,
     resolve_agent_turn_request,
+    resolve_agent_turn_request_from_runtime_context,
+    resolve_agent_turn_request_with_fallback,
     resolve_run_start_turn_request,
     serialize_agent_turn_request,
 )
@@ -80,6 +82,52 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(round_tripped.workspace_id, "default")
         self.assertEqual(round_tripped.session_id, "thread-1")
         self.assertEqual(round_tripped.message, "hello")
+
+    def test_resolve_agent_turn_request_with_fallback_uses_secondary_payload(self):
+        request = build_direct_chat_turn_request(
+            current_user={"user_id": "user-1"},
+            body={},
+            workspace_id="default",
+            thread_id="thread-1",
+            client_request_id="req-1",
+            message="hello",
+        )
+
+        resolved = resolve_agent_turn_request_with_fallback(
+            None,
+            serialize_agent_turn_request(request),
+        )
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.workspace_id, "default")
+        self.assertEqual(resolved.message, "hello")
+
+    def test_resolve_agent_turn_request_from_runtime_context_prefers_request_meta(self):
+        meta_request = build_direct_chat_turn_request(
+            current_user={"user_id": "meta-user"},
+            body={},
+            workspace_id="workspace-meta",
+            thread_id="thread-meta",
+            client_request_id="req-meta",
+            message="meta message",
+        )
+        session_request = build_direct_chat_turn_request(
+            current_user={"user_id": "session-user"},
+            body={},
+            workspace_id="workspace-session",
+            thread_id="thread-session",
+            client_request_id="req-session",
+            message="session message",
+        )
+
+        resolved = resolve_agent_turn_request_from_runtime_context(
+            request_meta={"agent_turn_request": serialize_agent_turn_request(meta_request)},
+            session_ctx={"agent_turn_request": serialize_agent_turn_request(session_request)},
+        )
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.workspace_id, "workspace-meta")
+        self.assertEqual(resolved.message, "meta message")
 
     def test_build_run_start_request_from_turn_preserves_canonical_metadata(self):
         base_request = RunStartRequest(

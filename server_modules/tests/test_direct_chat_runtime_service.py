@@ -155,6 +155,105 @@ class DirectChatRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(payload["reply"], "Hello world")
         self.assertEqual(payload["mode"], "answer")
 
+    def test_build_direct_operator_reply_uses_session_turn_request_fallback(self) -> None:
+        captured: dict[str, object] = {}
+        prepared = SimpleNamespace(
+            normalized_message="hello from turn",
+            normalized_workspace_id="default",
+            normalized_thread_id="thread-1",
+            normalized_requested_provider="openai",
+            normalized_requested_model="gpt-5.4",
+            normalized_reasoning_effort="medium",
+            compaction={},
+            compacted_prior_messages=[],
+            proactive_suggestions=[],
+            tool_loop_session_key="loop",
+            availability_payload={"ai_ready": True},
+            connected_systems=[],
+            tool_capabilities=[],
+            tools=[],
+            approved_action_payload=None,
+            base_context_used={"workspace_id": "default"},
+            slash_command_name="help",
+            slash_remainder="",
+            resolved_chat_max_iterations=3,
+        )
+        services = self._runtime_services(prepared)
+        def _prepare_direct_chat_request(**kwargs):
+            captured["kwargs"] = kwargs
+            return prepared
+        services.prepare_direct_chat_request = _prepare_direct_chat_request
+
+        turn_request = {
+            "workspace_id": "default",
+            "session_id": "thread-1",
+            "channel": "web",
+            "actor": {"type": "user", "id": "user-1", "display_name": "user-1"},
+            "message": "hello from turn",
+        }
+
+        list(
+            direct_chat_runtime_service.build_direct_operator_reply(
+                services=services,
+                message="fallback",
+                workspace_id="default",
+                requested_model="gpt-5.4",
+                requested_provider="openai",
+                session_ctx={"agent_turn_request": turn_request},
+            )
+        )
+
+        resolved_turn_request = captured["kwargs"]["resolved_turn_request"]
+        self.assertEqual(resolved_turn_request.workspace_id, "default")
+        self.assertEqual(resolved_turn_request.message, "hello from turn")
+
+    def test_build_chat_turn_event_stream_prefers_request_meta_turn_request(self) -> None:
+        captured: dict[str, object] = {}
+        services = self._runtime_services(SimpleNamespace())
+
+        def _build_direct_operator_reply(**kwargs):
+            captured.update(kwargs)
+            return iter(())
+
+        with mock.patch.object(
+            direct_chat_runtime_service,
+            "build_direct_operator_reply",
+            side_effect=_build_direct_operator_reply,
+        ):
+            list(
+                direct_chat_runtime_service.build_chat_turn_event_stream(
+                    services=services,
+                    session_ctx={
+                        "workspace_id": "context-workspace",
+                        "thread_id": "context-thread",
+                        "agent_turn_request": {
+                            "workspace_id": "context-workspace",
+                            "session_id": "context-thread",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "context-user", "display_name": "context-user"},
+                            "message": "context message",
+                        },
+                    },
+                    message="fallback",
+                    request_meta={
+                        "workspace_id": "meta-workspace",
+                        "thread_id": "meta-thread",
+                        "agent_turn_request": {
+                            "workspace_id": "meta-workspace",
+                            "session_id": "meta-thread",
+                            "channel": "web",
+                            "actor": {"type": "user", "id": "meta-user", "display_name": "meta-user"},
+                            "message": "meta message",
+                        },
+                    },
+                )
+            )
+
+        self.assertEqual(captured["message"], "meta message")
+        self.assertEqual(captured["workspace_id"], "meta-workspace")
+        self.assertEqual(captured["thread_id"], "meta-thread")
+        self.assertEqual(captured["agent_turn_request"].workspace_id, "meta-workspace")
+
 
 if __name__ == "__main__":
     unittest.main()

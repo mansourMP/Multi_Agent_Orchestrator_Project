@@ -160,6 +160,29 @@ def resolve_agent_turn_request(value: Any) -> Optional[AgentTurnRequest]:
     return None
 
 
+def resolve_agent_turn_request_with_fallback(
+    value: Any,
+    fallback: Any = None,
+) -> Optional[AgentTurnRequest]:
+    resolved = resolve_agent_turn_request(value)
+    if isinstance(resolved, AgentTurnRequest):
+        return resolved
+    return resolve_agent_turn_request(fallback)
+
+
+def resolve_agent_turn_request_from_runtime_context(
+    *,
+    request_meta: Any = None,
+    session_ctx: Any = None,
+) -> Optional[AgentTurnRequest]:
+    meta = request_meta if isinstance(request_meta, dict) else {}
+    context = session_ctx if isinstance(session_ctx, dict) else {}
+    return resolve_agent_turn_request_with_fallback(
+        meta.get("agent_turn_request"),
+        context.get("agent_turn_request"),
+    )
+
+
 def build_agent_turn_request(payload: Dict[str, Any]) -> AgentTurnRequest:
     actor_payload = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
     return AgentTurnRequest(

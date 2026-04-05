@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
-from server_modules.agent_turn import resolve_agent_turn_request
+from server_modules.agent_turn import (
+    resolve_agent_turn_request_from_runtime_context,
+    resolve_agent_turn_request_with_fallback,
+)
 from server_modules import direct_chat_generation_service
 from server_modules import direct_chat_prompt_service
 from server_modules import direct_chat_response_service
@@ -129,9 +132,10 @@ def build_direct_operator_reply(
     session_ctx: Optional[Dict[str, Any]] = None,
     agent_turn_request: Optional[Any] = None,
 ) -> Iterator[Dict[str, Any]]:
-    resolved_turn_request = resolve_agent_turn_request(agent_turn_request)
-    if resolved_turn_request is None and isinstance(session_ctx, dict):
-        resolved_turn_request = resolve_agent_turn_request(session_ctx.get("agent_turn_request"))
+    resolved_turn_request = resolve_agent_turn_request_with_fallback(
+        agent_turn_request,
+        (session_ctx.get("agent_turn_request") if isinstance(session_ctx, dict) else None),
+    )
     prepared = services.prepare_direct_chat_request(
         resolved_turn_request=resolved_turn_request,
         session_ctx=session_ctx,
@@ -479,9 +483,10 @@ def build_chat_turn_event_stream(
 ) -> Iterator[Dict[str, Any]]:
     context = session_ctx if isinstance(session_ctx, dict) else {}
     meta = request_meta if isinstance(request_meta, dict) else {}
-    turn_request = resolve_agent_turn_request(meta.get("agent_turn_request"))
-    if turn_request is None:
-        turn_request = resolve_agent_turn_request(context.get("agent_turn_request"))
+    turn_request = resolve_agent_turn_request_from_runtime_context(
+        request_meta=meta,
+        session_ctx=context,
+    )
     return build_direct_operator_reply(
         services=services,
         session_ctx=context,

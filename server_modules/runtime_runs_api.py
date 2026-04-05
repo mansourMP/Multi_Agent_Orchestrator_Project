@@ -63,6 +63,7 @@ from server_modules.runtime_state_store import (
     upsert_chat_stream_state,
 )
 from server_modules import runtime_heartbeat_service
+from server_modules import runtime_history_service
 from server_modules import runtime_usage_service
 from server_modules import runtime_webhook_trigger_service
 from server_modules.usage_reporting import aggregate_usage_summary, list_usage_runs
@@ -1512,32 +1513,21 @@ def register_run_routes(app) -> None:
         pack_id: Optional[str] = None,
         current_user=Depends(require_api_key),
     ):
-        _refresh_server_exports()
-        safe_limit = max(1, min(limit, 200))
-        with RUN_HISTORY_LOCK:
-            items = list(RUN_HISTORY)
-        filtered = [item for item in items if _history_item_matches(item, workspace_id, status, pack_id)]
-        if not _current_user_is_privileged(current_user):
-            request_user_id = str(current_user.get("user_id") or "").strip()
-            if not request_user_id:
-                raise HTTPException(status_code=401, detail="Authenticated user id is required.")
-            filtered = [item for item in filtered if _extract_run_owner_user_id(item) == request_user_id]
-        child_counts: Dict[str, int] = {}
-        for item in filtered:
-            parent_run_id = _late_server_export("_normalize_run_id_token")(item.get("parent_run_id"))
-            if parent_run_id:
-                child_counts[parent_run_id] = child_counts.get(parent_run_id, 0) + 1
-        payload = []
-        for item in filtered[:safe_limit]:
-            summary = _summarize_history_item(item)
-            run_id_value = str(summary.get("run_id") or "").strip()
-            summary["child_run_count"] = child_counts.get(run_id_value, 0)
-            payload.append(summary)
-        return {
-            "items": payload,
-            "count": len(payload),
-            "total": len(filtered),
-        }
+        return runtime_history_service.build_runs_history_payload(
+            limit=limit,
+            workspace_id=workspace_id,
+            status=status,
+            pack_id=pack_id,
+            current_user=current_user,
+            refresh_server_exports=_refresh_server_exports,
+            run_history_lock=RUN_HISTORY_LOCK,
+            run_history=RUN_HISTORY,
+            history_item_matches=_history_item_matches,
+            current_user_is_privileged=_current_user_is_privileged,
+            extract_run_owner_user_id=_extract_run_owner_user_id,
+            normalize_run_id_token=_late_server_export("_normalize_run_id_token"),
+            summarize_history_item=_summarize_history_item,
+        )
 
     @app.get("/usage/summary", dependencies=[Depends(require_api_key)])
     async def get_usage_summary(
